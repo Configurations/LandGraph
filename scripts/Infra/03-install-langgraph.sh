@@ -105,7 +105,6 @@ SQL
 # ── 4. Docker Compose (stack complete) ───────────────────────────────────────
 echo "[4/7] Creation du docker-compose.yml..."
 cat > docker-compose.yml << 'YAML'
-version: "3.9"
 
 volumes:
   postgres-data:
