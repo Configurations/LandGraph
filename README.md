@@ -94,7 +94,7 @@ Ce script cree le projet dans `~/langgraph-project/` avec :
    nano ~/langgraph-project/.env
    ```
 
-🔑 ANTHROPIC_API_KEY (obligatoire — seul coût récurrent)
+🔑 **ANTHROPIC_API_KEY (obligatoire — seul coût récurrent)**
 
 Aller sur https://console.anthropic.com
 Créer un compte (ou se connecter)
@@ -104,7 +104,7 @@ Copier la clé (commence par sk-ant-api03-...)
 Onglet Plans & Billing → ajouter une carte bancaire et mettre un spending limit (ex: 10€/mois pour commencer)
 
 
-🧠 VOYAGE_API_KEY (pour le RAG — quasi gratuit)
+🧠 **VOYAGE_API_KEY (pour le RAG — quasi gratuit)**
 
 Aller sur https://dash.voyageai.com
 Créer un compte (gratuit — 50M tokens/mois offerts)
@@ -115,7 +115,7 @@ Copier la clé (commence par pa-...)
 Alternative 0€ : ne pas mettre de clé Voyage et utiliser Ollama en local (voir le EMBEDDING_MODEL=local dans le script RAG). Mais il faut un GPU ou accepter que ce soit plus lent.
 
 
-🤖 DISCORD_BOT_TOKEN (gratuit)
+🤖 **DISCORD_BOT_TOKEN (gratuit)**
 
 Aller sur https://discord.com/developers/applications
 Se connecter avec son compte Discord
@@ -128,7 +128,6 @@ Activer les 3 Privileged Gateway Intents :
 PRESENCE INTENT ✅
 SERVER MEMBERS INTENT ✅
 MESSAGE CONTENT INTENT ✅
-
 
 Menu gauche → OAuth2 → URL Generator
 
