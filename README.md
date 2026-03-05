@@ -93,6 +93,15 @@ Ce script cree le projet dans `~/langgraph-project/` avec :
    ```bash
    nano ~/langgraph-project/.env
    ```
+```
+ANTHROPIC_API_KEY (obligatoire — seul coût récurrent)
+Aller sur https://console.anthropic.com
+Créer un compte (ou se connecter)
+Menu gauche → API Keys
+Cliquer Create Key → nommer "langgraph-agents"
+Copier la clé (commence par sk-ant-api03-...)
+Onglet Plans & Billing → ajouter une carte bancaire et mettre un spending limit (ex: 10€/mois pour commencer)
+```
 
 2. Tester l'agent orchestrateur :
    ```bash
