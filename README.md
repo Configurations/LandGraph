@@ -77,7 +77,7 @@ Ce script :
 **Ou** : sur la VM Ubuntu, apres reconnexion.
 
 ```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/03-install-langgraph.sh?token=GHSAT0AAAAAADWAJ3NGP7ZQSQLXKW7O4JGC2NJXWSA)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/03-install-langgraph.sh?token=GHSAT0AAAAAADWAJ3NHUEXBVJCBAGZ6QULY2NJX2HQ)"
 ```
 
 Ce script cree le projet dans `~/langgraph-project/` avec :
@@ -111,7 +111,7 @@ Ce script cree le projet dans `~/langgraph-project/` avec :
 **Ou** : sur la VM Ubuntu, apres l'etape 3.
 
 ```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/04-install-discord.sh)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/04-install-discord.sh?token=GHSAT0AAAAAADWAJ3NHTJLXVLDJCRNX5AKM2NJX3EA)"
 ```
 
 **Prerequis** : avoir cree un bot Discord sur le [portail developpeur](https://discord.com/developers/applications) avec les permissions suivantes :
