@@ -38,7 +38,7 @@ L'installation se deroule en 4 etapes sequentielles. Chaque script est telecharg
 **Ou** : sur le shell de l'hote Proxmox.
 
 ```bash
-bash -c "$(wget -qLO - https://github.com/Configurations/LandGraph/scripts/Infra/01-proxmox-create-vm.sh)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/01-proxmox-create-vm.sh)"
 ```
 
 Ce script cree une VM avec la configuration suivante :
@@ -60,7 +60,7 @@ Le VMID est optionnel (defaut : `200`).
 **Ou** : sur la VM Ubuntu fraichement installee.
 
 ```bash
-bash -c "$(wget -qLO - https://github.com/Configurations/LandGraph/scripts/Infra/02-install-docker.sh)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/02-install-docker.sh?token=GHSAT0AAAAAADWAJ3NGWZAILIQANVLMLJDE2NJXVWA)"
 ```
 
 Ce script :
@@ -77,7 +77,7 @@ Ce script :
 **Ou** : sur la VM Ubuntu, apres reconnexion.
 
 ```bash
-bash -c "$(wget -qLO - https://github.com/Configurations/LandGraph/scripts/Infra/03-install-langgraph.sh)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/03-install-langgraph.sh?token=GHSAT0AAAAAADWAJ3NGP7ZQSQLXKW7O4JGC2NJXWSA)"
 ```
 
 Ce script cree le projet dans `~/langgraph-project/` avec :
@@ -111,7 +111,7 @@ Ce script cree le projet dans `~/langgraph-project/` avec :
 **Ou** : sur la VM Ubuntu, apres l'etape 3.
 
 ```bash
-bash -c "$(wget -qLO - https://github.com/Configurations/LandGraph/scripts/Infra/04-install-discord.sh)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/04-install-discord.sh)"
 ```
 
 **Prerequis** : avoir cree un bot Discord sur le [portail developpeur](https://discord.com/developers/applications) avec les permissions suivantes :
