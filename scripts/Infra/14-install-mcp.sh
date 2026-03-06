@@ -1,33 +1,25 @@
 #!/bin/bash
 ###############################################################################
-# Script 14 : Installation interactive MCP — Agent + Service + Parametrage
+# Script 14 : Installation interactive MCP
 #
-# Flow :
-#   1. Choisir un agent dans la liste
-#   2. Chercher un serveur MCP dans le registry
-#   3. Configurer les variables d'environnement :
-#      - Si le service est deja configure : reutiliser ou creer un nouveau
-#      - Nouveau parametrage = suffixe personnalise (ex: _PERSO, _WORK)
-#   4. Sauvegarder le mapping agent <-> MCP <-> parametrage
-#
-# Fichiers generes :
-#   config/mcp_servers.json    — serveurs MCP installes (avec parametrages)
-#   config/agent_mcp_access.json — mapping agent -> [mcp_ids]
-#   agents/shared/mcp_client.py — client Python qui lit les configs
+# - Catalogue externe depuis GitHub (config/mcp_catalog.csv)
+# - Agents resolus dynamiquement depuis prompts/v1/*.md
+# - Recherche par nom en premier
+# - Gestion des parametrages .env avec suffixes nommes
 #
 # Usage : ./14-install-mcp.sh
 ###############################################################################
 set -euo pipefail
 
 PROJECT_DIR="$HOME/langgraph-project"
-MCP_REGISTRY="https://registry.modelcontextprotocol.io/v0/servers"
 MCP_CONFIG="${PROJECT_DIR}/config/mcp_servers.json"
 AGENT_ACCESS="${PROJECT_DIR}/config/agent_mcp_access.json"
 ENV_FILE="${PROJECT_DIR}/.env"
+CATALOG_FILE="${PROJECT_DIR}/config/mcp_catalog.csv"
+CATALOG_URL="https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/config/mcp_catalog.csv"
 
 echo "==========================================="
 echo "  Installation interactive MCP"
-echo "  Agent → Service → Parametrage"
 echo "==========================================="
 echo ""
 
@@ -40,10 +32,7 @@ if ! command -v node &>/dev/null; then
     apt-get install -y nodejs 2>/dev/null
 fi
 
-if ! command -v jq &>/dev/null; then
-    echo "Installation de jq..."
-    apt-get install -y jq 2>/dev/null
-fi
+command -v jq &>/dev/null || apt-get install -y jq 2>/dev/null
 
 source .venv/bin/activate 2>/dev/null || true
 pip install -q langchain-mcp-adapters mcp 2>/dev/null
@@ -53,76 +42,83 @@ mkdir -p config
 [ ! -f "${MCP_CONFIG}" ] && echo '{"servers": {}}' > "${MCP_CONFIG}"
 [ ! -f "${AGENT_ACCESS}" ] && echo '{}' > "${AGENT_ACCESS}"
 
-# ── Liste des agents ─────────────────────────────────────────────────────────
-AGENTS=(
-    "orchestrator:Orchestrateur:Routing et coordination"
-    "requirements_analyst:Analyste:PRD, user stories, MoSCoW"
-    "ux_designer:Designer UX:Wireframes, design system"
-    "architect:Architecte:ADRs, schemas, specs techniques"
-    "planner:Planificateur:Sprints, estimations, roadmap"
-    "lead_dev:Lead Dev:Supervision dev, code review, PRs"
-    "dev_frontend_web:Dev Frontend:Code React/Vue, composants UI"
-    "dev_backend_api:Dev Backend:APIs, migrations, logique metier"
-    "dev_mobile:Dev Mobile:Flutter, React Native, mobile"
-    "qa_engineer:QA Engineer:Tests, validation, rapports qualite"
-    "devops_engineer:DevOps:CI/CD, Docker, infra, monitoring"
-    "docs_writer:Documentaliste:README, guides, changelogs"
-    "legal_advisor:Avocat:RGPD, licences, conformite"
-)
+# ── Telecharger le catalogue ─────────────────────────────────────────────────
+echo "  Telechargement du catalogue MCP..."
+if wget -qO "${CATALOG_FILE}.tmp" "${CATALOG_URL}" 2>/dev/null && [ -s "${CATALOG_FILE}.tmp" ]; then
+    mv "${CATALOG_FILE}.tmp" "${CATALOG_FILE}"
+    echo "  -> Catalogue mis a jour"
+else
+    rm -f "${CATALOG_FILE}.tmp"
+    if [ -f "${CATALOG_FILE}" ]; then
+        echo "  -> Utilisation du cache local"
+    else
+        echo "  ERREUR : impossible de telecharger le catalogue et aucun cache local."
+        exit 1
+    fi
+fi
+
+# Charger le catalogue (ignorer commentaires et lignes vides)
+CATALOG=()
+while IFS= read -r line; do
+    [[ "${line}" =~ ^#.*$ ]] && continue
+    [[ -z "${line}" ]] && continue
+    CATALOG+=("${line}")
+done < "${CATALOG_FILE}"
+
+echo "  -> ${#CATALOG[@]} serveurs dans le catalogue"
+
+# ── Resoudre les agents dynamiquement ────────────────────────────────────────
+echo "  Detection des agents..."
+AGENTS=()
+
+# Chercher dans prompts/v1/*.md (chaque fichier = un agent)
+for prompt_file in "${PROJECT_DIR}"/prompts/v1/*.md; do
+    [ ! -f "${prompt_file}" ] && continue
+    agent_id=$(basename "${prompt_file}" .md)
+
+    # Essayer d'extraire le nom depuis le fichier agent Python
+    agent_py="${PROJECT_DIR}/agents/${agent_id}.py"
+    agent_name="${agent_id}"
+
+    if [ -f "${agent_py}" ]; then
+        # Chercher agent_name = "..." dans le fichier Python
+        found_name=$(grep -oP 'agent_name\s*=\s*"([^"]+)"' "${agent_py}" 2>/dev/null | head -1 | sed 's/.*"\(.*\)".*/\1/')
+        [ -n "${found_name}" ] && agent_name="${found_name}"
+    fi
+
+    # Fallback : humaniser l'id (requirements_analyst -> Requirements Analyst)
+    if [ "${agent_name}" = "${agent_id}" ]; then
+        agent_name=$(echo "${agent_id}" | tr '_' ' ' | sed 's/\b\(.\)/\u\1/g')
+    fi
+
+    AGENTS+=("${agent_id}|${agent_name}")
+done
+
+echo "  -> ${#AGENTS[@]} agents detectes"
+echo ""
 
 # ── Variables globales ───────────────────────────────────────────────────────
-LAST_SEARCH_RESULT=""
-LAST_SEARCH_COUNT=0
 SELECTED_AGENT_ID=""
 SELECTED_AGENT_NAME=""
+FILTERED_ENTRIES=()
+FILTERED_COUNT=0
 
 # ── Fonctions .env ───────────────────────────────────────────────────────────
 
-env_var_exists() {
-    grep -q "^${1}=" "${ENV_FILE}" 2>/dev/null
-}
-
-env_var_get() {
-    grep "^${1}=" "${ENV_FILE}" 2>/dev/null | head -1 | cut -d= -f2-
-}
+env_var_exists() { grep -q "^${1}=" "${ENV_FILE}" 2>/dev/null; }
+env_var_get() { grep "^${1}=" "${ENV_FILE}" 2>/dev/null | head -1 | cut -d= -f2-; }
 
 env_var_set() {
-    local var_name="$1"
-    local var_value="$2"
-    if env_var_exists "${var_name}"; then
-        local tmp
-        tmp=$(mktemp)
-        sed "s|^${var_name}=.*|${var_name}=${var_value}|" "${ENV_FILE}" > "${tmp}" && mv "${tmp}" "${ENV_FILE}"
+    local vn="$1" vv="$2"
+    if env_var_exists "${vn}"; then
+        local tmp; tmp=$(mktemp)
+        sed "s|^${vn}=.*|${vn}=${vv}|" "${ENV_FILE}" > "${tmp}" && mv "${tmp}" "${ENV_FILE}"
     else
-        echo "${var_name}=${var_value}" >> "${ENV_FILE}"
+        echo "${vn}=${vv}" >> "${ENV_FILE}"
     fi
 }
 
-# Trouver les parametrages existants pour une variable de base
-# Ex: GITHUB_PERSONAL_ACCESS_TOKEN -> trouve _PERSO, _WORK, etc.
-find_existing_profiles() {
-    local base_var="$1"
-    local profiles=()
-
-    # Le nom de base (sans suffixe)
-    if env_var_exists "${base_var}"; then
-        profiles+=("(defaut)")
-    fi
-
-    # Chercher les suffixes
-    while IFS= read -r line; do
-        local var_name
-        var_name=$(echo "${line}" | cut -d= -f1)
-        if [[ "${var_name}" == "${base_var}_"* ]] && [ "${var_name}" != "${base_var}" ]; then
-            local suffix="${var_name#${base_var}_}"
-            profiles+=("${suffix}")
-        fi
-    done < "${ENV_FILE}"
-
-    echo "${profiles[@]}"
-}
-
-# ── Fonctions affichage ──────────────────────────────────────────────────────
+# ── Affichage agents ─────────────────────────────────────────────────────────
 
 show_agents() {
     echo "  Choisissez un agent :"
@@ -130,21 +126,15 @@ show_agents() {
     echo ""
 
     local i=1
-    for agent_def in "${AGENTS[@]}"; do
-        IFS=':' read -r aid aname adesc <<< "${agent_def}"
+    for agent_entry in "${AGENTS[@]}"; do
+        IFS='|' read -r aid aname <<< "${agent_entry}"
 
-        # Compter les MCP deja associes
-        local mcp_count
-        mcp_count=$(jq -r --arg id "${aid}" '.[$id] // [] | length' "${AGENT_ACCESS}" 2>/dev/null || echo "0")
-
+        local mcp_list
+        mcp_list=$(jq -r --arg id "${aid}" '.[$id] // [] | join(", ")' "${AGENT_ACCESS}" 2>/dev/null)
         local mcp_info=""
-        if [ "${mcp_count}" -gt 0 ]; then
-            local mcp_list
-            mcp_list=$(jq -r --arg id "${aid}" '.[$id] // [] | join(", ")' "${AGENT_ACCESS}" 2>/dev/null)
-            mcp_info=" [MCP: ${mcp_list}]"
-        fi
+        [ -n "${mcp_list}" ] && mcp_info=" [${mcp_list}]"
 
-        printf "  %2d) %-18s %s%s\n" "${i}" "${aname}" "${adesc}" "${mcp_info}"
+        printf "  %2d) %-22s%s\n" "${i}" "${aname}" "${mcp_info}"
         i=$((i + 1))
     done
 
@@ -154,12 +144,76 @@ show_agents() {
     echo ""
 }
 
+# ── Recherche dans le catalogue ──────────────────────────────────────────────
+
+search_catalog() {
+    local query="$1"
+    local lower_query
+    lower_query=$(echo "${query}" | tr '[:upper:]' '[:lower:]')
+
+    FILTERED_ENTRIES=()
+    FILTERED_COUNT=0
+
+    for entry in "${CATALOG[@]}"; do
+        IFS='|' read -r mdep mid mlabel mdesc _ _ _ _ <<< "${entry}"
+
+        local lower_label lower_desc lower_id
+        lower_label=$(echo "${mlabel}" | tr '[:upper:]' '[:lower:]')
+        lower_desc=$(echo "${mdesc}" | tr '[:upper:]' '[:lower:]')
+        lower_id=$(echo "${mid}" | tr '[:upper:]' '[:lower:]')
+
+        if [[ "${lower_label}" == *"${lower_query}"* ]] || \
+           [[ "${lower_desc}" == *"${lower_query}"* ]] || \
+           [[ "${lower_id}" == *"${lower_query}"* ]]; then
+            FILTERED_ENTRIES+=("${entry}")
+            FILTERED_COUNT=$((FILTERED_COUNT + 1))
+        fi
+    done
+
+    if [ "${FILTERED_COUNT}" -eq 0 ]; then
+        echo ""
+        echo "  Aucun resultat pour '${query}'."
+        echo "  Essayez : github, postgres, slack, notion, docker, git"
+        echo ""
+        return 1
+    fi
+
+    echo ""
+    echo "  ${FILTERED_COUNT} resultat(s) pour '${query}' :"
+    echo "  ────────────────────────────────────────"
+    echo ""
+
+    local i=1
+    for entry in "${FILTERED_ENTRIES[@]}"; do
+        IFS='|' read -r mdep mid mlabel mdesc _ _ _ _ <<< "${entry}"
+
+        # Verifier si deja installe pour cet agent
+        local installed=""
+        if jq -e --arg a "${SELECTED_AGENT_ID}" --arg m "${mid}" \
+            '.[$a] // [] | index($m)' "${AGENT_ACCESS}" &>/dev/null 2>&1; then
+            installed=" ✅"
+        fi
+
+        local dep_badge=""
+        [ "${mdep}" = "1" ] && dep_badge=" ⚠️"
+
+        printf "  %2d) %-20s %s%s%s\n" "${i}" "${mlabel}" "${mdesc:0:45}" "${installed}" "${dep_badge}"
+        i=$((i + 1))
+    done
+
+    echo ""
+    echo "   0) Nouvelle recherche"
+    echo "   q) Retour aux agents"
+    echo ""
+}
+
+# ── Config actuelle ──────────────────────────────────────────────────────────
+
 show_config() {
     echo ""
     echo "  ═══ Configuration actuelle ═══"
     echo ""
-
-    echo "  Serveurs MCP installes :"
+    echo "  Serveurs MCP :"
     local srv_count
     srv_count=$(jq '.servers | length' "${MCP_CONFIG}")
     if [ "${srv_count}" -eq 0 ]; then
@@ -169,12 +223,11 @@ show_config() {
             "    \(if .value.enabled then "✅" else "❌" end) \(.key) — \(.value.name // .key)"
         ' "${MCP_CONFIG}"
     fi
-
     echo ""
-    echo "  Mapping agents → MCP :"
-    local agent_count
-    agent_count=$(jq 'length' "${AGENT_ACCESS}")
-    if [ "${agent_count}" -eq 0 ]; then
+    echo "  Agents → MCP :"
+    local ac
+    ac=$(jq 'length' "${AGENT_ACCESS}")
+    if [ "${ac}" -eq 0 ]; then
         echo "    (aucun mapping)"
     else
         jq -r 'to_entries[] | "    \(.key) → \(.value | join(", "))"' "${AGENT_ACCESS}"
@@ -182,100 +235,9 @@ show_config() {
     echo ""
 }
 
-# ── Fonctions MCP Registry ──────────────────────────────────────────────────
-
-search_servers() {
-    local query="$1"
-    local result
-    result=$(curl -s "${MCP_REGISTRY}?search=${query}&limit=20" 2>/dev/null)
-
-    if [ -z "${result}" ] || ! echo "${result}" | jq -e '.servers' &>/dev/null; then
-        echo "  Erreur : impossible de contacter le registry MCP."
-        return 1
-    fi
-
-    local count
-    count=$(echo "${result}" | jq '.servers | length')
-
-    if [ "${count}" -eq 0 ]; then
-        echo "  Aucun serveur trouve pour '${query}'."
-        return 1
-    fi
-
-    echo ""
-    echo "  ${count} resultats pour '${query}' :"
-    echo "  ────────────────────────────────────────"
-    echo ""
-
-    echo "${result}" | jq -r '
-        .servers | to_entries[] |
-        "  \(.key + 1)) \(.value.server.name // "inconnu")\n     \(.value.server.description // "" | .[0:100])\n"
-    '
-
-    echo "  0) Nouvelle recherche"
-    echo "  q) Retour au choix de l'agent"
-    echo ""
-
-    LAST_SEARCH_RESULT="${result}"
-    LAST_SEARCH_COUNT="${count}"
-}
-
-get_server_details() {
-    local index="$1"
-    local server_json
-    server_json=$(echo "${LAST_SEARCH_RESULT}" | jq ".servers[${index}]")
-
-    local name description
-    name=$(echo "${server_json}" | jq -r '.server.name // "inconnu"')
-    description=$(echo "${server_json}" | jq -r '.server.description // ""')
-
-    echo ""
-    echo "  ═══════════════════════════════════════"
-    echo "  ${name}"
-    echo "  Pour : ${SELECTED_AGENT_NAME}"
-    echo "  ═══════════════════════════════════════"
-    echo "${description}" | fold -s -w 70 | sed 's/^/  /'
-    echo ""
-
-    local pkg_count
-    pkg_count=$(echo "${server_json}" | jq '.server.packages // [] | length')
-
-    if [ "${pkg_count}" -gt 0 ]; then
-        echo "  Packages :"
-        local i
-        for i in $(seq 0 $((pkg_count - 1))); do
-            local reg_type identifier transport
-            reg_type=$(echo "${server_json}" | jq -r ".server.packages[${i}].registryType // \"?\"")
-            identifier=$(echo "${server_json}" | jq -r ".server.packages[${i}].identifier // \"?\"")
-            transport=$(echo "${server_json}" | jq -r ".server.packages[${i}].transport.type // \"stdio\"")
-            echo "    ${reg_type} : ${identifier} (${transport})"
-        done
-    fi
-
-    local env_info
-    env_info=$(echo "${server_json}" | jq -r '
-        [.server.packages[]?.environmentVariables // [] | .[]] | unique_by(.name) |
-        .[] | "    \(.name) — \(.description // "requis")"
-    ' 2>/dev/null || true)
-
-    if [ -n "${env_info}" ]; then
-        echo ""
-        echo "  Variables requises :"
-        echo "${env_info}"
-    fi
-
-    echo ""
-    echo "  i) Installer pour ${SELECTED_AGENT_NAME}"
-    echo "  0) Retour    q) Menu principal"
-    echo ""
-}
-
-# ── Installation avec gestion du parametrage ─────────────────────────────────
+# ── Configuration variable d'environnement ───────────────────────────────────
 
 configure_env_var() {
-    # Configure une variable d'environnement avec gestion des profils
-    # Args: var_name, var_description
-    # Retourne le nom final de la variable via REPLY_VAR_NAME
     local base_var="$1"
     local var_desc="${2:-Requis}"
 
@@ -283,18 +245,17 @@ configure_env_var() {
     echo "  ┌─ ${base_var}"
     echo "  │  ${var_desc}"
 
-    # Chercher les parametrages existants
+    # Trouver parametrages existants
     local existing=()
     if env_var_exists "${base_var}"; then
-        existing+=("defaut")
+        existing+=("defaut|${base_var}")
     fi
-
     while IFS= read -r line; do
         local vn
         vn=$(echo "${line}" | cut -d= -f1)
         if [[ "${vn}" == "${base_var}_"* ]] && [ "${vn}" != "${base_var}" ]; then
             local sfx="${vn#${base_var}_}"
-            existing+=("${sfx}")
+            existing+=("${sfx}|${vn}")
         fi
     done < <(grep "^${base_var}" "${ENV_FILE}" 2>/dev/null || true)
 
@@ -303,22 +264,18 @@ configure_env_var() {
         echo "  │  Parametrages existants :"
 
         local idx=1
-        for profile in "${existing[@]}"; do
-            local full_var="${base_var}"
-            [ "${profile}" != "defaut" ] && full_var="${base_var}_${profile}"
-
-            local val
-            val=$(env_var_get "${full_var}")
-            local masked
+        for pe in "${existing[@]}"; do
+            IFS='|' read -r pname pvar <<< "${pe}"
+            local val masked
+            val=$(env_var_get "${pvar}")
             if [ "${#val}" -gt 10 ]; then
                 masked="${val:0:6}...${val: -4}"
-            elif [ -n "${val}" ]; then
+            elif [ -n "${val}" ] && [ "${val}" != "A_CONFIGURER" ]; then
                 masked="****"
             else
-                masked="(vide)"
+                masked="(a configurer)"
             fi
-
-            printf "  │    %d) [%s] = %s\n" "${idx}" "${profile}" "${masked}"
+            printf "  │    %d) [%s] = %s\n" "${idx}" "${pname}" "${masked}"
             idx=$((idx + 1))
         done
 
@@ -326,321 +283,173 @@ configure_env_var() {
         echo "  │"
 
         while true; do
-            read -rp "  │  Choix : " profile_choice
-
-            case "${profile_choice}" in
+            read -rp "  │  Choix : " pc
+            case "${pc}" in
                 n|N)
-                    read -rp "  │  Nom du profil (ex: perso, work, test) : " suffix_name
-
-                    if [ -z "${suffix_name}" ]; then
-                        echo "  │  Nom vide, annule."
-                        continue
-                    fi
-
-                    suffix_name=$(echo "${suffix_name}" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_' | sed 's/__*/_/g; s/^_//; s/_$//')
-                    local new_var="${base_var}_${suffix_name}"
-
-                    if env_var_exists "${new_var}"; then
-                        echo "  │  ⚠️  ${new_var} existe deja !"
-                        continue
-                    fi
-
-                    read -rp "  │  Valeur pour ${new_var} : " new_value
-                    if [ -n "${new_value}" ]; then
-                        env_var_set "${new_var}" "${new_value}"
-                        echo "  │  ✅ ${new_var} cree"
+                    read -rp "  │  Nom du profil (ex: perso, work, test) : " sfx
+                    [ -z "${sfx}" ] && echo "  │  Annule." && continue
+                    sfx=$(echo "${sfx}" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_' | sed 's/__*/_/g; s/^_//; s/_$//')
+                    local new_var="${base_var}_${sfx}"
+                    if env_var_exists "${new_var}"; then echo "  │  ⚠️  ${new_var} existe deja !"; continue; fi
+                    read -rp "  │  Valeur pour ${new_var} : " nv
+                    if [ -n "${nv}" ]; then
+                        env_var_set "${new_var}" "${nv}"; echo "  │  ✅ ${new_var} cree"
                     else
-                        env_var_set "${new_var}" "A_CONFIGURER"
-                        echo "  │  ⚠️  ${new_var} cree (placeholder)"
+                        env_var_set "${new_var}" "A_CONFIGURER"; echo "  │  ⚠️  Placeholder cree"
                     fi
-
-                    REPLY_VAR_NAME="${new_var}"
-                    break
-                    ;;
-
+                    REPLY_VAR_NAME="${new_var}"; break ;;
                 [0-9]*)
-                    local pidx=$((profile_choice - 1))
+                    local pidx=$((pc - 1))
                     if [ "${pidx}" -ge 0 ] && [ "${pidx}" -lt "${#existing[@]}" ]; then
-                        local chosen_profile="${existing[${pidx}]}"
-                        local chosen_var="${base_var}"
-                        [ "${chosen_profile}" != "defaut" ] && chosen_var="${base_var}_${chosen_profile}"
-
+                        IFS='|' read -r _ chosen_var <<< "${existing[${pidx}]}"
                         echo "  │  ✅ Reutilise : ${chosen_var}"
-                        REPLY_VAR_NAME="${chosen_var}"
-                        break
-                    else
-                        echo "  │  Numero invalide."
-                    fi
-                    ;;
-
-                *)
-                    echo "  │  Tapez un numero ou 'n'."
-                    ;;
+                        REPLY_VAR_NAME="${chosen_var}"; break
+                    else echo "  │  Numero invalide."; fi ;;
+                *) echo "  │  Tapez un numero ou 'n'." ;;
             esac
         done
     else
-        # Pas de parametrage existant — saisie directe
         echo "  │"
-        read -rp "  │  Valeur : " new_value
-        if [ -n "${new_value}" ]; then
-            env_var_set "${base_var}" "${new_value}"
-            echo "  │  ✅ ${base_var} ajoute"
+        read -rp "  │  Valeur : " nv
+        if [ -n "${nv}" ]; then
+            env_var_set "${base_var}" "${nv}"; echo "  │  ✅ ${base_var} ajoute"
         else
-            env_var_set "${base_var}" "A_CONFIGURER"
-            echo "  │  ⚠️  Placeholder ajoute (pensez a le remplir)"
+            env_var_set "${base_var}" "A_CONFIGURER"; echo "  │  ⚠️  Placeholder"
         fi
         REPLY_VAR_NAME="${base_var}"
     fi
-
     echo "  └────────────────────────────"
 }
 
-install_server_for_agent() {
-    local index="$1"
-    local server_json
-    server_json=$(echo "${LAST_SEARCH_RESULT}" | jq ".servers[${index}]")
+# ── Installation MCP pour un agent ───────────────────────────────────────────
 
-    local name
-    name=$(echo "${server_json}" | jq -r '.server.name // "inconnu"')
+install_mcp_for_agent() {
+    local catalog_entry="$1"
+    IFS='|' read -r mdep mid mname mdesc mcmd margs mtransport menvs <<< "${catalog_entry}"
 
     echo ""
-    echo "  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  ┃  ${name}"
-    echo "  ┃  → pour ${SELECTED_AGENT_NAME} (${SELECTED_AGENT_ID})"
-    echo "  ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  ┃  ${mname} → ${SELECTED_AGENT_NAME}"
+    echo "  ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-    # Package info
-    local reg_type identifier transport
-    reg_type=$(echo "${server_json}" | jq -r '.server.packages[0].registryType // "npm"')
-    identifier=$(echo "${server_json}" | jq -r '.server.packages[0].identifier // ""')
-    transport=$(echo "${server_json}" | jq -r '.server.packages[0].transport.type // "stdio"')
+    local args_json
+    args_json=$(echo "${margs}" | tr ' ' '\n' | jq -R . | jq -sc .)
 
-    if [ -z "${identifier}" ]; then
-        echo "  ERREUR : pas de package identifie."
-        return 1
-    fi
-
-    local cmd args_json
-    if [ "${reg_type}" = "npm" ]; then
-        cmd="npx"
-        args_json=$(echo "${server_json}" | jq -c '["-y"] + [.server.packages[0].identifier]')
-    elif [ "${reg_type}" = "pypi" ]; then
-        cmd="uvx"
-        args_json=$(echo "${server_json}" | jq -c '[.server.packages[0].identifier]')
-    else
-        cmd="npx"
-        args_json="[\"-y\", \"${identifier}\"]"
-    fi
-
-    # ── Variables d'environnement ────────────────────────────────────────────
-    local env_list
-    env_list=$(echo "${server_json}" | jq -r '
-        [.server.packages[]?.environmentVariables // [] | .[]] | unique_by(.name) |
-        .[] | "\(.name)|\(.description // "Requis")"
-    ' 2>/dev/null || true)
-
+    # Variables d'environnement
     local env_mapping="{}"
     REPLY_VAR_NAME=""
 
-    if [ -n "${env_list}" ]; then
+    if [ -n "${menvs}" ]; then
         echo ""
         echo "  Configuration des acces :"
-
-        while IFS='|' read -r var_name var_desc; do
+        IFS=',' read -ra env_pairs <<< "${menvs}"
+        for pair in "${env_pairs[@]}"; do
+            IFS=':' read -r var_name var_desc <<< "${pair}"
             [ -z "${var_name}" ] && continue
-
             configure_env_var "${var_name}" "${var_desc}"
-
-            # REPLY_VAR_NAME contient le nom final de la variable
             env_mapping=$(echo "${env_mapping}" | jq --arg k "${var_name}" --arg v "${REPLY_VAR_NAME}" '. + {($k): $v}')
-
-        done <<< "${env_list}"
+        done
     fi
 
-    # ── ID du serveur ────────────────────────────────────────────────────────
-    local server_id
-    server_id=$(echo "${name}" | sed 's/.*\///' | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/--*/-/g; s/^-//; s/-$//')
-
-    # Verifier doublon
-    if jq -e ".servers[\"${server_id}\"]" "${MCP_CONFIG}" &>/dev/null; then
-        echo ""
-        echo "  ⚠️  ${server_id} existe deja."
-        read -rp "  Ecraser la configuration ? (o/n) : " overwrite
-        if [ "${overwrite}" != "o" ] && [ "${overwrite}" != "O" ]; then
-            echo "  Conservation de l'existant."
-            # Ajouter quand meme le mapping agent -> mcp
-            add_agent_mapping "${server_id}"
-            return 0
-        fi
+    # Sauvegarder dans mcp_servers.json (ou reutiliser)
+    if jq -e ".servers[\"${mid}\"]" "${MCP_CONFIG}" &>/dev/null; then
+        echo "  ℹ️  ${mid} deja configure — mise a jour env."
+        local tmp; tmp=$(mktemp)
+        jq --arg id "${mid}" --argjson env "${env_mapping}" \
+            '.servers[$id].env = $env' "${MCP_CONFIG}" > "${tmp}" && mv "${tmp}" "${MCP_CONFIG}"
+    else
+        local new_entry
+        new_entry=$(jq -n \
+            --arg cmd "${mcmd}" --argjson args "${args_json}" \
+            --arg transport "${mtransport}" --argjson env "${env_mapping}" \
+            --arg name "${mname}" \
+            '{command:$cmd,args:$args,transport:$transport,env:$env,name:$name,enabled:true}')
+        local tmp; tmp=$(mktemp)
+        jq --arg id "${mid}" --argjson entry "${new_entry}" \
+            '.servers[$id] = $entry' "${MCP_CONFIG}" > "${tmp}" && mv "${tmp}" "${MCP_CONFIG}"
     fi
 
-    # ── Sauvegarder dans mcp_servers.json ────────────────────────────────────
-    local new_entry
-    new_entry=$(jq -n \
-        --arg cmd "${cmd}" \
-        --argjson args "${args_json}" \
-        --arg transport "${transport}" \
-        --argjson env "${env_mapping}" \
-        --arg name "${name}" \
-        '{
-            command: $cmd,
-            args: $args,
-            transport: $transport,
-            env: $env,
-            name: $name,
-            enabled: true
-        }')
-
-    local tmp
-    tmp=$(mktemp)
-    jq --arg id "${server_id}" --argjson entry "${new_entry}" \
-        '.servers[$id] = $entry' "${MCP_CONFIG}" > "${tmp}" && mv "${tmp}" "${MCP_CONFIG}"
-
-    # ── Ajouter le mapping agent -> mcp ──────────────────────────────────────
-    add_agent_mapping "${server_id}"
+    # Mapping agent -> mcp
+    local tmp2; tmp2=$(mktemp)
+    jq --arg a "${SELECTED_AGENT_ID}" --arg m "${mid}" '
+        if .[$a] then
+            if (.[$a] | index($m)) then . else .[$a] += [$m] end
+        else .[$a] = [$m] end
+    ' "${AGENT_ACCESS}" > "${tmp2}" && mv "${tmp2}" "${AGENT_ACCESS}"
 
     echo ""
-    echo "  ✅ ${name} configure pour ${SELECTED_AGENT_NAME}"
-    echo "     ID        : ${server_id}"
-    echo "     Commande  : ${cmd} ${identifier}"
-    echo "     Transport : ${transport}"
+    echo "  ✅ ${mname} → ${SELECTED_AGENT_NAME}"
     echo ""
 }
 
-add_agent_mapping() {
-    local server_id="$1"
-    local tmp
-    tmp=$(mktemp)
-
-    # Ajouter le server_id dans la liste de l'agent (sans doublon)
-    jq --arg agent "${SELECTED_AGENT_ID}" --arg mcp "${server_id}" '
-        if .[$agent] then
-            if (.[$agent] | index($mcp)) then .
-            else .[$agent] += [$mcp]
-            end
-        else
-            .[$agent] = [$mcp]
-        end
-    ' "${AGENT_ACCESS}" > "${tmp}" && mv "${tmp}" "${AGENT_ACCESS}"
-}
-
-# ── Generation du mcp_client.py ──────────────────────────────────────────────
+# ── Generation mcp_client.py ─────────────────────────────────────────────────
 
 generate_mcp_client() {
     echo "  Generation de agents/shared/mcp_client.py..."
 
     cat > agents/shared/mcp_client.py << 'PYTHONEOF'
-"""MCP Client — Charge les configs depuis mcp_servers.json et agent_mcp_access.json."""
+"""MCP Client — Filtre par agent via config/agent_mcp_access.json."""
 import json, logging, os, asyncio
 from dotenv import load_dotenv
-
 load_dotenv()
 logger = logging.getLogger(__name__)
-
 BASE = os.path.dirname(__file__)
-CONFIG_PATHS = [
-    os.path.join(BASE, "..", "..", "config"),
-    os.path.join("/app", "config"),
-]
+CPATHS = [os.path.join(BASE,"..","..","config"), os.path.join("/app","config")]
 
-
-def _find_config(filename):
-    for base in CONFIG_PATHS:
-        path = os.path.join(os.path.abspath(base), filename)
-        if os.path.exists(path):
-            return path
+def _find(f):
+    for b in CPATHS:
+        p = os.path.join(os.path.abspath(b), f)
+        if os.path.exists(p): return p
     return None
 
+def _load(f):
+    p = _find(f)
+    return json.load(open(p)) if p else {}
 
-def _load_json(filename):
-    path = _find_config(filename)
-    if path:
-        with open(path) as f:
-            return json.load(f)
-    return {}
+def _resolve(env):
+    r = {}
+    for k, vn in env.items():
+        v = os.getenv(vn, os.getenv(k, ""))
+        if v and v != "A_CONFIGURER": r[k] = v
+    return r
 
-
-def _resolve_env(env_dict):
-    """Resout les variables — chaque valeur est le nom reel de la var dans .env."""
-    resolved = {}
-    for key, var_name in env_dict.items():
-        val = os.getenv(var_name, "")
-        if not val:
-            val = os.getenv(key, "")
-        if val and val != "A_CONFIGURER":
-            resolved[key] = val
-    return resolved
-
-
-def get_mcp_tools_sync(agent_id: str) -> list:
+def get_mcp_tools_sync(agent_id):
     try:
         loop = asyncio.new_event_loop()
-        tools = loop.run_until_complete(_get_tools_async(agent_id))
-        loop.close()
-        return tools
+        t = loop.run_until_complete(_get(agent_id)); loop.close(); return t
     except Exception as e:
-        logger.warning(f"[{agent_id}] MCP tools unavailable: {e}")
-        return []
+        logger.warning(f"[{agent_id}] MCP: {e}"); return []
 
-
-async def _get_tools_async(agent_id: str) -> list:
+async def _get(agent_id):
     from langchain_mcp_adapters.client import MultiServerMCPClient
-
-    mcp_config = _load_json("mcp_servers.json")
-    agent_access = _load_json("agent_mcp_access.json")
-
-    # Quels MCP cet agent peut utiliser
-    allowed = agent_access.get(agent_id, [])
-    if not allowed:
-        return []
-
+    mc, ac = _load("mcp_servers.json"), _load("agent_mcp_access.json")
+    allowed = ac.get(agent_id, [])
+    if not allowed: return []
     servers = {}
-    for server_id in allowed:
-        server_conf = mcp_config.get("servers", {}).get(server_id)
-        if not server_conf or not server_conf.get("enabled", True):
-            continue
-
-        env = _resolve_env(server_conf.get("env", {}))
-
-        # Verifier les vars requises
-        missing = [k for k in server_conf.get("env", {}) if not env.get(k)]
-        if missing:
-            logger.warning(f"[{agent_id}] MCP {server_id} skip — missing: {missing}")
-            continue
-
-        entry = {
-            "command": server_conf["command"],
-            "args": server_conf["args"],
-            "transport": server_conf.get("transport", "stdio"),
-        }
-        if env:
-            entry["env"] = env
-        servers[server_id] = entry
-
-    if not servers:
-        return []
-
+    for sid in allowed:
+        sc = mc.get("servers",{}).get(sid)
+        if not sc or not sc.get("enabled",True): continue
+        env = _resolve(sc.get("env",{}))
+        missing = [k for k in sc.get("env",{}) if not env.get(k)]
+        if missing: logger.warning(f"[{agent_id}] {sid} skip: {missing}"); continue
+        e = {"command":sc["command"],"args":sc["args"],"transport":sc.get("transport","stdio")}
+        if env: e["env"] = env
+        servers[sid] = e
+    if not servers: return []
     try:
-        client = MultiServerMCPClient(servers)
-        tools = await client.get_tools()
-        logger.info(f"[{agent_id}] MCP: {len(tools)} tools from {list(servers.keys())}")
-        return tools
-    except Exception as e:
-        logger.error(f"[{agent_id}] MCP error: {e}")
-        return []
+        c = MultiServerMCPClient(servers); t = await c.get_tools()
+        logger.info(f"[{agent_id}] MCP: {len(t)} tools from {list(servers.keys())}"); return t
+    except Exception as e: logger.error(f"[{agent_id}] MCP: {e}"); return []
 
-
-def get_tools_for_agent(agent_id: str) -> list:
-    tools = get_mcp_tools_sync(agent_id)
+def get_tools_for_agent(agent_id):
+    t = get_mcp_tools_sync(agent_id)
     try:
         from agents.shared.rag_service import create_rag_tools
-        tools.extend(create_rag_tools())
-    except ImportError:
-        pass
-    return tools
+        t.extend(create_rag_tools())
+    except ImportError: pass
+    return t
 PYTHONEOF
-
-    echo "  -> mcp_client.py genere (filtre par agent)"
+    echo "  -> mcp_client.py genere"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -650,80 +459,74 @@ PYTHONEOF
 while true; do
     echo ""
     show_agents
-    read -rp "  Agent (numero, 0=config, q=quitter) : " agent_choice
+    read -rp "  Agent (numero, 0=config, q=quitter) : " ac
 
-    [ "${agent_choice}" = "q" ] || [ "${agent_choice}" = "Q" ] && break
+    [ "${ac}" = "q" ] || [ "${ac}" = "Q" ] && break
+    if [ "${ac}" = "0" ]; then show_config; continue; fi
+    if ! [[ "${ac}" =~ ^[0-9]+$ ]]; then echo "  Tapez un numero."; continue; fi
 
-    if [ "${agent_choice}" = "0" ]; then
-        show_config
-        continue
+    aidx=$((ac - 1))
+    if [ "${aidx}" -lt 0 ] || [ "${aidx}" -ge "${#AGENTS[@]}" ]; then
+        echo "  Invalide (1-${#AGENTS[@]})."; continue
     fi
 
-    if ! [[ "${agent_choice}" =~ ^[0-9]+$ ]]; then
-        echo "  Tapez un numero."
-        continue
-    fi
-
-    local_idx=$((agent_choice - 1))
-    if [ "${local_idx}" -lt 0 ] || [ "${local_idx}" -ge "${#AGENTS[@]}" ]; then
-        echo "  Numero invalide (1-${#AGENTS[@]})."
-        continue
-    fi
-
-    # Extraire l'agent selectionne
-    IFS=':' read -r SELECTED_AGENT_ID SELECTED_AGENT_NAME _ <<< "${AGENTS[${local_idx}]}"
-
+    IFS='|' read -r SELECTED_AGENT_ID SELECTED_AGENT_NAME <<< "${AGENTS[${aidx}]}"
     echo ""
-    echo "  ✔ Agent selectionne : ${SELECTED_AGENT_NAME} (${SELECTED_AGENT_ID})"
-    echo ""
+    echo "  ✔ ${SELECTED_AGENT_NAME} (${SELECTED_AGENT_ID})"
 
-    # Boucle de recherche MCP pour cet agent
+    # Boucle MCP : recherche d'abord
     while true; do
-        read -rp "  🔍 MCP pour ${SELECTED_AGENT_NAME} (q=retour) : " search_input
+        echo ""
+        read -rp "  🔍 MCP pour ${SELECTED_AGENT_NAME} (q=retour agents) : " sq
 
-        [ "${search_input}" = "q" ] || [ "${search_input}" = "Q" ] && break
-        [ -z "${search_input}" ] && continue
+        [ "${sq}" = "q" ] || [ "${sq}" = "Q" ] && break
+        [ -z "${sq}" ] && continue
 
-        if ! search_servers "${search_input}"; then
+        if ! search_catalog "${sq}"; then
             continue
         fi
 
+        # Selection dans les resultats
         while true; do
-            read -rp "  Choix (numero, 0=recherche, q=retour agent) : " mcp_choice
+            read -rp "  Choix (numero, 0=rechercher, q=retour agents) : " mc
 
-            [ "${mcp_choice}" = "q" ] || [ "${mcp_choice}" = "Q" ] && break 2
-            [ "${mcp_choice}" = "0" ] && break
+            [ "${mc}" = "q" ] || [ "${mc}" = "Q" ] && break 2
+            [ "${mc}" = "0" ] && break
 
-            if ! [[ "${mcp_choice}" =~ ^[0-9]+$ ]]; then
-                echo "  Tapez un numero."
-                continue
+            if ! [[ "${mc}" =~ ^[0-9]+$ ]]; then echo "  Tapez un numero."; continue; fi
+
+            midx=$((mc - 1))
+            if [ "${midx}" -lt 0 ] || [ "${midx}" -ge "${FILTERED_COUNT}" ]; then
+                echo "  Invalide (1-${FILTERED_COUNT})."; continue
             fi
 
-            mcp_idx=$((mcp_choice - 1))
-            if [ "${mcp_idx}" -lt 0 ] || [ "${mcp_idx}" -ge "${LAST_SEARCH_COUNT}" ]; then
-                echo "  Numero invalide (1-${LAST_SEARCH_COUNT})."
-                continue
+            # Detail
+            local_entry="${FILTERED_ENTRIES[${midx}]}"
+            IFS='|' read -r sdep sid sname sdesc _ _ _ senvs <<< "${local_entry}"
+
+            echo ""
+            echo "  ═══════════════════════════════════════"
+            echo "  ${sname} → ${SELECTED_AGENT_NAME}"
+            [ "${sdep}" = "1" ] && echo "  ⚠️  DEPRECIE — fonctionne mais remplace par une version plus recente"
+            echo "  ═══════════════════════════════════════"
+            echo "  ${sdesc}"
+            if [ -n "${senvs}" ]; then
+                echo "  Variables : $(echo "${senvs}" | tr ',' ', ' | sed 's/:[^,]*//g')"
             fi
+            echo ""
+            echo "  i) Installer    0) Retour resultats    q) Retour agents"
+            echo ""
 
-            get_server_details "${mcp_idx}"
-
-            while true; do
-                read -rp "  Choix (i=installer, 0=retour, q=menu) : " detail_choice
-
-                [ "${detail_choice}" = "q" ] || [ "${detail_choice}" = "Q" ] && break 3
-                [ "${detail_choice}" = "0" ] && break
-
-                if [ "${detail_choice}" = "i" ] || [ "${detail_choice}" = "I" ]; then
-                    install_server_for_agent "${mcp_idx}"
-
-                    echo "  Ajouter un autre MCP pour ${SELECTED_AGENT_NAME} ?"
-                    read -rp "  (o=oui, n=retour agents) : " more
-                    [ "${more}" = "n" ] || [ "${more}" = "N" ] && break 3
-                    break 2  # Retour a la recherche MCP
-                fi
-
-                echo "  Tapez i, 0, ou q."
-            done
+            read -rp "  Choix : " dc
+            case "${dc}" in
+                i|I)
+                    install_mcp_for_agent "${local_entry}"
+                    # Retour a la recherche pour en ajouter d'autres
+                    break
+                    ;;
+                q|Q) break 2 ;;
+                *) continue ;;
+            esac
         done
     done
 done
@@ -731,21 +534,11 @@ done
 # ── Finalisation ─────────────────────────────────────────────────────────────
 echo ""
 
-installed_count=$(jq '.servers | length' "${MCP_CONFIG}")
-mapping_count=$(jq 'length' "${AGENT_ACCESS}")
-
-if [ "${installed_count}" -gt 0 ] || [ "${mapping_count}" -gt 0 ]; then
+installed=$(jq '.servers | length' "${MCP_CONFIG}")
+if [ "${installed}" -gt 0 ]; then
     echo "  Finalisation..."
     generate_mcp_client
-
     show_config
-
-    echo "  Fichiers generes :"
-    echo "    ${MCP_CONFIG}"
-    echo "    ${AGENT_ACCESS}"
-    echo "    agents/shared/mcp_client.py"
-    echo "    ${ENV_FILE}"
-    echo ""
     echo "  Pour appliquer :"
     echo "    cd ${PROJECT_DIR}"
     echo "    docker compose up -d --build langgraph-api"
