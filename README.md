@@ -254,6 +254,23 @@ Ce script :
    docker compose up -d --build langgraph-api
    ```
 
+### Etape 6 — Mettre a jour les agents
+
+**Ou** : sur la VM Ubuntu, apres l'etape 3 (stack Docker en fonctionnement).
+
+```bash
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/06-install-agents.sh)"
+```
+
+Ce script met a jour les agents LangGraph depuis le depot distant. Il permet de deployer les dernieres versions des agents sans reinstaller toute la stack.
+
+**Apres execution** : relancer les services pour prendre en compte les modifications :
+
+```bash
+cd ~/langgraph-project
+docker compose up -d --build langgraph-api
+```
+
 ## Ports exposes
 
 | Service        | Port  | Acces              |
