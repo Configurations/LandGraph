@@ -44,13 +44,18 @@ mkdir -p config
 
 # ── Telecharger le catalogue ─────────────────────────────────────────────────
 echo "  Telechargement du catalogue MCP..."
+CATALOG_DOWNLOADED=0
 if wget -qO "${CATALOG_FILE}.tmp" "${CATALOG_URL}" 2>/dev/null && [ -s "${CATALOG_FILE}.tmp" ]; then
     mv "${CATALOG_FILE}.tmp" "${CATALOG_FILE}"
-    echo "  -> Catalogue mis a jour"
+    echo "  -> Catalogue telecharge"
+    CATALOG_DOWNLOADED=1
 else
     rm -f "${CATALOG_FILE}.tmp"
+fi
+
+if [ "${CATALOG_DOWNLOADED}" -eq 0 ]; then
     if [ -f "${CATALOG_FILE}" ]; then
-        echo "  -> Utilisation du cache local"
+        echo "  -> Telechargement echoue, utilisation du cache local"
     else
         echo "  ERREUR : impossible de telecharger le catalogue et aucun cache local."
         exit 1
@@ -71,28 +76,33 @@ echo "  -> ${#CATALOG[@]} serveurs dans le catalogue"
 echo "  Detection des agents..."
 AGENTS=()
 
-# Chercher dans prompts/v1/*.md (chaque fichier = un agent)
 for prompt_file in "${PROJECT_DIR}"/prompts/v1/*.md; do
     [ ! -f "${prompt_file}" ] && continue
     agent_id=$(basename "${prompt_file}" .md)
 
-    # Essayer d'extraire le nom depuis le fichier agent Python
     agent_py="${PROJECT_DIR}/agents/${agent_id}.py"
     agent_name="${agent_id}"
 
     if [ -f "${agent_py}" ]; then
-        # Chercher agent_name = "..." dans le fichier Python
-        found_name=$(grep -oP 'agent_name\s*=\s*"([^"]+)"' "${agent_py}" 2>/dev/null | head -1 | sed 's/.*"\(.*\)".*/\1/')
-        [ -n "${found_name}" ] && agent_name="${found_name}"
+        found_name=$(grep 'agent_name' "${agent_py}" 2>/dev/null | head -1 | sed 's/.*"\(.*\)".*/\1/' || true)
+        if [ -n "${found_name}" ] && [ "${found_name}" != "${agent_id}" ]; then
+            agent_name="${found_name}"
+        fi
     fi
 
-    # Fallback : humaniser l'id (requirements_analyst -> Requirements Analyst)
+    # Fallback : humaniser l'id
     if [ "${agent_name}" = "${agent_id}" ]; then
-        agent_name=$(echo "${agent_id}" | tr '_' ' ' | sed 's/\b\(.\)/\u\1/g')
+        agent_name=$(echo "${agent_id}" | tr '_' ' ' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2)}1')
     fi
 
     AGENTS+=("${agent_id}|${agent_name}")
 done
+
+if [ "${#AGENTS[@]}" -eq 0 ]; then
+    echo "  ERREUR : aucun agent trouve dans ${PROJECT_DIR}/prompts/v1/"
+    echo "  Executez d'abord le script 06-install-agents.sh"
+    exit 1
+fi
 
 echo "  -> ${#AGENTS[@]} agents detectes"
 echo ""
