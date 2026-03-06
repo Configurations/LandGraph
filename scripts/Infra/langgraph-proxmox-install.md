@@ -1,8 +1,8 @@
 # Méthodologie d'Installation — LangGraph Multi-Agent sur Proxmox
 
-> **Version** : 1.2 — Mars 2026
-> **Cible** : Serveur Proxmox VE 8.x / 9.x  
-> **Architecture** : LangGraph Self-Hosted (Standalone Container) + Discord MCP  
+> **Version** : 1.3 — Mars 2026
+> **Cible** : Serveur Proxmox VE 8.x / 9.x (VM ou LXC)
+> **Architecture** : LangGraph Self-Hosted (Standalone Container) + Discord MCP + MCP Servers
 > **Auteur** : Généré par Claude — à adapter à votre repo `Configurations/Proxmox`
 
 ---
@@ -11,18 +11,21 @@
 
 1. [Vue d'ensemble de l'architecture](#1-vue-densemble)
 2. [Prérequis matériels et logiciels](#2-prérequis)
-3. [Phase 1 — Création de la VM sur Proxmox](#3-phase-1)
-4. [Phase 2 — Socle système (Docker + dépendances)](#4-phase-2)
-5. [Phase 3 — Infrastructure de données (PostgreSQL + Redis)](#5-phase-3)
-6. [Phase 4 — Installation de LangGraph](#6-phase-4)
-7. [Phase 5 — Premier agent (Hello World)](#7-phase-5)
-8. [Phase 6 — Observabilité (Langfuse self-hosted)](#8-phase-6)
-9. [Phase 7 — Discord MCP (communication agents ↔ humain)](#9-phase-7-discord)
-10. [Phase 8 — Couche RAG (pgvector + embeddings)](#10-phase-8-rag)
-11. [Phase 9 — Sécurisation et réseau](#11-phase-9)
-12. [Phase 10 — Intégration dans votre repo Proxmox](#12-phase-10)
-13. [Arborescence finale](#13-arborescence)
-14. [Troubleshooting](#14-troubleshooting)
+3. [Phase 0 — Configuration LXC (optionnel)](#3-phase-0-lxc)
+4. [Phase 1 — Création de la VM sur Proxmox](#4-phase-1)
+5. [Phase 2 — Socle système (Docker + dépendances)](#5-phase-2)
+6. [Phase 3 — Infrastructure de données (PostgreSQL + Redis)](#6-phase-3)
+7. [Phase 4 — Installation de LangGraph](#7-phase-4)
+8. [Phase 5 — Premier agent (Hello World)](#8-phase-5)
+9. [Phase 6 — Observabilité (Langfuse self-hosted)](#9-phase-6)
+10. [Phase 7 — Discord MCP (communication agents ↔ humain)](#10-phase-7-discord)
+11. [Phase 8 — Couche RAG (pgvector + embeddings)](#11-phase-8-rag)
+12. [Phase 9 — Sécurisation et réseau](#12-phase-9)
+13. [Phase 10 — Intégration dans votre repo Proxmox](#13-phase-10)
+14. [Phase 11 — Fix thread persistence](#14-phase-11-thread)
+15. [Phase 12 — Installation MCP (Model Context Protocol)](#15-phase-12-mcp)
+16. [Arborescence finale](#16-arborescence)
+17. [Troubleshooting](#17-troubleshooting)
 
 ---
 
@@ -33,7 +36,7 @@
 │                    PROXMOX VE HOST                          │
 │                                                             │
 │  ┌────────────────────────────────────────────────────────┐ │
-│  │              VM: langgraph-agents                      │ │
+│  │          VM ou LXC : langgraph-agents                  │ │
 │  │              Ubuntu 24.04 LTS / Debian 12              │ │
 │  │                                                        │ │
 │  │  ┌──────────────────────────────────────────────────┐  │ │
@@ -66,8 +69,9 @@
                            Votre serveur Discord
 ```
 
-**Pourquoi une VM et pas un LXC ?**  
-LangGraph tourne dans Docker, qui nécessite un runtime complet. Bien qu'il soit possible de faire tourner Docker dans un LXC privilégié, une VM offre une isolation plus propre, un support complet de `cgroups v2`, et évite les problèmes de `nesting`. Pour un workload de production multi-agents, la VM est le choix recommandé.
+**VM ou LXC ?**
+- **VM (recommandé)** : isolation complete, support natif de cgroups v2, aucun probleme de nesting. Choix recommande pour la production.
+- **LXC** : plus leger en ressources, mais necessite une configuration specifique (nesting, AppArmor, sysctl). Utilisez le script `00-configure-lxc.sh` pour configurer un LXC existant. Voir [Phase 0](#3-phase-0-lxc).
 
 ---
 
@@ -102,7 +106,32 @@ LangGraph tourne dans Docker, qui nécessite un runtime complet. Bien qu'il soit
 
 ---
 
-## 3. Phase 1 — Création de la VM sur Proxmox
+## 3. Phase 0 — Configuration LXC (optionnel)
+
+> **Script** : `00-configure-lxc.sh`
+> **Ou** : sur le shell de l'hote Proxmox (uniquement si vous utilisez un LXC au lieu d'une VM)
+
+Si vous preferez un container LXC plutot qu'une VM, ce script configure un LXC existant pour supporter Docker :
+
+```bash
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/00-configure-lxc.sh)"
+```
+
+**Usage** : `./00-configure-lxc.sh <CTID>`
+
+Ce script resout les problemes courants de Docker dans un LXC :
+- AppArmor `permission denied`
+- Network unreachable (pas de DHCP)
+- Docker sysctl errors
+- Nesting / cgroup permissions
+
+**Prerequis** : le container LXC doit deja exister. Apres execution, passez directement a la [Phase 2](#5-phase-2).
+
+> Si vous utilisez une VM, ignorez cette phase et passez a la Phase 1.
+
+---
+
+## 4. Phase 1 — Création de la VM sur Proxmox
 
 ### 3.1 Via l'interface web Proxmox
 
@@ -173,7 +202,7 @@ sudo hostnamectl set-hostname langgraph-agents
 
 ---
 
-## 4. Phase 2 — Socle Docker
+## 5. Phase 2 — Socle Docker
 
 ### 4.1 Installer Docker Engine
 
@@ -226,7 +255,7 @@ sudo systemctl restart docker
 
 ---
 
-## 5. Phase 3 — Infrastructure de données
+## 6. Phase 3 — Infrastructure de données
 
 ### 5.1 Structure du projet
 
@@ -412,7 +441,7 @@ docker exec -it langgraph-redis redis-cli -a $(grep REDIS_PASSWORD .env | cut -d
 
 ---
 
-## 6. Phase 4 — Installation de LangGraph
+## 7. Phase 4 — Installation de LangGraph
 
 ### 6.1 Environnement Python
 
@@ -622,7 +651,7 @@ YAML
 
 ---
 
-## 7. Phase 5 — Premier agent (validation)
+## 8. Phase 5 — Premier agent (validation)
 
 ### 7.1 Agent minimal de test
 
@@ -730,7 +759,7 @@ Bonjour ! Je suis opérationnel et prêt à travailler. [...]
 
 ---
 
-## 8. Phase 6 — Observabilité (Langfuse self-hosted)
+## 9. Phase 6 — Observabilité (Langfuse self-hosted)
 
 Alternative open-source à LangSmith, entièrement self-hosted.
 
@@ -784,7 +813,7 @@ result = graph.invoke(input_data, config={"callbacks": [langfuse_handler]})
 
 ---
 
-## 9. Phase 7 — Discord MCP (communication agents ↔ humain)
+## 10. Phase 7 — Discord MCP (communication agents ↔ humain)
 
 Discord sert d'interface entre vous et vos agents : notifications, validations human-in-the-loop, commandes en langage naturel, et logs en temps réel. **Coût : 0€.**
 
@@ -1271,7 +1300,7 @@ python agents/discord_listener.py
 
 ---
 
-## 10. Phase 8 — Couche RAG (pgvector + embeddings)
+## 11. Phase 8 — Couche RAG (pgvector + embeddings)
 
 > **Script** : `05-install-rag.sh`
 > **Prérequis** : Phase 3 terminée, stack Docker running (`docker compose up -d`)
@@ -1416,7 +1445,7 @@ docker compose up -d --build langgraph-api
 
 ---
 
-## 11. Phase 9 — Sécurisation
+## 12. Phase 9 — Sécurisation
 
 ### 11.1 Firewall (UFW)
 
@@ -1473,7 +1502,7 @@ echo "*.key" >> .gitignore
 
 ---
 
-## 12. Phase 10 — Intégration repo Proxmox
+## 13. Phase 10 — Intégration repo Proxmox
 
 ### 12.1 Structure recommandée pour votre repo
 
@@ -1685,7 +1714,80 @@ echo "✅ Backup terminé : ${BACKUP_DIR}/*_${DATE}.*"
 
 ---
 
-## 13. Arborescence finale
+## 14. Phase 11 — Fix thread persistence
+
+> **Script** : `13-fix-thread-persistence.sh`
+> **Prerequis** : Phase 7 terminee (Discord operationnel)
+
+### 14.1 Probleme
+
+Chaque message Discord creait un nouveau `thread_id`, ce qui faisait perdre le contexte a l'Orchestrateur entre les messages. L'agent ne se souvenait pas des echanges precedents dans le meme channel.
+
+### 14.2 Solution
+
+Le `thread_id` est desormais base sur le channel Discord : un projet = un channel ou un thread Discord. Tous les messages envoyes dans le meme channel partagent le meme contexte de conversation.
+
+### 14.3 Installation
+
+```bash
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/13-fix-thread-persistence.sh)"
+```
+
+Ce script met a jour `agents/discord_listener.py` pour utiliser un `thread_id` persistant par channel.
+
+**Apres execution** : relancer le bot Discord :
+
+```bash
+docker compose up -d --build discord-bot
+```
+
+---
+
+## 15. Phase 12 — Installation MCP (Model Context Protocol)
+
+> **Script** : `14-install-mcp.sh`
+> **Prerequis** : Phase 4 terminee (LangGraph operationnel)
+
+### 15.1 Objectif
+
+Connecter les agents a des serveurs MCP externes (GitHub, Filesystem, Slack, bases de donnees, etc.) pour etendre leurs capacites au-dela du LLM. Chaque agent peut avoir acces a des serveurs MCP differents selon son role.
+
+### 15.2 Installation interactive
+
+```bash
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/14-install-mcp.sh)"
+```
+
+Le script propose un flow interactif :
+
+1. **Choisir un agent** dans la liste des 13 agents disponibles
+2. **Chercher un serveur MCP** dans le registry officiel (https://registry.modelcontextprotocol.io)
+3. **Configurer les variables d'environnement** :
+   - Si le service est deja configure : reutiliser le parametrage existant ou en creer un nouveau
+   - Nouveau parametrage = suffixe personnalise (ex: `_PERSO`, `_WORK`)
+4. **Sauvegarder le mapping** agent <-> MCP <-> parametrage
+
+### 15.3 Fichiers generes
+
+| Fichier | Role |
+|---------|------|
+| `config/mcp_servers.json` | Serveurs MCP installes avec leurs parametrages |
+| `config/agent_mcp_access.json` | Mapping agent -> [mcp_ids] |
+| `agents/shared/mcp_client.py` | Client Python qui lit les configs et initialise les connexions MCP |
+
+### 15.4 Exemple d'utilisation
+
+```python
+from agents.shared.mcp_client import get_tools_for_agent
+
+# Recuperer les tools MCP disponibles pour un agent
+tools = get_tools_for_agent("architect")
+# -> [github_search, github_create_issue, filesystem_read, ...]
+```
+
+---
+
+## 16. Arborescence finale
 
 ```
 ~/langgraph-project/
@@ -1702,30 +1804,49 @@ echo "✅ Backup terminé : ${BACKUP_DIR}/*_${DATE}.*"
 │
 ├── agents/
 │   ├── __init__.py
-│   ├── orchestrator.py           # Meta-agent PM
-│   ├── requirements_agent.py     # Analyste
+│   ├── orchestrator.py           # Meta-agent PM (orchestrateur)
 │   ├── architect_agent.py        # Architecte
-│   ├── developer_agent.py        # Développeur
-│   ├── qa_agent.py               # QA
-│   ├── devops_agent.py           # DevOps
-│   ├── docs_agent.py             # Documentaliste
-│   ├── discord_listener.py       # Bot Discord (écoute #commandes)
+│   ├── ux_designer_agent.py      # UX Designer
+│   ├── requirements_agent.py     # Analyste
+│   ├── lead_dev_agent.py         # Lead Dev
+│   ├── planner_agent.py          # Planificateur
+│   ├── dev_backend_api_agent.py  # Dev Backend API
+│   ├── dev_mobile_agent.py       # Dev Mobile
+│   ├── dev_frontend_web_agent.py # Dev Frontend Web
+│   ├── qa_agent.py               # QA Engineer
+│   ├── devops_agent.py           # DevOps Engineer
+│   ├── docs_agent.py             # Docs Writer
+│   ├── legal_agent.py            # Legal Advisor
+│   ├── discord_listener.py       # Bot Discord (ecoute #commandes)
 │   ├── gateway.py                # FastAPI entry point
 │   └── shared/
 │       ├── state.py              # ProjectState (Pydantic)
 │       ├── memory.py             # RAG / Vector store utils
 │       ├── discord_tools.py      # Discord MCP tools (notify, approve, alert)
+│       ├── rag_service.py        # Service RAG (chunking, indexation, recherche)
+│       ├── mcp_client.py         # Client MCP (lecture configs, init connexions)
 │       └── tools.py              # MCP tool definitions
 │
-├── prompts/                      # System prompts versionnés
-│   └── v1/
-│       ├── orchestrator.md
-│       ├── requirements.md
-│       └── ...
+├── prompts/                      # System prompts (13 agents)
+│   ├── orchestrator.md
+│   ├── architect.md
+│   ├── ux_designer.md
+│   ├── requirements_analyst.md
+│   ├── lead_dev.md
+│   ├── planner.md
+│   ├── dev_backend_api.md
+│   ├── dev_mobile.md
+│   ├── dev_frontend_web.md
+│   ├── qa_engineer.md
+│   ├── devops_engineer.md
+│   ├── docs_writer.md
+│   └── legal_advisor.md
 │
 ├── config/
 │   ├── init.sql                  # Schema Postgres
 │   ├── daemon.json               # Docker daemon config
+│   ├── mcp_servers.json          # Serveurs MCP installes
+│   ├── agent_mcp_access.json     # Mapping agent -> MCP
 │   └── Caddyfile                 # Reverse proxy
 │
 ├── scripts/
@@ -1739,7 +1860,7 @@ echo "✅ Backup terminé : ${BACKUP_DIR}/*_${DATE}.*"
 
 ---
 
-## 14. Troubleshooting
+## 17. Troubleshooting
 
 | Problème | Cause probable | Solution |
 |----------|---------------|----------|
@@ -1756,23 +1877,31 @@ echo "✅ Backup terminé : ${BACKUP_DIR}/*_${DATE}.*"
 | Discord `Forbidden 403` | Permissions bot insuffisantes | Re-inviter le bot avec les permissions correctes (Send Messages, Read History, etc.) |
 | `MESSAGE_CONTENT` intent error | Intent non activé | Aller dans Discord Developer Portal → Bot → activer `MESSAGE CONTENT INTENT` |
 | Human gate timeout (Discord) | Personne n'a répondu à temps | Augmenter le `timeout` dans `request_human_approval()` ou configurer une action par défaut |
+| LXC Docker `permission denied` | AppArmor ou nesting pas configure | Executer `00-configure-lxc.sh <CTID>` sur l'hote Proxmox |
+| LXC `network unreachable` | Pas de DHCP dans le LXC | Verifier la config reseau du LXC (script 00 le corrige) |
+| Thread Discord perd le contexte | Chaque message cree un nouveau thread_id | Executer `13-fix-thread-persistence.sh` pour baser le thread_id sur le channel |
+| MCP server ne repond pas | Variables d'env manquantes ou mauvais token | Verifier `config/mcp_servers.json` et les variables dans `.env` |
 
 ---
 
 ## Checklist de déploiement
 
-- [ ] VM créée sur Proxmox avec les bonnes specs
-- [ ] Ubuntu installé et mis à jour
-- [ ] Docker + Docker Compose installés
-- [ ] PostgreSQL + pgvector opérationnels
-- [ ] Redis opérationnel
-- [ ] `.env` configuré avec les clés API
+- [ ] VM ou LXC creee sur Proxmox avec les bonnes specs
+- [ ] (Si LXC) Script `00-configure-lxc.sh` execute
+- [ ] Ubuntu installe et mis a jour
+- [ ] Docker + Docker Compose installes
+- [ ] PostgreSQL + pgvector operationnels
+- [ ] Redis operationnel
+- [ ] `.env` configure avec les cles API
 - [ ] Agent de test (`orchestrator.py`) fonctionne
 - [ ] Langfuse accessible (optionnel)
-- [ ] Bot Discord créé (Developer Portal) avec les bons intents
-- [ ] Serveur Discord structuré (channels agents, review, commandes)
-- [ ] Bot Discord connecté et répond dans #commandes
+- [ ] Bot Discord cree (Developer Portal) avec les bons intents
+- [ ] Serveur Discord structure (channels agents, review, commandes)
+- [ ] Bot Discord connecte et repond dans #commandes
 - [ ] Human gate fonctionne (approve/revise dans #human-review)
-- [ ] Firewall configuré
-- [ ] Backup automatisé (cron)
-- [ ] Scripts ajoutés au repo `Configurations/Proxmox`
+- [ ] Thread persistence corrige (script 13)
+- [ ] Couche RAG operationnelle (pgvector + embeddings)
+- [ ] Serveurs MCP configures pour les agents (script 14)
+- [ ] Firewall configure
+- [ ] Backup automatise (cron)
+- [ ] Scripts ajoutes au repo `Configurations/Proxmox`
