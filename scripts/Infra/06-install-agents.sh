@@ -1,11 +1,13 @@
 #!/bin/bash
 ###############################################################################
 # Script 6 : Installation des agents LangGraph (equipe complete)
-# VERSION CONSOLIDEE (integre fix 07/08/09/10)
+# VERSION CONSOLIDEE (integre scripts 04 + fix 07/08/09/10/11)
+#   - 04 : Discord bot (discord_tools, discord_listener, Dockerfile.discord)
 #   - 07 : gateway multi-agent
 #   - 08 : context + max_tokens
 #   - 09 : pipeline mode (base_agent, analyst 3 etapes, legal 2 etapes)
 #   - 10 : gateway asynchrone + discord_listener mis a jour
+#   - 11 : streaming resultats Discord (notification par etape pipeline)
 #
 # A executer depuis la VM Ubuntu (apres les scripts 03 et 05).
 # Usage : ./06-install-agents.sh
@@ -25,12 +27,12 @@ cd "${PROJECT_DIR}"
 [ ! -f .env ] && echo "ERREUR : .env introuvable." && exit 1
 
 # ── 1. Structure ─────────────────────────────
-echo "[1/8] Structure..."
+echo "[1/11] Structure..."
 mkdir -p agents/shared prompts/v1
 touch agents/__init__.py agents/shared/__init__.py
 
 # ── 2. Prompts ───────────────────────────────
-echo "[2/8] Telechargement des prompts..."
+echo "[2/11] Telechargement des prompts..."
 PROMPTS=(orchestrator requirements_analyst ux_designer architect planner lead_dev dev_frontend_web dev_backend_api dev_mobile qa_engineer devops_engineer docs_writer legal_advisor)
 DL=0
 for name in "${PROMPTS[@]}"; do
@@ -46,7 +48,7 @@ done
 echo "  -> ${DL}/${#PROMPTS[@]} prompts"
 
 # ── 3. shared/state.py ──────────────────────
-echo "[3/8] ProjectState..."
+echo "[3/11] ProjectState..."
 cat > agents/shared/state.py << 'PY'
 from typing import TypedDict, Annotated
 from langgraph.graph.message import add_messages
@@ -66,10 +68,10 @@ class ProjectState(TypedDict, total=False):
     notifications_log: list
 PY
 
-# ── 4. shared/base_agent.py (pipeline mode + max_tokens 32768) ────
-echo "[4/8] BaseAgent (pipeline mode + max_tokens 32768)..."
+# ── 4. shared/base_agent.py (pipeline + max_tokens 32768 + streaming Discord) ─
+echo "[4/11] BaseAgent (pipeline + streaming Discord par etape)..."
 cat > agents/shared/base_agent.py << 'PYTHON'
-"""BaseAgent — Classe de base avec mode pipeline multi-etapes."""
+"""BaseAgent — Pipeline multi-etapes avec notification Discord par etape."""
 import json, logging, os
 from datetime import datetime, timezone
 from dotenv import load_dotenv
@@ -77,6 +79,61 @@ from langchain_anthropic import ChatAnthropic
 
 load_dotenv()
 logger = logging.getLogger(__name__)
+
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")
+
+
+def _post_to_discord_sync(channel_id: str, message: str):
+    """Post synchrone vers Discord (pour les agents qui tournent dans des threads)."""
+    if not DISCORD_BOT_TOKEN or not channel_id:
+        return
+
+    import requests
+    url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
+    headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}", "Content-Type": "application/json"}
+
+    chunks = [message[i:i + 1900] for i in range(0, len(message), 1900)]
+    for chunk in chunks:
+        try:
+            resp = requests.post(url, headers=headers, json={"content": chunk}, timeout=10)
+            if resp.status_code not in (200, 201):
+                logger.error(f"Discord POST failed: {resp.status_code}")
+        except Exception as e:
+            logger.error(f"Discord error: {e}")
+
+
+def _format_deliverable(key: str, val) -> str:
+    """Formate un livrable pour Discord (lisible, pas trop long)."""
+    if isinstance(val, str):
+        return val[:1500] + "..." if len(val) > 1500 else val
+    elif isinstance(val, dict):
+        parts = []
+        for k, v in val.items():
+            if isinstance(v, str):
+                parts.append(f"**{k}** : {v[:300]}{'...' if len(v) > 300 else ''}")
+            elif isinstance(v, list):
+                parts.append(f"**{k}** : {len(v)} elements")
+            elif isinstance(v, dict):
+                parts.append(f"**{k}** : {json.dumps(v, ensure_ascii=False, default=str)[:300]}...")
+            else:
+                parts.append(f"**{k}** : {v}")
+        return "\n".join(parts[:10])
+    elif isinstance(val, list):
+        if len(val) == 0:
+            return "(vide)"
+        parts = []
+        for item in val[:5]:
+            if isinstance(item, dict):
+                summary = " | ".join(f"{k}={str(v)[:80]}" for k, v in list(item.items())[:4])
+                parts.append(f"  - {summary}")
+            else:
+                parts.append(f"  - {str(item)[:200]}")
+        result = "\n".join(parts)
+        if len(val) > 5:
+            result += f"\n  ... et {len(val) - 5} de plus"
+        return result
+    else:
+        return str(val)[:500]
 
 
 class BaseAgent:
@@ -86,9 +143,6 @@ class BaseAgent:
     default_temperature = 0.3
     default_max_tokens = 32768
     prompt_filename = "base.md"
-
-    # Pipeline : liste d'etapes. Si vide, mode single-shot.
-    # Chaque etape = {"name": "...", "instruction": "...", "output_key": "..."}
     pipeline_steps = []
 
     def __init__(self):
@@ -133,6 +187,10 @@ class BaseAgent:
                     return a.task or ""
         return ""
 
+    def _get_channel_id(self, state):
+        """Recupere le channel Discord depuis le state ou les env vars."""
+        return state.get("_discord_channel_id", "") or os.getenv("DISCORD_CHANNEL_COMMANDS", "") or os.getenv("DISCORD_CHANNEL_LOGS", "")
+
     def build_context(self, state):
         o = state.get("agent_outputs", {})
         return {
@@ -156,28 +214,25 @@ class BaseAgent:
         return json.loads(c)
 
     def _call_llm(self, instruction, context, previous_results=None):
-        """Appel LLM unique avec contexte et resultats precedents."""
         llm = self.get_llm()
-
         user_content = f"Contexte du projet :\n```json\n{json.dumps(context, indent=2, default=str)}\n```\n\n"
-
         if previous_results:
-            user_content += f"Resultats des etapes precedentes :\n```json\n{json.dumps(previous_results, indent=2, default=str, ensure_ascii=False)[:10000]}\n```\n\n"
-
-        user_content += f"Instruction : {instruction}\n\nReponds UNIQUEMENT en JSON valide, sans texte avant ou apres."
-
+            prev_str = json.dumps(previous_results, indent=2, default=str, ensure_ascii=False)
+            if len(prev_str) > 15000:
+                prev_str = prev_str[:15000] + "\n... (tronque pour le context window)"
+            user_content += f"Resultats des etapes precedentes :\n```json\n{prev_str}\n```\n\n"
+        user_content += f"Instruction : {instruction}\n\nReponds UNIQUEMENT en JSON valide."
         response = llm.invoke([
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": user_content},
         ])
-
         raw = response.content if isinstance(response.content, str) else str(response.content)
         logger.info(f"[{self.agent_id}] LLM response: {len(raw)} chars")
         return raw
 
     def _run_pipeline(self, state):
-        """Execute les etapes du pipeline sequentiellement."""
         context = self.build_context(state)
+        channel_id = self._get_channel_id(state)
         deliverables = {}
 
         for i, step in enumerate(self.pipeline_steps, 1):
@@ -185,7 +240,9 @@ class BaseAgent:
             instruction = step["instruction"]
             output_key = step["output_key"]
 
-            logger.info(f"[{self.agent_id}] Pipeline etape {i}/{len(self.pipeline_steps)}: {step_name}")
+            logger.info(f"[{self.agent_id}] Pipeline {i}/{len(self.pipeline_steps)}: {step_name}")
+            _post_to_discord_sync(channel_id,
+                f"**{self.agent_name}** — etape {i}/{len(self.pipeline_steps)} : **{step_name}**...")
 
             raw = self._call_llm(instruction, context, deliverables if deliverables else None)
 
@@ -197,10 +254,21 @@ class BaseAgent:
                     deliverables[output_key] = parsed["deliverables"][output_key]
                 else:
                     deliverables[output_key] = parsed
-                logger.info(f"[{self.agent_id}] Etape {step_name}: OK ({output_key})")
+
+                logger.info(f"[{self.agent_id}] Etape {step_name}: OK")
+                formatted = _format_deliverable(output_key, deliverables[output_key])
+                _post_to_discord_sync(channel_id,
+                    f"**{self.agent_name}** — **{step_name}** termine\n\n{formatted}")
+
             except json.JSONDecodeError as e:
                 logger.error(f"[{self.agent_id}] Etape {step_name} JSON fail: {e}")
                 deliverables[output_key] = {"raw": raw[:8000], "parse_error": str(e)[:100]}
+                _post_to_discord_sync(channel_id,
+                    f"**{self.agent_name}** — **{step_name}** : reponse trop longue, output brut preserve.")
+
+        _post_to_discord_sync(channel_id,
+            f"**{self.agent_name}** termine — {len(self.pipeline_steps)} etapes completees.\n"
+            f"Livrables : {', '.join(deliverables.keys())}")
 
         return {
             "agent_id": self.agent_id,
@@ -212,27 +280,35 @@ class BaseAgent:
         }
 
     def _run_single(self, state):
-        """Mode single-shot (comportement original)."""
         context = self.build_context(state)
-        raw = self._call_llm(
-            context.get("task", "Produis ton livrable complet."),
-            context,
-        )
+        channel_id = self._get_channel_id(state)
+
+        _post_to_discord_sync(channel_id, f"**{self.agent_name}** travaille...")
+
+        raw = self._call_llm(context.get("task", "Produis ton livrable."), context)
 
         try:
             output = self.parse_response(raw)
         except json.JSONDecodeError as e:
             logger.error(f"[{self.agent_id}] JSON fail: {e}")
             output = {
-                "agent_id": self.agent_id,
-                "status": "complete",
-                "confidence": 0.6,
-                "deliverables": {"raw_output": raw[:8000]},
-                "parse_note": str(e)[:100],
+                "agent_id": self.agent_id, "status": "complete", "confidence": 0.6,
+                "deliverables": {"raw_output": raw[:8000]}, "parse_note": str(e)[:100],
             }
 
         output["agent_id"] = self.agent_id
         output["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+        status = output.get("status", "unknown")
+        conf = output.get("confidence", "N/A")
+        deliverables = output.get("deliverables", {})
+        msg = f"**{self.agent_name}** termine — status={status}, confidence={conf}\n"
+        if isinstance(deliverables, dict):
+            for key in list(deliverables.keys())[:5]:
+                formatted = _format_deliverable(key, deliverables[key])
+                msg += f"\n**{key}** :\n{formatted}\n"
+        _post_to_discord_sync(channel_id, msg)
+
         return output
 
     def __call__(self, state):
@@ -252,11 +328,14 @@ class BaseAgent:
             msgs.append(("assistant", f"[{self.agent_id}] status={output.get('status')}"))
             state["messages"] = msgs
 
-            logger.info(f"[{self.agent_id}] Done — status={output.get('status')} conf={output.get('confidence')}")
+            logger.info(f"[{self.agent_id}] Done — status={output.get('status')}")
             return state
 
         except Exception as e:
             logger.error(f"[{self.agent_id}] EXC: {e}", exc_info=True)
+            channel_id = self._get_channel_id(state)
+            _post_to_discord_sync(channel_id, f"**{self.agent_name}** erreur : {str(e)[:300]}")
+
             ao = dict(state.get("agent_outputs", {}))
             ao[self.agent_id] = {
                 "agent_id": self.agent_id, "status": "blocked",
@@ -269,7 +348,7 @@ PYTHON
 echo "  -> Modules partages crees"
 
 # ── 5. Agents specialistes ───────────────────
-echo "[5/8] Agents specialistes..."
+echo "[5/11] Agents specialistes..."
 
 # -- Analyste en mode pipeline (3 etapes : PRD -> User Stories -> MoSCoW) --
 cat > agents/requirements_analyst.py << 'PYTHON'
@@ -440,7 +519,7 @@ done
 echo "  -> 12 agents crees (analyst pipeline 3 etapes, legal pipeline 2 etapes, 10 single-shot)"
 
 # ── 6. Orchestrateur ─────────────────────────
-echo "[6/8] Orchestrateur..."
+echo "[6/11] Orchestrateur..."
 if wget -qO agents/orchestrator.py "${REPO_RAW}/prompts/orchestrator.py" 2>/dev/null && [ -s agents/orchestrator.py ]; then
     echo "  -> telecharge"
 else
@@ -448,7 +527,7 @@ else
 fi
 
 # ── 7. Gateway asynchrone ────────────────────
-echo "[7/8] Gateway asynchrone..."
+echo "[7/11] Gateway asynchrone..."
 
 cat > agents/gateway.py << 'PY'
 """FastAPI Gateway — Asynchrone. Repond immediatement, agents en background."""
@@ -579,35 +658,14 @@ async def run_agents_background(state: dict, decisions: list, thread_id: str, ch
         logger.info(f"[background] Running {agent_id}...")
 
         try:
-            await post_to_discord(
-                channel_id,
-                f"**{agent_id}** commence son travail...\nTache : {task[:200]}"
-            )
-
+            # L'agent poste ses propres resultats dans Discord via BaseAgent
             result_state = await asyncio.to_thread(agent_callable, dict(state))
 
             agent_output = result_state.get("agent_outputs", {}).get(agent_id, {})
             status = agent_output.get("status", "unknown")
-            confidence = agent_output.get("confidence", "N/A")
 
             state["agent_outputs"] = result_state.get("agent_outputs", state.get("agent_outputs", {}))
 
-            result_msg = f"**{agent_id}** termine — status={status}, confidence={confidence}\n"
-
-            deliverables = agent_output.get("deliverables", {})
-            if isinstance(deliverables, dict):
-                result_msg += f"Livrables : {', '.join(deliverables.keys())}\n"
-
-                for key, val in list(deliverables.items())[:3]:
-                    if isinstance(val, str):
-                        preview = val[:500] + "..." if len(val) > 500 else val
-                    elif isinstance(val, (dict, list)):
-                        preview = json.dumps(val, ensure_ascii=False, default=str)[:500] + "..."
-                    else:
-                        preview = str(val)[:500]
-                    result_msg += f"\n**{key}** :\n{preview}\n"
-
-            await post_to_discord(channel_id, result_msg)
             logger.info(f"[background] {agent_id} done — status={status}")
 
         except Exception as e:
@@ -700,6 +758,7 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
 
         if agents_dispatched:
             channel_id = request.channel_id or DISCORD_CHANNEL_COMMANDS or DISCORD_CHANNEL_LOGS
+            result["_discord_channel_id"] = channel_id
             background_tasks.add_task(
                 run_agents_background,
                 result,
@@ -731,12 +790,293 @@ PY
 
 echo "  -> gateway.py asynchrone installe"
 
-# ── 8. Dockerfile + rebuild + validation ─────
-echo "[8/8] Rebuild et validation..."
+# ── 8. Variables Discord dans .env ────────────
+echo "[8/11] Configuration Discord dans .env..."
+if ! grep -q "DISCORD_BOT_TOKEN" .env; then
+    cat >> .env << 'EOF'
+
+# ── Discord MCP ──────────────────────────────
+DISCORD_BOT_TOKEN=VOTRE-TOKEN-BOT-DISCORD
+DISCORD_CHANNEL_REVIEW=ID-DU-CHANNEL-HUMAN-REVIEW
+DISCORD_CHANNEL_LOGS=ID-DU-CHANNEL-AGENT-LOGS
+DISCORD_CHANNEL_ALERTS=ID-DU-CHANNEL-ALERTS
+DISCORD_CHANNEL_COMMANDS=ID-DU-CHANNEL-COMMANDES
+DISCORD_GUILD_ID=ID-DE-VOTRE-SERVEUR
+EOF
+    echo "  -> Variables Discord ajoutees dans .env"
+    echo "  -> PENSEZ A REMPLIR LES VALEURS !"
+else
+    echo "  -> Variables Discord deja presentes dans .env"
+fi
+
+# ── 9. Discord listener + tools ──────────────
+echo "[9/11] Discord listener et tools..."
+
+cat > agents/shared/discord_tools.py << 'PYTHON'
+"""Discord MCP tools pour la communication agents <-> humain (human-in-the-loop)."""
+import os
+import asyncio
+import threading
+import discord
+from discord import Intents, Client
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+CHANNEL_REVIEW = int(os.getenv("DISCORD_CHANNEL_REVIEW", "0"))
+CHANNEL_LOGS = int(os.getenv("DISCORD_CHANNEL_LOGS", "0"))
+CHANNEL_ALERTS = int(os.getenv("DISCORD_CHANNEL_ALERTS", "0"))
+
+intents = Intents.default()
+intents.message_content = True
+client = Client(intents=intents)
+
+_client_ready = asyncio.Event()
+
+@client.event
+async def on_ready():
+    print(f"Discord bot connecte : {client.user}")
+    _client_ready.set()
+
+
+async def send_notification(channel_id: int, message: str, embed: dict = None):
+    """Envoie une notification sans attendre de reponse."""
+    await _client_ready.wait()
+    channel = client.get_channel(channel_id)
+    if channel is None:
+        channel = await client.fetch_channel(channel_id)
+    if embed:
+        discord_embed = discord.Embed(
+            title=embed.get("title", ""),
+            description=embed.get("description", ""),
+            color=embed.get("color", 0x6366F1),
+        )
+        for field in embed.get("fields", []):
+            discord_embed.add_field(name=field["name"], value=field["value"], inline=field.get("inline", False))
+        await channel.send(content=message, embed=discord_embed)
+    else:
+        await channel.send(content=message)
+
+
+async def request_human_approval(channel_id: int, agent_name: str, question: str, context: str = "", timeout: int = 300) -> dict:
+    """Envoie une demande de validation et attend la reponse humaine."""
+    await _client_ready.wait()
+    channel = client.get_channel(channel_id)
+    if channel is None:
+        channel = await client.fetch_channel(channel_id)
+
+    embed = discord.Embed(title=f"Validation requise - {agent_name}", description=question, color=0xF59E0B)
+    if context:
+        embed.add_field(name="Contexte", value=context[:1024], inline=False)
+    embed.add_field(name="Actions", value="Repondre `approve` ou `revise` (+ commentaire optionnel)", inline=False)
+    embed.set_footer(text=f"Timeout: {timeout}s - sans reponse = escalade")
+
+    msg = await channel.send(embed=embed)
+    await msg.add_reaction("\u2705")
+    await msg.add_reaction("\U0001f504")
+
+    def check(m):
+        return (m.channel.id == channel_id and not m.author.bot and m.reference is not None and m.reference.message_id == msg.id) or \
+               (m.channel.id == channel_id and not m.author.bot and m.content.lower().startswith(("approve", "revise")))
+
+    try:
+        reply = await client.wait_for("message", check=check, timeout=timeout)
+        content = reply.content.lower().strip()
+        approved = content.startswith("approve") or content == "ok" or content == "yes"
+        return {"approved": approved, "response": reply.content, "timed_out": False, "reviewer": str(reply.author)}
+    except asyncio.TimeoutError:
+        await channel.send(f"Timeout - pas de reponse pour `{agent_name}`. Escalade automatique.")
+        return {"approved": False, "response": "", "timed_out": True, "reviewer": None}
+
+
+async def send_alert(message: str, severity: str = "warning"):
+    """Envoie une alerte dans le channel #alerts."""
+    colors = {"info": 0x6366F1, "warning": 0xF59E0B, "error": 0xF43F5E, "critical": 0xFF0000}
+    embed = discord.Embed(title=f"Alerte - {severity.upper()}", description=message, color=colors.get(severity, 0xF59E0B))
+    await send_notification(CHANNEL_ALERTS, "", embed=embed)
+
+
+async def send_phase_transition(from_phase: str, to_phase: str, details: str = ""):
+    """Log une transition de phase dans #orchestrateur-logs."""
+    embed = discord.Embed(title="Transition de phase", description=f"**{from_phase}** -> **{to_phase}**", color=0x10B981)
+    if details:
+        embed.add_field(name="Details", value=details[:1024], inline=False)
+    await send_notification(CHANNEL_LOGS, "", embed=embed)
+
+
+def create_discord_tools_for_langgraph():
+    """Retourne des tools LangChain utilisables dans les agents LangGraph."""
+    from langchain_core.tools import tool
+
+    @tool
+    def notify_discord(channel: str, message: str) -> str:
+        """Envoie une notification Discord. channel: 'logs' | 'review' | 'alerts'"""
+        channel_map = {"logs": CHANNEL_LOGS, "review": CHANNEL_REVIEW, "alerts": CHANNEL_ALERTS}
+        channel_id = channel_map.get(channel, CHANNEL_LOGS)
+        asyncio.run_coroutine_threadsafe(send_notification(channel_id, message), client.loop)
+        return f"Message envoye dans #{channel}"
+
+    @tool
+    def request_approval(question: str, context: str = "") -> dict:
+        """Demande une validation humaine via Discord. Bloque jusqu'a reponse."""
+        future = asyncio.run_coroutine_threadsafe(
+            request_human_approval(CHANNEL_REVIEW, agent_name="Agent", question=question, context=context), client.loop)
+        return future.result(timeout=600)
+
+    return [notify_discord, request_approval]
+
+
+def start_discord_bot():
+    """Lance le bot Discord dans un thread background."""
+    loop = asyncio.new_event_loop()
+    def run():
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(client.start(BOT_TOKEN))
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return client
+PYTHON
+
+cat > agents/discord_listener.py << 'PYTHON'
+"""Discord Listener — Ecoute #commandes et forward vers LangGraph API."""
+import os
+import asyncio
+import logging
+import aiohttp
+import discord
+from dotenv import load_dotenv
+
+load_dotenv()
+
+logger = logging.getLogger("discord_listener")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
+
+TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+CHANNEL_COMMANDS = os.getenv("DISCORD_CHANNEL_COMMANDS", "")
+API_URL = os.getenv("LANGGRAPH_API_URL", "http://langgraph-api:8000")
+
+intents = discord.Intents.default()
+intents.message_content = True
+client = discord.Client(intents=intents)
+
+
+@client.event
+async def on_ready():
+    logger.info(f"Bot connecte : {client.user}")
+
+
+@client.event
+async def on_message(message):
+    if message.author == client.user:
+        return
+    if CHANNEL_COMMANDS and str(message.channel.id) != CHANNEL_COMMANDS:
+        return
+    if len(message.content) < 5:
+        return
+
+    logger.info(f"Message recu de {message.author}: {message.content[:100]}")
+    await message.add_reaction("\u2705")
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            payload = {
+                "messages": [{"role": "user", "content": message.content}],
+                "thread_id": f"discord-{message.id}",
+                "project_id": "default",
+                "channel_id": str(message.channel.id),
+            }
+            async with session.post(f"{API_URL}/invoke", json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    output = data.get("output", "Pas de reponse.")
+                    if len(output) > 1900:
+                        chunks = [output[i:i+1900] for i in range(0, len(output), 1900)]
+                        for chunk in chunks:
+                            await message.reply(chunk)
+                    else:
+                        await message.reply(output)
+                else:
+                    error = await resp.text()
+                    logger.error(f"API error {resp.status}: {error[:200]}")
+                    await message.reply(f"Erreur API: {resp.status}")
+    except asyncio.TimeoutError:
+        await message.reply("L'orchestrateur prend du temps. Les resultats seront postes quand les agents auront termine.")
+    except Exception as e:
+        logger.error(f"Error: {e}", exc_info=True)
+        await message.reply(f"Erreur: {str(e)[:200]}")
+
+
+if __name__ == "__main__":
+    if not TOKEN:
+        logger.error("DISCORD_BOT_TOKEN manquant dans .env")
+        exit(1)
+    client.run(TOKEN)
+PYTHON
+
+echo "  -> discord_tools.py + discord_listener.py crees"
+
+# ── 10. Dockerfile.discord + service docker-compose ──
+echo "[10/11] Dockerfile.discord + service docker-compose..."
+
+cat > Dockerfile.discord << 'DOCKERFILE'
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir \
+    discord.py>=2.4.0 \
+    python-dotenv>=1.0.0 \
+    langchain-core>=0.3.0 \
+    aiohttp>=3.10.0
+
+COPY agents/shared/ ./agents/shared/
+COPY agents/discord_listener.py ./agents/discord_listener.py
+
+CMD ["python", "agents/discord_listener.py"]
+DOCKERFILE
+
+if ! grep -q "discord-bot:" docker-compose.yml; then
+    cat >> docker-compose.yml << 'YAML'
+
+  # ── Discord Bot (MCP Agent Communication) ───
+  discord-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.discord
+    container_name: langgraph-discord
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      langgraph-api:
+        condition: service_healthy
+    networks:
+      - langgraph-net
+YAML
+    echo "  -> Service discord-bot ajoute dans docker-compose.yml"
+else
+    echo "  -> Service discord-bot deja present"
+fi
+
+if ! grep -q "discord.py" requirements.txt; then
+    echo "discord.py>=2.4.0" >> requirements.txt
+    echo "aiohttp>=3.10.0" >> requirements.txt
+fi
+
+echo "  -> Dockerfile.discord + service docker-compose crees"
+
+# ── 11. Dockerfile + rebuild + validation ─────
+echo "[11/11] Rebuild et validation..."
 
 grep -q "COPY prompts/" Dockerfile 2>/dev/null || sed -i '/COPY config\//a COPY prompts/ ./prompts/' Dockerfile
+grep -q "^requests" requirements.txt || echo "requests>=2.31.0" >> requirements.txt
 
-docker compose up -d --build langgraph-api
+docker compose up -d --build langgraph-api discord-bot
 sleep 12
 
 AC=$(ls -1 agents/*.py 2>/dev/null | grep -v __init__ | grep -v gateway | wc -l)
