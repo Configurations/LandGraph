@@ -31,7 +31,7 @@ Plateforme multi-agents LangGraph auto-hebergee sur une VM Proxmox, avec Postgre
 
 ## Installation
 
-L'installation se deroule en 4 etapes sequentielles. Chaque script est telecharge et execute en une seule commande.
+L'installation se deroule en 5 etapes sequentielles. Chaque script est telecharge et execute en une seule commande.
 
 ### Etape 1 — Creer la VM sur Proxmox
 
@@ -135,6 +135,37 @@ Ce script :
 | `#commandes`           | Instructions utilisateur          |
 | `#rapports`            | Resumes generes par les agents    |
 
+### Etape 5 — Installer la couche RAG (pgvector + embeddings)
+
+**Ou** : sur la VM Ubuntu, apres l'etape 3 (stack Docker en fonctionnement).
+
+```bash
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/05-install-rag.sh)"
+```
+
+**Prerequis** : PostgreSQL + pgvector doit etre running/healthy (`docker compose up -d`).
+
+Ce script :
+- Ajoute les variables d'embeddings (Voyage AI) dans le `.env`
+- Cree le schema `rag.documents` dans PostgreSQL avec index HNSW
+- Cree les fonctions SQL `search_similar` et `upsert_document_chunks`
+- Genere le service Python `agents/shared/rag_service.py` (chunking, indexation, recherche)
+- Fournit des tools LangGraph (`rag_search`, `rag_index`) utilisables par tous les agents
+- Installe les dependances Python (voyageai, tiktoken)
+
+**Apres execution** :
+
+1. Configurer votre cle Voyage AI dans le `.env` :
+   ```bash
+   nano ~/langgraph-project/.env
+   ```
+   (Obtenez une cle sur [dash.voyageai.com](https://dash.voyageai.com))
+
+2. Rebuild l'image Docker pour inclure le RAG :
+   ```bash
+   docker compose up -d --build langgraph-api
+   ```
+
 ## Ports exposes
 
 | Service        | Port  | Acces              |
@@ -149,3 +180,4 @@ Le fichier [scripts/Infra/langgraph-proxmox-install.md](scripts/Infra/langgraph-
 - Observabilite avec Langfuse (self-hosted)
 - Securisation et reseau
 - Troubleshooting
+

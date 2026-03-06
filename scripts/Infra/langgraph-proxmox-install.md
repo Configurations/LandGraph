@@ -18,10 +18,11 @@
 7. [Phase 5 — Premier agent (Hello World)](#7-phase-5)
 8. [Phase 6 — Observabilité (Langfuse self-hosted)](#8-phase-6)
 9. [Phase 7 — Discord MCP (communication agents ↔ humain)](#9-phase-7-discord)
-10. [Phase 8 — Sécurisation et réseau](#10-phase-8)
-11. [Phase 9 — Intégration dans votre repo Proxmox](#11-phase-9)
-12. [Arborescence finale](#12-arborescence)
-13. [Troubleshooting](#13-troubleshooting)
+10. [Phase 8 — Couche RAG (pgvector + embeddings)](#10-phase-8-rag)
+11. [Phase 9 — Sécurisation et réseau](#11-phase-9)
+12. [Phase 10 — Intégration dans votre repo Proxmox](#12-phase-10)
+13. [Arborescence finale](#13-arborescence)
+14. [Troubleshooting](#14-troubleshooting)
 
 ---
 
@@ -1270,9 +1271,154 @@ python agents/discord_listener.py
 
 ---
 
-## 10. Phase 8 — Sécurisation
+## 10. Phase 8 — Couche RAG (pgvector + embeddings)
 
-### 10.1 Firewall (UFW)
+> **Script** : `05-install-rag.sh`
+> **Prérequis** : Phase 3 terminée, stack Docker running (`docker compose up -d`)
+
+### 10.1 Objectif
+
+Donner une **mémoire partagée** à tous les agents. Chaque livrable produit (PRD, ADR, code, user stories…) est découpé en chunks, transformé en vecteur via un modèle d'embeddings, et stocké dans PostgreSQL/pgvector. Les agents peuvent ensuite faire une recherche sémantique avant de produire leur propre livrable.
+
+```
+Agent Analyste ──► index_document() ──► pgvector (rag.documents)
+                                              │
+Agent Architecte ──► search() ◄───────────────┘
+```
+
+### 10.2 Installation rapide
+
+```bash
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/05-install-rag.sh)"
+```
+
+### 10.3 Ce que fait le script
+
+| Étape | Action |
+|-------|--------|
+| 1/6 | Ajoute `VOYAGE_API_KEY` et `EMBEDDING_MODEL` dans `.env` |
+| 2/6 | Crée le schema SQL `rag` avec la table `rag.documents` (vector 1024 dims) |
+| 3/6 | Génère `agents/shared/rag_service.py` (chunking, indexation, recherche) |
+| 4/6 | Installe les dépendances Python (`voyageai`, `tiktoken`) |
+| 5/6 | Met à jour `requirements.txt` |
+| 6/6 | Valide le schema, les index et les fonctions SQL |
+
+### 10.4 Schema PostgreSQL
+
+Le script crée le schema `rag` avec la table principale :
+
+```sql
+CREATE SCHEMA IF NOT EXISTS rag;
+
+CREATE TABLE IF NOT EXISTS rag.documents (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    content TEXT NOT NULL,
+    embedding vector(1024),          -- Voyage AI (1024 dims)
+
+    -- Traçabilité
+    source_type VARCHAR(50) NOT NULL, -- prd, adr, code, user_story, test_report, legal, mockup, doc
+    source_agent VARCHAR(50) NOT NULL, -- orchestrator, analyst, architect, lead_dev, etc.
+    source_id UUID,
+    project_name VARCHAR(200),
+    phase VARCHAR(50),
+
+    -- Technique
+    chunk_index INTEGER DEFAULT 0,
+    total_chunks INTEGER DEFAULT 1,
+    file_path VARCHAR(500),
+    language VARCHAR(20) DEFAULT 'fr',
+    metadata JSONB DEFAULT '{}',
+
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Index HNSW pour recherche de similarité cosinus
+CREATE INDEX IF NOT EXISTS idx_documents_embedding
+    ON rag.documents USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 200);
+```
+
+**Fonctions SQL créées :**
+
+| Fonction | Rôle |
+|----------|------|
+| `rag.search_similar()` | Recherche les N documents les plus proches d'un vecteur, avec filtres optionnels (source_type, phase, agent) et seuil de similarité |
+| `rag.upsert_document_chunks()` | Supprime les anciens chunks d'un document avant ré-indexation |
+
+### 10.5 Service Python — `rag_service.py`
+
+Le fichier `agents/shared/rag_service.py` expose les fonctions principales :
+
+```python
+from agents.shared.rag_service import (
+    index_document,     # Indexe un document (chunking + embedding + INSERT)
+    search,             # Recherche sémantique avec filtres
+    create_rag_tools,   # Retourne des tools LangChain (rag_search, rag_index)
+    DocumentMetadata,   # Dataclass pour les métadonnées
+)
+```
+
+**Modèles d'embeddings supportés :**
+
+| Modèle | Config `.env` | Dimensions | Notes |
+|--------|--------------|------------|-------|
+| Voyage AI `voyage-3-large` | `EMBEDDING_MODEL=voyage-3-large` | 1024 | Par défaut, nécessite `VOYAGE_API_KEY` |
+| Local (Ollama) | `EMBEDDING_MODEL=local` | Variable | Gratuit, nécessite Ollama + `nomic-embed-text` |
+
+### 10.6 Utilisation dans les agents
+
+Chaque agent peut utiliser les tools RAG directement :
+
+```python
+from agents.shared.rag_service import create_rag_tools
+
+# Dans la définition de l'agent LangGraph
+tools = create_rag_tools()  # [rag_search, rag_index]
+```
+
+**Matrice agent ↔ RAG :**
+
+| Agent | Indexe | Recherche |
+|-------|--------|-----------|
+| Analyste | PRDs, user stories | Historique projet, besoins similaires |
+| Designer | Mockups, guidelines | Specs fonctionnelles |
+| Architecte | ADRs, schémas | Specs, contraintes techniques |
+| Lead Dev | Code, implémentations | Architecture, maquettes |
+| QA | Rapports de tests | Critères d'acceptation |
+| Avocat | Analyses juridiques | Base juridique, licences |
+| Documentaliste | Documentation finale | Tout (cohérence globale) |
+
+### 10.7 Configuration post-installation
+
+```bash
+# 1. Ajouter votre clé Voyage AI
+nano ~/langgraph-project/.env
+# → Remplacer VOYAGE_API_KEY=pa-VOTRE-CLE-VOYAGE-AI par votre vraie clé
+#   (https://dash.voyageai.com → API Keys)
+
+# 2. Tester manuellement
+cd ~/langgraph-project
+source .venv/bin/activate
+DB_PASS=$(grep POSTGRES_PASSWORD .env | cut -d= -f2)
+DATABASE_URI="postgres://langgraph:${DB_PASS}@localhost:5432/langgraph?sslmode=disable" \
+python -c "
+from agents.shared.rag_service import index_document, search, DocumentMetadata
+meta = DocumentMetadata(source_type='test', source_agent='manual')
+index_document('Mon premier document de test', meta)
+results = search('document test')
+print(f'Résultats: {len(results)}')
+"
+
+# 3. Rebuild l'image Docker pour inclure le RAG
+docker compose up -d --build langgraph-api
+```
+
+---
+
+## 11. Phase 9 — Sécurisation
+
+### 11.1 Firewall (UFW)
 
 ```bash
 # Politique par défaut
@@ -1292,7 +1438,7 @@ sudo ufw allow from 192.168.1.0/24 to any port 3000
 sudo ufw enable
 ```
 
-### 10.2 Reverse proxy (Caddy — optionnel)
+### 11.2 Reverse proxy (Caddy — optionnel)
 
 ```bash
 # Si vous voulez exposer via HTTPS
@@ -1314,7 +1460,7 @@ CADDY
 sudo systemctl reload caddy
 ```
 
-### 10.3 Gestion des secrets
+### 11.3 Gestion des secrets
 
 ```bash
 # Ne JAMAIS committer le .env
@@ -1327,9 +1473,9 @@ echo "*.key" >> .gitignore
 
 ---
 
-## 11. Phase 9 — Intégration repo Proxmox
+## 12. Phase 10 — Intégration repo Proxmox
 
-### 11.1 Structure recommandée pour votre repo
+### 12.1 Structure recommandée pour votre repo
 
 Ajoutez un dossier dans votre repo `Configurations/Proxmox` :
 
@@ -1380,7 +1526,7 @@ Configurations/Proxmox/
             └── healthcheck.py            # Vérification de santé
 ```
 
-### 11.2 Script de création de VM automatisé
+### 12.2 Script de création de VM automatisé
 
 ```bash
 # Configurations/Proxmox/vms/langgraph-agents/create-vm.sh
@@ -1421,7 +1567,7 @@ qm create ${VMID} \
 echo "✅ VM ${VMID} créée. Démarrer avec : qm start ${VMID}"
 ```
 
-### 11.3 Script de provisioning post-installation
+### 12.3 Script de provisioning post-installation
 
 ```bash
 # Configurations/Proxmox/vms/langgraph-agents/provision.sh
@@ -1498,7 +1644,7 @@ echo "  4. Tester : python agents/orchestrator.py"
 echo "═══════════════════════════════════════════"
 ```
 
-### 11.4 Script de backup
+### 12.4 Script de backup
 
 ```bash
 # Configurations/Proxmox/vms/langgraph-agents/scripts/backup.sh
@@ -1539,7 +1685,7 @@ echo "✅ Backup terminé : ${BACKUP_DIR}/*_${DATE}.*"
 
 ---
 
-## 12. Arborescence finale
+## 13. Arborescence finale
 
 ```
 ~/langgraph-project/
@@ -1593,7 +1739,7 @@ echo "✅ Backup terminé : ${BACKUP_DIR}/*_${DATE}.*"
 
 ---
 
-## 13. Troubleshooting
+## 14. Troubleshooting
 
 | Problème | Cause probable | Solution |
 |----------|---------------|----------|
