@@ -94,6 +94,94 @@ Ce script cree le projet dans `~/langgraph-project/` avec :
    nano ~/langgraph-project/.env
    ```
 
+🔑 **ANTHROPIC_API_KEY (obligatoire — seul coût récurrent)**
+
+Aller sur https://console.anthropic.com
+Créer un compte (ou se connecter)
+Menu gauche → API Keys
+Cliquer Create Key → nommer "langgraph-agents"
+Copier la clé (commence par sk-ant-api03-...)
+Onglet Plans & Billing → ajouter une carte bancaire et mettre un spending limit (ex: 10€/mois pour commencer)
+
+
+🧠 **VOYAGE_API_KEY (pour le RAG — quasi gratuit)**
+
+Aller sur https://dash.voyageai.com
+Créer un compte (gratuit — 50M tokens/mois offerts)
+Menu API Keys → Create new API key
+Copier la clé (commence par pa-...)
+
+
+Alternative 0€ : ne pas mettre de clé Voyage et utiliser Ollama en local (voir le EMBEDDING_MODEL=local dans le script RAG). Mais il faut un GPU ou accepter que ce soit plus lent.
+
+
+🤖 **DISCORD_BOT_TOKEN (gratuit)**
+
+Aller sur https://discord.com/developers/applications
+Se connecter avec son compte Discord
+Cliquer New Application → nommer "LangGraph Agent" → Create
+Menu gauche → Bot
+Cliquer Reset Token → Yes, do it! → copier le token
+Sur la même page, désactiver Public Bot
+Activer les 3 Privileged Gateway Intents :
+
+PRESENCE INTENT ✅
+SERVER MEMBERS INTENT ✅
+MESSAGE CONTENT INTENT ✅
+
+Menu gauche → OAuth2 → URL Generator
+
+Scopes : cocher bot + applications.commands
+Bot Permissions : cocher Send Messages, Read Message History, Add Reactions, Embed Links, Attach Files, Use Slash Commands
+
+
+Copier l'URL générée en bas → ouvrir dans le navigateur → choisir ton serveur Discord → Autoriser
+
+Les Channel IDs Discord
+
+Dans Discord, aller dans Paramètres utilisateur (roue dentée) → Avancés → activer Mode développeur
+Créer tes channels sur ton serveur (#orchestrateur-logs, #human-review, #alerts, #commandes)
+Clic droit sur chaque channel → Copier l'identifiant du salon
+C'est un nombre comme 1234567890123456789 — le coller dans le .env
+
+
+📊 LANGSMITH_API_KEY (optionnel — gratuit)
+
+Aller sur https://smith.langchain.com
+Créer un compte (gratuit — 100K traces/mois)
+Menu → Settings → API Keys → Create API Key
+Copier la clé (commence par lsv2_pt_...)
+
+
+Récapitulatif de ton .env
+```
+# ─── OBLIGATOIRE ──────────────────────────────
+ANTHROPIC_API_KEY=sk-ant-api03-xxxxx          # console.anthropic.com → API Keys
+
+# ─── RAG ──────────────────────────────────────
+VOYAGE_API_KEY=pa-xxxxx                        # dash.voyageai.com → API Keys
+
+# ─── DISCORD (optionnel) ─────────────────────
+DISCORD_BOT_TOKEN=MTIzNDU2Nzg5.xxxxx          # discord.com/developers → Bot → Reset Token
+DISCORD_CHANNEL_REVIEW=1234567890123456789     # clic droit channel → Copier l'identifiant
+DISCORD_CHANNEL_LOGS=1234567890123456789
+DISCORD_CHANNEL_COMMANDS=1234567890123456789
+DISCORD_GUILD_ID=1234567890123456789           # clic droit sur le nom du serveur → Copier l'identifiant
+
+# ─── OBSERVABILITÉ (optionnel) ───────────────
+LANGSMITH_API_KEY=lsv2_pt_xxxxx                # smith.langchain.com → Settings → API Keys
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_PROJECT=langgraph-multi-agent
+
+# ─── INFRA (ne pas modifier) ─────────────────
+POSTGRES_DB=langgraph
+POSTGRES_USER=langgraph
+POSTGRES_PASSWORD=ton-mot-de-passe-ici         # choisis-en un solide
+REDIS_PASSWORD=ton-mot-de-passe-redis
+DATABASE_URI=postgres://langgraph:ton-mot-de-passe-ici@langgraph-postgres:5432/langgraph?sslmode=disable
+REDIS_URI=redis://:ton-mot-de-passe-redis@langgraph-redis:6379/0
+```
+
 2. Tester l'agent orchestrateur :
    ```bash
    cd ~/langgraph-project
