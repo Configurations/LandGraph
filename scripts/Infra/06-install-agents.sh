@@ -56,8 +56,13 @@ PROMPT_FILES=(
 DOWNLOADED=0
 for name in "${PROMPT_FILES[@]}"; do
     TARGET="${PROJECT_DIR}/prompts/v1/${name}.md"
-    URL="${REPO_RAW}/prompts/v1/${name}.md"
-    if wget -qO "${TARGET}" "${URL}" 2>/dev/null; then
+    # Essayer d'abord prompts/{name}.md (structure actuelle du repo)
+    URL_FLAT="${REPO_RAW}/prompts/${name}.md"
+    # Puis prompts/v1/{name}.md (structure alternative)
+    URL_V1="${REPO_RAW}/prompts/v1/${name}.md"
+    if wget -qO "${TARGET}" "${URL_FLAT}" 2>/dev/null && [ -s "${TARGET}" ]; then
+        DOWNLOADED=$((DOWNLOADED + 1))
+    elif wget -qO "${TARGET}" "${URL_V1}" 2>/dev/null && [ -s "${TARGET}" ]; then
         DOWNLOADED=$((DOWNLOADED + 1))
     else
         echo "  -> ATTENTION : ${name}.md non trouve sur le repo (sera cree localement)"
@@ -491,9 +496,11 @@ echo "  -> 12 agents crees (9 specialistes + 3 sous-agents dev)"
 # ── 5. Orchestrateur (deja genere, on le telecharge) ────────────────────────
 echo "[5/6] Installation de l'orchestrateur production..."
 
-# Telecharger depuis le repo s'il existe
-if wget -qO "${PROJECT_DIR}/agents/orchestrator.py" "${REPO_RAW}/prompts/orchestrator.py" 2>/dev/null; then
-    echo "  -> orchestrator.py telecharge depuis le repo"
+# Telecharger depuis le repo (essayer les deux chemins possibles)
+if wget -qO "${PROJECT_DIR}/agents/orchestrator.py" "${REPO_RAW}/prompts/orchestrator.py" 2>/dev/null && [ -s "${PROJECT_DIR}/agents/orchestrator.py" ]; then
+    echo "  -> orchestrator.py telecharge depuis prompts/"
+elif wget -qO "${PROJECT_DIR}/agents/orchestrator.py" "${REPO_RAW}/prompts/v1/orchestrator.py" 2>/dev/null && [ -s "${PROJECT_DIR}/agents/orchestrator.py" ]; then
+    echo "  -> orchestrator.py telecharge depuis prompts/v1/"
 else
     echo "  -> orchestrator.py conserve (version locale)"
 fi
