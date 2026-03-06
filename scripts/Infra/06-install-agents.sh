@@ -1,10 +1,9 @@
 #!/bin/bash
 ###############################################################################
 # Script 6 : Installation des agents LangGraph (equipe complete)
+# VERSION CONSOLIDEE (integre fix 07 gateway + 08 context + max_tokens)
 #
 # A executer depuis la VM Ubuntu (apres les scripts 03 et 05).
-# Installe les 10 agents + 3 sous-agents + structure partagee.
-#
 # Usage : ./06-install-agents.sh
 ###############################################################################
 set -euo pipefail
@@ -14,80 +13,39 @@ REPO_RAW="https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/
 
 echo "==========================================="
 echo "  Script 6 : Installation des agents"
-echo "  (10 agents + 3 sous-agents)"
+echo "  (version consolidee)"
 echo "==========================================="
 echo ""
 
-# ── Verification pre-requis ──────────────────────────────────────────────────
 cd "${PROJECT_DIR}"
+[ ! -f .env ] && echo "ERREUR : .env introuvable." && exit 1
 
-if [ ! -f .env ]; then
-    echo "ERREUR : .env introuvable. Executez d'abord 03-install-langgraph.sh"
-    exit 1
-fi
+# ── 1. Structure ─────────────────────────────
+echo "[1/8] Structure..."
+mkdir -p agents/shared prompts/v1
+touch agents/__init__.py agents/shared/__init__.py
 
-# ── 1. Structure des dossiers ────────────────────────────────────────────────
-echo "[1/6] Creation de la structure..."
-mkdir -p "${PROJECT_DIR}/agents/shared"
-mkdir -p "${PROJECT_DIR}/prompts/v1"
-touch "${PROJECT_DIR}/agents/__init__.py"
-touch "${PROJECT_DIR}/agents/shared/__init__.py"
-echo "  -> Structure creee"
-
-# ── 2. Telecharger les system prompts depuis le repo ─────────────────────────
-echo "[2/6] Telechargement des system prompts..."
-
-PROMPT_FILES=(
-    "orchestrator"
-    "requirements_analyst"
-    "ux_designer"
-    "architect"
-    "planner"
-    "lead_dev"
-    "dev_frontend_web"
-    "dev_backend_api"
-    "dev_mobile"
-    "qa_engineer"
-    "devops_engineer"
-    "docs_writer"
-    "legal_advisor"
-)
-
-DOWNLOADED=0
-for name in "${PROMPT_FILES[@]}"; do
-    TARGET="${PROJECT_DIR}/prompts/v1/${name}.md"
-    # Essayer d'abord prompts/{name}.md (structure actuelle du repo)
-    URL_FLAT="${REPO_RAW}/prompts/${name}.md"
-    # Puis prompts/v1/{name}.md (structure alternative)
-    URL_V1="${REPO_RAW}/prompts/v1/${name}.md"
-    if wget -qO "${TARGET}" "${URL_FLAT}" 2>/dev/null && [ -s "${TARGET}" ]; then
-        DOWNLOADED=$((DOWNLOADED + 1))
-    elif wget -qO "${TARGET}" "${URL_V1}" 2>/dev/null && [ -s "${TARGET}" ]; then
-        DOWNLOADED=$((DOWNLOADED + 1))
+# ── 2. Prompts ───────────────────────────────
+echo "[2/8] Telechargement des prompts..."
+PROMPTS=(orchestrator requirements_analyst ux_designer architect planner lead_dev dev_frontend_web dev_backend_api dev_mobile qa_engineer devops_engineer docs_writer legal_advisor)
+DL=0
+for name in "${PROMPTS[@]}"; do
+    T="prompts/v1/${name}.md"
+    if wget -qO "$T" "${REPO_RAW}/prompts/${name}.md" 2>/dev/null && [ -s "$T" ]; then
+        DL=$((DL+1))
+    elif wget -qO "$T" "${REPO_RAW}/prompts/v1/${name}.md" 2>/dev/null && [ -s "$T" ]; then
+        DL=$((DL+1))
     else
-        echo "  -> ATTENTION : ${name}.md non trouve sur le repo (sera cree localement)"
+        echo "Tu es ${name}, agent LangGraph. Reponds en JSON: {agent_id, status, confidence, deliverables}." > "$T"
     fi
 done
-echo "  -> ${DOWNLOADED}/${#PROMPT_FILES[@]} prompts telecharges"
+echo "  -> ${DL}/${#PROMPTS[@]} prompts"
 
-# Creer les prompts manquants avec un fallback minimal
-for name in "${PROMPT_FILES[@]}"; do
-    TARGET="${PROJECT_DIR}/prompts/v1/${name}.md"
-    if [ ! -s "${TARGET}" ]; then
-        echo "  -> Creation du prompt fallback pour ${name}..."
-        echo "Tu es ${name}, agent specialise dans un systeme multi-agent LangGraph." > "${TARGET}"
-        echo "Reponds en JSON structure avec les champs : agent_id, status, confidence, deliverables." >> "${TARGET}"
-    fi
-done
-
-# ── 3. Module partage : ProjectState ─────────────────────────────────────────
-echo "[3/6] Creation des modules partages..."
-
-cat > "${PROJECT_DIR}/agents/shared/state.py" << 'PYTHON'
-"""ProjectState — Schema d'etat partage entre tous les agents."""
+# ── 3. shared/state.py ──────────────────────
+echo "[3/8] ProjectState..."
+cat > agents/shared/state.py << 'PY'
 from typing import TypedDict, Annotated
 from langgraph.graph.message import add_messages
-
 class ProjectState(TypedDict, total=False):
     messages: Annotated[list, add_messages]
     project_id: str
@@ -102,26 +60,21 @@ class ProjectState(TypedDict, total=False):
     deploy_status: dict
     human_feedback_log: list
     notifications_log: list
-PYTHON
+PY
 
-# ── 4. Module partage : BaseAgent ────────────────────────────────────────────
-cat > "${PROJECT_DIR}/agents/shared/base_agent.py" << 'PYTHON'
-"""BaseAgent — Classe de base pour tous les agents specialistes."""
+# ── 4. shared/base_agent.py ─────────────────
+echo "[4/8] BaseAgent (avec extract_brief/task)..."
+cat > agents/shared/base_agent.py << 'PY'
 import json, logging, os
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from langchain_anthropic import ChatAnthropic
-
 load_dotenv()
 logger = logging.getLogger(__name__)
 
 class BaseAgent:
-    agent_id: str = "base"
-    agent_name: str = "Base Agent"
-    default_model: str = "claude-sonnet-4-5-20250929"
-    default_temperature: float = 0.3
-    default_max_tokens: int = 8192
-    prompt_filename: str = "base.md"
+    agent_id = "base"; agent_name = "Base"; default_model = "claude-sonnet-4-5-20250929"
+    default_temperature = 0.3; default_max_tokens = 16384; prompt_filename = "base.md"
 
     def __init__(self):
         self.model = os.getenv(f"{self.agent_id.upper()}_MODEL", self.default_model)
@@ -129,471 +82,269 @@ class BaseAgent:
         self.max_tokens = int(os.getenv(f"{self.agent_id.upper()}_MAX_TOKENS", str(self.default_max_tokens)))
         self.system_prompt = self._load_prompt()
 
-    def _load_prompt(self) -> str:
-        paths = [
-            os.path.join(os.path.dirname(__file__), "..", "..", "prompts", "v1", self.prompt_filename),
-            os.path.join("/app", "prompts", "v1", self.prompt_filename),
-        ]
-        for path in paths:
-            abs_path = os.path.abspath(path)
-            if os.path.exists(abs_path):
-                with open(abs_path, "r") as f:
-                    logger.info(f"[{self.agent_id}] Prompt: {abs_path}")
-                    return f.read()
-        logger.warning(f"[{self.agent_id}] Prompt non trouve, fallback")
-        return f"Tu es {self.agent_name}. Reponds en JSON: {{agent_id, status, confidence, deliverables}}"
+    def _load_prompt(self):
+        for p in [os.path.join(os.path.dirname(__file__),"..","..", "prompts","v1",self.prompt_filename), os.path.join("/app","prompts","v1",self.prompt_filename)]:
+            a = os.path.abspath(p)
+            if os.path.exists(a):
+                logger.info(f"[{self.agent_id}] Prompt: {a}")
+                return open(a).read()
+        return f"Tu es {self.agent_name}. JSON: {{agent_id, status, confidence, deliverables}}"
 
-    def get_llm(self) -> ChatAnthropic:
+    def get_llm(self):
         return ChatAnthropic(model=self.model, temperature=self.temperature, max_tokens=self.max_tokens)
 
-    def build_context(self, state: dict) -> dict:
-        return {"project_phase": state.get("project_phase"), "project_metadata": state.get("project_metadata", {})}
+    def _extract_brief(self, state):
+        m = state.get("project_metadata", {})
+        if isinstance(m, dict) and m.get("brief"): return m["brief"]
+        for msg in state.get("messages", []):
+            if isinstance(msg, tuple) and len(msg)==2 and msg[0]=="user" and len(msg[1])>20: return msg[1]
+            elif hasattr(msg, "content"):
+                c = msg.content if isinstance(msg.content, str) else str(msg.content)
+                if len(c)>20: return c
+        return "Aucun brief."
 
-    def parse_response(self, raw: str) -> dict:
-        clean = raw.strip()
-        if "```json" in clean: clean = clean.split("```json")[1].split("```")[0].strip()
-        elif "```" in clean: clean = clean.split("```")[1].split("```")[0].strip()
-        return json.loads(clean)
+    def _extract_task(self, state):
+        for d in reversed(state.get("decision_history", [])):
+            for a in d.get("actions", []):
+                if isinstance(a, dict) and a.get("target")==self.agent_id: return a.get("task") or ""
+                elif hasattr(a, "target") and a.target==self.agent_id: return a.task or ""
+        return ""
 
-    def __call__(self, state: dict) -> dict:
+    def build_context(self, state):
+        return {"project_phase": state.get("project_phase"), "project_metadata": state.get("project_metadata",{}),
+                "brief": self._extract_brief(state), "task": self._extract_task(state),
+                "existing_outputs": list(state.get("agent_outputs",{}).keys())}
+
+    def parse_response(self, raw):
+        c = raw.strip()
+        if "```json" in c: c = c.split("```json")[1].split("```")[0].strip()
+        elif "```" in c: c = c.split("```")[1].split("```")[0].strip()
+        return json.loads(c)
+
+    def __call__(self, state):
         try:
-            context = self.build_context(state)
-            llm = self.get_llm()
-            response = llm.invoke([
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": f"Contexte :\n```json\n{json.dumps(context, indent=2, default=str)}\n```\nProduis ton livrable en JSON valide."},
-            ])
-            raw = response.content if isinstance(response.content, str) else str(response.content)
-            output = self.parse_response(raw)
-            output["agent_id"] = self.agent_id
-            output["timestamp"] = datetime.now(timezone.utc).isoformat()
-            agent_outputs = dict(state.get("agent_outputs", {}))
-            agent_outputs[self.agent_id] = output
-            state["agent_outputs"] = agent_outputs
-            messages = list(state.get("messages", []))
-            messages.append(("assistant", f"[{self.agent_id}] status={output.get('status')}"))
-            state["messages"] = messages
-            logger.info(f"[{self.agent_id}] status={output.get('status')}")
+            ctx = self.build_context(state); llm = self.get_llm()
+            logger.info(f"[{self.agent_id}] LLM call — brief:{len(ctx.get('brief',''))}c task:{ctx.get('task','')[:80]}")
+            r = llm.invoke([{"role":"system","content":self.system_prompt},
+                {"role":"user","content":f"Contexte:\n```json\n{json.dumps(ctx,indent=2,default=str)}\n```\nTache: {ctx.get('task','Produire tes livrables')}\nReponds en JSON valide."}])
+            raw = r.content if isinstance(r.content, str) else str(r.content)
+            logger.info(f"[{self.agent_id}] Response: {len(raw)}c")
+            try: output = self.parse_response(raw)
+            except json.JSONDecodeError as e:
+                logger.error(f"[{self.agent_id}] JSON fail: {e}")
+                output = {"agent_id":self.agent_id,"status":"complete","confidence":0.6,
+                          "deliverables":{"raw_output":raw[:8000]},"parse_note":str(e)[:100]}
+            output["agent_id"]=self.agent_id; output["timestamp"]=datetime.now(timezone.utc).isoformat()
+            ao = dict(state.get("agent_outputs",{})); ao[self.agent_id]=output; state["agent_outputs"]=ao
+            msgs = list(state.get("messages",[])); msgs.append(("assistant",f"[{self.agent_id}] status={output.get('status')}")); state["messages"]=msgs
+            logger.info(f"[{self.agent_id}] status={output.get('status')} conf={output.get('confidence')}")
             return state
         except Exception as e:
-            logger.error(f"[{self.agent_id}] Error: {e}")
-            agent_outputs = dict(state.get("agent_outputs", {}))
-            agent_outputs[self.agent_id] = {"agent_id": self.agent_id, "status": "blocked", "error": str(e), "timestamp": datetime.now(timezone.utc).isoformat()}
-            state["agent_outputs"] = agent_outputs
-            return state
-PYTHON
+            logger.error(f"[{self.agent_id}] EXC: {e}", exc_info=True)
+            ao = dict(state.get("agent_outputs",{}))
+            ao[self.agent_id]={"agent_id":self.agent_id,"status":"blocked","error":str(e),"timestamp":datetime.now(timezone.utc).isoformat()}
+            state["agent_outputs"]=ao; return state
+PY
 
-echo "  -> shared/state.py et shared/base_agent.py crees"
+echo "  -> Modules partages crees"
+# ── 5. Agents specialistes ───────────────────
+echo "[5/8] Agents specialistes..."
 
-# ── 5. Agents specialistes ───────────────────────────────────────────────────
-echo "[4/6] Creation des agents specialistes..."
+for AGENT_DEF in \
+  "requirements_analyst:Analyste:0.3:16384:requirements_analyst.md" \
+  "ux_designer:Designer UX:0.4:16384:ux_designer.md" \
+  "architect:Architecte:0.2:16384:architect.md" \
+  "planner:Planificateur:0.2:16384:planner.md" \
+  "lead_dev:Lead Dev:0.2:8192:lead_dev.md" \
+  "dev_frontend_web:Dev Frontend Web:0.2:16384:dev_frontend_web.md" \
+  "dev_backend_api:Dev Backend API:0.2:16384:dev_backend_api.md" \
+  "dev_mobile:Dev Mobile:0.2:16384:dev_mobile.md" \
+  "qa_engineer:QA Engineer:0.2:16384:qa_engineer.md" \
+  "devops_engineer:DevOps Engineer:0.2:16384:devops_engineer.md" \
+  "docs_writer:Documentaliste:0.3:16384:docs_writer.md" \
+  "legal_advisor:Avocat:0.2:16384:legal_advisor.md"; do
 
-# --- Requirements Analyst ---
-cat > "${PROJECT_DIR}/agents/requirements_analyst.py" << 'PYTHON'
-"""Analyste (Requirements Agent)"""
+  IFS=':' read -r AID ANAME ATEMP AMAX APROMPT <<< "${AGENT_DEF}"
+
+  # Determiner les reads specifiques par agent
+  case "${AID}" in
+    requirements_analyst)
+      READS='{"project_phase":state.get("project_phase","discovery"),"project_metadata":state.get("project_metadata",{}),"brief":self._extract_brief(state),"task":self._extract_task(state),"existing_outputs":list(state.get("agent_outputs",{}).keys())}' ;;
+    ux_designer)
+      READS='{**self._base_ctx(state),"prd":o.get("requirements_analyst",{}).get("deliverables",{}).get("prd"),"user_stories":o.get("requirements_analyst",{}).get("deliverables",{}).get("user_stories")}' ;;
+    *)
+      READS='self._base_ctx(state)' ;;
+  esac
+
+  cat > "agents/${AID}.py" << PYEOF
+"""${ANAME}"""
 from agents.shared.base_agent import BaseAgent
 
-class AnalystAgent(BaseAgent):
-    agent_id = "requirements_analyst"
-    agent_name = "Analyste"
-    default_temperature = 0.3
-    default_max_tokens = 8192
-    prompt_filename = "requirements_analyst.md"
+class Agent(BaseAgent):
+    agent_id = "${AID}"
+    agent_name = "${ANAME}"
+    default_temperature = ${ATEMP}
+    default_max_tokens = ${AMAX}
+    prompt_filename = "${APROMPT}"
 
-    def build_context(self, state: dict) -> dict:
+    def build_context(self, state):
+        o = state.get("agent_outputs", {})
         return {
-            "project_phase": state.get("project_phase", "discovery"),
+            "project_phase": state.get("project_phase", "unknown"),
             "project_metadata": state.get("project_metadata", {}),
-            "existing_outputs": list(state.get("agent_outputs", {}).keys()),
+            "brief": self._extract_brief(state),
+            "task": self._extract_task(state),
+            "existing_outputs": list(o.keys()),
+            "relevant_outputs": {k: {"status": v.get("status"), "deliverables_keys": list(v.get("deliverables", {}).keys())} for k, v in o.items() if v.get("status") == "complete"},
         }
 
-agent = AnalystAgent()
-PYTHON
+agent = Agent()
+PYEOF
+done
 
-# --- UX Designer ---
-cat > "${PROJECT_DIR}/agents/ux_designer.py" << 'PYTHON'
-"""Designer UX/Ergonome"""
-from agents.shared.base_agent import BaseAgent
+echo "  -> 12 agents crees"
 
-class UXDesignerAgent(BaseAgent):
-    agent_id = "ux_designer"
-    agent_name = "Designer UX/Ergonome"
-    default_temperature = 0.4
-    default_max_tokens = 8192
-    prompt_filename = "ux_designer.md"
-
-    def build_context(self, state: dict) -> dict:
-        outputs = state.get("agent_outputs", {})
-        return {
-            "project_phase": state.get("project_phase", "design"),
-            "project_metadata": state.get("project_metadata", {}),
-            "prd": outputs.get("requirements_analyst", {}).get("deliverables", {}).get("prd"),
-            "user_stories": outputs.get("requirements_analyst", {}).get("deliverables", {}).get("user_stories"),
-        }
-
-agent = UXDesignerAgent()
-PYTHON
-
-# --- Architect ---
-cat > "${PROJECT_DIR}/agents/architect.py" << 'PYTHON'
-"""Architecte (Design Agent)"""
-from agents.shared.base_agent import BaseAgent
-
-class ArchitectAgent(BaseAgent):
-    agent_id = "architect"
-    agent_name = "Architecte"
-    default_model = "claude-opus-4-5-20250929"
-    default_temperature = 0.2
-    default_max_tokens = 16384
-    prompt_filename = "architect.md"
-
-    def build_context(self, state: dict) -> dict:
-        outputs = state.get("agent_outputs", {})
-        return {
-            "project_phase": state.get("project_phase", "design"),
-            "project_metadata": state.get("project_metadata", {}),
-            "prd": outputs.get("requirements_analyst", {}).get("deliverables", {}).get("prd"),
-            "user_stories": outputs.get("requirements_analyst", {}).get("deliverables", {}).get("user_stories"),
-            "wireframes": outputs.get("ux_designer", {}).get("deliverables", {}).get("wireframes"),
-            "mockups": outputs.get("ux_designer", {}).get("deliverables", {}).get("mockups"),
-        }
-
-agent = ArchitectAgent()
-PYTHON
-
-# --- Planner ---
-cat > "${PROJECT_DIR}/agents/planner.py" << 'PYTHON'
-"""Planificateur (Planning Agent)"""
-from agents.shared.base_agent import BaseAgent
-
-class PlannerAgent(BaseAgent):
-    agent_id = "planner"
-    agent_name = "Planificateur"
-    default_temperature = 0.2
-    default_max_tokens = 8192
-    prompt_filename = "planner.md"
-
-    def build_context(self, state: dict) -> dict:
-        outputs = state.get("agent_outputs", {})
-        return {
-            "project_phase": state.get("project_phase", "design"),
-            "project_metadata": state.get("project_metadata", {}),
-            "user_stories": outputs.get("requirements_analyst", {}).get("deliverables", {}).get("user_stories"),
-            "adrs": outputs.get("architect", {}).get("deliverables", {}).get("adrs"),
-            "openapi_spec": outputs.get("architect", {}).get("deliverables", {}).get("openapi_spec"),
-        }
-
-agent = PlannerAgent()
-PYTHON
-
-# --- Lead Dev ---
-cat > "${PROJECT_DIR}/agents/lead_dev.py" << 'PYTHON'
-"""Lead Dev (Supervisor)"""
-from agents.shared.base_agent import BaseAgent
-
-class LeadDevAgent(BaseAgent):
-    agent_id = "lead_dev"
-    agent_name = "Lead Dev"
-    default_temperature = 0.2
-    default_max_tokens = 4096
-    prompt_filename = "lead_dev.md"
-    SUB_AGENTS = ["dev_frontend_web", "dev_backend_api", "dev_mobile"]
-
-    def build_context(self, state: dict) -> dict:
-        outputs = state.get("agent_outputs", {})
-        return {
-            "project_phase": "build",
-            "project_metadata": state.get("project_metadata", {}),
-            "sprint_backlog": outputs.get("planner", {}).get("deliverables", {}).get("sprint_backlog"),
-            "adrs": outputs.get("architect", {}).get("deliverables", {}).get("adrs"),
-            "openapi_spec": outputs.get("architect", {}).get("deliverables", {}).get("openapi_spec"),
-            "design_tokens": outputs.get("ux_designer", {}).get("deliverables", {}).get("design_tokens"),
-            "mockups": outputs.get("ux_designer", {}).get("deliverables", {}).get("mockups"),
-            "current_assignments": state.get("current_assignments", {}),
-        }
-
-agent = LeadDevAgent()
-PYTHON
-
-# --- Dev Frontend Web ---
-cat > "${PROJECT_DIR}/agents/dev_frontend_web.py" << 'PYTHON'
-"""Dev Frontend Web — React/Next.js/TypeScript/Tailwind"""
-from agents.shared.base_agent import BaseAgent
-
-class DevFrontendWebAgent(BaseAgent):
-    agent_id = "dev_frontend_web"
-    agent_name = "Dev Frontend Web"
-    default_temperature = 0.2
-    default_max_tokens = 16384
-    prompt_filename = "dev_frontend_web.md"
-
-    def build_context(self, state: dict) -> dict:
-        outputs = state.get("agent_outputs", {})
-        return {
-            "project_phase": "build",
-            "openapi_spec": outputs.get("architect", {}).get("deliverables", {}).get("openapi_spec"),
-            "design_tokens": outputs.get("ux_designer", {}).get("deliverables", {}).get("design_tokens"),
-            "mockups": outputs.get("ux_designer", {}).get("deliverables", {}).get("mockups"),
-            "task": state.get("current_assignments", {}).get("dev_frontend_web", ""),
-        }
-
-agent = DevFrontendWebAgent()
-PYTHON
-
-# --- Dev Backend API ---
-cat > "${PROJECT_DIR}/agents/dev_backend_api.py" << 'PYTHON'
-"""Dev Backend/API — Python/FastAPI/SQLAlchemy/Alembic"""
-from agents.shared.base_agent import BaseAgent
-
-class DevBackendApiAgent(BaseAgent):
-    agent_id = "dev_backend_api"
-    agent_name = "Dev Backend/API"
-    default_temperature = 0.2
-    default_max_tokens = 16384
-    prompt_filename = "dev_backend_api.md"
-
-    def build_context(self, state: dict) -> dict:
-        outputs = state.get("agent_outputs", {})
-        return {
-            "project_phase": "build",
-            "openapi_spec": outputs.get("architect", {}).get("deliverables", {}).get("openapi_spec"),
-            "data_models": outputs.get("architect", {}).get("deliverables", {}).get("data_models"),
-            "adrs": outputs.get("architect", {}).get("deliverables", {}).get("adrs"),
-            "task": state.get("current_assignments", {}).get("dev_backend_api", ""),
-        }
-
-agent = DevBackendApiAgent()
-PYTHON
-
-# --- Dev Mobile ---
-cat > "${PROJECT_DIR}/agents/dev_mobile.py" << 'PYTHON'
-"""Dev Mobile — React Native/Expo/TypeScript"""
-from agents.shared.base_agent import BaseAgent
-
-class DevMobileAgent(BaseAgent):
-    agent_id = "dev_mobile"
-    agent_name = "Dev Mobile"
-    default_temperature = 0.2
-    default_max_tokens = 16384
-    prompt_filename = "dev_mobile.md"
-
-    def build_context(self, state: dict) -> dict:
-        outputs = state.get("agent_outputs", {})
-        return {
-            "project_phase": "build",
-            "openapi_spec": outputs.get("architect", {}).get("deliverables", {}).get("openapi_spec"),
-            "design_tokens": outputs.get("ux_designer", {}).get("deliverables", {}).get("design_tokens"),
-            "mockups": outputs.get("ux_designer", {}).get("deliverables", {}).get("mockups"),
-            "task": state.get("current_assignments", {}).get("dev_mobile", ""),
-        }
-
-agent = DevMobileAgent()
-PYTHON
-
-# --- QA Engineer ---
-cat > "${PROJECT_DIR}/agents/qa_engineer.py" << 'PYTHON'
-"""QA Engineer (Testing Agent)"""
-from agents.shared.base_agent import BaseAgent
-
-class QAEngineerAgent(BaseAgent):
-    agent_id = "qa_engineer"
-    agent_name = "QA Engineer"
-    default_temperature = 0.2
-    default_max_tokens = 8192
-    prompt_filename = "qa_engineer.md"
-
-    def build_context(self, state: dict) -> dict:
-        outputs = state.get("agent_outputs", {})
-        return {
-            "project_phase": state.get("project_phase", "build"),
-            "user_stories": outputs.get("requirements_analyst", {}).get("deliverables", {}).get("user_stories"),
-            "source_code": {k: v for k, v in outputs.items() if k.startswith("dev_")},
-            "acceptance_criteria": outputs.get("requirements_analyst", {}).get("deliverables", {}).get("user_stories"),
-        }
-
-agent = QAEngineerAgent()
-PYTHON
-
-# --- DevOps Engineer ---
-cat > "${PROJECT_DIR}/agents/devops_engineer.py" << 'PYTHON'
-"""DevOps Engineer (Infra Agent)"""
-from agents.shared.base_agent import BaseAgent
-
-class DevOpsEngineerAgent(BaseAgent):
-    agent_id = "devops_engineer"
-    agent_name = "DevOps Engineer"
-    default_temperature = 0.2
-    default_max_tokens = 8192
-    prompt_filename = "devops_engineer.md"
-
-    def build_context(self, state: dict) -> dict:
-        outputs = state.get("agent_outputs", {})
-        return {
-            "project_phase": state.get("project_phase", "ship"),
-            "project_metadata": state.get("project_metadata", {}),
-            "adrs": outputs.get("architect", {}).get("deliverables", {}).get("adrs"),
-            "stack_decision": outputs.get("architect", {}).get("deliverables", {}).get("stack_decision"),
-            "qa_verdict": state.get("qa_verdict", {}),
-        }
-
-agent = DevOpsEngineerAgent()
-PYTHON
-
-# --- Docs Writer ---
-cat > "${PROJECT_DIR}/agents/docs_writer.py" << 'PYTHON'
-"""Documentaliste (Docs Agent)"""
-from agents.shared.base_agent import BaseAgent
-
-class DocsWriterAgent(BaseAgent):
-    agent_id = "docs_writer"
-    agent_name = "Documentaliste"
-    default_temperature = 0.3
-    default_max_tokens = 8192
-    prompt_filename = "docs_writer.md"
-
-    def build_context(self, state: dict) -> dict:
-        outputs = state.get("agent_outputs", {})
-        return {
-            "project_phase": state.get("project_phase", "ship"),
-            "project_metadata": state.get("project_metadata", {}),
-            "prd": outputs.get("requirements_analyst", {}).get("deliverables", {}).get("prd"),
-            "adrs": outputs.get("architect", {}).get("deliverables", {}).get("adrs"),
-            "openapi_spec": outputs.get("architect", {}).get("deliverables", {}).get("openapi_spec"),
-            "all_outputs": list(outputs.keys()),
-        }
-
-agent = DocsWriterAgent()
-PYTHON
-
-# --- Legal Advisor ---
-cat > "${PROJECT_DIR}/agents/legal_advisor.py" << 'PYTHON'
-"""Avocat (Legal Agent)"""
-from agents.shared.base_agent import BaseAgent
-
-class LegalAdvisorAgent(BaseAgent):
-    agent_id = "legal_advisor"
-    agent_name = "Avocat"
-    default_temperature = 0.2
-    default_max_tokens = 8192
-    prompt_filename = "legal_advisor.md"
-
-    def build_context(self, state: dict) -> dict:
-        outputs = state.get("agent_outputs", {})
-        return {
-            "project_phase": state.get("project_phase", "discovery"),
-            "project_metadata": state.get("project_metadata", {}),
-            "prd": outputs.get("requirements_analyst", {}).get("deliverables", {}).get("prd"),
-            "user_stories": outputs.get("requirements_analyst", {}).get("deliverables", {}).get("user_stories"),
-            "source_code_agents": [k for k in outputs if k.startswith("dev_")],
-            "existing_legal_alerts": state.get("legal_alerts", []),
-        }
-
-agent = LegalAdvisorAgent()
-PYTHON
-
-echo "  -> 12 agents crees (9 specialistes + 3 sous-agents dev)"
-
-# ── 5. Orchestrateur (deja genere, on le telecharge) ────────────────────────
-echo "[5/6] Installation de l'orchestrateur production..."
-
-# Telecharger depuis le repo (essayer les deux chemins possibles)
-if wget -qO "${PROJECT_DIR}/agents/orchestrator.py" "${REPO_RAW}/prompts/orchestrator.py" 2>/dev/null && [ -s "${PROJECT_DIR}/agents/orchestrator.py" ]; then
-    echo "  -> orchestrator.py telecharge depuis prompts/"
-elif wget -qO "${PROJECT_DIR}/agents/orchestrator.py" "${REPO_RAW}/prompts/v1/orchestrator.py" 2>/dev/null && [ -s "${PROJECT_DIR}/agents/orchestrator.py" ]; then
-    echo "  -> orchestrator.py telecharge depuis prompts/v1/"
+# ── 6. Orchestrateur ─────────────────────────
+echo "[6/8] Orchestrateur..."
+if wget -qO agents/orchestrator.py "${REPO_RAW}/prompts/orchestrator.py" 2>/dev/null && [ -s agents/orchestrator.py ]; then
+    echo "  -> telecharge"
 else
-    echo "  -> orchestrator.py conserve (version locale)"
+    echo "  -> conserve (local)"
 fi
 
-# ── 6. Test de validation ────────────────────────────────────────────────────
-echo "[6/6] Validation de l'installation..."
+# ── 7. Gateway multi-agent ───────────────────
+echo "[7/8] Gateway multi-agent..."
+
+cat > agents/gateway.py << 'PY'
+"""FastAPI Gateway — Graphe multi-agent complet."""
+import json,logging,os
+from datetime import datetime,timezone
+import psycopg
+from dotenv import load_dotenv
+from fastapi import FastAPI,HTTPException
+from pydantic import BaseModel
+load_dotenv()
+logger=logging.getLogger("gateway")
+logging.basicConfig(level=logging.INFO,format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
+app=FastAPI(title="LangGraph Multi-Agent API",version="0.3.0")
+
+from agents.requirements_analyst import agent as a1
+from agents.ux_designer import agent as a2
+from agents.architect import agent as a3
+from agents.planner import agent as a4
+from agents.lead_dev import agent as a5
+from agents.dev_frontend_web import agent as a6
+from agents.dev_backend_api import agent as a7
+from agents.dev_mobile import agent as a8
+from agents.qa_engineer import agent as a9
+from agents.devops_engineer import agent as a10
+from agents.docs_writer import agent as a11
+from agents.legal_advisor import agent as a12
+from agents.orchestrator import orchestrator_node,route_after_orchestrator
+from langgraph.graph import StateGraph,END
+from langgraph.checkpoint.postgres import PostgresSaver
+
+AGENT_MAP={"requirements_analyst":a1,"ux_designer":a2,"architect":a3,"planner":a4,
+    "lead_dev":a5,"dev_frontend_web":a6,"dev_backend_api":a7,"dev_mobile":a8,
+    "qa_engineer":a9,"devops_engineer":a10,"docs_writer":a11,"legal_advisor":a12}
+
+def human_gate_node(state):
+    logger.info("HUMAN GATE — auto approve")
+    f=list(state.get("human_feedback_log",[])); f.append({"timestamp":datetime.now(timezone.utc).isoformat(),"response":"approve","source":"auto"})
+    state["human_feedback_log"]=f; return state
+
+def build_graph():
+    g=StateGraph(dict); g.add_node("orchestrator",orchestrator_node); g.add_node("human_gate",human_gate_node)
+    for aid,ac in AGENT_MAP.items(): g.add_node(aid,ac)
+    g.set_entry_point("orchestrator")
+    rm={aid:aid for aid in AGENT_MAP}; rm.update({"human_gate":"human_gate","orchestrator":"orchestrator","end":END})
+    g.add_conditional_edges("orchestrator",route_after_orchestrator,rm)
+    for aid in AGENT_MAP: g.add_edge(aid,"orchestrator")
+    g.add_edge("human_gate","orchestrator"); return g
+
+GRAPH=None
+def get_graph():
+    global GRAPH
+    if not GRAPH:
+        c=psycopg.connect(os.getenv("DATABASE_URI"),autocommit=True); cp=PostgresSaver(c); cp.setup()
+        GRAPH=build_graph().compile(checkpointer=cp); logger.info("Graph ready — %d agents",len(AGENT_MAP)+1)
+    return GRAPH
+
+@app.get("/health")
+async def health(): return {"status":"ok","service":"langgraph-multi-agent","version":"0.3.0"}
+
+@app.get("/status")
+async def status(): return {"agents":list(AGENT_MAP)+["orchestrator"],"total_agents":len(AGENT_MAP)+1}
+
+class InvokeReq(BaseModel):
+    messages:list[dict]; thread_id:str="default"; project_id:str="default"
+class InvokeRes(BaseModel):
+    output:str; thread_id:str; decisions:list=[]; agent_outputs:dict={}
+
+@app.post("/invoke",response_model=InvokeRes)
+async def invoke(req:InvokeReq):
+    try:
+        g=get_graph(); cfg={"configurable":{"thread_id":req.thread_id}}
+        msgs=[(m.get("role","user"),m.get("content","")) for m in req.messages]
+        r=g.invoke({"messages":msgs,"project_id":req.project_id,"project_phase":"discovery",
+            "project_metadata":{},"agent_outputs":{},"legal_alerts":[],"decision_history":[],
+            "current_assignments":{},"blockers":[],"human_feedback_log":[],"notifications_log":[]},cfg)
+        decs=r.get("decision_history",[]); aos=r.get("agent_outputs",{}); parts=[]
+        for i,d in enumerate(decs,1):
+            parts.append(f"[Orchestrateur] Decision {i}: {d.get('decision_type')} (conf:{d.get('confidence')})\n{d.get('reasoning','')[:300]}")
+            for a in d.get("actions",[]):
+                t=(a.get("target") or ""); tk=(a.get("task") or "")[:200]
+                if a.get("action")=="dispatch_agent" and t: parts.append(f"  -> {t}: {tk}")
+        for aid,o in aos.items():
+            parts.append(f"\n[{aid}] status={o.get('status')}, conf={o.get('confidence','N/A')}")
+            dl=o.get("deliverables",{})
+            if isinstance(dl,dict):
+                for k in list(dl.keys())[:5]:
+                    v=dl[k]
+                    if isinstance(v,str): v=v[:300]+"..." if len(v)>300 else v
+                    elif isinstance(v,(dict,list)): s=json.dumps(v,ensure_ascii=False,default=str); v=s[:300]+"..." if len(s)>300 else s
+                    parts.append(f"  {k}: {v}")
+        return InvokeRes(output="\n\n".join(parts) if parts else "En attente.",thread_id=req.thread_id,
+            decisions=decs,agent_outputs={k:{"status":v.get("status"),"agent_id":k} for k,v in aos.items()})
+    except Exception as e:
+        logger.error(f"Invoke error: {e}",exc_info=True); raise HTTPException(500,str(e))
+
+@app.on_event("startup")
+async def startup():
+    try: get_graph(); logger.info("Gateway ready")
+    except Exception as e: logger.error(f"Init error: {e}")
+PY
+
+echo "  -> gateway.py installe"
+
+# ── 8. Dockerfile + rebuild + validation ─────
+echo "[8/8] Rebuild et validation..."
+
+grep -q "COPY prompts/" Dockerfile 2>/dev/null || sed -i '/COPY config\//a COPY prompts/ ./prompts/' Dockerfile
+
+docker compose up -d --build langgraph-api
+sleep 12
+
+AC=$(ls -1 agents/*.py 2>/dev/null | grep -v __init__ | grep -v gateway | wc -l)
+PC=$(ls -1 prompts/v1/*.md 2>/dev/null | wc -l)
+echo "  Agents: ${AC} | Prompts: ${PC}"
+
+H=$(curl -s http://localhost:8123/health 2>/dev/null || echo error)
+S=$(curl -s http://localhost:8123/status 2>/dev/null || echo '{}')
+NA=$(echo "$S" | python3 -c "import sys,json;print(json.load(sys.stdin).get('total_agents',0))" 2>/dev/null || echo 0)
+echo "  Health: ${H}"
+echo "  API Agents: ${NA}"
+
 echo ""
-
-source "${PROJECT_DIR}/.venv/bin/activate" 2>/dev/null || true
-
-# Verifier les fichiers
-AGENTS_COUNT=$(ls -1 "${PROJECT_DIR}/agents/"*.py 2>/dev/null | grep -v __init__ | grep -v gateway | wc -l)
-PROMPTS_COUNT=$(ls -1 "${PROJECT_DIR}/prompts/v1/"*.md 2>/dev/null | wc -l)
-
-echo "  Fichiers agents Python : ${AGENTS_COUNT}"
-echo "  Fichiers system prompts : ${PROMPTS_COUNT}"
-
-# Verifier les imports
-echo ""
-echo "  Test d'import des modules..."
-IMPORT_OK=0
-IMPORT_FAIL=0
-for agent_file in "${PROJECT_DIR}/agents/"*.py; do
-    agent_name=$(basename "${agent_file}" .py)
-    if [ "${agent_name}" = "__init__" ] || [ "${agent_name}" = "gateway" ] || [ "${agent_name}" = "discord_listener" ]; then
-        continue
-    fi
-    if python -c "import agents.${agent_name}" 2>/dev/null; then
-        IMPORT_OK=$((IMPORT_OK + 1))
-    else
-        IMPORT_FAIL=$((IMPORT_FAIL + 1))
-        echo "    ERREUR import : agents.${agent_name}"
-    fi
-done
-echo "  -> Imports OK : ${IMPORT_OK}, Erreurs : ${IMPORT_FAIL}"
-
-# Lister les agents
-echo ""
-echo "  Equipe installee :"
 echo "  ┌─────────────────────────────────────────────────┐"
-echo "  │ 🎯  Orchestrateur       (orchestrator)          │"
-echo "  │ 📋  Analyste            (requirements_analyst)  │"
-echo "  │ 🎨  Designer UX         (ux_designer)           │"
-echo "  │ 🏗️  Architecte          (architect)              │"
-echo "  │ 📅  Planificateur       (planner)               │"
-echo "  │ ⚡  Lead Dev            (lead_dev)              │"
-echo "  │   🌐  Dev Frontend Web  (dev_frontend_web)      │"
-echo "  │   🔧  Dev Backend/API   (dev_backend_api)       │"
-echo "  │   📱  Dev Mobile        (dev_mobile)            │"
-echo "  │ 🔍  QA Engineer         (qa_engineer)           │"
-echo "  │ 🚀  DevOps Engineer     (devops_engineer)       │"
-echo "  │ 📝  Documentaliste      (docs_writer)           │"
-echo "  │ ⚖️  Avocat              (legal_advisor)          │"
+echo "  │ 🎯 Orchestrateur    │ 📋 Analyste              │"
+echo "  │ 🎨 Designer UX      │ 🏗️ Architecte            │"
+echo "  │ 📅 Planificateur    │ ⚡ Lead Dev              │"
+echo "  │   🌐 Frontend Web   │   🔧 Backend API         │"
+echo "  │   📱 Mobile         │ 🔍 QA Engineer           │"
+echo "  │ 🚀 DevOps           │ 📝 Documentaliste        │"
+echo "  │ ⚖️ Avocat            │                          │"
 echo "  └─────────────────────────────────────────────────┘"
-
 echo ""
-echo "==========================================="
-echo "  Agents installes avec succes."
-echo ""
-echo "  Structure creee :"
-echo "  agents/"
-echo "  ├── shared/"
-echo "  │   ├── state.py          (ProjectState partage)"
-echo "  │   ├── base_agent.py     (classe de base)"
-echo "  │   ├── rag_service.py    (si script 05 execute)"
-echo "  │   └── discord_tools.py  (si script 04 execute)"
-echo "  ├── orchestrator.py       (Meta-Agent PM)"
-echo "  ├── requirements_analyst.py"
-echo "  ├── ux_designer.py"
-echo "  ├── architect.py"
-echo "  ├── planner.py"
-echo "  ├── lead_dev.py"
-echo "  ├── dev_frontend_web.py"
-echo "  ├── dev_backend_api.py"
-echo "  ├── dev_mobile.py"
-echo "  ├── qa_engineer.py"
-echo "  ├── devops_engineer.py"
-echo "  ├── docs_writer.py"
-echo "  ├── legal_advisor.py"
-echo "  └── gateway.py"
-echo ""
-echo "  Prochaines etapes :"
-echo "  1. Committez vos system prompts dans prompts/v1/"
-echo "     (depuis votre repo Configurations/LandGraph)"
-echo ""
-echo "  2. Rebuild l'image Docker :"
-echo "     docker compose up -d --build langgraph-api"
-echo ""
-echo "  3. Testez l'orchestrateur :"
-echo "     DB_PASS=\$(grep POSTGRES_PASSWORD .env | cut -d= -f2)"
-echo "     DATABASE_URI=\"postgres://langgraph:\${DB_PASS}@localhost:5432/langgraph?sslmode=disable\" \\"
-echo "     python agents/orchestrator.py"
-echo ""
-echo "  4. Testez via Discord (#commandes) :"
-echo "     \"Nouveau projet : app de gestion de taches\""
+echo "  Testez : Discord #commandes ou curl localhost:8123/invoke"
 echo "==========================================="

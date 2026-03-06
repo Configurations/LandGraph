@@ -1,6 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # Script 3/3 : Installation de LangGraph + Infrastructure de donnees
+# VERSION CONSOLIDEE (integre les fix 07 et 08)
 #
 # A executer depuis la VM Ubuntu (apres le script 02).
 # Usage : ./03-install-langgraph.sh
@@ -10,7 +11,8 @@ set -euo pipefail
 PROJECT_DIR="$HOME/langgraph-project"
 
 echo "==========================================="
-echo "  Script 3/3 : Installation LangGraph"
+echo "  Script 3 : Installation LangGraph"
+echo "  (version consolidee)"
 echo "==========================================="
 echo ""
 
@@ -26,18 +28,22 @@ if ! docker info &> /dev/null 2>&1; then
 fi
 
 # ── 1. Arborescence du projet ────────────────────────────────────────────────
-echo "[1/7] Creation de l'arborescence du projet..."
-mkdir -p "${PROJECT_DIR}"/{agents,config,data/backups,scripts,prompts/v1}
+echo "[1/8] Creation de l'arborescence du projet..."
+mkdir -p "${PROJECT_DIR}"/{agents/shared,config,data/backups,scripts,prompts/v1}
 cd "${PROJECT_DIR}"
 
 # ── 2. Fichier .env ─────────────────────────────────────────────────────────
-echo "[2/7] Creation du fichier .env..."
+echo "[2/8] Creation du fichier .env..."
 if [ ! -f .env ]; then
     cat > .env << 'EOF'
 # ── LLM ──────────────────────────────────────
 ANTHROPIC_API_KEY=sk-ant-api03-VOTRE-CLE-ICI
 
-# ── LangSmith (optionnel, pour le tracing) ───
+# ── Embeddings (RAG) ────────────────────────
+VOYAGE_API_KEY=pa-VOTRE-CLE-VOYAGE-AI
+EMBEDDING_MODEL=voyage-3-large
+
+# ── LangSmith (optionnel) ────────────────────
 LANGSMITH_API_KEY=lsv2-VOTRE-CLE-ICI
 LANGCHAIN_TRACING_V2=true
 LANGCHAIN_PROJECT=langgraph-multi-agent
@@ -59,21 +65,16 @@ EOF
 else
     echo "  -> .env existe deja, conservation du fichier existant."
 fi
-
-# Copie template
 cp -n .env .env.example 2>/dev/null || true
 
 # ── 3. Script SQL init ──────────────────────────────────────────────────────
-echo "[3/7] Creation du schema PostgreSQL..."
+echo "[3/8] Creation du schema PostgreSQL..."
 cat > config/init.sql << 'SQL'
--- Extensions pour LangGraph + RAG
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- Schema pour les artefacts projet
 CREATE SCHEMA IF NOT EXISTS project;
 
--- Table de metadonnees des agents
 CREATE TABLE IF NOT EXISTS project.agent_registry (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name VARCHAR(100) NOT NULL UNIQUE,
@@ -85,7 +86,6 @@ CREATE TABLE IF NOT EXISTS project.agent_registry (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Table des artefacts produits par les agents
 CREATE TABLE IF NOT EXISTS project.artifacts (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     agent_id UUID REFERENCES project.agent_registry(id),
@@ -96,16 +96,14 @@ CREATE TABLE IF NOT EXISTS project.artifacts (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Index pour les recherches frequentes
 CREATE INDEX IF NOT EXISTS idx_artifacts_agent ON project.artifacts(agent_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_phase ON project.artifacts(phase);
 CREATE INDEX IF NOT EXISTS idx_artifacts_type ON project.artifacts(artifact_type);
 SQL
 
-# ── 4. Docker Compose (stack complete) ───────────────────────────────────────
-echo "[4/7] Creation du docker-compose.yml..."
+# ── 4. Docker Compose ────────────────────────────────────────────────────────
+echo "[4/8] Creation du docker-compose.yml..."
 cat > docker-compose.yml << 'YAML'
-
 volumes:
   postgres-data:
     driver: local
@@ -117,7 +115,6 @@ networks:
     driver: bridge
 
 services:
-  # ── PostgreSQL 16 + pgvector ───────────────
   langgraph-postgres:
     image: pgvector/pgvector:pg16
     container_name: langgraph-postgres
@@ -152,7 +149,6 @@ services:
     networks:
       - langgraph-net
 
-  # ── Redis 7 ────────────────────────────────
   langgraph-redis:
     image: redis:7-alpine
     container_name: langgraph-redis
@@ -175,7 +171,6 @@ services:
     networks:
       - langgraph-net
 
-  # ── LangGraph Agent Server ─────────────────
   langgraph-api:
     build:
       context: .
@@ -197,6 +192,7 @@ services:
     volumes:
       - ./agents:/app/agents
       - ./config:/app/config
+      - ./prompts:/app/prompts
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -207,25 +203,23 @@ services:
       - langgraph-net
 YAML
 
-# ── 5. Dockerfile + requirements.txt ────────────────────────────────────────
-echo "[5/7] Creation du Dockerfile et requirements.txt..."
+# ── 5. Dockerfile (inclut prompts/) ─────────────────────────────────────────
+echo "[5/8] Creation du Dockerfile et requirements.txt..."
 cat > Dockerfile << 'DOCKERFILE'
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Dependances systeme
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential libpq-dev curl git \
     && rm -rf /var/lib/apt/lists/*
 
-# Dependances Python
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Code des agents
 COPY agents/ ./agents/
 COPY config/ ./config/
+COPY prompts/ ./prompts/
 COPY langgraph.json .
 
 EXPOSE 8000
@@ -247,20 +241,120 @@ redis>=5.0.0
 python-dotenv>=1.0.0
 fastapi>=0.115.0
 uvicorn>=0.32.0
+voyageai>=0.3.0
+tiktoken>=0.7.0
 TXT
 
-# ── 6. Environnement Python local + agent de test ───────────────────────────
-echo "[6/7] Installation de l'environnement Python local..."
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip -q
-pip install -q \
-  langgraph langgraph-checkpoint-postgres \
-  langchain-anthropic langchain-core langsmith \
-  anthropic pydantic 'psycopg[binary]' psycopg-pool \
-  redis python-dotenv fastapi uvicorn
+# ── 6. Gateway avec vrai graphe multi-agent ──────────────────────────────────
+echo "[6/8] Creation du gateway et de l'orchestrateur de test..."
 
-# Configuration LangGraph
+touch agents/__init__.py
+touch agents/shared/__init__.py
+
+# Gateway simple (sera remplace par le script 06 avec le vrai graphe)
+cat > agents/gateway.py << 'PYTHON'
+"""FastAPI Gateway — version initiale (test)."""
+import os
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from agents.orchestrator import get_graph
+
+load_dotenv()
+app = FastAPI(title="LangGraph Multi-Agent API", version="0.1.0")
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "langgraph-agents"}
+
+class InvokeRequest(BaseModel):
+    messages: list[dict]
+    thread_id: str = "default"
+
+class InvokeResponse(BaseModel):
+    output: str
+    thread_id: str
+
+@app.post("/invoke", response_model=InvokeResponse)
+async def invoke(request: InvokeRequest):
+    try:
+        graph = get_graph()
+        config = {"configurable": {"thread_id": request.thread_id}}
+        formatted_messages = [
+            (msg.get("role", "user"), msg.get("content", ""))
+            for msg in request.messages
+        ]
+        result = graph.invoke(
+            {"messages": formatted_messages, "phase": "active"},
+            config,
+        )
+        last_message = result["messages"][-1]
+        output = last_message.content if hasattr(last_message, "content") else str(last_message)
+        return InvokeResponse(output=output, thread_id=request.thread_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/status")
+async def status():
+    return {"agents": ["orchestrator"], "infrastructure": {"postgres": "connected", "redis": "connected"}}
+PYTHON
+
+# Agent orchestrateur minimal de test (autocommit fix inclus)
+cat > agents/orchestrator.py << 'PYTHON'
+"""Orchestrateur minimal — valide que LangGraph + Anthropic + Postgres fonctionnent."""
+import os
+from dotenv import load_dotenv
+from typing import TypedDict, Annotated
+from langgraph.graph import StateGraph, END
+from langgraph.graph.message import add_messages
+from langgraph.checkpoint.postgres import PostgresSaver
+from langchain_anthropic import ChatAnthropic
+import psycopg
+
+load_dotenv()
+
+class AgentState(TypedDict):
+    messages: Annotated[list, add_messages]
+    phase: str
+
+llm = ChatAnthropic(model="claude-sonnet-4-5-20250929", max_tokens=2000, temperature=0.3)
+
+def orchestrator(state: AgentState) -> dict:
+    response = llm.invoke(state["messages"])
+    return {"messages": [response]}
+
+def should_continue(state: AgentState) -> str:
+    last_message = state["messages"][-1]
+    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+        return "continue"
+    return "end"
+
+workflow = StateGraph(AgentState)
+workflow.add_node("orchestrator", orchestrator)
+workflow.set_entry_point("orchestrator")
+workflow.add_conditional_edges("orchestrator", should_continue, {"continue": "orchestrator", "end": END})
+
+DB_URI = os.getenv("DATABASE_URI")
+
+def get_graph():
+    conn = psycopg.connect(DB_URI, autocommit=True)
+    checkpointer = PostgresSaver(conn)
+    checkpointer.setup()
+    return workflow.compile(checkpointer=checkpointer)
+
+if __name__ == "__main__":
+    graph = get_graph()
+    config = {"configurable": {"thread_id": "test-001"}}
+    result = graph.invoke(
+        {"messages": [("user", "Dis-moi bonjour et confirme que tu es operationnel.")], "phase": "test"},
+        config,
+    )
+    print("\nReponse de l'agent :")
+    print(result["messages"][-1].content)
+    print("\nLangGraph est operationnel !")
+PYTHON
+
+# LangGraph config
 cat > langgraph.json << 'JSON'
 {
   "dependencies": ["."],
@@ -270,88 +364,6 @@ cat > langgraph.json << 'JSON'
   "env": ".env"
 }
 JSON
-
-# Agent orchestrateur minimal de test
-cat > agents/__init__.py << 'PYTHON'
-PYTHON
-
-cat > agents/orchestrator.py << 'PYTHON'
-"""
-Orchestrateur minimal - valide que LangGraph + Anthropic + Postgres fonctionnent.
-"""
-import os
-from dotenv import load_dotenv
-from typing import TypedDict, Annotated
-from langgraph.graph import StateGraph, END
-from langgraph.graph.message import add_messages
-from langgraph.checkpoint.postgres import PostgresSaver
-from langchain_anthropic import ChatAnthropic
-from psycopg_pool import ConnectionPool
-
-load_dotenv()
-
-# ── State ────────────────────────────────────
-class AgentState(TypedDict):
-    messages: Annotated[list, add_messages]
-    phase: str
-
-# ── LLM ──────────────────────────────────────
-llm = ChatAnthropic(
-    model="claude-sonnet-4-5-20250929",
-    max_tokens=2000,
-    temperature=0.3,
-)
-
-# ── Nodes ────────────────────────────────────
-def orchestrator(state: AgentState) -> dict:
-    """Le noeud orchestrateur analyse et repond."""
-    response = llm.invoke(state["messages"])
-    return {"messages": [response]}
-
-def should_continue(state: AgentState) -> str:
-    """Decide si on continue ou on s'arrete."""
-    last_message = state["messages"][-1]
-    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
-        return "continue"
-    return "end"
-
-# ── Graph ────────────────────────────────────
-workflow = StateGraph(AgentState)
-workflow.add_node("orchestrator", orchestrator)
-workflow.set_entry_point("orchestrator")
-workflow.add_conditional_edges(
-    "orchestrator",
-    should_continue,
-    {"continue": "orchestrator", "end": END},
-)
-
-# ── Compile avec checkpoint Postgres ─────────
-DB_URI = os.getenv("DATABASE_URI")
-
-def get_graph():
-    """Factory pour obtenir le graphe compile."""
-    pool = ConnectionPool(conninfo=DB_URI)
-    checkpointer = PostgresSaver(pool)
-    checkpointer.setup()
-    return workflow.compile(checkpointer=checkpointer)
-
-# ── Test direct ──────────────────────────────
-if __name__ == "__main__":
-    graph = get_graph()
-    config = {"configurable": {"thread_id": "test-001"}}
-
-    result = graph.invoke(
-        {
-            "messages": [("user", "Dis-moi bonjour et confirme que tu es operationnel.")],
-            "phase": "test",
-        },
-        config,
-    )
-
-    print("\nReponse de l'agent :")
-    print(result["messages"][-1].content)
-    print("\nLangGraph est operationnel sur Proxmox !")
-PYTHON
 
 # .gitignore
 cat > .gitignore << 'GIT'
@@ -363,32 +375,41 @@ __pycache__/
 data/backups/
 GIT
 
-# ── 7. Demarrage de l'infrastructure ────────────────────────────────────────
-echo "[7/7] Demarrage de PostgreSQL + Redis..."
+# ── 7. Environnement Python local ───────────────────────────────────────────
+echo "[7/8] Installation de l'environnement Python local..."
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip -q
+pip install -q \
+  langgraph langgraph-checkpoint-postgres \
+  langchain-anthropic langchain-core langsmith \
+  anthropic pydantic 'psycopg[binary]' psycopg-pool \
+  redis python-dotenv fastapi uvicorn \
+  voyageai tiktoken
+
+# ── 8. Demarrage infra ──────────────────────────────────────────────────────
+echo "[8/8] Demarrage de PostgreSQL + Redis..."
 docker compose up -d langgraph-postgres langgraph-redis
 
 echo ""
 echo "Attente que les services soient healthy..."
 sleep 10
 
-# Verification
 echo ""
 echo "--- Statut des containers ---"
 docker compose ps
 echo ""
 
-# Test Postgres
 if docker exec langgraph-postgres pg_isready -U langgraph -d langgraph &> /dev/null; then
     echo "  PostgreSQL : OK"
 else
-    echo "  PostgreSQL : EN ATTENTE (peut prendre quelques secondes)"
+    echo "  PostgreSQL : EN ATTENTE"
 fi
 
-# Test Redis
 if docker exec langgraph-redis redis-cli -a "$(grep REDIS_PASSWORD .env | cut -d= -f2)" ping 2>/dev/null | grep -q PONG; then
     echo "  Redis      : OK"
 else
-    echo "  Redis      : EN ATTENTE (peut prendre quelques secondes)"
+    echo "  Redis      : EN ATTENTE"
 fi
 
 echo ""
@@ -402,12 +423,13 @@ echo ""
 echo "  2. Testez l'agent orchestrateur :"
 echo "     cd ${PROJECT_DIR}"
 echo "     source .venv/bin/activate"
+echo "     DB_PASS=\$(grep POSTGRES_PASSWORD .env | cut -d= -f2)"
+echo "     DATABASE_URI=\"postgres://langgraph:\${DB_PASS}@localhost:5432/langgraph?sslmode=disable\" \\"
 echo "     python agents/orchestrator.py"
 echo ""
 echo "  3. Pour la stack complete (avec l'API) :"
 echo "     docker compose up -d"
 echo ""
-echo "  4. Pour l'observabilite (Langfuse) :"
-echo "     Voir le fichier langgraph-proxmox-install.md"
-echo "     section Phase 6"
+echo "  4. Ensuite installez les agents :"
+echo "     Executez 05-install-rag.sh puis 06-install-agents.sh"
 echo "==========================================="
