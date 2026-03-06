@@ -228,7 +228,7 @@ Ce script :
 **Ou** : sur la VM Ubuntu, apres l'etape 3 (stack Docker en fonctionnement).
 
 ```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/05-install-rag.sh)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/05-install-rag.sh?token=GHSAT0AAAAAADWAJ3NG4VOLKXGXEICZT7RQ2NKQ4CA)"
 ```
 
 **Prerequis** : PostgreSQL + pgvector doit etre running/healthy (`docker compose up -d`).
