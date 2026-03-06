@@ -1,6 +1,6 @@
 # Méthodologie d'Installation — LangGraph Multi-Agent sur Proxmox
 
-> **Version** : 1.1 — Mars 2026  
+> **Version** : 1.2 — Mars 2026
 > **Cible** : Serveur Proxmox VE 8.x / 9.x  
 > **Architecture** : LangGraph Self-Hosted (Standalone Container) + Discord MCP  
 > **Auteur** : Généré par Claude — à adapter à votre repo `Configurations/Proxmox`

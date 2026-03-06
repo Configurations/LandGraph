@@ -1,6 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # Script 4 : Installation du bot Discord MCP (communication agents <-> humain)
+# VERSION CONSOLIDEE (integre le listener asynchrone du fix 10)
 #
 # A executer depuis la VM Ubuntu, apres le script 03.
 # Pre-requis :
@@ -291,90 +292,99 @@ def start_discord_bot():
 PYTHON
 
 # ── 5. discord_listener.py (ecoute #commandes) ──────────────────────────────
-echo "[5/7] Creation de agents/discord_listener.py..."
+echo "[5/7] Creation de agents/discord_listener.py (version asynchrone)..."
 cat > agents/discord_listener.py << 'PYTHON'
-"""
-Discord Listener - recoit les commandes utilisateur depuis Discord
-et les forward vers le graphe LangGraph.
-"""
+"""Discord Listener — Ecoute #commandes et forward vers LangGraph API."""
 import os
 import asyncio
+import logging
+import aiohttp
 import discord
-from discord import Intents
 from dotenv import load_dotenv
 
 load_dotenv()
 
-BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-CHANNEL_COMMANDS = int(os.getenv("DISCORD_CHANNEL_COMMANDS", "0"))
-CHANNEL_LOGS = int(os.getenv("DISCORD_CHANNEL_LOGS", "0"))
+logger = logging.getLogger("discord_listener")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
 
-intents = Intents.default()
+TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+CHANNEL_COMMANDS = os.getenv("DISCORD_CHANNEL_COMMANDS", "")
+API_URL = os.getenv("LANGGRAPH_API_URL", "http://langgraph-api:8000")
+
+intents = discord.Intents.default()
 intents.message_content = True
+
 client = discord.Client(intents=intents)
 
 
 @client.event
 async def on_ready():
-    print(f"Discord listener connecte : {client.user}")
-    channel = client.get_channel(CHANNEL_LOGS)
-    if channel:
-        embed = discord.Embed(
-            title="Systeme en ligne",
-            description="LangGraph Multi-Agent est operationnel.",
-            color=0x10B981,
-        )
-        embed.add_field(name="Agents", value="8 agents disponibles", inline=True)
-        embed.add_field(name="Status", value="Ready", inline=True)
-        await channel.send(embed=embed)
+    logger.info(f"Bot connecte : {client.user}")
 
 
 @client.event
 async def on_message(message):
-    # Ignorer les messages du bot lui-meme
-    if message.author.bot:
+    # Ignorer les messages du bot
+    if message.author == client.user:
         return
 
-    # Reagir uniquement dans #commandes
-    if message.channel.id != CHANNEL_COMMANDS:
+    # Ignorer si pas dans #commandes
+    if CHANNEL_COMMANDS and str(message.channel.id) != CHANNEL_COMMANDS:
         return
 
-    content = message.content.strip()
-    if not content:
+    # Ignorer les messages courts
+    if len(message.content) < 5:
         return
 
-    # Accuse de reception
-    await message.add_reaction("\u23f3")
+    logger.info(f"Message recu de {message.author}: {message.content[:100]}")
+
+    # Reaction pour confirmer la reception
+    await message.add_reaction("\u2705")
 
     try:
-        import aiohttp
+        # Appeler l'API LangGraph avec le channel_id pour les callbacks
         async with aiohttp.ClientSession() as session:
+            payload = {
+                "messages": [{"role": "user", "content": message.content}],
+                "thread_id": f"discord-{message.id}",
+                "project_id": "default",
+                "channel_id": str(message.channel.id),
+            }
+
             async with session.post(
-                "http://langgraph-api:8000/invoke",
-                json={
-                    "messages": [{"role": "user", "content": content}],
-                    "thread_id": f"discord-{message.author.id}",
-                },
+                f"{API_URL}/invoke",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=30),
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    reply = data.get("output", "Tache recue et en cours de traitement.")
-                    await message.reply(reply[:2000])  # Discord limit
-                    await message.remove_reaction("\u23f3", client.user)
-                    await message.add_reaction("\u2705")
-                else:
-                    await message.reply(f"Erreur API: {resp.status}")
-                    await message.remove_reaction("\u23f3", client.user)
-                    await message.add_reaction("\u274c")
+                    output = data.get("output", "Pas de reponse.")
 
+                    # Discord limite a 2000 chars
+                    if len(output) > 1900:
+                        chunks = [output[i:i+1900] for i in range(0, len(output), 1900)]
+                        for chunk in chunks:
+                            await message.reply(chunk)
+                    else:
+                        await message.reply(output)
+
+                else:
+                    error = await resp.text()
+                    logger.error(f"API error {resp.status}: {error[:200]}")
+                    await message.reply(f"Erreur API: {resp.status}")
+
+    except asyncio.TimeoutError:
+        await message.reply("L'orchestrateur prend du temps. Les resultats seront postes quand les agents auront termine.")
     except Exception as e:
+        logger.error(f"Error: {e}", exc_info=True)
         await message.reply(f"Erreur: {str(e)[:200]}")
-        await message.remove_reaction("\u23f3", client.user)
-        await message.add_reaction("\u274c")
 
 
 if __name__ == "__main__":
-    client.run(BOT_TOKEN)
+    if not TOKEN:
+        logger.error("DISCORD_BOT_TOKEN manquant dans .env")
+        exit(1)
+    client.run(TOKEN)
 PYTHON
 
 # ── 6. Dockerfile.discord ───────────────────────────────────────────────────
