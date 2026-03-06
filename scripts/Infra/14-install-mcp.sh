@@ -16,7 +16,7 @@ MCP_CONFIG="${PROJECT_DIR}/config/mcp_servers.json"
 AGENT_ACCESS="${PROJECT_DIR}/config/agent_mcp_access.json"
 ENV_FILE="${PROJECT_DIR}/.env"
 CATALOG_FILE="${PROJECT_DIR}/config/mcp_catalog.csv"
-CATALOG_URL="https://github.com/Configurations/LandGraph/blob/main/scripts/Infra/mcp_catalog.csv"
+CATALOG_URL="https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/mcp_catalog.csv"
 
 echo "==========================================="
 echo "  Installation interactive MCP"
