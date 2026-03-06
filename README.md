@@ -384,6 +384,31 @@ Le flow :
   ...
 ```
 
+## mode ReAct
+
+(appel de tools MCP). Les agents sont configurés pour accéder aux MCP, mais le code qui leur permet d'appeler les tools n'est pas encore en place. 
+
+```bash
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/15-activate-mcp-tools.sh)"
+```
+
+**Ce que ça fait :**
+
+1. **BaseAgent** gagne `_call_llm_with_tools()` — une boucle ReAct où le LLM peut appeler des MCP tools, lire le résultat, et re-appeler (max 20 itérations)
+2. **Activation dynamique** — le script lit `config/agent_mcp_access.json` et ajoute `use_tools = True` uniquement sur les agents qui ont des MCP configurés via le script 14
+3. **Fallback gracieux** — si un agent a `use_tools = True` mais qu'aucun tool n'est disponible (clé manquante, serveur MCP en panne), il fonctionne comme avant sans tools
+
+Exemple de ce qui se passe quand le Lead Dev reçoit la tâche "crée un repo" avec GitHub MCP :
+
+```
+[lead_dev] Start — pipeline=0, tools=True
+[lead_dev] 3 MCP tools loaded
+[lead_dev] Tool: create_repository({"name":"PerformanceTracker",...})
+[lead_dev] Tool: create_or_update_file({"path":"README.md",...})
+[lead_dev] ReAct done — 3 iterations
+```
+
+
 ## Documentation detaillee
 
 Le fichier [scripts/Infra/langgraph-proxmox-install.md](scripts/Infra/langgraph-proxmox-install.md) contient la methodologie complete d'installation avec les phases supplementaires :
