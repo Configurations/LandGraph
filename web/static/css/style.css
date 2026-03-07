@@ -298,6 +298,8 @@ tr:hover { background: rgba(255,255,255,0.02); }
   margin-bottom: 1.5rem;
 }
 
+.modal.modal-wide { max-width: 950px; }
+
 .modal-header h3 { font-size: 1.1rem; }
 
 .modal-actions {
@@ -487,6 +489,129 @@ tr:hover { background: rgba(255,255,255,0.02); }
 .script-btn svg { width: 32px; height: 32px; }
 .script-btn span { font-weight: 600; font-size: 0.9rem; }
 .script-btn small { color: var(--text-secondary); font-size: 0.75rem; }
+
+/* MCP chip toggles */
+.mcp-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: var(--bg-input);
+  border-radius: 0.5rem;
+}
+
+.mcp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  transition: all 0.15s;
+  user-select: none;
+}
+
+.mcp-chip:hover { border-color: var(--accent); }
+
+.mcp-chip.active {
+  background: rgba(59,130,246,0.2);
+  color: #60a5fa;
+  border-color: var(--accent);
+}
+
+.mcp-chip.disabled { opacity: 0.5; }
+
+.mcp-chip input[type="checkbox"] { display: none; }
+
+/* Markdown preview */
+.prompt-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 0;
+}
+
+.prompt-tab {
+  padding: 0.4rem 1rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  border-radius: 0.5rem 0.5rem 0 0;
+}
+
+.prompt-tab.active {
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.prompt-preview {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 0 0.5rem 0.5rem 0.5rem;
+  padding: 1rem 1.25rem;
+  font-size: 0.875rem;
+  line-height: 1.7;
+  max-height: 400px;
+  overflow-y: auto;
+  color: var(--text-primary);
+}
+
+.prompt-preview h1, .prompt-preview h2, .prompt-preview h3, .prompt-preview h4 {
+  margin: 1rem 0 0.5rem;
+  color: var(--text-primary);
+}
+
+.prompt-preview h1 { font-size: 1.3rem; }
+.prompt-preview h2 { font-size: 1.15rem; }
+.prompt-preview h3 { font-size: 1rem; }
+
+.prompt-preview p { margin: 0.5rem 0; }
+
+.prompt-preview ul, .prompt-preview ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+
+.prompt-preview code {
+  background: var(--bg-primary);
+  padding: 0.15rem 0.4rem;
+  border-radius: 0.25rem;
+  font-size: 0.85em;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.prompt-preview pre {
+  background: var(--bg-primary);
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  overflow-x: auto;
+  margin: 0.5rem 0;
+}
+
+.prompt-preview pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.prompt-preview blockquote {
+  border-left: 3px solid var(--accent);
+  padding-left: 1rem;
+  color: var(--text-secondary);
+  margin: 0.5rem 0;
+}
+
+.prompt-preview strong { color: var(--text-primary); }
+
+.prompt-preview hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1rem 0;
+}
 
 /* Env value masking */
 .masked-value {

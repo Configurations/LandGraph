@@ -1,5 +1,6 @@
 #!/bin/bash
-cd "$(dirname "$0")"
+PROJECT_DIR="${HOME}/langgraph-project"
+cd "${PROJECT_DIR}"
 docker compose up -d --build langgraph-api discord-bot
 sleep 12
 echo ""

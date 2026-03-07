@@ -174,61 +174,191 @@ async def delete_env_entry(data: EnvDelete):
     return {"ok": True}
 
 
-# ── API: MCP Catalog ───────────────────────────────
+# ── MCP helpers ────────────────────────────────────
+
+def _write_mcp_catalog(items: list[dict]):
+    """Write catalog back to CSV, preserving header comments."""
+    lines = []
+    if MCP_CATALOG_FILE.exists():
+        for line in MCP_CATALOG_FILE.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("#") or not line.strip():
+                lines.append(line)
+            else:
+                break
+    for item in items:
+        env_str = ",".join(
+            f"{v['var']}:{v['desc']}" for v in item.get("env_vars", [])
+        )
+        dep = "1" if item.get("deprecated") else "0"
+        lines.append(
+            f"{dep}|{item['id']}|{item['label']}|{item['description']}"
+            f"|{item['command']}|{item['args']}|{item['transport']}|{env_str}"
+        )
+    MCP_CATALOG_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _get_mcp_full() -> list[dict]:
+    """Return catalog entries enriched with install status and agent access."""
+    catalog = _parse_mcp_catalog()
+    servers = _read_json(MCP_SERVERS_FILE).get("servers", {})
+    access = _read_json(MCP_ACCESS_FILE)
+    env_entries = {e["key"]: e["value"] for e in _parse_env(ENV_FILE) if e.get("key")}
+
+    for item in catalog:
+        srv = servers.get(item["id"])
+        item["installed"] = srv is not None
+        item["enabled"] = srv.get("enabled", True) if srv else False
+        item["agents"] = [
+            aid for aid, sids in access.items() if item["id"] in sids
+        ]
+        for ev in item.get("env_vars", []):
+            val = env_entries.get(ev["var"], "")
+            ev["configured"] = bool(val) and val != "A_CONFIGURER"
+    return catalog
+
+
+# ── API: MCP Catalog (pivot central) ──────────────
 
 @app.get("/api/mcp/catalog")
 async def get_mcp_catalog():
-    return {"servers": _parse_mcp_catalog()}
+    return {"servers": _get_mcp_full()}
 
 
-# ── API: MCP Servers (configured) ──────────────────
-
-@app.get("/api/mcp/servers")
-async def get_mcp_servers():
-    data = _read_json(MCP_SERVERS_FILE)
-    return {"servers": data.get("servers", {})}
-
-
-class MCPServerConfig(BaseModel):
+class MCPCatalogEntry(BaseModel):
     id: str
+    label: str
+    description: str
     command: str
     args: str
     transport: str = "stdio"
-    env: dict = {}
-    enabled: bool = True
+    env_vars: list[dict] = []
+    deprecated: bool = False
 
 
-@app.post("/api/mcp/servers")
-async def add_mcp_server(cfg: MCPServerConfig):
-    data = _read_json(MCP_SERVERS_FILE)
-    if "servers" not in data:
-        data["servers"] = {}
-    data["servers"][cfg.id] = {
-        "command": cfg.command,
-        "args": cfg.args.split() if isinstance(cfg.args, str) else cfg.args,
-        "transport": cfg.transport,
-        "env": cfg.env,
-        "enabled": cfg.enabled,
-    }
-    _write_json(MCP_SERVERS_FILE, data)
+@app.post("/api/mcp/catalog")
+async def add_catalog_entry(entry: MCPCatalogEntry):
+    catalog = _parse_mcp_catalog()
+    if any(c["id"] == entry.id for c in catalog):
+        raise HTTPException(409, f"ID '{entry.id}' existe deja dans le catalogue")
+    catalog.append(entry.model_dump())
+    _write_mcp_catalog(catalog)
     return {"ok": True}
 
 
-@app.delete("/api/mcp/servers/{server_id}")
-async def delete_mcp_server(server_id: str):
+@app.put("/api/mcp/catalog/{entry_id}")
+async def update_catalog_entry(entry_id: str, entry: MCPCatalogEntry):
+    catalog = _parse_mcp_catalog()
+    found = False
+    for i, c in enumerate(catalog):
+        if c["id"] == entry_id:
+            catalog[i] = entry.model_dump()
+            found = True
+            break
+    if not found:
+        raise HTTPException(404, f"ID '{entry_id}' introuvable")
+    _write_mcp_catalog(catalog)
+    return {"ok": True}
+
+
+@app.delete("/api/mcp/catalog/{entry_id}")
+async def delete_catalog_entry(entry_id: str):
+    catalog = _parse_mcp_catalog()
+    catalog = [c for c in catalog if c["id"] != entry_id]
+    _write_mcp_catalog(catalog)
+    # Also uninstall
     data = _read_json(MCP_SERVERS_FILE)
-    if server_id in data.get("servers", {}):
-        del data["servers"][server_id]
+    if entry_id in data.get("servers", {}):
+        del data["servers"][entry_id]
         _write_json(MCP_SERVERS_FILE, data)
-    # Also remove from access
     access = _read_json(MCP_ACCESS_FILE)
     changed = False
-    for agent_id in access:
-        if server_id in access[agent_id]:
-            access[agent_id].remove(server_id)
+    for aid in access:
+        if entry_id in access[aid]:
+            access[aid].remove(entry_id)
             changed = True
     if changed:
         _write_json(MCP_ACCESS_FILE, access)
+    return {"ok": True}
+
+
+# ── API: MCP Install / Uninstall ──────────────────
+
+class MCPInstallRequest(BaseModel):
+    env_values: dict = {}
+
+
+@app.post("/api/mcp/install/{entry_id}")
+async def install_mcp(entry_id: str, req: MCPInstallRequest):
+    catalog = _parse_mcp_catalog()
+    item = next((c for c in catalog if c["id"] == entry_id), None)
+    if not item:
+        raise HTTPException(404, f"ID '{entry_id}' introuvable dans le catalogue")
+
+    # Add to mcp_servers.json
+    data = _read_json(MCP_SERVERS_FILE)
+    if "servers" not in data:
+        data["servers"] = {}
+    env_map = {ev["var"]: ev["var"] for ev in item.get("env_vars", [])}
+    data["servers"][entry_id] = {
+        "command": item["command"],
+        "args": item["args"].split() if isinstance(item["args"], str) else item["args"],
+        "transport": item.get("transport", "stdio"),
+        "env": env_map,
+        "enabled": True,
+    }
+    _write_json(MCP_SERVERS_FILE, data)
+
+    # Add env vars to .env if provided
+    if req.env_values:
+        entries = _parse_env(ENV_FILE)
+        existing_keys = {e["key"] for e in entries if e.get("key")}
+        new_vars = []
+        for k, v in req.env_values.items():
+            if k in existing_keys:
+                entries = [
+                    {**e, "value": v} if e.get("key") == k else e
+                    for e in entries
+                ]
+            else:
+                new_vars.append({"key": k, "value": v, "comment": ""})
+        if new_vars:
+            entries.append({"key": "", "value": "", "comment": f"# -- MCP {entry_id} --"})
+            entries.extend(new_vars)
+        _write_env(ENV_FILE, entries)
+
+    return {"ok": True}
+
+
+@app.post("/api/mcp/uninstall/{entry_id}")
+async def uninstall_mcp(entry_id: str):
+    data = _read_json(MCP_SERVERS_FILE)
+    if entry_id in data.get("servers", {}):
+        del data["servers"][entry_id]
+        _write_json(MCP_SERVERS_FILE, data)
+    access = _read_json(MCP_ACCESS_FILE)
+    changed = False
+    for aid in access:
+        if entry_id in access[aid]:
+            access[aid].remove(entry_id)
+            changed = True
+    if changed:
+        _write_json(MCP_ACCESS_FILE, access)
+    return {"ok": True}
+
+
+# ── API: MCP Toggle enable/disable ────────────────
+
+class MCPToggle(BaseModel):
+    enabled: bool
+
+
+@app.put("/api/mcp/toggle/{entry_id}")
+async def toggle_mcp(entry_id: str, req: MCPToggle):
+    data = _read_json(MCP_SERVERS_FILE)
+    if entry_id not in data.get("servers", {}):
+        raise HTTPException(404, f"Serveur '{entry_id}' non installe")
+    data["servers"][entry_id]["enabled"] = req.enabled
+    _write_json(MCP_SERVERS_FILE, data)
     return {"ok": True}
 
 
@@ -237,6 +367,12 @@ async def delete_mcp_server(server_id: str):
 @app.get("/api/mcp/access")
 async def get_mcp_access():
     return _read_json(MCP_ACCESS_FILE)
+
+
+@app.get("/api/mcp/servers")
+async def get_mcp_servers():
+    data = _read_json(MCP_SERVERS_FILE)
+    return {"servers": data.get("servers", {})}
 
 
 class MCPAccessUpdate(BaseModel):
@@ -361,6 +497,120 @@ async def delete_agent(agent_id: str):
 @app.get("/api/llm/providers")
 async def get_llm_providers():
     return _read_json(LLM_PROVIDERS_FILE)
+
+
+class LLMProviderEntry(BaseModel):
+    id: str
+    type: str
+    model: str
+    env_key: str = ""
+    description: str = ""
+    base_url: str = ""
+    azure_endpoint: str = ""
+    azure_deployment: str = ""
+    api_version: str = ""
+
+
+@app.post("/api/llm/providers/provider")
+async def add_llm_provider(entry: LLMProviderEntry):
+    data = _read_json(LLM_PROVIDERS_FILE)
+    if "providers" not in data:
+        data["providers"] = {}
+    if entry.id in data["providers"]:
+        raise HTTPException(409, f"Provider '{entry.id}' existe deja")
+    prov = {"type": entry.type, "model": entry.model, "description": entry.description}
+    if entry.env_key:
+        prov["env_key"] = entry.env_key
+    if entry.type == "ollama" and entry.base_url:
+        prov["base_url"] = entry.base_url
+    if entry.type == "azure":
+        if entry.azure_endpoint:
+            prov["azure_endpoint"] = entry.azure_endpoint
+        if entry.azure_deployment:
+            prov["azure_deployment"] = entry.azure_deployment
+        if entry.api_version:
+            prov["api_version"] = entry.api_version
+    data["providers"][entry.id] = prov
+    _write_json(LLM_PROVIDERS_FILE, data)
+    return {"ok": True}
+
+
+@app.put("/api/llm/providers/provider/{provider_id}")
+async def update_llm_provider(provider_id: str, entry: LLMProviderEntry):
+    data = _read_json(LLM_PROVIDERS_FILE)
+    if provider_id not in data.get("providers", {}):
+        raise HTTPException(404, f"Provider '{provider_id}' introuvable")
+    prov = {"type": entry.type, "model": entry.model, "description": entry.description}
+    if entry.env_key:
+        prov["env_key"] = entry.env_key
+    if entry.type == "ollama" and entry.base_url:
+        prov["base_url"] = entry.base_url
+    if entry.type == "azure":
+        if entry.azure_endpoint:
+            prov["azure_endpoint"] = entry.azure_endpoint
+        if entry.azure_deployment:
+            prov["azure_deployment"] = entry.azure_deployment
+        if entry.api_version:
+            prov["api_version"] = entry.api_version
+    # If ID changed, remove old and add new
+    if entry.id != provider_id:
+        del data["providers"][provider_id]
+        if data.get("default") == provider_id:
+            data["default"] = entry.id
+    data["providers"][entry.id] = prov
+    _write_json(LLM_PROVIDERS_FILE, data)
+    return {"ok": True}
+
+
+@app.delete("/api/llm/providers/provider/{provider_id}")
+async def delete_llm_provider(provider_id: str):
+    data = _read_json(LLM_PROVIDERS_FILE)
+    if provider_id not in data.get("providers", {}):
+        raise HTTPException(404, f"Provider '{provider_id}' introuvable")
+    del data["providers"][provider_id]
+    if data.get("default") == provider_id:
+        data["default"] = ""
+    _write_json(LLM_PROVIDERS_FILE, data)
+    return {"ok": True}
+
+
+class LLMDefaultUpdate(BaseModel):
+    provider_id: str
+
+
+@app.put("/api/llm/providers/default")
+async def set_llm_default(req: LLMDefaultUpdate):
+    data = _read_json(LLM_PROVIDERS_FILE)
+    if req.provider_id and req.provider_id not in data.get("providers", {}):
+        raise HTTPException(404, f"Provider '{req.provider_id}' introuvable")
+    data["default"] = req.provider_id
+    _write_json(LLM_PROVIDERS_FILE, data)
+    return {"ok": True}
+
+
+class ThrottlingEntry(BaseModel):
+    env_key: str
+    rpm: int
+    tpm: int
+
+
+@app.put("/api/llm/providers/throttling")
+async def update_throttling(entry: ThrottlingEntry):
+    data = _read_json(LLM_PROVIDERS_FILE)
+    if "throttling" not in data:
+        data["throttling"] = {}
+    data["throttling"][entry.env_key] = {"rpm": entry.rpm, "tpm": entry.tpm}
+    _write_json(LLM_PROVIDERS_FILE, data)
+    return {"ok": True}
+
+
+@app.delete("/api/llm/providers/throttling/{env_key}")
+async def delete_throttling(env_key: str):
+    data = _read_json(LLM_PROVIDERS_FILE)
+    if env_key in data.get("throttling", {}):
+        del data["throttling"][env_key]
+        _write_json(LLM_PROVIDERS_FILE, data)
+    return {"ok": True}
 
 
 # ── API: Git operations ───────────────────────────

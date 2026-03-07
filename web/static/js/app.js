@@ -49,15 +49,15 @@ function showSection(name) {
   document.querySelector(`.nav-item[data-section="${name}"]`).classList.add('active');
 
   // Load data on section switch
-  const loaders = { secrets: loadEnv, mcp: loadMCP, agents: loadAgents, scripts: loadScripts, git: loadGit };
+  const loaders = { secrets: loadEnv, mcp: loadMCP, agents: loadAgents, llm: loadLLM, scripts: loadScripts, git: loadGit };
   if (loaders[name]) loaders[name]();
 }
 
 // ── Modal helpers ──────────────────────────────────
-function showModal(html) {
+function showModal(html, cssClass = '') {
   document.getElementById('modal-container').innerHTML = `
     <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
-      <div class="modal">${html}</div>
+      <div class="modal ${cssClass}">${html}</div>
     </div>`;
 }
 
@@ -193,45 +193,57 @@ async function deleteEnvEntry(key) {
 }
 
 // ═══════════════════════════════════════════════════
-// MCP SERVICES
+// MCP SERVICES — Catalogue-driven
 // ═══════════════════════════════════════════════════
+let mcpShowDeprecated = false;
+
 async function loadMCP() {
   try {
-    const [serversData, catalogData, accessData] = await Promise.all([
-      api('/api/mcp/servers'),
-      api('/api/mcp/catalog'),
-      api('/api/mcp/access'),
-    ]);
-    mcpServers = serversData.servers;
-    mcpCatalog = catalogData.servers;
-    mcpAccess = accessData;
+    const data = await api('/api/mcp/catalog');
+    mcpCatalog = data.servers;
     renderMCP();
   } catch (e) { toast(e.message, 'error'); }
 }
 
 function renderMCP() {
-  // Configured servers
+  const installed = mcpCatalog.filter(c => c.installed);
+  const available = mcpCatalog.filter(c => !c.installed && (mcpShowDeprecated || !c.deprecated));
+
+  // Installed servers
   const configuredEl = document.getElementById('mcp-configured');
-  const serverIds = Object.keys(mcpServers);
-  if (serverIds.length === 0) {
-    configuredEl.innerHTML = '<p style="color:var(--text-secondary);text-align:center;padding:1rem">Aucun serveur MCP configure.</p>';
+  if (installed.length === 0) {
+    configuredEl.innerHTML = '<p style="color:var(--text-secondary);text-align:center;padding:1rem">Aucun serveur MCP installe. Choisissez-en dans le catalogue ci-dessous.</p>';
   } else {
     configuredEl.innerHTML = `<table>
-      <thead><tr><th>ID</th><th>Commande</th><th>Transport</th><th>Actif</th><th>Actions</th></tr></thead>
-      <tbody>${serverIds.map(id => {
-        const s = mcpServers[id];
-        const args = Array.isArray(s.args) ? s.args.join(' ') : s.args;
-        const enabled = s.enabled !== false;
+      <thead><tr><th>Service</th><th>Commande</th><th>Env</th><th>Agents</th><th>Actif</th><th>Actions</th></tr></thead>
+      <tbody>${installed.map(c => {
+        const envStatus = c.env_vars.length === 0
+          ? '<span class="tag tag-gray">aucune</span>'
+          : c.env_vars.map(v =>
+              `<span class="tag ${v.configured ? 'tag-green' : 'tag-red'}" title="${escHtml(v.desc)}">${escHtml(v.var)}</span>`
+            ).join(' ');
+        const agentTags = c.agents.length
+          ? c.agents.map(a => `<span class="tag tag-blue">${escHtml(a)}</span>`).join(' ')
+          : '<span style="color:var(--text-secondary);font-size:0.75rem">aucun</span>';
         return `<tr>
-          <td><strong>${escHtml(id)}</strong></td>
-          <td><code>${escHtml(s.command)} ${escHtml(args)}</code></td>
-          <td><span class="tag tag-blue">${s.transport || 'stdio'}</span></td>
-          <td><span class="tag ${enabled ? 'tag-green' : 'tag-red'}">${enabled ? 'Oui' : 'Non'}</span></td>
           <td>
-            <button class="btn-icon" onclick="editMCPServer('${escHtml(id)}')" title="Modifier">
+            <strong>${escHtml(c.label)}</strong>
+            <div style="font-size:0.7rem;color:var(--text-secondary)">${escHtml(c.id)}</div>
+          </td>
+          <td><code style="font-size:0.75rem">${escHtml(c.command)} ${escHtml(c.args)}</code></td>
+          <td>${envStatus}</td>
+          <td>${agentTags}</td>
+          <td>
+            <div class="toggle ${c.enabled ? 'active' : ''}" onclick="toggleMCP('${escHtml(c.id)}', ${!c.enabled})"></div>
+          </td>
+          <td>
+            <button class="btn-icon" onclick="showMCPEnvModal('${escHtml(c.id)}')" title="Configurer env">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            </button>
+            <button class="btn-icon" onclick="editCatalogEntry('${escHtml(c.id)}')" title="Modifier fiche">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
             </button>
-            <button class="btn-icon danger" onclick="deleteMCPServer('${escHtml(id)}')" title="Supprimer">
+            <button class="btn-icon danger" onclick="uninstallMCP('${escHtml(c.id)}')" title="Desinstaller">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
             </button>
           </td>
@@ -240,163 +252,311 @@ function renderMCP() {
     </table>`;
   }
 
-  // Catalog
+  // Catalog (not installed)
   const catalogEl = document.getElementById('mcp-catalog');
-  catalogEl.innerHTML = mcpCatalog
-    .filter(c => !c.deprecated)
-    .map(c => {
-      const installed = mcpServers.hasOwnProperty(c.id);
-      return `<div class="mcp-card ${installed ? 'installed' : ''}">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:0.5rem">
+  catalogEl.innerHTML = available.map(c => {
+    const depClass = c.deprecated ? ' deprecated' : '';
+    return `<div class="mcp-card${depClass}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:0.5rem">
+        <div>
           <strong>${escHtml(c.label)}</strong>
-          ${installed
-            ? '<span class="tag tag-green">Configure</span>'
-            : `<button class="btn btn-sm btn-primary" onclick="installMCPFromCatalog('${escHtml(c.id)}')">Installer</button>`
-          }
+          ${c.deprecated ? '<span class="tag tag-red" style="margin-left:0.5rem">deprecie</span>' : ''}
         </div>
-        <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.5rem">${escHtml(c.description)}</p>
-        <code style="font-size:0.7rem;color:var(--text-secondary)">${escHtml(c.command)} ${escHtml(c.args)}</code>
-        ${c.env_vars.length ? `<div style="margin-top:0.5rem">${c.env_vars.map(v =>
-          `<span class="tag tag-yellow" style="margin:0.1rem">${escHtml(v.var)}</span>`
-        ).join('')}</div>` : ''}
-      </div>`;
-    }).join('');
+        <div style="display:flex;gap:0.25rem">
+          <button class="btn btn-sm btn-primary" onclick="showInstallMCPModal('${escHtml(c.id)}')">Installer</button>
+          <button class="btn-icon" onclick="editCatalogEntry('${escHtml(c.id)}')" title="Modifier">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          </button>
+          <button class="btn-icon danger" onclick="deleteCatalogEntry('${escHtml(c.id)}')" title="Supprimer du catalogue">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </button>
+        </div>
+      </div>
+      <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.5rem">${escHtml(c.description)}</p>
+      <code style="font-size:0.7rem;color:var(--text-secondary)">${escHtml(c.command)} ${escHtml(c.args)}</code>
+      ${c.env_vars.length ? `<div style="margin-top:0.5rem">${c.env_vars.map(v =>
+        `<span class="tag tag-yellow" style="margin:0.1rem" title="${escHtml(v.desc)}">${escHtml(v.var)}</span>`
+      ).join('')}</div>` : ''}
+    </div>`;
+  }).join('');
 }
 
-function showAddMCPModal() {
-  const available = mcpCatalog.filter(c => !c.deprecated && !mcpServers.hasOwnProperty(c.id));
+// Install modal with env var fields
+function showInstallMCPModal(id) {
+  const item = mcpCatalog.find(c => c.id === id);
+  if (!item) return;
+  const envFields = item.env_vars.length
+    ? item.env_vars.map(v => `
+        <div class="form-group">
+          <label>${escHtml(v.var)} <span style="font-weight:400;color:var(--text-secondary)">— ${escHtml(v.desc)}</span></label>
+          <input class="mcp-install-env" data-var="${escHtml(v.var)}" placeholder="${escHtml(v.desc || 'Valeur...')}" />
+        </div>
+      `).join('')
+    : '<p style="color:var(--text-secondary);font-size:0.85rem">Aucune variable d\'environnement requise.</p>';
+
   showModal(`
     <div class="modal-header">
-      <h3>Ajouter un serveur MCP</h3>
+      <h3>Installer : ${escHtml(item.label)}</h3>
       <button class="btn-icon" onclick="closeModal()">&times;</button>
     </div>
+    <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:1rem">${escHtml(item.description)}</p>
+    <div style="background:var(--bg-input);padding:0.5rem 0.75rem;border-radius:0.5rem;margin-bottom:1rem">
+      <code style="font-size:0.8rem">${escHtml(item.command)} ${escHtml(item.args)}</code>
+    </div>
+    ${item.env_vars.length ? '<h4 style="margin-bottom:0.75rem;font-size:0.9rem">Variables d\'environnement</h4>' : ''}
+    ${envFields}
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="installMCP('${escHtml(id)}')">Installer</button>
+    </div>
+  `);
+}
+
+async function installMCP(id) {
+  const envInputs = document.querySelectorAll('.mcp-install-env');
+  const env_values = {};
+  envInputs.forEach(inp => {
+    const val = inp.value.trim();
+    if (val) env_values[inp.getAttribute('data-var')] = val;
+  });
+  try {
+    await api(`/api/mcp/install/${id}`, { method: 'POST', body: { env_values } });
+    toast('Serveur MCP installe', 'success');
+    closeModal();
+    loadMCP();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function uninstallMCP(id) {
+  if (!confirm(`Desinstaller le serveur MCP "${id}" ? Les acces agents seront aussi retires.`)) return;
+  try {
+    await api(`/api/mcp/uninstall/${id}`, { method: 'POST' });
+    toast('Serveur MCP desinstalle', 'success');
+    loadMCP();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function toggleMCP(id, enabled) {
+  try {
+    await api(`/api/mcp/toggle/${id}`, { method: 'PUT', body: { enabled } });
+    loadMCP();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// Configure env vars for installed MCP
+function showMCPEnvModal(id) {
+  const item = mcpCatalog.find(c => c.id === id);
+  if (!item || !item.env_vars.length) {
+    toast('Aucune variable d\'environnement pour ce serveur', 'info');
+    return;
+  }
+  const fields = item.env_vars.map(v => `
     <div class="form-group">
-      <label>Depuis le catalogue</label>
-      <select id="mcp-catalog-select" onchange="fillMCPForm()">
-        <option value="">-- Choisir ou configurer manuellement --</option>
-        ${available.map(c => `<option value="${c.id}">${escHtml(c.label)} — ${escHtml(c.description)}</option>`).join('')}
+      <label>
+        ${escHtml(v.var)}
+        ${v.configured
+          ? '<span class="tag tag-green" style="margin-left:0.5rem">configure</span>'
+          : '<span class="tag tag-red" style="margin-left:0.5rem">manquant</span>'}
+        <span style="font-weight:400;color:var(--text-secondary)"> — ${escHtml(v.desc)}</span>
+      </label>
+      <input class="mcp-env-field" data-var="${escHtml(v.var)}" placeholder="Nouvelle valeur (laisser vide pour ne pas modifier)" />
+    </div>
+  `).join('');
+
+  showModal(`
+    <div class="modal-header">
+      <h3>Env : ${escHtml(item.label)}</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    ${fields}
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="saveMCPEnv('${escHtml(id)}')">Sauvegarder</button>
+    </div>
+  `);
+}
+
+async function saveMCPEnv(id) {
+  const inputs = document.querySelectorAll('.mcp-env-field');
+  const env_values = {};
+  inputs.forEach(inp => {
+    const val = inp.value.trim();
+    if (val) env_values[inp.getAttribute('data-var')] = val;
+  });
+  if (Object.keys(env_values).length === 0) { closeModal(); return; }
+  try {
+    await api(`/api/mcp/install/${id}`, { method: 'POST', body: { env_values } });
+    toast('Variables mises a jour', 'success');
+    closeModal();
+    loadMCP();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// CRUD catalog entries
+function showAddCatalogModal() {
+  showModal(`
+    <div class="modal-header">
+      <h3>Ajouter au catalogue MCP</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>ID (unique)</label>
+        <input id="cat-new-id" placeholder="mon-serveur" />
+      </div>
+      <div class="form-group">
+        <label>Label</label>
+        <input id="cat-new-label" placeholder="Mon Serveur" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Description</label>
+      <input id="cat-new-desc" placeholder="Breve description du service" />
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Commande</label>
+        <input id="cat-new-cmd" placeholder="npx" />
+      </div>
+      <div class="form-group">
+        <label>Arguments</label>
+        <input id="cat-new-args" placeholder="-y @scope/package" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Transport</label>
+      <select id="cat-new-transport">
+        <option value="stdio">stdio</option>
+        <option value="sse">sse</option>
       </select>
     </div>
     <div class="form-group">
-      <label>ID</label>
-      <input id="mcp-new-id" placeholder="mon-serveur" />
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Commande</label>
-        <input id="mcp-new-cmd" placeholder="npx" />
-      </div>
-      <div class="form-group">
-        <label>Arguments</label>
-        <input id="mcp-new-args" placeholder="-y @package/name" />
-      </div>
-    </div>
-    <div class="form-group">
-      <label>Variables d'environnement (JSON)</label>
-      <input id="mcp-new-env" placeholder='{"VAR_NAME": "ENV_VAR_NAME"}' value="{}" />
+      <label>Variables d'env (une par ligne : NOM:description)</label>
+      <textarea id="cat-new-envvars" style="min-height:60px" placeholder="GITHUB_TOKEN:Token d'acces GitHub"></textarea>
     </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
-      <button class="btn btn-primary" onclick="addMCPServer()">Ajouter</button>
+      <button class="btn btn-primary" onclick="addCatalogEntry()">Ajouter</button>
     </div>
   `);
 }
 
-function fillMCPForm() {
-  const id = document.getElementById('mcp-catalog-select').value;
-  const item = mcpCatalog.find(c => c.id === id);
-  if (!item) return;
-  document.getElementById('mcp-new-id').value = item.id;
-  document.getElementById('mcp-new-cmd').value = item.command;
-  document.getElementById('mcp-new-args').value = item.args;
-  if (item.env_vars.length) {
-    const env = {};
-    item.env_vars.forEach(v => { env[v.var] = v.var; });
-    document.getElementById('mcp-new-env').value = JSON.stringify(env);
-  }
-}
+async function addCatalogEntry() {
+  const id = document.getElementById('cat-new-id').value.trim();
+  const label = document.getElementById('cat-new-label').value.trim();
+  const description = document.getElementById('cat-new-desc').value.trim();
+  const command = document.getElementById('cat-new-cmd').value.trim();
+  const args = document.getElementById('cat-new-args').value.trim();
+  const transport = document.getElementById('cat-new-transport').value;
+  const envRaw = document.getElementById('cat-new-envvars').value.trim();
+  const env_vars = envRaw ? envRaw.split('\n').filter(l => l.trim()).map(l => {
+    const [v, ...d] = l.split(':');
+    return { var: v.trim(), desc: d.join(':').trim() };
+  }) : [];
 
-function installMCPFromCatalog(catalogId) {
-  const item = mcpCatalog.find(c => c.id === catalogId);
-  if (!item) return;
-  showAddMCPModal();
-  setTimeout(() => {
-    document.getElementById('mcp-catalog-select').value = catalogId;
-    fillMCPForm();
-  }, 50);
-}
-
-async function addMCPServer() {
-  const id = document.getElementById('mcp-new-id').value.trim();
-  const command = document.getElementById('mcp-new-cmd').value.trim();
-  const args = document.getElementById('mcp-new-args').value.trim();
-  let env = {};
-  try { env = JSON.parse(document.getElementById('mcp-new-env').value); } catch {}
-  if (!id || !command) { toast('ID et commande requis', 'error'); return; }
+  if (!id || !label || !command) { toast('ID, label et commande requis', 'error'); return; }
   try {
-    await api('/api/mcp/servers', { method: 'POST', body: { id, command, args, env, transport: 'stdio', enabled: true } });
-    toast('Serveur MCP ajoute', 'success');
+    await api('/api/mcp/catalog', { method: 'POST', body: { id, label, description, command, args, transport, env_vars, deprecated: false } });
+    toast('Ajout au catalogue', 'success');
     closeModal();
     loadMCP();
   } catch (e) { toast(e.message, 'error'); }
 }
 
-function editMCPServer(id) {
-  const s = mcpServers[id];
-  const args = Array.isArray(s.args) ? s.args.join(' ') : s.args;
+function editCatalogEntry(id) {
+  const c = mcpCatalog.find(x => x.id === id);
+  if (!c) return;
+  const envText = c.env_vars.map(v => `${v.var}:${v.desc}`).join('\n');
   showModal(`
     <div class="modal-header">
-      <h3>Modifier: ${escHtml(id)}</h3>
+      <h3>Modifier : ${escHtml(c.label)}</h3>
       <button class="btn-icon" onclick="closeModal()">&times;</button>
     </div>
     <div class="form-row">
       <div class="form-group">
+        <label>ID</label>
+        <input id="cat-edit-id" value="${escHtml(c.id)}" disabled style="opacity:0.5" />
+      </div>
+      <div class="form-group">
+        <label>Label</label>
+        <input id="cat-edit-label" value="${escHtml(c.label)}" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Description</label>
+      <input id="cat-edit-desc" value="${escHtml(c.description)}" />
+    </div>
+    <div class="form-row">
+      <div class="form-group">
         <label>Commande</label>
-        <input id="mcp-edit-cmd" value="${escHtml(s.command)}" />
+        <input id="cat-edit-cmd" value="${escHtml(c.command)}" />
       </div>
       <div class="form-group">
         <label>Arguments</label>
-        <input id="mcp-edit-args" value="${escHtml(args)}" />
+        <input id="cat-edit-args" value="${escHtml(c.args)}" />
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Transport</label>
+        <select id="cat-edit-transport">
+          <option value="stdio" ${c.transport === 'stdio' ? 'selected' : ''}>stdio</option>
+          <option value="sse" ${c.transport === 'sse' ? 'selected' : ''}>sse</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>
+          <input type="checkbox" id="cat-edit-dep" ${c.deprecated ? 'checked' : ''} />
+          Deprecie
+        </label>
       </div>
     </div>
     <div class="form-group">
-      <label>Variables d'environnement (JSON)</label>
-      <input id="mcp-edit-env" value='${escHtml(JSON.stringify(s.env || {}))}' />
-    </div>
-    <div class="form-group">
-      <label>
-        <input type="checkbox" id="mcp-edit-enabled" ${s.enabled !== false ? 'checked' : ''} />
-        Actif
-      </label>
+      <label>Variables d'env (une par ligne : NOM:description)</label>
+      <textarea id="cat-edit-envvars" style="min-height:60px">${escHtml(envText)}</textarea>
     </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
-      <button class="btn btn-primary" onclick="saveMCPServer('${escHtml(id)}')">Sauvegarder</button>
+      <button class="btn btn-primary" onclick="saveCatalogEntry('${escHtml(c.id)}')">Sauvegarder</button>
     </div>
   `);
 }
 
-async function saveMCPServer(id) {
-  const command = document.getElementById('mcp-edit-cmd').value.trim();
-  const args = document.getElementById('mcp-edit-args').value.trim();
-  const enabled = document.getElementById('mcp-edit-enabled').checked;
-  let env = {};
-  try { env = JSON.parse(document.getElementById('mcp-edit-env').value); } catch {}
+async function saveCatalogEntry(id) {
+  const label = document.getElementById('cat-edit-label').value.trim();
+  const description = document.getElementById('cat-edit-desc').value.trim();
+  const command = document.getElementById('cat-edit-cmd').value.trim();
+  const args = document.getElementById('cat-edit-args').value.trim();
+  const transport = document.getElementById('cat-edit-transport').value;
+  const deprecated = document.getElementById('cat-edit-dep').checked;
+  const envRaw = document.getElementById('cat-edit-envvars').value.trim();
+  const env_vars = envRaw ? envRaw.split('\n').filter(l => l.trim()).map(l => {
+    const [v, ...d] = l.split(':');
+    return { var: v.trim(), desc: d.join(':').trim() };
+  }) : [];
+
   try {
-    await api('/api/mcp/servers', { method: 'POST', body: { id, command, args, env, transport: 'stdio', enabled } });
-    toast('Serveur MCP modifie', 'success');
+    await api(`/api/mcp/catalog/${id}`, { method: 'PUT', body: { id, label, description, command, args, transport, env_vars, deprecated } });
+    toast('Catalogue mis a jour', 'success');
     closeModal();
     loadMCP();
   } catch (e) { toast(e.message, 'error'); }
 }
 
-async function deleteMCPServer(id) {
-  if (!confirm(`Supprimer le serveur MCP "${id}" ?`)) return;
+async function deleteCatalogEntry(id) {
+  if (!confirm(`Supprimer "${id}" du catalogue ? (desinstalle aussi si installe)`)) return;
   try {
-    await api(`/api/mcp/servers/${id}`, { method: 'DELETE' });
-    toast('Serveur MCP supprime', 'success');
+    await api(`/api/mcp/catalog/${id}`, { method: 'DELETE' });
+    toast('Supprime du catalogue', 'success');
     loadMCP();
   } catch (e) { toast(e.message, 'error'); }
+}
+
+function toggleDeprecated() {
+  mcpShowDeprecated = !mcpShowDeprecated;
+  const btn = document.getElementById('btn-show-deprecated');
+  btn.textContent = mcpShowDeprecated ? 'Masquer deprecies' : 'Afficher deprecies';
+  renderMCP();
 }
 
 // ═══════════════════════════════════════════════════
@@ -404,14 +564,16 @@ async function deleteMCPServer(id) {
 // ═══════════════════════════════════════════════════
 async function loadAgents() {
   try {
-    const [agentsData, llmData, accessData] = await Promise.all([
+    const [agentsData, llmData, accessData, mcpData] = await Promise.all([
       api('/api/agents'),
       api('/api/llm/providers'),
       api('/api/mcp/access'),
+      api('/api/mcp/catalog'),
     ]);
     agents = agentsData.agents;
     llmProviders = llmData;
     mcpAccess = accessData;
+    mcpCatalog = mcpData.servers;
     renderAgents();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -449,15 +611,22 @@ function editAgent(id) {
   const a = agents[id];
   const providerNames = Object.keys(llmProviders.providers || {});
   const mcpList = mcpAccess[id] || [];
-  const allMCPIds = Object.keys(mcpServers || {});
+  const installedMCP = mcpCatalog.filter(c => c.installed);
 
-  // Build MCP checkboxes — load servers first if needed
-  const mcpCheckboxes = allMCPIds.length > 0
-    ? allMCPIds.map(mid => `<label style="display:flex;align-items:center;gap:0.5rem;margin:0.25rem 0">
-        <input type="checkbox" class="agent-mcp-cb" value="${escHtml(mid)}" ${mcpList.includes(mid) ? 'checked' : ''} />
-        ${escHtml(mid)}
-      </label>`).join('')
-    : '<p style="color:var(--text-secondary);font-size:0.8rem">Aucun serveur MCP configure. Ajoutez-en dans la section MCP d\'abord.</p>';
+  const mcpChips = installedMCP.length > 0
+    ? installedMCP.map(c => {
+        const checked = mcpList.includes(c.id);
+        const disabledClass = !c.enabled ? ' disabled' : '';
+        return `<label class="mcp-chip${checked ? ' active' : ''}${disabledClass}">
+          <input type="checkbox" class="agent-mcp-cb" value="${escHtml(c.id)}" ${checked ? 'checked' : ''} onchange="this.parentElement.classList.toggle('active',this.checked)" />
+          ${escHtml(c.label)}
+          ${!c.enabled ? ' (off)' : ''}
+        </label>`;
+      }).join('')
+    : '<p style="color:var(--text-secondary);font-size:0.8rem">Aucun serveur MCP installe.</p>';
+
+  const promptRaw = a.prompt_content || '';
+  const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
 
   showModal(`
     <div class="modal-header">
@@ -489,19 +658,44 @@ function editAgent(id) {
     </div>
     <div class="form-group">
       <label>Prompt (${escHtml(a.prompt)})</label>
-      <textarea id="agent-edit-prompt" style="min-height:300px">${escHtml(a.prompt_content || '')}</textarea>
+      <div class="prompt-tabs">
+        <div class="prompt-tab active" id="prompt-tab-preview" onclick="switchPromptTab('preview')">Apercu</div>
+        <div class="prompt-tab" id="prompt-tab-edit" onclick="switchPromptTab('edit')">Editer</div>
+      </div>
+      <div class="prompt-preview" id="agent-prompt-preview">${promptHtml}</div>
+      <textarea id="agent-edit-prompt" style="min-height:300px;display:none;border-radius:0 0.5rem 0.5rem 0.5rem">${escHtml(promptRaw)}</textarea>
     </div>
     <div class="form-group">
       <label>Services MCP autorises</label>
-      <div style="max-height:150px;overflow-y:auto;padding:0.5rem;background:var(--bg-input);border-radius:0.5rem">
-        ${mcpCheckboxes}
+      <div class="mcp-chips">
+        ${mcpChips}
       </div>
     </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
       <button class="btn btn-primary" onclick="saveAgent('${escHtml(id)}')">Sauvegarder</button>
     </div>
-  `);
+  `, 'modal-wide');
+}
+
+function switchPromptTab(tab) {
+  const preview = document.getElementById('agent-prompt-preview');
+  const editor = document.getElementById('agent-edit-prompt');
+  const tabPreview = document.getElementById('prompt-tab-preview');
+  const tabEdit = document.getElementById('prompt-tab-edit');
+  if (tab === 'edit') {
+    preview.style.display = 'none';
+    editor.style.display = '';
+    tabPreview.classList.remove('active');
+    tabEdit.classList.add('active');
+  } else {
+    const raw = editor.value;
+    preview.innerHTML = typeof marked !== 'undefined' ? marked.parse(raw) : escHtml(raw);
+    preview.style.display = '';
+    editor.style.display = 'none';
+    tabPreview.classList.add('active');
+    tabEdit.classList.remove('active');
+  }
 }
 
 async function saveAgent(id) {
@@ -592,6 +786,343 @@ async function deleteAgent(id) {
     await api(`/api/agents/${id}`, { method: 'DELETE' });
     toast('Agent supprime', 'success');
     loadAgents();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════
+// LLM PROVIDERS
+// ═══════════════════════════════════════════════════
+
+const LLM_TYPES = ['anthropic', 'openai', 'azure', 'google', 'mistral', 'deepseek', 'moonshot', 'groq', 'ollama'];
+
+async function loadLLM() {
+  try {
+    const data = await api('/api/llm/providers');
+    llmProviders = data;
+    renderLLM();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function renderLLM() {
+  const providers = llmProviders.providers || {};
+  const throttling = llmProviders.throttling || {};
+  const defaultId = llmProviders.default || '';
+
+  // Default select
+  const sel = document.getElementById('llm-default-select');
+  sel.innerHTML = `<option value="">-- Aucun --</option>` +
+    Object.entries(providers).map(([id, p]) =>
+      `<option value="${escHtml(id)}" ${id === defaultId ? 'selected' : ''}>${escHtml(id)} — ${escHtml(p.description || p.model)}</option>`
+    ).join('');
+
+  // Providers table
+  const tbl = document.getElementById('llm-providers-table');
+  if (Object.keys(providers).length === 0) {
+    tbl.innerHTML = '<p style="color:var(--text-secondary);text-align:center;padding:1rem">Aucun provider configure.</p>';
+  } else {
+    tbl.innerHTML = `<table>
+      <thead><tr><th>ID</th><th>Type</th><th>Modele</th><th>Cle API</th><th>Description</th><th style="width:100px">Actions</th></tr></thead>
+      <tbody>${Object.entries(providers).map(([id, p]) => {
+        const isDefault = id === defaultId;
+        return `<tr>
+          <td>
+            <strong>${escHtml(id)}</strong>
+            ${isDefault ? '<span class="tag tag-green" style="margin-left:0.5rem">defaut</span>' : ''}
+          </td>
+          <td><span class="tag tag-blue">${escHtml(p.type)}</span></td>
+          <td><code style="font-size:0.8rem">${escHtml(p.model)}</code></td>
+          <td>${p.env_key ? `<code style="font-size:0.75rem">${escHtml(p.env_key)}</code>` : '<span style="color:var(--text-secondary)">—</span>'}</td>
+          <td style="font-size:0.8rem;color:var(--text-secondary)">${escHtml(p.description || '')}</td>
+          <td>
+            <button class="btn-icon" onclick="editProvider('${escHtml(id)}')" title="Modifier">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            </button>
+            <button class="btn-icon danger" onclick="deleteProvider('${escHtml(id)}')" title="Supprimer">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </button>
+          </td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
+  }
+
+  // Throttling table
+  const ttbl = document.getElementById('llm-throttling-table');
+  if (Object.keys(throttling).length === 0) {
+    ttbl.innerHTML = '<p style="color:var(--text-secondary);text-align:center;padding:1rem">Aucune regle de throttling.</p>';
+  } else {
+    ttbl.innerHTML = `<table>
+      <thead><tr><th>Cle API</th><th>RPM</th><th>TPM</th><th style="width:100px">Actions</th></tr></thead>
+      <tbody>${Object.entries(throttling).map(([key, t]) => `<tr>
+        <td><code>${escHtml(key)}</code></td>
+        <td>${t.rpm}</td>
+        <td>${t.tpm.toLocaleString()}</td>
+        <td>
+          <button class="btn-icon" onclick="editThrottling('${escHtml(key)}', ${t.rpm}, ${t.tpm})" title="Modifier">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          </button>
+          <button class="btn-icon danger" onclick="deleteThrottling('${escHtml(key)}')" title="Supprimer">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </button>
+        </td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+  }
+}
+
+async function setLLMDefault(providerId) {
+  try {
+    await api('/api/llm/providers/default', { method: 'PUT', body: { provider_id: providerId } });
+    toast('Modele par defaut mis a jour', 'success');
+    loadLLM();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function _providerTypeFields(type, values = {}) {
+  let extra = '';
+  if (type === 'ollama') {
+    extra = `<div class="form-group" id="llm-extra-fields">
+      <label>Base URL</label>
+      <input id="prov-base-url" value="${escHtml(values.base_url || 'http://localhost:11434')}" />
+    </div>`;
+  } else if (type === 'azure') {
+    extra = `<div id="llm-extra-fields">
+      <div class="form-group">
+        <label>Azure Endpoint</label>
+        <input id="prov-azure-endpoint" value="${escHtml(values.azure_endpoint || '')}" placeholder="https://xxx.openai.azure.com/" />
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Azure Deployment</label>
+          <input id="prov-azure-deployment" value="${escHtml(values.azure_deployment || '')}" />
+        </div>
+        <div class="form-group">
+          <label>API Version</label>
+          <input id="prov-api-version" value="${escHtml(values.api_version || '2024-12-01-preview')}" />
+        </div>
+      </div>
+    </div>`;
+  } else {
+    extra = '<div id="llm-extra-fields"></div>';
+  }
+  return extra;
+}
+
+function _updateProviderTypeFields() {
+  const type = document.getElementById('prov-type').value;
+  const container = document.getElementById('llm-extra-fields');
+  if (container) container.outerHTML = _providerTypeFields(type);
+}
+
+function showAddProviderModal() {
+  showModal(`
+    <div class="modal-header">
+      <h3>Ajouter un provider LLM</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>ID (unique)</label>
+        <input id="prov-id" placeholder="mon-modele" />
+      </div>
+      <div class="form-group">
+        <label>Type</label>
+        <select id="prov-type" onchange="_updateProviderTypeFields()">
+          ${LLM_TYPES.map(t => `<option value="${t}">${t}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Modele</label>
+        <input id="prov-model" placeholder="gpt-4o, claude-sonnet-4-5..." />
+      </div>
+      <div class="form-group">
+        <label>Cle API (env var)</label>
+        <input id="prov-envkey" placeholder="OPENAI_API_KEY" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Description</label>
+      <input id="prov-desc" placeholder="Description du modele" />
+    </div>
+    ${_providerTypeFields('anthropic')}
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="addProvider()">Ajouter</button>
+    </div>
+  `);
+}
+
+async function addProvider() {
+  const id = document.getElementById('prov-id').value.trim();
+  const type = document.getElementById('prov-type').value;
+  const model = document.getElementById('prov-model').value.trim();
+  const env_key = document.getElementById('prov-envkey').value.trim();
+  const description = document.getElementById('prov-desc').value.trim();
+  if (!id || !model) { toast('ID et modele requis', 'error'); return; }
+  const body = { id, type, model, env_key, description, base_url: '', azure_endpoint: '', azure_deployment: '', api_version: '' };
+  if (type === 'ollama') body.base_url = (document.getElementById('prov-base-url')?.value || '').trim();
+  if (type === 'azure') {
+    body.azure_endpoint = (document.getElementById('prov-azure-endpoint')?.value || '').trim();
+    body.azure_deployment = (document.getElementById('prov-azure-deployment')?.value || '').trim();
+    body.api_version = (document.getElementById('prov-api-version')?.value || '').trim();
+  }
+  try {
+    await api('/api/llm/providers/provider', { method: 'POST', body });
+    toast('Provider ajoute', 'success');
+    closeModal();
+    loadLLM();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function editProvider(id) {
+  const p = llmProviders.providers[id];
+  if (!p) return;
+  showModal(`
+    <div class="modal-header">
+      <h3>Modifier : ${escHtml(id)}</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>ID</label>
+        <input id="prov-id" value="${escHtml(id)}" />
+      </div>
+      <div class="form-group">
+        <label>Type</label>
+        <select id="prov-type" onchange="_updateProviderTypeFields()">
+          ${LLM_TYPES.map(t => `<option value="${t}" ${t === p.type ? 'selected' : ''}>${t}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Modele</label>
+        <input id="prov-model" value="${escHtml(p.model)}" />
+      </div>
+      <div class="form-group">
+        <label>Cle API (env var)</label>
+        <input id="prov-envkey" value="${escHtml(p.env_key || '')}" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Description</label>
+      <input id="prov-desc" value="${escHtml(p.description || '')}" />
+    </div>
+    ${_providerTypeFields(p.type, p)}
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="saveProvider('${escHtml(id)}')">Sauvegarder</button>
+    </div>
+  `);
+}
+
+async function saveProvider(originalId) {
+  const id = document.getElementById('prov-id').value.trim();
+  const type = document.getElementById('prov-type').value;
+  const model = document.getElementById('prov-model').value.trim();
+  const env_key = document.getElementById('prov-envkey').value.trim();
+  const description = document.getElementById('prov-desc').value.trim();
+  if (!id || !model) { toast('ID et modele requis', 'error'); return; }
+  const body = { id, type, model, env_key, description, base_url: '', azure_endpoint: '', azure_deployment: '', api_version: '' };
+  if (type === 'ollama') body.base_url = (document.getElementById('prov-base-url')?.value || '').trim();
+  if (type === 'azure') {
+    body.azure_endpoint = (document.getElementById('prov-azure-endpoint')?.value || '').trim();
+    body.azure_deployment = (document.getElementById('prov-azure-deployment')?.value || '').trim();
+    body.api_version = (document.getElementById('prov-api-version')?.value || '').trim();
+  }
+  try {
+    await api(`/api/llm/providers/provider/${originalId}`, { method: 'PUT', body });
+    toast('Provider mis a jour', 'success');
+    closeModal();
+    loadLLM();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteProvider(id) {
+  if (!confirm(`Supprimer le provider "${id}" ?`)) return;
+  try {
+    await api(`/api/llm/providers/provider/${id}`, { method: 'DELETE' });
+    toast('Provider supprime', 'success');
+    loadLLM();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// Throttling
+function showAddThrottlingModal() {
+  showModal(`
+    <div class="modal-header">
+      <h3>Ajouter une regle de throttling</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-group">
+      <label>Cle API (env var)</label>
+      <input id="throttle-key" placeholder="OPENAI_API_KEY" />
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>RPM (requetes/min)</label>
+        <input id="throttle-rpm" type="number" value="60" />
+      </div>
+      <div class="form-group">
+        <label>TPM (tokens/min)</label>
+        <input id="throttle-tpm" type="number" value="60000" />
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="saveThrottling()">Ajouter</button>
+    </div>
+  `);
+}
+
+function editThrottling(key, rpm, tpm) {
+  showModal(`
+    <div class="modal-header">
+      <h3>Modifier throttling : ${escHtml(key)}</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-group">
+      <label>Cle API</label>
+      <input id="throttle-key" value="${escHtml(key)}" disabled style="opacity:0.5" />
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>RPM (requetes/min)</label>
+        <input id="throttle-rpm" type="number" value="${rpm}" />
+      </div>
+      <div class="form-group">
+        <label>TPM (tokens/min)</label>
+        <input id="throttle-tpm" type="number" value="${tpm}" />
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="saveThrottling()">Sauvegarder</button>
+    </div>
+  `);
+}
+
+async function saveThrottling() {
+  const env_key = document.getElementById('throttle-key').value.trim();
+  const rpm = parseInt(document.getElementById('throttle-rpm').value);
+  const tpm = parseInt(document.getElementById('throttle-tpm').value);
+  if (!env_key) { toast('Cle API requise', 'error'); return; }
+  try {
+    await api('/api/llm/providers/throttling', { method: 'PUT', body: { env_key, rpm, tpm } });
+    toast('Throttling mis a jour', 'success');
+    closeModal();
+    loadLLM();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteThrottling(key) {
+  if (!confirm(`Supprimer le throttling pour "${key}" ?`)) return;
+  try {
+    await api(`/api/llm/providers/throttling/${key}`, { method: 'DELETE' });
+    toast('Throttling supprime', 'success');
+    loadLLM();
   } catch (e) { toast(e.message, 'error'); }
 }
 

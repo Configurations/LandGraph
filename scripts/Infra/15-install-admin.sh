@@ -56,6 +56,11 @@ if [ ! -f config/mcp_catalog.csv ]; then
     wget -qO config/mcp_catalog.csv "${REPO_RAW}/scripts/Infra/mcp_catalog.csv" 2>/dev/null || true
     echo "  -> mcp_catalog.csv copie"
 fi
+# Copier llm_providers.json si absent
+if [ ! -f config/llm_providers.json ]; then
+    wget -qO config/llm_providers.json "${REPO_RAW}/Configs/llm_providers.json" 2>/dev/null || true
+    echo "  -> llm_providers.json copie"
+fi
 
 # ── 4. Build et demarrage ────────────────────
 echo "[4/4] Build et demarrage du conteneur admin..."
