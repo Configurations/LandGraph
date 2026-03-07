@@ -1208,20 +1208,43 @@ async def git_pull():
             return {"stdout": result.stdout, "stderr": result.stderr, "code": result.returncode}
         else:
             log.info("git pull in %s", GIT_DIR)
+            # Ensure remote origin is configured from git config
+            cfg = _read_json(GIT_CONFIG_FILE)
+            repo_path = cfg.get("path", "").strip()
+            if repo_path:
+                login = cfg.get("login", "").strip()
+                password = cfg.get("password", "").strip()
+                if login and password:
+                    if "://" in repo_path:
+                        scheme, rest = repo_path.split("://", 1)
+                        remote_url = f"{scheme}://{login}:{password}@{rest}"
+                    else:
+                        remote_url = f"https://{login}:{password}@{repo_path}"
+                else:
+                    remote_url = repo_path if "://" in repo_path else f"https://{repo_path}"
+                subprocess.run(
+                    ["git", "remote", "remove", "origin"],
+                    cwd=str(GIT_DIR), capture_output=True, text=True, timeout=5
+                )
+                subprocess.run(
+                    ["git", "remote", "add", "origin", remote_url],
+                    cwd=str(GIT_DIR), capture_output=True, text=True, timeout=5
+                )
             # Detect current branch
             branch_result = subprocess.run(
                 ["git", "branch", "--show-current"],
                 cwd=str(GIT_DIR), capture_output=True, text=True, timeout=10
             )
             branch = branch_result.stdout.strip() or "master"
-            # Set upstream if not set
+            # Set upstream
             subprocess.run(
                 ["git", "branch", "--set-upstream-to", f"origin/{branch}", branch],
                 cwd=str(GIT_DIR), capture_output=True, text=True, timeout=10
             )
             result = subprocess.run(
                 ["git", "pull", "origin", branch],
-                cwd=str(GIT_DIR), capture_output=True, text=True, timeout=60
+                cwd=str(GIT_DIR), capture_output=True, text=True, timeout=60,
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
             )
             if result.returncode != 0:
                 log.error("git pull failed (code %d): stdout=%s stderr=%s", result.returncode, result.stdout, result.stderr)
