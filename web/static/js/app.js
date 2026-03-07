@@ -1253,9 +1253,12 @@ async function loadGit() {
       api('/api/git/status'),
       api('/api/git/config'),
     ]);
-    document.getElementById('git-branch').textContent = status.branch || 'inconnu';
-    document.getElementById('git-status').textContent = status.status || '(aucun changement)';
-    document.getElementById('git-log').textContent = status.log || '(vide)';
+    const inited = status.initialized;
+    document.getElementById('git-branch').textContent = inited ? (status.branch || 'inconnu') : 'Non initialise';
+    document.getElementById('git-status').textContent = inited ? (status.status || '(aucun changement)') : 'Git non initialise. Enregistrez la configuration pour initialiser.';
+    document.getElementById('git-log').textContent = inited ? (status.log || '(vide)') : '';
+    document.getElementById('btn-git-pull').disabled = !inited;
+    document.getElementById('btn-git-commit').disabled = !inited;
     document.getElementById('git-cfg-path').value = cfg.path || '';
     document.getElementById('git-cfg-login').value = cfg.login || '';
     document.getElementById('git-cfg-password').value = cfg.password || '';
@@ -1271,6 +1274,7 @@ async function saveGitConfig() {
   try {
     await api('/api/git/config', { method: 'PUT', body });
     toast('Configuration Git enregistree', 'success');
+    loadGit();
   } catch (e) { toast(e.message, 'error'); }
 }
 

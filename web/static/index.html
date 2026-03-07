@@ -243,8 +243,8 @@
               <div id="git-branch" style="font-size:1.1rem;font-weight:600;margin-top:0.25rem">-</div>
             </div>
             <div style="display:flex;gap:0.5rem;align-items:flex-end">
-              <button class="btn btn-primary" onclick="gitPull()">Pull (mise a jour)</button>
-              <button class="btn btn-success" onclick="showGitCommitModal()">Commit configs</button>
+              <button class="btn btn-primary" id="btn-git-pull" onclick="gitPull()" disabled>Pull (mise a jour)</button>
+              <button class="btn btn-success" id="btn-git-commit" onclick="showGitCommitModal()" disabled>Commit &amp; Push</button>
             </div>
           </div>
         </div>

@@ -1049,6 +1049,27 @@ class GitConfig(BaseModel):
 @app.put("/api/git/config")
 async def update_git_config(cfg: GitConfig):
     _write_json(GIT_CONFIG_FILE, cfg.model_dump())
+    # Init git repo if not already initialized
+    if not (GIT_DIR / ".git").exists():
+        log.info("Initializing git repo in %s", GIT_DIR)
+        subprocess.run(["git", "init"], cwd=str(GIT_DIR), capture_output=True, text=True, timeout=10)
+        _ensure_gitignore()
+    # Configure remote origin
+    if cfg.path:
+        login = cfg.login.strip()
+        password = cfg.password.strip()
+        if login and password:
+            if "://" in cfg.path:
+                scheme, rest = cfg.path.split("://", 1)
+                remote_url = f"{scheme}://{login}:{password}@{rest}"
+            else:
+                remote_url = f"https://{login}:{password}@{cfg.path}"
+        else:
+            remote_url = cfg.path if "://" in cfg.path else f"https://{cfg.path}"
+        # Remove existing origin then add
+        subprocess.run(["git", "remote", "remove", "origin"], cwd=str(GIT_DIR), capture_output=True, text=True, timeout=5)
+        subprocess.run(["git", "remote", "add", "origin", remote_url], cwd=str(GIT_DIR), capture_output=True, text=True, timeout=5)
+        log.info("Git remote origin set to %s", cfg.path)
     return {"ok": True}
 
 
@@ -1057,6 +1078,9 @@ async def update_git_config(cfg: GitConfig):
 @app.get("/api/git/status")
 async def git_status():
     try:
+        initialized = (GIT_DIR / ".git").exists()
+        if not initialized:
+            return {"initialized": False, "status": "", "branch": "", "log": ""}
         result = subprocess.run(
             ["git", "status", "--short"],
             cwd=str(GIT_DIR), capture_output=True, text=True, timeout=10
@@ -1070,6 +1094,7 @@ async def git_status():
             cwd=str(GIT_DIR), capture_output=True, text=True, timeout=10
         )
         return {
+            "initialized": True,
             "status": result.stdout,
             "branch": branch.stdout.strip(),
             "log": log.stdout,
