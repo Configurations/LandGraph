@@ -1256,7 +1256,6 @@ async function loadGit() {
     document.getElementById('git-branch').textContent = status.branch || 'inconnu';
     document.getElementById('git-status').textContent = status.status || '(aucun changement)';
     document.getElementById('git-log').textContent = status.log || '(vide)';
-    document.getElementById('git-cfg-server').value = cfg.server || '';
     document.getElementById('git-cfg-path').value = cfg.path || '';
     document.getElementById('git-cfg-login').value = cfg.login || '';
     document.getElementById('git-cfg-password').value = cfg.password || '';
@@ -1265,7 +1264,6 @@ async function loadGit() {
 
 async function saveGitConfig() {
   const body = {
-    server: document.getElementById('git-cfg-server').value.trim(),
     path: document.getElementById('git-cfg-path').value.trim(),
     login: document.getElementById('git-cfg-login').value.trim(),
     password: document.getElementById('git-cfg-password').value.trim(),
@@ -1290,14 +1288,14 @@ function showGitCommitModal() {
       <h3>Commit des configurations</h3>
       <button class="btn-icon" onclick="closeModal()">&times;</button>
     </div>
-    <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:1rem">Stage automatiquement Configs/ et prompts/</p>
+    <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:1rem">Commit et push de tout le contenu du projet vers le depot distant.</p>
     <div class="form-group">
       <label>Message de commit</label>
       <input id="git-commit-msg" placeholder="Mise a jour configuration agents" />
     </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
-      <button class="btn btn-success" onclick="gitCommit()">Commit</button>
+      <button class="btn btn-success" onclick="gitCommit()">Commit &amp; Push</button>
     </div>
   `);
 }
@@ -1307,7 +1305,7 @@ async function gitCommit() {
   if (!msg) { toast('Message requis', 'error'); return; }
   try {
     const data = await api('/api/git/commit', { method: 'POST', body: { message: msg } });
-    toast(data.code === 0 ? 'Commit effectue' : (data.stderr || 'Erreur commit'), data.code === 0 ? 'success' : 'error');
+    toast(data.code === 0 ? 'Commit & push effectue' : (data.stderr || 'Erreur commit/push'), data.code === 0 ? 'success' : 'error');
     closeModal();
     loadGit();
   } catch (e) { toast(e.message, 'error'); }

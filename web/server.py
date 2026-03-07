@@ -1033,7 +1033,6 @@ async def get_git_config():
 
 
 class GitConfig(BaseModel):
-    server: str = ""
     path: str = ""
     login: str = ""
     password: str = ""
@@ -1074,11 +1073,40 @@ async def git_status():
 @app.post("/api/git/pull")
 async def git_pull():
     try:
-        result = subprocess.run(
-            ["git", "pull"],
-            cwd=str(GIT_DIR), capture_output=True, text=True, timeout=60
-        )
-        return {"stdout": result.stdout, "stderr": result.stderr, "code": result.returncode}
+        git_dir = GIT_DIR / ".git"
+        if not git_dir.exists():
+            # Clone into GIT_DIR using git config credentials
+            cfg = _read_json(GIT_CONFIG_FILE)
+            repo_path = cfg.get("path", "").strip()
+            if not repo_path:
+                raise HTTPException(400, "Chemin du depot non configure (Git > Depot distant)")
+            login = cfg.get("login", "").strip()
+            password = cfg.get("password", "").strip()
+            if login and password:
+                # Insert credentials into URL: https://login:password@host/path
+                if "://" in repo_path:
+                    scheme, rest = repo_path.split("://", 1)
+                    clone_url = f"{scheme}://{login}:{password}@{rest}"
+                else:
+                    clone_url = f"https://{login}:{password}@{repo_path}"
+            else:
+                clone_url = repo_path if "://" in repo_path else f"https://{repo_path}"
+            log.info("Cloning %s into %s", repo_path, GIT_DIR)
+            # Clone into a temp dir then move contents (GIT_DIR may already have files)
+            result = subprocess.run(
+                ["git", "clone", clone_url, "."],
+                cwd=str(GIT_DIR), capture_output=True, text=True, timeout=120,
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            )
+            return {"stdout": result.stdout, "stderr": result.stderr, "code": result.returncode}
+        else:
+            result = subprocess.run(
+                ["git", "pull"],
+                cwd=str(GIT_DIR), capture_output=True, text=True, timeout=60
+            )
+            return {"stdout": result.stdout, "stderr": result.stderr, "code": result.returncode}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -1089,20 +1117,48 @@ class GitCommitRequest(BaseModel):
 
 @app.post("/api/git/commit")
 async def git_commit(req: GitCommitRequest):
-    """Stage config files and commit."""
+    """Stage all files in /project, commit and push."""
     try:
-        # Stage config-related files
-        # In Docker: config/ and prompts/; local: Configs/ and prompts/
-        add_paths = ["config/", "prompts/"] if DOCKER_MODE else ["Configs/", "prompts/"]
+        git_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        # Build remote URL with credentials for push
+        cfg = _read_json(GIT_CONFIG_FILE)
+        repo_path = cfg.get("path", "").strip()
+        login = cfg.get("login", "").strip()
+        password = cfg.get("password", "").strip()
+
+        # Stage everything
         subprocess.run(
-            ["git", "add"] + add_paths,
+            ["git", "add", "-A"],
             cwd=str(GIT_DIR), capture_output=True, text=True, timeout=10
         )
-        result = subprocess.run(
+        # Commit
+        commit_result = subprocess.run(
             ["git", "commit", "-m", req.message],
             cwd=str(GIT_DIR), capture_output=True, text=True, timeout=30
         )
-        return {"stdout": result.stdout, "stderr": result.stderr, "code": result.returncode}
+        if commit_result.returncode != 0:
+            return {"stdout": commit_result.stdout, "stderr": commit_result.stderr, "code": commit_result.returncode}
+
+        # Push
+        if repo_path and login and password:
+            if "://" in repo_path:
+                scheme, rest = repo_path.split("://", 1)
+                push_url = f"{scheme}://{login}:{password}@{rest}"
+            else:
+                push_url = f"https://{login}:{password}@{repo_path}"
+            push_result = subprocess.run(
+                ["git", "push", push_url],
+                cwd=str(GIT_DIR), capture_output=True, text=True, timeout=60,
+                env=git_env,
+            )
+        else:
+            push_result = subprocess.run(
+                ["git", "push"],
+                cwd=str(GIT_DIR), capture_output=True, text=True, timeout=60,
+                env=git_env,
+            )
+        return {"stdout": commit_result.stdout + "\n" + push_result.stdout,
+                "stderr": push_result.stderr, "code": push_result.returncode}
     except Exception as e:
         raise HTTPException(500, str(e))
 
