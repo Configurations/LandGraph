@@ -1208,8 +1208,19 @@ async def git_pull():
             return {"stdout": result.stdout, "stderr": result.stderr, "code": result.returncode}
         else:
             log.info("git pull in %s", GIT_DIR)
+            # Detect current branch
+            branch_result = subprocess.run(
+                ["git", "branch", "--show-current"],
+                cwd=str(GIT_DIR), capture_output=True, text=True, timeout=10
+            )
+            branch = branch_result.stdout.strip() or "master"
+            # Set upstream if not set
+            subprocess.run(
+                ["git", "branch", "--set-upstream-to", f"origin/{branch}", branch],
+                cwd=str(GIT_DIR), capture_output=True, text=True, timeout=10
+            )
             result = subprocess.run(
-                ["git", "pull"],
+                ["git", "pull", "origin", branch],
                 cwd=str(GIT_DIR), capture_output=True, text=True, timeout=60
             )
             if result.returncode != 0:
