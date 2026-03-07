@@ -42,6 +42,8 @@ def _create_agent(agent_id, conf, has_mcp):
     attrs = {
         "agent_id": agent_id,
         "agent_name": conf["name"],
+        "default_llm": conf.get("llm", ""),
+        "default_model": conf.get("model", "claude-sonnet-4-5-20250929"),
         "default_temperature": conf.get("temperature", 0.3),
         "default_max_tokens": conf.get("max_tokens", 32768),
         "prompt_filename": conf.get("prompt", f"{agent_id}.md"),

@@ -2,7 +2,6 @@
 import json, logging, os
 from datetime import datetime, timezone
 from dotenv import load_dotenv
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import ToolMessage
 
 load_dotenv()
@@ -188,6 +187,7 @@ class BaseAgent:
     agent_id = "base"
     agent_name = "Base Agent"
     default_model = "claude-sonnet-4-5-20250929"
+    default_llm = ""  # nom du provider dans llm_providers.json
     default_temperature = 0.3
     default_max_tokens = 32768
     prompt_filename = "base.md"
@@ -196,6 +196,8 @@ class BaseAgent:
     requires_approval = False
 
     def __init__(self):
+        # Le provider peut etre defini via : env var > registry (default_llm) > default
+        self.llm_provider = os.getenv(f"{self.agent_id.upper()}_LLM", self.default_llm) or None
         self.model = os.getenv(f"{self.agent_id.upper()}_MODEL", self.default_model)
         self.temperature = float(os.getenv(f"{self.agent_id.upper()}_TEMPERATURE", str(self.default_temperature)))
         self.max_tokens = int(os.getenv(f"{self.agent_id.upper()}_MAX_TOKENS", str(self.default_max_tokens)))
@@ -214,7 +216,12 @@ class BaseAgent:
         return f"Tu es {self.agent_name}. JSON: {{agent_id, status, confidence, deliverables}}"
 
     def get_llm(self):
-        return ChatAnthropic(model=self.model, temperature=self.temperature, max_tokens=self.max_tokens)
+        from agents.shared.llm_provider import create_llm
+        return create_llm(
+            provider_name=self.llm_provider,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+        )
 
     def get_tools(self):
         if self._tools is None and self.use_tools:

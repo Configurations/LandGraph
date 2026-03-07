@@ -1,0 +1,23 @@
+{
+  "providers": {
+    "claude-sonnet": {
+      "type": "anthropic",
+      "model": "claude-sonnet-4-5-20250929",
+      "env_key": "ANTHROPIC_API_KEY",
+      "description": "Claude Sonnet 4.5 — equilibre qualite/vitesse"
+    },
+    "claude-opus": {
+      "type": "anthropic",
+      "model": "claude-opus-4-5-20250929",
+      "env_key": "ANTHROPIC_API_KEY",
+      "description": "Claude Opus 4.5 — maximum intelligence"
+    },
+    "claude-haiku": {
+      "type": "anthropic",
+      "model": "claude-haiku-3-5-20241022",
+      "env_key": "ANTHROPIC_API_KEY",
+      "description": "Claude Haiku 3.5 — rapide et economique"
+    }
+  },
+  "default": "claude-sonnet"
+}

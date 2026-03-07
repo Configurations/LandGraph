@@ -41,12 +41,13 @@ echo "  -> ${DL}/${#PROMPTS[@]} prompts"
 # ── 3. Config (agents_registry.json) ─────────
 echo "[3/7] Config..."
 wget -qO config/agents_registry.json "${REPO_RAW}/Configs/agents_registry.json" 2>/dev/null || echo "  -> agents_registry.json: conserve local"
+wget -qO config/llm_providers.json "${REPO_RAW}/Configs/llm_providers.json" 2>/dev/null || echo "  -> llm_providers.json: conserve local"
 AGENT_COUNT=$(python3 -c "import json;print(len(json.load(open('config/agents_registry.json')).get('agents',{})))" 2>/dev/null || echo 0)
 echo "  -> ${AGENT_COUNT} agents dans le registry"
 
 # ── 4. Code Python (Shared + gateway + discord) ─
 echo "[4/7] Code Python..."
-SHARED_FILES=(base_agent.py mcp_client.py agent_loader.py state.py discord_tools.py human_gate.py agent_conversation.py rate_limiter.py __init__.py)
+SHARED_FILES=(base_agent.py mcp_client.py agent_loader.py state.py discord_tools.py human_gate.py agent_conversation.py rate_limiter.py llm_provider.py __init__.py)
 for f in "${SHARED_FILES[@]}"; do
     wget -qO "agents/shared/${f}" "${REPO_RAW}/Agents/Shared/${f}" 2>/dev/null || true
 done
