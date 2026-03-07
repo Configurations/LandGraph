@@ -1,9 +1,10 @@
-"""Human Gate — Validation humaine via Discord REST API (pas de bot, juste HTTP)."""
+"""Human Gate — Validation humaine via Discord REST API avec rappels."""
 import asyncio
 import json
 import logging
 import os
 import time
+from datetime import datetime, timezone
 
 import aiohttp
 from dotenv import load_dotenv
@@ -14,24 +15,25 @@ logger = logging.getLogger("human_gate")
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")
 DISCORD_CHANNEL_REVIEW = os.getenv("DISCORD_CHANNEL_REVIEW", "")
 
+REMINDER_INTERVALS = [120, 240, 480, 960]  # 2, 4, 8, 16 min
+TOTAL_TIMEOUT = 1800  # 30 minutes
+
 
 async def request_approval(agent_name: str, summary: str, details: str = "",
-                            channel_id: str = "", timeout: int = 300) -> dict:
+                            channel_id: str = "", timeout: int = TOTAL_TIMEOUT) -> dict:
     """
     Poste une demande de validation dans Discord et attend la reponse.
-
-    Retourne:
-        {"approved": bool, "response": str, "reviewer": str, "timed_out": bool}
+    Envoie des rappels periodiques.
     """
     channel = channel_id or DISCORD_CHANNEL_REVIEW
     if not DISCORD_BOT_TOKEN or not channel:
-        logger.warning("Human gate: pas de token ou channel configure — auto-approve")
-        return {"approved": True, "response": "auto-approve (pas de channel review)", "reviewer": "system", "timed_out": False}
+        logger.warning("Human gate: pas de token ou channel — auto-approve")
+        return {"approved": True, "response": "auto-approve", "reviewer": "system", "timed_out": False}
 
     url = f"https://discord.com/api/v10/channels/{channel}/messages"
     headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}", "Content-Type": "application/json"}
 
-    # Formater le message
+    asked_at = datetime.now(timezone.utc).strftime("%H:%M UTC")
     message = (
         f"🔒 **Validation requise — {agent_name}**\n\n"
         f"**Resume :** {summary}\n"
@@ -43,10 +45,9 @@ async def request_approval(agent_name: str, summary: str, details: str = "",
         f"  `approve` — valider et continuer\n"
         f"  `revise <commentaire>` — demander des modifications\n"
         f"  `reject` — rejeter\n"
-        f"\n⏰ Timeout : {timeout // 60} min (auto-escalade si pas de reponse)"
+        f"\n⏰ Timeout : {timeout // 60} min"
     )
 
-    # Poster la demande
     async with aiohttp.ClientSession() as session:
         try:
             async with session.post(url, headers=headers, json={"content": message}) as resp:
@@ -55,21 +56,35 @@ async def request_approval(agent_name: str, summary: str, details: str = "",
                     return {"approved": True, "response": "discord error — auto-approve", "reviewer": "system", "timed_out": False}
                 msg_data = await resp.json()
                 request_msg_id = msg_data["id"]
-                request_timestamp = msg_data["timestamp"]
         except Exception as e:
             logger.error(f"Human gate: {e}")
             return {"approved": True, "response": f"error — auto-approve: {e}", "reviewer": "system", "timed_out": False}
 
-        # Poller les messages pour une reponse
         logger.info(f"Human gate: waiting for approval (timeout={timeout}s)")
         start = time.time()
-        poll_interval = 5  # secondes entre chaque poll
+        reminder_idx = 0
+        next_reminder = start + (REMINDER_INTERVALS[0] if REMINDER_INTERVALS else timeout)
 
         while time.time() - start < timeout:
-            await asyncio.sleep(poll_interval)
+            await asyncio.sleep(5)
+            now = time.time()
 
+            # Rappel
+            if now >= next_reminder and reminder_idx < len(REMINDER_INTERVALS):
+                try:
+                    await session.post(url, headers=headers, json={
+                        "content": f"⏳ **{agent_name}** attend toujours votre validation (demande a {asked_at})"
+                    })
+                except Exception:
+                    pass
+                reminder_idx += 1
+                if reminder_idx < len(REMINDER_INTERVALS):
+                    next_reminder = now + REMINDER_INTERVALS[reminder_idx]
+                else:
+                    next_reminder = start + timeout
+
+            # Chercher une reponse
             try:
-                # Lire les messages recents du channel (apres notre message)
                 params = {"after": request_msg_id, "limit": 20}
                 async with session.get(url, headers=headers, params=params) as resp:
                     if resp.status != 200:
@@ -77,7 +92,6 @@ async def request_approval(agent_name: str, summary: str, details: str = "",
                     messages = await resp.json()
 
                 for msg in messages:
-                    # Ignorer les bots
                     if msg.get("author", {}).get("bot", False):
                         continue
 
@@ -86,7 +100,6 @@ async def request_approval(agent_name: str, summary: str, details: str = "",
 
                     if content.startswith("approve") or content == "ok" or content == "yes":
                         logger.info(f"Human gate: APPROVED by {author}")
-                        # Poster confirmation
                         await session.post(url, headers=headers, json={
                             "content": f"✅ **Approuve** par {author}. Les agents continuent."
                         })
@@ -94,9 +107,9 @@ async def request_approval(agent_name: str, summary: str, details: str = "",
 
                     elif content.startswith("revise"):
                         comment = msg.get("content", "")[6:].strip()
-                        logger.info(f"Human gate: REVISION requested by {author}: {comment}")
+                        logger.info(f"Human gate: REVISION by {author}: {comment}")
                         await session.post(url, headers=headers, json={
-                            "content": f"🔄 **Revision** demandee par {author}. Commentaire transmis aux agents."
+                            "content": f"🔄 **Revision** demandee par {author}."
                         })
                         return {"approved": False, "response": comment, "reviewer": author, "timed_out": False}
 
@@ -113,17 +126,19 @@ async def request_approval(agent_name: str, summary: str, details: str = "",
 
         # Timeout
         logger.warning(f"Human gate: timeout after {timeout}s")
-        async with aiohttp.ClientSession() as session2:
-            await session2.post(url, headers=headers, json={
-                "content": f"⏰ **Timeout** — pas de reponse apres {timeout // 60} min. Escalade automatique."
-            })
-
+        try:
+            async with aiohttp.ClientSession() as session2:
+                await session2.post(url, headers=headers, json={
+                    "content": f"⏰ **{agent_name}** — pas de validation apres {timeout // 60} min. Escalade automatique."
+                })
+        except Exception:
+            pass
         return {"approved": False, "response": "timeout", "reviewer": None, "timed_out": True}
 
 
 def request_approval_sync(agent_name: str, summary: str, details: str = "",
-                           channel_id: str = "", timeout: int = 300) -> dict:
-    """Version synchrone pour appel depuis les agents."""
+                           channel_id: str = "", timeout: int = TOTAL_TIMEOUT) -> dict:
+    """Version synchrone."""
     try:
         loop = asyncio.new_event_loop()
         result = loop.run_until_complete(

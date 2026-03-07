@@ -256,7 +256,7 @@ class BaseAgent:
             from agents.shared.agent_conversation import ask_human_sync
             # Recuperer le channel_id depuis les env vars
             channel_id = os.getenv("DISCORD_CHANNEL_COMMANDS", "")
-            result = ask_human_sync(agent_name, question, channel_id, context, timeout=300)
+            result = ask_human_sync(agent_name, question, channel_id, context, timeout=1800)
             if result["answered"]:
                 return f"Reponse de {result['author']}: {result['response']}"
             elif result["timed_out"]:
@@ -512,7 +512,7 @@ class BaseAgent:
                         agent_name=self.agent_name,
                         summary=summary,
                         details=details,
-                        timeout=300,
+                        timeout=1800,
                     )
 
                     if approval["approved"]:

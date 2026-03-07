@@ -142,13 +142,13 @@ def load_or_create_state(thread_id, msgs, project_id, channel_id):
 async def run_single_agent(agent_id, agent_callable, state, channel_id):
     try:
         result = await asyncio.wait_for(
-            asyncio.to_thread(agent_callable, dict(state)), timeout=300)
+            asyncio.to_thread(agent_callable, dict(state)), timeout=2100)
         state["agent_outputs"] = result.get("agent_outputs", state.get("agent_outputs", {}))
         logger.info(f"[bg] {agent_id} done")
         return result
     except asyncio.TimeoutError:
         logger.error(f"[bg] {agent_id} timeout")
-        await post_to_discord(channel_id, f"⏰ **{agent_id}** timeout (5min)")
+        await post_to_discord(channel_id, f"⏰ **{agent_id}** timeout (35min)")
         return state
     except Exception as e:
         logger.error(f"[bg] {agent_id} error: {e}")

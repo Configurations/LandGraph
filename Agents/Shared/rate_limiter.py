@@ -25,9 +25,10 @@ DEFAULT_LIMITS = {
 }
 
 # Retry config
-MAX_RETRIES = 3
+MAX_RETRIES = 20
 INITIAL_BACKOFF = 5      # secondes
 BACKOFF_MULTIPLIER = 2   # exponentiel
+MAX_BACKOFF = 120        # cap a 2 min max entre deux retries
 
 
 def _get_limits(provider: str) -> dict:
@@ -166,14 +167,14 @@ def throttled_invoke(llm, messages, model: str = "", estimated_tokens: int = 100
 
             # Rate limit error — retry avec backoff
             if "rate_limit" in error_str.lower() or "429" in error_str:
-                wait = INITIAL_BACKOFF * (BACKOFF_MULTIPLIER ** attempt)
+                wait = min(INITIAL_BACKOFF * (BACKOFF_MULTIPLIER ** attempt), MAX_BACKOFF)
                 logger.warning(f"Throttle [{provider}]: Rate limit hit (attempt {attempt + 1}/{MAX_RETRIES + 1}), backoff {wait}s")
                 time.sleep(wait)
                 continue
 
             # Overloaded — retry avec backoff
             if "overloaded" in error_str.lower() or "529" in error_str:
-                wait = INITIAL_BACKOFF * (BACKOFF_MULTIPLIER ** attempt)
+                wait = min(INITIAL_BACKOFF * (BACKOFF_MULTIPLIER ** attempt), MAX_BACKOFF)
                 logger.warning(f"Throttle [{provider}]: Overloaded (attempt {attempt + 1}/{MAX_RETRIES + 1}), backoff {wait}s")
                 time.sleep(wait)
                 continue

@@ -3,6 +3,7 @@ import asyncio
 import logging
 import os
 import time
+from datetime import datetime, timezone
 
 import aiohttp
 from dotenv import load_dotenv
@@ -12,14 +13,17 @@ logger = logging.getLogger("agent_conversation")
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")
 
+# Rappels : 5 tentatives, intervalle double a chaque fois
+# 2 min, 4 min, 8 min, 16 min = ~30 min total
+REMINDER_INTERVALS = [120, 240, 480, 960]  # secondes entre chaque rappel
+TOTAL_TIMEOUT = 1800  # 30 minutes
+
 
 async def ask_human(agent_name: str, question: str, channel_id: str,
-                     context: str = "", timeout: int = 300) -> dict:
+                     context: str = "", timeout: int = TOTAL_TIMEOUT) -> dict:
     """
-    Pose une question ouverte a l'humain dans Discord et attend la reponse.
-
-    Retourne:
-        {"answered": bool, "response": str, "author": str, "timed_out": bool}
+    Pose une question a l'humain dans Discord et attend la reponse.
+    Envoie des rappels periodiques avec intervalle doublant.
     """
     if not DISCORD_BOT_TOKEN or not channel_id:
         logger.warning("ask_human: pas de token ou channel — skip")
@@ -29,6 +33,7 @@ async def ask_human(agent_name: str, question: str, channel_id: str,
     headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}", "Content-Type": "application/json"}
 
     # Formater la question
+    asked_at = datetime.now(timezone.utc).strftime("%H:%M UTC")
     message = f"❓ **{agent_name} a besoin d'une reponse**\n\n{question}\n"
     if context:
         message += f"\n*Contexte : {context[:500]}*\n"
@@ -47,13 +52,31 @@ async def ask_human(agent_name: str, question: str, channel_id: str,
             logger.error(f"ask_human: {e}")
             return {"answered": False, "response": "", "author": "", "timed_out": False}
 
-        # Poller les reponses
-        logger.info(f"ask_human: [{agent_name}] waiting for answer (timeout={timeout}s)")
+        # Poller les reponses avec rappels
+        logger.info(f"ask_human: [{agent_name}] waiting (timeout={timeout}s)")
         start = time.time()
+        reminder_idx = 0
+        next_reminder = start + (REMINDER_INTERVALS[0] if REMINDER_INTERVALS else timeout)
 
         while time.time() - start < timeout:
             await asyncio.sleep(5)
+            now = time.time()
 
+            # Envoyer un rappel si c'est le moment
+            if now >= next_reminder and reminder_idx < len(REMINDER_INTERVALS):
+                try:
+                    reminder_msg = f"⏳ **{agent_name}** attend toujours une reponse (question posee a {asked_at})"
+                    await session.post(url, headers=headers, json={"content": reminder_msg})
+                    logger.info(f"ask_human: [{agent_name}] reminder {reminder_idx + 1}")
+                except Exception:
+                    pass
+                reminder_idx += 1
+                if reminder_idx < len(REMINDER_INTERVALS):
+                    next_reminder = now + REMINDER_INTERVALS[reminder_idx]
+                else:
+                    next_reminder = start + timeout  # plus de rappels
+
+            # Chercher une reponse
             try:
                 params = {"after": question_msg_id, "limit": 20}
                 async with session.get(url, headers=headers, params=params) as resp:
@@ -64,37 +87,34 @@ async def ask_human(agent_name: str, question: str, channel_id: str,
                 for msg in messages:
                     if msg.get("author", {}).get("bot", False):
                         continue
-
                     content = msg.get("content", "").strip()
                     author = msg.get("author", {}).get("username", "unknown")
-
-                    # Ignorer les commandes
-                    if content.startswith("!"):
+                    if content.startswith("!") or len(content) < 2:
                         continue
 
-                    # Ignorer les messages trop courts
-                    if len(content) < 2:
-                        continue
-
-                    logger.info(f"ask_human: [{agent_name}] got answer from {author}: {content[:100]}")
-
-                    # Confirmer la reception
+                    logger.info(f"ask_human: [{agent_name}] answer from {author}: {content[:100]}")
                     await session.post(url, headers=headers, json={
                         "content": f"📝 **{agent_name}** a recu votre reponse. Traitement en cours..."
                     })
-
                     return {"answered": True, "response": content, "author": author, "timed_out": False}
 
             except Exception as e:
                 logger.warning(f"ask_human poll error: {e}")
                 continue
 
-        logger.warning(f"ask_human: [{agent_name}] timeout")
+        # Timeout final
+        logger.warning(f"ask_human: [{agent_name}] timeout after {timeout}s")
+        try:
+            await session.post(url, headers=headers, json={
+                "content": f"⏰ **{agent_name}** — pas de reponse apres {timeout // 60} min. Continue avec son meilleur jugement."
+            })
+        except Exception:
+            pass
         return {"answered": False, "response": "", "author": "", "timed_out": True}
 
 
 def ask_human_sync(agent_name: str, question: str, channel_id: str,
-                    context: str = "", timeout: int = 300) -> dict:
+                    context: str = "", timeout: int = TOTAL_TIMEOUT) -> dict:
     """Version synchrone pour appel depuis les agents."""
     try:
         loop = asyncio.new_event_loop()
