@@ -16,38 +16,172 @@ def _post_to_discord_sync(channel_id, message):
     import requests
     url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
     headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}", "Content-Type": "application/json"}
-    for chunk in [message[i:i+1900] for i in range(0, len(message), 1900)]:
+
+    for chunk in _smart_split(message, 1900):
         try:
             requests.post(url, headers=headers, json={"content": chunk}, timeout=10)
         except Exception as e:
             logger.error(f"Discord: {e}")
 
 
-def _format_deliverable(key, val):
+def _smart_split(text, max_len=1900):
+    """Decoupe un message en chunks Discord en coupant sur les sauts de ligne."""
+    if len(text) <= max_len:
+        return [text]
+
+    chunks = []
+    current = ""
+
+    for line in text.split("\n"):
+        # Si une seule ligne depasse max_len, la couper par mots
+        if len(line) > max_len:
+            if current:
+                chunks.append(current.rstrip())
+                current = ""
+            words = line.split(" ")
+            for word in words:
+                if len(current) + len(word) + 1 > max_len:
+                    if current:
+                        chunks.append(current.rstrip())
+                    current = word + " "
+                else:
+                    current += word + " "
+            continue
+
+        # Ajouter la ligne au chunk courant
+        if len(current) + len(line) + 1 > max_len:
+            chunks.append(current.rstrip())
+            current = line + "\n"
+        else:
+            current += line + "\n"
+
+    if current.strip():
+        chunks.append(current.rstrip())
+
+    return chunks
+
+
+def _format_deliverable(key, val, depth=0):
+    """Formate un livrable pour Discord — lisible, structure, pas trop long."""
+    indent = "  " * depth
+    max_len = 1500 if depth == 0 else 500
+
+    if val is None:
+        return f"{indent}_(vide)_"
+
+    if isinstance(val, bool):
+        return f"{indent}{'✅' if val else '❌'}"
+
+    if isinstance(val, (int, float)):
+        return f"{indent}{val}"
+
     if isinstance(val, str):
-        return val[:1500] + "..." if len(val) > 1500 else val
-    elif isinstance(val, dict):
+        val = val.strip()
+        if len(val) > max_len:
+            return f"{indent}{val[:max_len]}..."
+        return f"{indent}{val}"
+
+    if isinstance(val, dict):
+        if not val:
+            return f"{indent}_(vide)_"
         parts = []
-        for k, v in list(val.items())[:10]:
-            if isinstance(v, str):
-                parts.append(f"**{k}** : {v[:300]}{'...' if len(v) > 300 else ''}")
+        for k, v in list(val.items())[:8]:
+            label = k.replace("_", " ").title()
+            if isinstance(v, bool):
+                parts.append(f"{indent}{'✅' if v else '❌'} {label}")
+            elif isinstance(v, (str, int, float)) and not isinstance(v, bool):
+                sv = str(v)
+                if len(sv) > 200:
+                    sv = sv[:200] + "..."
+                parts.append(f"{indent}▸ **{label}** : {sv}")
             elif isinstance(v, list):
-                parts.append(f"**{k}** : {len(v)} elements")
+                if len(v) == 0:
+                    parts.append(f"{indent}▸ **{label}** : _(vide)_")
+                elif all(isinstance(i, str) for i in v):
+                    items = ", ".join(v[:10])
+                    if len(v) > 10:
+                        items += f" ... (+{len(v)-10})"
+                    parts.append(f"{indent}▸ **{label}** : {items}")
+                else:
+                    parts.append(f"{indent}▸ **{label}** ({len(v)} elements)")
+                    if depth < 2:
+                        for item in v[:3]:
+                            parts.append(_format_deliverable("", item, depth + 1))
+                        if len(v) > 3:
+                            parts.append(f"{indent}  _... et {len(v)-3} de plus_")
+            elif isinstance(v, dict):
+                if depth < 2:
+                    parts.append(f"{indent}▸ **{label}** :")
+                    parts.append(_format_deliverable("", v, depth + 1))
+                else:
+                    parts.append(f"{indent}▸ **{label}** : {len(v)} champs")
             else:
-                parts.append(f"**{k}** : {str(v)[:200]}")
+                parts.append(f"{indent}▸ **{label}** : {str(v)[:150]}")
+        if len(val) > 8:
+            parts.append(f"{indent}_... et {len(val)-8} champs de plus_")
         return "\n".join(parts)
-    elif isinstance(val, list):
+
+    if isinstance(val, list):
+        if not val:
+            return f"{indent}_(vide)_"
         parts = []
         for item in val[:5]:
             if isinstance(item, dict):
-                parts.append("  - " + " | ".join(f"{k}={str(v)[:80]}" for k, v in list(item.items())[:4]))
+                # Ligne compacte pour les dicts dans une liste
+                summary = " | ".join(
+                    f"**{k.replace('_',' ').title()}**: {str(v)[:60]}"
+                    for k, v in list(item.items())[:4]
+                )
+                parts.append(f"{indent}• {summary}")
+            elif isinstance(item, str):
+                parts.append(f"{indent}• {item[:200]}")
             else:
-                parts.append(f"  - {str(item)[:200]}")
-        result = "\n".join(parts)
+                parts.append(f"{indent}• {str(item)[:200]}")
         if len(val) > 5:
-            result += f"\n  ... et {len(val) - 5} de plus"
-        return result
-    return str(val)[:500]
+            parts.append(f"{indent}_... et {len(val)-5} de plus_")
+        return "\n".join(parts)
+
+    return f"{indent}{str(val)[:300]}"
+
+
+def _format_output_for_discord(agent_name, deliverables):
+    """Formate tous les livrables d'un agent pour Discord."""
+    if not deliverables:
+        return f"✅ **{agent_name}** termine\n_(pas de livrables)_"
+
+    msg = f"✅ **{agent_name}** termine\n"
+
+    if isinstance(deliverables, dict):
+        skip = {"agent_id", "status", "confidence", "timestamp", "parse_note"}
+        items = {k: v for k, v in deliverables.items() if k not in skip}
+        if not items:
+            items = deliverables
+
+        # Grouper les booleens et nombres sur une ligne
+        checks = []
+        details = {}
+        for k, v in items.items():
+            if isinstance(v, bool):
+                emoji = "✅" if v else "❌"
+                checks.append(f"{emoji} {k.replace('_', ' ').title()}")
+            elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                checks.append(f"**{k.replace('_', ' ').title()}**: {v}")
+            else:
+                details[k] = v
+
+        if checks:
+            msg += "\n" + " · ".join(checks) + "\n"
+
+        for k in list(details.keys())[:5]:
+            label = k.replace("_", " ").title()
+            formatted = _format_deliverable(k, details[k])
+            if len(formatted) > 5:
+                msg += f"\n📎 **{label}**\n{formatted}\n"
+
+    elif isinstance(deliverables, str):
+        msg += f"\n{deliverables[:1500]}\n"
+
+    return msg
 
 
 class BaseAgent:
@@ -293,7 +427,8 @@ class BaseAgent:
                 else:
                     dl[ok] = parsed
                 logger.info(f"[{self.agent_id}] {sn}: OK")
-                _post_to_discord_sync(ch, f"✅ **{self.agent_name}** — **{sn}** termine\n\n{_format_deliverable(ok, dl[ok])}")
+                formatted = _format_deliverable(ok, dl[ok])
+                _post_to_discord_sync(ch, f"✅ **{self.agent_name}** — **{sn}**\n\n{formatted}")
             except json.JSONDecodeError as e:
                 logger.error(f"[{self.agent_id}] {sn} JSON fail: {e}")
                 dl[ok] = {"raw": raw[:8000], "parse_error": str(e)[:100]}
@@ -340,12 +475,7 @@ class BaseAgent:
         d = output.get("deliverables", {})
 
         if s == "complete":
-            msg = f"✅ **{self.agent_name}** termine\n"
-            if isinstance(d, dict) and d:
-                for k in list(d.keys())[:5]:
-                    msg += f"\n**{k}** :\n{_format_deliverable(k, d[k])}\n"
-            elif isinstance(d, str):
-                msg += f"\n{d[:1500]}\n"
+            msg = _format_output_for_discord(self.agent_name, d)
             _post_to_discord_sync(ch, msg)
         elif s == "blocked":
             reason = output.get("error", "")
