@@ -327,11 +327,46 @@ REDIS_URI=redis://:ton-mot-de-passe-redis@langgraph-redis:6379/0
 | `#commandes`           | Instructions utilisateur          |
 | `#rapports`            | Resumes generes par les agents    |
 
+### Etape 15 — Installer le panneau d'administration web
+
+```bash
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/15-install-admin.sh)"
+```
+
+Ce script installe une interface web d'administration accessible sur le port **8080** :
+
+- **Secrets (.env)** — Ajouter, modifier, supprimer des variables d'environnement (valeurs masquees)
+- **Services MCP** — Catalogue de 20+ serveurs, installation en un clic, activation/desactivation par agent
+- **Agents** — CRUD complet, edition du prompt, choix du modele LLM, gestion des acces MCP
+- **Scripts** — Boutons start / stop / restart / build avec sortie terminal
+- **Git** — Status, historique, pull pour mise a jour, commit des configs
+
+Fichiers deployes :
+
+```
+~/langgraph-project/
+  Dockerfile.admin
+  web/
+    server.py
+    requirements.txt
+    static/
+      index.html
+      css/style.css
+      js/app.js
+```
+
+**Apres execution** : acceder a `http://<IP-VM>:8080`
+
+> **Securite** : le port 8080 est expose sans authentification. Pensez a restreindre l'acces via le firewall UFW (`ufw allow from 192.168.1.0/24 to any port 8080`) ou un reverse proxy avec authentification.
+
+---
+
 ## Ports exposes
 
 | Service        | Port  | Acces              |
 |----------------|-------|---------------------|
 | LangGraph API  | 8123  | Reseau local (UFW)  |
+| Admin Web      | 8080  | Reseau local (UFW)  |
 | PostgreSQL     | 5432  | localhost uniquement |
 | Redis          | 6379  | localhost uniquement |
 
