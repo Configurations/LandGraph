@@ -3,9 +3,8 @@
 # Script 6 : Installation des agents LangGraph
 # VERSION v4 — Registry JSON + loader dynamique
 #
-# Les agents sont definis dans config/agents_registry.json
+# Les agents sont definis dans Configs/agents_registry.json
 # Le code est telecharge depuis Agents/ sur GitHub
-# Plus aucun heredoc Python
 #
 # Usage : ./06-install-agents.sh
 ###############################################################################
@@ -41,15 +40,15 @@ echo "  -> ${DL}/${#PROMPTS[@]} prompts"
 
 # ── 3. Config (agents_registry.json) ─────────
 echo "[3/7] Config..."
-wget -qO config/agents_registry.json "${REPO_RAW}/config/agents_registry.json" 2>/dev/null || echo "  -> agents_registry.json: conserve local"
+wget -qO config/agents_registry.json "${REPO_RAW}/Configs/agents_registry.json" 2>/dev/null || echo "  -> agents_registry.json: conserve local"
 AGENT_COUNT=$(python3 -c "import json;print(len(json.load(open('config/agents_registry.json')).get('agents',{})))" 2>/dev/null || echo 0)
 echo "  -> ${AGENT_COUNT} agents dans le registry"
 
-# ── 4. Code Python (shared + gateway + discord) ─
+# ── 4. Code Python (Shared + gateway + discord) ─
 echo "[4/7] Code Python..."
 SHARED_FILES=(base_agent.py mcp_client.py agent_loader.py state.py discord_tools.py __init__.py)
 for f in "${SHARED_FILES[@]}"; do
-    wget -qO "agents/shared/${f}" "${REPO_RAW}/Agents/shared/${f}" 2>/dev/null || true
+    wget -qO "agents/shared/${f}" "${REPO_RAW}/Agents/Shared/${f}" 2>/dev/null || true
 done
 
 MAIN_FILES=(orchestrator.py gateway.py discord_listener.py)
