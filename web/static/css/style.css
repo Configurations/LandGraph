@@ -490,6 +490,57 @@ tr:hover { background: rgba(255,255,255,0.02); }
 .script-btn span { font-weight: 600; font-size: 0.9rem; }
 .script-btn small { color: var(--text-secondary); font-size: 0.75rem; }
 
+/* MCP env var rows */
+.env-var-list {
+  background: var(--bg-input);
+  border-radius: 0.5rem;
+  padding: 0.25rem 0.75rem;
+}
+
+.env-var-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.env-var-row:last-child { border-bottom: none; }
+
+.env-var-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.env-var-info code {
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.env-var-desc {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.env-var-action {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.env-var-action input {
+  width: 200px;
+}
+
 /* MCP chip toggles */
 .mcp-chips {
   display: flex;

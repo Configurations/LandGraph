@@ -207,9 +207,9 @@ async function loadMCP() {
 
 function renderMCP() {
   const installed = mcpCatalog.filter(c => c.installed);
-  const available = mcpCatalog.filter(c => !c.installed && (mcpShowDeprecated || !c.deprecated));
+  const catalog = mcpCatalog.filter(c => mcpShowDeprecated || !c.deprecated);
 
-  // Installed servers
+  // ── Top: Installed servers ──
   const configuredEl = document.getElementById('mcp-configured');
   if (installed.length === 0) {
     configuredEl.innerHTML = '<p style="color:var(--text-secondary);text-align:center;padding:1rem">Aucun serveur MCP installe. Choisissez-en dans le catalogue ci-dessous.</p>';
@@ -240,9 +240,6 @@ function renderMCP() {
             <button class="btn-icon" onclick="showMCPEnvModal('${escHtml(c.id)}')" title="Configurer env">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
             </button>
-            <button class="btn-icon" onclick="editCatalogEntry('${escHtml(c.id)}')" title="Modifier fiche">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-            </button>
             <button class="btn-icon danger" onclick="uninstallMCP('${escHtml(c.id)}')" title="Desinstaller">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
             </button>
@@ -252,76 +249,152 @@ function renderMCP() {
     </table>`;
   }
 
-  // Catalog (not installed)
+  // ── Bottom: Catalogue with Install / Activé buttons ──
   const catalogEl = document.getElementById('mcp-catalog');
-  catalogEl.innerHTML = available.map(c => {
-    const depClass = c.deprecated ? ' deprecated' : '';
-    return `<div class="mcp-card${depClass}">
+  catalogEl.innerHTML = catalog.map(c => {
+    let statusBtn;
+    if (c.installed && c.enabled) {
+      statusBtn = '<span class="tag tag-green" style="padding:0.4rem 0.75rem;font-size:0.8rem">Active</span>';
+    } else if (c.installed && !c.enabled) {
+      statusBtn = '<span class="tag tag-yellow" style="padding:0.4rem 0.75rem;font-size:0.8rem">Desactive</span>';
+    } else {
+      statusBtn = `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();showAddCatalogModal('${escHtml(c.id)}')">Installer</button>`;
+    }
+    return `<div class="mcp-card${c.deprecated ? ' deprecated' : ''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:0.5rem">
         <div>
           <strong>${escHtml(c.label)}</strong>
           ${c.deprecated ? '<span class="tag tag-red" style="margin-left:0.5rem">deprecie</span>' : ''}
         </div>
-        <div style="display:flex;gap:0.25rem">
-          <button class="btn btn-sm btn-primary" onclick="showInstallMCPModal('${escHtml(c.id)}')">Installer</button>
-          <button class="btn-icon" onclick="editCatalogEntry('${escHtml(c.id)}')" title="Modifier">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-          </button>
-          <button class="btn-icon danger" onclick="deleteCatalogEntry('${escHtml(c.id)}')" title="Supprimer du catalogue">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-          </button>
-        </div>
+        ${statusBtn}
       </div>
       <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.5rem">${escHtml(c.description)}</p>
       <code style="font-size:0.7rem;color:var(--text-secondary)">${escHtml(c.command)} ${escHtml(c.args)}</code>
       ${c.env_vars.length ? `<div style="margin-top:0.5rem">${c.env_vars.map(v =>
-        `<span class="tag tag-yellow" style="margin:0.1rem" title="${escHtml(v.desc)}">${escHtml(v.var)}</span>`
+        `<span class="tag ${v.configured ? 'tag-green' : 'tag-yellow'}" style="margin:0.1rem" title="${escHtml(v.desc)}">${escHtml(v.var)}</span>`
       ).join('')}</div>` : ''}
     </div>`;
   }).join('');
 }
 
-// Install modal with env var fields
-function showInstallMCPModal(id) {
-  const item = mcpCatalog.find(c => c.id === id);
-  if (!item) return;
-  const envFields = item.env_vars.length
-    ? item.env_vars.map(v => `
-        <div class="form-group">
-          <label>${escHtml(v.var)} <span style="font-weight:400;color:var(--text-secondary)">— ${escHtml(v.desc)}</span></label>
-          <input class="mcp-install-env" data-var="${escHtml(v.var)}" placeholder="${escHtml(v.desc || 'Valeur...')}" />
-        </div>
-      `).join('')
-    : '<p style="color:var(--text-secondary);font-size:0.85rem">Aucune variable d\'environnement requise.</p>';
+// ── Install service modal (dropdown-based) ──
+function showAddCatalogModal(preselectedId) {
+  const available = mcpCatalog.filter(c => !c.installed);
+  if (available.length === 0) {
+    toast('Tous les services du catalogue sont deja installes', 'info');
+    return;
+  }
+  const selected = preselectedId
+    ? mcpCatalog.find(c => c.id === preselectedId)
+    : available[0];
+  if (!selected) return;
+
+  const options = available.map(c =>
+    `<option value="${escHtml(c.id)}" ${c.id === selected.id ? 'selected' : ''}>${escHtml(c.label)} — ${escHtml(c.description)}</option>`
+  ).join('');
 
   showModal(`
     <div class="modal-header">
-      <h3>Installer : ${escHtml(item.label)}</h3>
+      <h3>Installer un service MCP</h3>
       <button class="btn-icon" onclick="closeModal()">&times;</button>
     </div>
-    <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:1rem">${escHtml(item.description)}</p>
-    <div style="background:var(--bg-input);padding:0.5rem 0.75rem;border-radius:0.5rem;margin-bottom:1rem">
-      <code style="font-size:0.8rem">${escHtml(item.command)} ${escHtml(item.args)}</code>
+    <div class="form-group">
+      <label>Service</label>
+      <select id="mcp-install-select" onchange="onMCPServiceSelected()">
+        ${options}
+      </select>
     </div>
-    ${item.env_vars.length ? '<h4 style="margin-bottom:0.75rem;font-size:0.9rem">Variables d\'environnement</h4>' : ''}
-    ${envFields}
+    <div id="mcp-install-details">${_renderInstallDetails(selected)}</div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
-      <button class="btn btn-primary" onclick="installMCP('${escHtml(id)}')">Installer</button>
+      <button class="btn btn-primary" onclick="installSelectedService()">Installer</button>
     </div>
-  `);
+  `, 'modal-wide');
 }
 
-async function installMCP(id) {
-  const envInputs = document.querySelectorAll('.mcp-install-env');
-  const env_values = {};
-  envInputs.forEach(inp => {
-    const val = inp.value.trim();
-    if (val) env_values[inp.getAttribute('data-var')] = val;
-  });
+function _renderInstallDetails(item) {
+  const envVarsHtml = item.env_vars.length > 0
+    ? `<div style="margin-top:1rem">
+        <label>Variables d'environnement</label>
+        <div class="env-var-list">
+          ${item.env_vars.map(v => `
+            <div class="env-var-row">
+              <div class="env-var-info">
+                <code>${escHtml(v.var)}</code>
+                <span class="env-var-desc">${escHtml(v.desc)}</span>
+                ${v.configured
+                  ? '<span class="tag tag-green">configure</span>'
+                  : '<span class="tag tag-red">manquant</span>'}
+              </div>
+              <div class="env-var-action">
+                <input class="mcp-install-env" data-var="${escHtml(v.var)}" placeholder="Valeur..." />
+                <button class="btn btn-sm btn-outline" onclick="setEnvVarFromInstall('${escHtml(v.var)}', this)" title="Enregistrer dans .env">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                </button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>`
+    : '<p style="color:var(--text-secondary);font-size:0.85rem;margin-top:1rem">Aucune variable d\'environnement requise.</p>';
+
+  return `
+    <div class="form-row" style="margin-top:0.5rem">
+      <div class="form-group">
+        <label>Commande</label>
+        <input value="${escHtml(item.command)}" readonly style="opacity:0.6" />
+      </div>
+      <div class="form-group">
+        <label>Arguments</label>
+        <input value="${escHtml(item.args)}" readonly style="opacity:0.6" />
+      </div>
+    </div>
+    ${envVarsHtml}
+  `;
+}
+
+function onMCPServiceSelected() {
+  const id = document.getElementById('mcp-install-select').value;
+  const item = mcpCatalog.find(c => c.id === id);
+  if (item) {
+    document.getElementById('mcp-install-details').innerHTML = _renderInstallDetails(item);
+  }
+}
+
+async function setEnvVarFromInstall(varName, btn) {
+  const input = btn.closest('.env-var-action').querySelector('input');
+  const value = input.value.trim();
+  if (!value) { toast('Valeur requise', 'error'); return; }
   try {
-    await api(`/api/mcp/install/${id}`, { method: 'POST', body: { env_values } });
-    toast('Serveur MCP installe', 'success');
+    await api('/api/env/add', { method: 'POST', body: { key: varName, value, section_comment: '' } });
+    toast(`${varName} enregistre dans .env`, 'success');
+    _markEnvVarConfigured(btn);
+    input.value = '';
+  } catch (e) {
+    if (e.message.includes('already exists')) {
+      try {
+        const data = await api('/api/env');
+        const entries = data.entries.map(en => en.key === varName ? { ...en, value } : en);
+        await api('/api/env', { method: 'PUT', body: { entries } });
+        toast(`${varName} mis a jour dans .env`, 'success');
+        _markEnvVarConfigured(btn);
+        input.value = '';
+      } catch (e2) { toast(e2.message, 'error'); }
+    } else { toast(e.message, 'error'); }
+  }
+}
+
+function _markEnvVarConfigured(btn) {
+  const row = btn.closest('.env-var-row');
+  const tag = row.querySelector('.tag');
+  if (tag) { tag.className = 'tag tag-green'; tag.textContent = 'configure'; }
+}
+
+async function installSelectedService() {
+  const id = document.getElementById('mcp-install-select').value;
+  try {
+    await api(`/api/mcp/install/${id}`, { method: 'POST', body: { env_values: {} } });
+    toast('Service MCP installe', 'success');
     closeModal();
     loadMCP();
   } catch (e) { toast(e.message, 'error'); }
@@ -350,206 +423,34 @@ function showMCPEnvModal(id) {
     toast('Aucune variable d\'environnement pour ce serveur', 'info');
     return;
   }
-  const fields = item.env_vars.map(v => `
-    <div class="form-group">
-      <label>
-        ${escHtml(v.var)}
-        ${v.configured
-          ? '<span class="tag tag-green" style="margin-left:0.5rem">configure</span>'
-          : '<span class="tag tag-red" style="margin-left:0.5rem">manquant</span>'}
-        <span style="font-weight:400;color:var(--text-secondary)"> — ${escHtml(v.desc)}</span>
-      </label>
-      <input class="mcp-env-field" data-var="${escHtml(v.var)}" placeholder="Nouvelle valeur (laisser vide pour ne pas modifier)" />
-    </div>
-  `).join('');
-
   showModal(`
     <div class="modal-header">
       <h3>Env : ${escHtml(item.label)}</h3>
       <button class="btn-icon" onclick="closeModal()">&times;</button>
     </div>
-    ${fields}
-    <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
-      <button class="btn btn-primary" onclick="saveMCPEnv('${escHtml(id)}')">Sauvegarder</button>
-    </div>
-  `);
-}
-
-async function saveMCPEnv(id) {
-  const inputs = document.querySelectorAll('.mcp-env-field');
-  const env_values = {};
-  inputs.forEach(inp => {
-    const val = inp.value.trim();
-    if (val) env_values[inp.getAttribute('data-var')] = val;
-  });
-  if (Object.keys(env_values).length === 0) { closeModal(); return; }
-  try {
-    await api(`/api/mcp/install/${id}`, { method: 'POST', body: { env_values } });
-    toast('Variables mises a jour', 'success');
-    closeModal();
-    loadMCP();
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-// CRUD catalog entries
-function showAddCatalogModal() {
-  showModal(`
-    <div class="modal-header">
-      <h3>Ajouter au catalogue MCP</h3>
-      <button class="btn-icon" onclick="closeModal()">&times;</button>
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>ID (unique)</label>
-        <input id="cat-new-id" placeholder="mon-serveur" />
-      </div>
-      <div class="form-group">
-        <label>Label</label>
-        <input id="cat-new-label" placeholder="Mon Serveur" />
-      </div>
-    </div>
-    <div class="form-group">
-      <label>Description</label>
-      <input id="cat-new-desc" placeholder="Breve description du service" />
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Commande</label>
-        <input id="cat-new-cmd" placeholder="npx" />
-      </div>
-      <div class="form-group">
-        <label>Arguments</label>
-        <input id="cat-new-args" placeholder="-y @scope/package" />
-      </div>
-    </div>
-    <div class="form-group">
-      <label>Transport</label>
-      <select id="cat-new-transport">
-        <option value="stdio">stdio</option>
-        <option value="sse">sse</option>
-      </select>
-    </div>
-    <div class="form-group">
-      <label>Variables d'env (une par ligne : NOM:description)</label>
-      <textarea id="cat-new-envvars" style="min-height:60px" placeholder="GITHUB_TOKEN:Token d'acces GitHub"></textarea>
+    <div class="env-var-list">
+      ${item.env_vars.map(v => `
+        <div class="env-var-row">
+          <div class="env-var-info">
+            <code>${escHtml(v.var)}</code>
+            <span class="env-var-desc">${escHtml(v.desc)}</span>
+            ${v.configured
+              ? '<span class="tag tag-green">configure</span>'
+              : '<span class="tag tag-red">manquant</span>'}
+          </div>
+          <div class="env-var-action">
+            <input class="mcp-env-field" data-var="${escHtml(v.var)}" placeholder="Nouvelle valeur..." />
+            <button class="btn btn-sm btn-outline" onclick="setEnvVarFromInstall('${escHtml(v.var)}', this)" title="Enregistrer dans .env">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            </button>
+          </div>
+        </div>
+      `).join('')}
     </div>
     <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
-      <button class="btn btn-primary" onclick="addCatalogEntry()">Ajouter</button>
+      <button class="btn btn-outline" onclick="closeModal()">Fermer</button>
     </div>
   `);
-}
-
-async function addCatalogEntry() {
-  const id = document.getElementById('cat-new-id').value.trim();
-  const label = document.getElementById('cat-new-label').value.trim();
-  const description = document.getElementById('cat-new-desc').value.trim();
-  const command = document.getElementById('cat-new-cmd').value.trim();
-  const args = document.getElementById('cat-new-args').value.trim();
-  const transport = document.getElementById('cat-new-transport').value;
-  const envRaw = document.getElementById('cat-new-envvars').value.trim();
-  const env_vars = envRaw ? envRaw.split('\n').filter(l => l.trim()).map(l => {
-    const [v, ...d] = l.split(':');
-    return { var: v.trim(), desc: d.join(':').trim() };
-  }) : [];
-
-  if (!id || !label || !command) { toast('ID, label et commande requis', 'error'); return; }
-  try {
-    await api('/api/mcp/catalog', { method: 'POST', body: { id, label, description, command, args, transport, env_vars, deprecated: false } });
-    toast('Ajout au catalogue', 'success');
-    closeModal();
-    loadMCP();
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-function editCatalogEntry(id) {
-  const c = mcpCatalog.find(x => x.id === id);
-  if (!c) return;
-  const envText = c.env_vars.map(v => `${v.var}:${v.desc}`).join('\n');
-  showModal(`
-    <div class="modal-header">
-      <h3>Modifier : ${escHtml(c.label)}</h3>
-      <button class="btn-icon" onclick="closeModal()">&times;</button>
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>ID</label>
-        <input id="cat-edit-id" value="${escHtml(c.id)}" disabled style="opacity:0.5" />
-      </div>
-      <div class="form-group">
-        <label>Label</label>
-        <input id="cat-edit-label" value="${escHtml(c.label)}" />
-      </div>
-    </div>
-    <div class="form-group">
-      <label>Description</label>
-      <input id="cat-edit-desc" value="${escHtml(c.description)}" />
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Commande</label>
-        <input id="cat-edit-cmd" value="${escHtml(c.command)}" />
-      </div>
-      <div class="form-group">
-        <label>Arguments</label>
-        <input id="cat-edit-args" value="${escHtml(c.args)}" />
-      </div>
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Transport</label>
-        <select id="cat-edit-transport">
-          <option value="stdio" ${c.transport === 'stdio' ? 'selected' : ''}>stdio</option>
-          <option value="sse" ${c.transport === 'sse' ? 'selected' : ''}>sse</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>
-          <input type="checkbox" id="cat-edit-dep" ${c.deprecated ? 'checked' : ''} />
-          Deprecie
-        </label>
-      </div>
-    </div>
-    <div class="form-group">
-      <label>Variables d'env (une par ligne : NOM:description)</label>
-      <textarea id="cat-edit-envvars" style="min-height:60px">${escHtml(envText)}</textarea>
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
-      <button class="btn btn-primary" onclick="saveCatalogEntry('${escHtml(c.id)}')">Sauvegarder</button>
-    </div>
-  `);
-}
-
-async function saveCatalogEntry(id) {
-  const label = document.getElementById('cat-edit-label').value.trim();
-  const description = document.getElementById('cat-edit-desc').value.trim();
-  const command = document.getElementById('cat-edit-cmd').value.trim();
-  const args = document.getElementById('cat-edit-args').value.trim();
-  const transport = document.getElementById('cat-edit-transport').value;
-  const deprecated = document.getElementById('cat-edit-dep').checked;
-  const envRaw = document.getElementById('cat-edit-envvars').value.trim();
-  const env_vars = envRaw ? envRaw.split('\n').filter(l => l.trim()).map(l => {
-    const [v, ...d] = l.split(':');
-    return { var: v.trim(), desc: d.join(':').trim() };
-  }) : [];
-
-  try {
-    await api(`/api/mcp/catalog/${id}`, { method: 'PUT', body: { id, label, description, command, args, transport, env_vars, deprecated } });
-    toast('Catalogue mis a jour', 'success');
-    closeModal();
-    loadMCP();
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-async function deleteCatalogEntry(id) {
-  if (!confirm(`Supprimer "${id}" du catalogue ? (desinstalle aussi si installe)`)) return;
-  try {
-    await api(`/api/mcp/catalog/${id}`, { method: 'DELETE' });
-    toast('Supprime du catalogue', 'success');
-    loadMCP();
-  } catch (e) { toast(e.message, 'error'); }
 }
 
 function toggleDeprecated() {
@@ -880,12 +781,7 @@ async function setLLMDefault(providerId) {
 
 function _providerTypeFields(type, values = {}) {
   let extra = '';
-  if (type === 'ollama') {
-    extra = `<div class="form-group" id="llm-extra-fields">
-      <label>Base URL</label>
-      <input id="prov-base-url" value="${escHtml(values.base_url || 'http://localhost:11434')}" />
-    </div>`;
-  } else if (type === 'azure') {
+  if (type === 'azure') {
     extra = `<div id="llm-extra-fields">
       <div class="form-group">
         <label>Azure Endpoint</label>
@@ -942,9 +838,15 @@ function showAddProviderModal() {
         <input id="prov-envkey" placeholder="OPENAI_API_KEY" />
       </div>
     </div>
-    <div class="form-group">
-      <label>Description</label>
-      <input id="prov-desc" placeholder="Description du modele" />
+    <div class="form-row">
+      <div class="form-group">
+        <label>Description</label>
+        <input id="prov-desc" placeholder="Description du modele" />
+      </div>
+      <div class="form-group">
+        <label>Base URL</label>
+        <input id="prov-base-url" value="" placeholder="https://..." />
+      </div>
     </div>
     ${_providerTypeFields('anthropic')}
     <div class="modal-actions">
@@ -961,8 +863,8 @@ async function addProvider() {
   const env_key = document.getElementById('prov-envkey').value.trim();
   const description = document.getElementById('prov-desc').value.trim();
   if (!id || !model) { toast('ID et modele requis', 'error'); return; }
-  const body = { id, type, model, env_key, description, base_url: '', azure_endpoint: '', azure_deployment: '', api_version: '' };
-  if (type === 'ollama') body.base_url = (document.getElementById('prov-base-url')?.value || '').trim();
+  const base_url = (document.getElementById('prov-base-url')?.value || '').trim();
+  const body = { id, type, model, env_key, description, base_url, azure_endpoint: '', azure_deployment: '', api_version: '' };
   if (type === 'azure') {
     body.azure_endpoint = (document.getElementById('prov-azure-endpoint')?.value || '').trim();
     body.azure_deployment = (document.getElementById('prov-azure-deployment')?.value || '').trim();
@@ -1006,9 +908,15 @@ function editProvider(id) {
         <input id="prov-envkey" value="${escHtml(p.env_key || '')}" />
       </div>
     </div>
-    <div class="form-group">
-      <label>Description</label>
-      <input id="prov-desc" value="${escHtml(p.description || '')}" />
+    <div class="form-row">
+      <div class="form-group">
+        <label>Description</label>
+        <input id="prov-desc" value="${escHtml(p.description || '')}" />
+      </div>
+      <div class="form-group">
+        <label>Base URL</label>
+        <input id="prov-base-url" value="${escHtml(p.base_url || '')}" placeholder="https://..." />
+      </div>
     </div>
     ${_providerTypeFields(p.type, p)}
     <div class="modal-actions">
@@ -1025,8 +933,8 @@ async function saveProvider(originalId) {
   const env_key = document.getElementById('prov-envkey').value.trim();
   const description = document.getElementById('prov-desc').value.trim();
   if (!id || !model) { toast('ID et modele requis', 'error'); return; }
-  const body = { id, type, model, env_key, description, base_url: '', azure_endpoint: '', azure_deployment: '', api_version: '' };
-  if (type === 'ollama') body.base_url = (document.getElementById('prov-base-url')?.value || '').trim();
+  const base_url = (document.getElementById('prov-base-url')?.value || '').trim();
+  const body = { id, type, model, env_key, description, base_url, azure_endpoint: '', azure_deployment: '', api_version: '' };
   if (type === 'azure') {
     body.azure_endpoint = (document.getElementById('prov-azure-endpoint')?.value || '').trim();
     body.azure_deployment = (document.getElementById('prov-azure-deployment')?.value || '').trim();

@@ -521,7 +521,7 @@ async def add_llm_provider(entry: LLMProviderEntry):
     prov = {"type": entry.type, "model": entry.model, "description": entry.description}
     if entry.env_key:
         prov["env_key"] = entry.env_key
-    if entry.type == "ollama" and entry.base_url:
+    if entry.base_url:
         prov["base_url"] = entry.base_url
     if entry.type == "azure":
         if entry.azure_endpoint:
@@ -543,7 +543,7 @@ async def update_llm_provider(provider_id: str, entry: LLMProviderEntry):
     prov = {"type": entry.type, "model": entry.model, "description": entry.description}
     if entry.env_key:
         prov["env_key"] = entry.env_key
-    if entry.type == "ollama" and entry.base_url:
+    if entry.base_url:
         prov["base_url"] = entry.base_url
     if entry.type == "azure":
         if entry.azure_endpoint:
