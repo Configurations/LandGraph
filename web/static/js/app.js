@@ -49,7 +49,7 @@ function showSection(name) {
   document.querySelector(`.nav-item[data-section="${name}"]`).classList.add('active');
 
   // Load data on section switch
-  const loaders = { secrets: loadEnv, mcp: loadMCP, agents: loadAgents, llm: loadLLM, scripts: loadScripts, git: loadGit };
+  const loaders = { secrets: loadEnv, mcp: loadMCP, agents: loadAgents, llm: loadLLM, chat: loadChat, scripts: loadScripts, git: loadGit };
   if (loaders[name]) loaders[name]();
 }
 
@@ -80,7 +80,8 @@ async function loadEnv() {
 
 function renderEnv() {
   const tbody = document.getElementById('env-table-body');
-  const rows = envEntries.filter(e => e.key).map((e, i) => `
+  const search = (document.getElementById('env-search')?.value || '').toLowerCase();
+  const rows = envEntries.filter(e => e.key && (!search || e.key.toLowerCase().includes(search))).map((e, i) => `
     <tr>
       <td><code>${escHtml(e.key)}</code></td>
       <td>
@@ -307,38 +308,51 @@ function showAddCatalogModal(preselectedId) {
     <div id="mcp-install-details">${_renderInstallDetails(selected)}</div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
-      <button class="btn btn-primary" onclick="installSelectedService()">Installer</button>
+      <button class="btn btn-primary" onclick="installSelectedService()">Enregistrer</button>
     </div>
   `, 'modal-wide');
 }
 
+function _normalizeInstanceId(name) {
+  return name.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
+}
+
 function _renderInstallDetails(item) {
-  const envVarsHtml = item.env_vars.length > 0
+  const hasEnv = item.env_vars.length > 0;
+  const prefix = _normalizeInstanceId(item.id);
+
+  const instanceHtml = hasEnv ? `
+    <div class="form-group" style="margin-top:0.5rem">
+      <label>Nom de l'instance</label>
+      <input id="mcp-instance-name" value="${escHtml(item.id)}" oninput="_updateInstallEnvNames()" />
+    </div>` : '';
+
+  const envVarsHtml = hasEnv
     ? `<div style="margin-top:1rem">
         <label>Variables d'environnement</label>
-        <div class="env-var-list">
-          ${item.env_vars.map(v => `
+        <div class="env-var-list" id="mcp-install-env-list">
+          ${item.env_vars.map(v => {
+            const envName = `${prefix}_${v.var}`;
+            return `
             <div class="env-var-row">
               <div class="env-var-info">
-                <code>${escHtml(v.var)}</code>
+                <code class="mcp-env-computed" data-base="${escHtml(v.var)}">${escHtml(envName)}</code>
                 <span class="env-var-desc">${escHtml(v.desc)}</span>
-                ${v.configured
-                  ? '<span class="tag tag-green">configure</span>'
-                  : '<span class="tag tag-red">manquant</span>'}
               </div>
               <div class="env-var-action">
                 <input class="mcp-install-env" data-var="${escHtml(v.var)}" placeholder="Valeur..." />
-                <button class="btn btn-sm btn-outline" onclick="setEnvVarFromInstall('${escHtml(v.var)}', this)" title="Enregistrer dans .env">
+                <button class="btn btn-sm btn-outline" onclick="saveInstallEnvVar(this)" title="Enregistrer dans .env">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
                 </button>
               </div>
-            </div>
-          `).join('')}
+            </div>`;
+          }).join('')}
         </div>
       </div>`
     : '<p style="color:var(--text-secondary);font-size:0.85rem;margin-top:1rem">Aucune variable d\'environnement requise.</p>';
 
   return `
+    ${instanceHtml}
     <div class="form-row" style="margin-top:0.5rem">
       <div class="form-group">
         <label>Commande</label>
@@ -351,6 +365,41 @@ function _renderInstallDetails(item) {
     </div>
     ${envVarsHtml}
   `;
+}
+
+function _updateInstallEnvNames() {
+  const name = document.getElementById('mcp-instance-name')?.value.trim() || '';
+  const prefix = _normalizeInstanceId(name || 'INSTANCE');
+  document.querySelectorAll('.mcp-env-computed').forEach(el => {
+    const base = el.getAttribute('data-base');
+    el.textContent = `${prefix}_${base}`;
+  });
+}
+
+async function saveInstallEnvVar(btn) {
+  const row = btn.closest('.env-var-row');
+  const input = row.querySelector('.mcp-install-env');
+  const computedEl = row.querySelector('.mcp-env-computed');
+  const varName = computedEl.textContent;
+  const value = input.value.trim();
+  if (!value) { toast('Valeur requise', 'error'); return; }
+  try {
+    await api('/api/env/add', { method: 'POST', body: { key: varName, value, section_comment: '' } });
+    toast(`${varName} enregistre dans .env`, 'success');
+    _markEnvVarConfigured(btn);
+    input.value = '';
+  } catch (e) {
+    if (e.message.includes('already exists')) {
+      try {
+        const data = await api('/api/env');
+        const entries = data.entries.map(en => en.key === varName ? { ...en, value } : en);
+        await api('/api/env', { method: 'PUT', body: { entries } });
+        toast(`${varName} mis a jour dans .env`, 'success');
+        _markEnvVarConfigured(btn);
+        input.value = '';
+      } catch (e2) { toast(e2.message, 'error'); }
+    } else { toast(e.message, 'error'); }
+  }
 }
 
 function onMCPServiceSelected() {
@@ -392,8 +441,14 @@ function _markEnvVarConfigured(btn) {
 
 async function installSelectedService() {
   const id = document.getElementById('mcp-install-select').value;
+  // Build env mapping: {base_var: computed_var}
+  const envMapping = {};
+  document.querySelectorAll('.mcp-env-computed').forEach(el => {
+    const base = el.getAttribute('data-base');
+    envMapping[base] = el.textContent;
+  });
   try {
-    await api(`/api/mcp/install/${id}`, { method: 'POST', body: { env_values: {} } });
+    await api(`/api/mcp/install/${id}`, { method: 'POST', body: { env_values: {}, env_mapping: envMapping } });
     toast('Service MCP installe', 'success');
     closeModal();
     loadMCP();
@@ -1032,6 +1087,91 @@ async function deleteThrottling(key) {
     toast('Throttling supprime', 'success');
     loadLLM();
   } catch (e) { toast(e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════
+// CHAT LLM
+// ═══════════════════════════════════════════════════
+
+let chatMessages = [];
+
+async function loadChat() {
+  try {
+    const data = await api('/api/llm/providers');
+    const defaultId = data.default || '';
+    const provider = defaultId ? data.providers[defaultId] : null;
+    const label = document.getElementById('chat-provider-label');
+    if (provider) {
+      label.innerHTML = `<span class="tag tag-blue">${escHtml(provider.type)}</span> <strong>${escHtml(defaultId)}</strong> — ${escHtml(provider.model)}`;
+    } else {
+      label.textContent = 'Aucun provider par defaut';
+    }
+  } catch (e) { /* ignore */ }
+}
+
+function renderChatMessages() {
+  const container = document.getElementById('chat-messages');
+  const empty = document.getElementById('chat-empty');
+  if (chatMessages.length === 0) {
+    if (!empty) {
+      container.innerHTML = `<div class="chat-empty" id="chat-empty">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" stroke-width="1"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <p>Envoyez un message pour commencer une conversation avec le LLM par defaut.</p>
+      </div>`;
+    }
+    return;
+  }
+  container.innerHTML = chatMessages.map(m => {
+    if (m.role === 'user') {
+      return `<div class="chat-msg user">${escHtml(m.content)}</div>`;
+    } else if (m.role === 'error') {
+      return `<div class="chat-msg error">${escHtml(m.content)}</div>`;
+    } else {
+      const html = typeof marked !== 'undefined' ? marked.parse(m.content) : escHtml(m.content);
+      return `<div class="chat-msg assistant">${html}</div>`;
+    }
+  }).join('');
+  container.scrollTop = container.scrollHeight;
+}
+
+async function sendChat() {
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if (!text) return;
+
+  chatMessages.push({ role: 'user', content: text });
+  input.value = '';
+  renderChatMessages();
+
+  // Show typing indicator
+  const container = document.getElementById('chat-messages');
+  const typing = document.createElement('div');
+  typing.className = 'chat-typing';
+  typing.innerHTML = '<span>.</span><span>.</span><span>.</span>';
+  container.appendChild(typing);
+  container.scrollTop = container.scrollHeight;
+
+  // Disable send
+  const btn = document.getElementById('chat-send-btn');
+  btn.disabled = true;
+
+  try {
+    const apiMessages = chatMessages.filter(m => m.role === 'user' || m.role === 'assistant');
+    const result = await api('/api/chat', { method: 'POST', body: { messages: apiMessages } });
+    chatMessages.push({ role: 'assistant', content: result.content });
+  } catch (e) {
+    chatMessages.push({ role: 'error', content: e.message });
+  }
+
+  typing.remove();
+  btn.disabled = false;
+  renderChatMessages();
+  input.focus();
+}
+
+function clearChat() {
+  chatMessages = [];
+  renderChatMessages();
 }
 
 // ═══════════════════════════════════════════════════

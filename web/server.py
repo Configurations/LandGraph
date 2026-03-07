@@ -1,15 +1,19 @@
 """LandGraph Admin — FastAPI backend."""
+import base64
 import csv
 import io
 import json
 import os
+import secrets
 import subprocess
 import asyncio
 from pathlib import Path
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
+import httpx
 
 # In Docker: /project is the host's langgraph-project dir
 # Local dev: use parent of web/
@@ -38,9 +42,63 @@ AGENTS_FILE = CONFIGS / "agents_registry.json"
 LLM_PROVIDERS_FILE = CONFIGS / "llm_providers.json"
 
 app = FastAPI(title="LandGraph Admin")
+security = HTTPBasic(auto_error=False)
 
-# ── Static files ────────────────────────────────────
+# ── Auth ───────────────────────────────────────────
+
+def _get_auth_credentials() -> tuple[str, str] | None:
+    """Read admin credentials from .env or environment."""
+    env_vars = {e["key"]: e["value"] for e in _parse_env(ENV_FILE) if e.get("key")}
+    username = env_vars.get("WEB_ADMIN_USERNAME") or os.environ.get("WEB_ADMIN_USERNAME", "")
+    password = env_vars.get("WEB_ADMIN_PASSWORD") or os.environ.get("WEB_ADMIN_PASSWORD", "")
+    if username and password:
+        return (username, password)
+    return None
+
+
+def _check_auth(credentials: HTTPBasicCredentials | None) -> bool:
+    creds = _get_auth_credentials()
+    if creds is None:
+        return True  # no credentials configured → open access
+    if credentials is None:
+        return False
+    ok_user = secrets.compare_digest(credentials.username.encode(), creds[0].encode())
+    ok_pass = secrets.compare_digest(credentials.password.encode(), creds[1].encode())
+    return ok_user and ok_pass
+
+
+async def require_auth(credentials: HTTPBasicCredentials | None = Depends(security)):
+    if not _check_auth(credentials):
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized",
+            headers={"WWW-Authenticate": "Basic realm=\"LandGraph Admin\""},
+        )
+
+app.router.dependencies = [Depends(require_auth)]
+
+# ── Static files (protected via middleware) ────────
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """Protect static files with Basic Auth (API routes use Depends)."""
+    if request.url.path.startswith("/static") or request.url.path == "/favicon.ico":
+        creds = _get_auth_credentials()
+        if creds is not None:
+            auth_header = request.headers.get("authorization", "")
+            if not auth_header.startswith("Basic "):
+                return Response(status_code=401, headers={"WWW-Authenticate": "Basic realm=\"LandGraph Admin\""})
+            try:
+                decoded = base64.b64decode(auth_header[6:]).decode()
+                username, password = decoded.split(":", 1)
+            except Exception:
+                return Response(status_code=401, headers={"WWW-Authenticate": "Basic realm=\"LandGraph Admin\""})
+            if not (secrets.compare_digest(username.encode(), creds[0].encode())
+                    and secrets.compare_digest(password.encode(), creds[1].encode())):
+                return Response(status_code=401, headers={"WWW-Authenticate": "Basic realm=\"LandGraph Admin\""})
+    return await call_next(request)
 
 
 @app.get("/")
@@ -285,6 +343,7 @@ async def delete_catalog_entry(entry_id: str):
 
 class MCPInstallRequest(BaseModel):
     env_values: dict = {}
+    env_mapping: dict = {}
 
 
 @app.post("/api/mcp/install/{entry_id}")
@@ -298,7 +357,10 @@ async def install_mcp(entry_id: str, req: MCPInstallRequest):
     data = _read_json(MCP_SERVERS_FILE)
     if "servers" not in data:
         data["servers"] = {}
-    env_map = {ev["var"]: ev["var"] for ev in item.get("env_vars", [])}
+    if req.env_mapping:
+        env_map = req.env_mapping
+    else:
+        env_map = {ev["var"]: ev["var"] for ev in item.get("env_vars", [])}
     data["servers"][entry_id] = {
         "command": item["command"],
         "args": item["args"].split() if isinstance(item["args"], str) else item["args"],
@@ -611,6 +673,133 @@ async def delete_throttling(env_key: str):
         del data["throttling"][env_key]
         _write_json(LLM_PROVIDERS_FILE, data)
     return {"ok": True}
+
+
+# ── API: Chat LLM ─────────────────────────────────
+
+# Default base URLs per provider type
+_LLM_BASE_URLS = {
+    "anthropic": "https://api.anthropic.com",
+    "openai": "https://api.openai.com",
+    "mistral": "https://api.mistral.ai",
+    "deepseek": "https://api.deepseek.com",
+    "groq": "https://api.groq.com/openai",
+    "moonshot": "https://api.moonshot.cn",
+    "ollama": "http://localhost:11434",
+}
+
+
+class ChatRequest(BaseModel):
+    messages: list[dict]
+
+
+@app.post("/api/chat")
+async def chat(req: ChatRequest):
+    data = _read_json(LLM_PROVIDERS_FILE)
+    default_id = data.get("default", "")
+    if not default_id or default_id not in data.get("providers", {}):
+        raise HTTPException(400, "Aucun provider LLM par defaut configure")
+
+    provider = data["providers"][default_id]
+    ptype = provider["type"]
+    model = provider["model"]
+    env_key = provider.get("env_key", "")
+    base_url = provider.get("base_url", "")
+
+    # Resolve API key from .env or environment
+    api_key = ""
+    if env_key:
+        env_entries = {e["key"]: e["value"] for e in _parse_env(ENV_FILE) if e.get("key")}
+        api_key = env_entries.get(env_key, "") or os.environ.get(env_key, "")
+
+    messages = req.messages
+
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            if ptype == "anthropic":
+                url = f"{base_url or _LLM_BASE_URLS['anthropic']}/v1/messages"
+                system_msg = ""
+                chat_msgs = []
+                for m in messages:
+                    if m["role"] == "system":
+                        system_msg = m["content"]
+                    else:
+                        chat_msgs.append({"role": m["role"], "content": m["content"]})
+                body = {"model": model, "max_tokens": 4096, "messages": chat_msgs}
+                if system_msg:
+                    body["system"] = system_msg
+                resp = await client.post(
+                    url,
+                    headers={
+                        "x-api-key": api_key,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    },
+                    json=body,
+                )
+                resp.raise_for_status()
+                result = resp.json()
+                content = result["content"][0]["text"] if result.get("content") else ""
+                return {"role": "assistant", "content": content}
+
+            elif ptype == "google":
+                url = (
+                    f"{base_url or 'https://generativelanguage.googleapis.com'}"
+                    f"/v1beta/models/{model}:generateContent?key={api_key}"
+                )
+                contents = []
+                for m in messages:
+                    role = "user" if m["role"] == "user" else "model"
+                    contents.append({"role": role, "parts": [{"text": m["content"]}]})
+                resp = await client.post(
+                    url,
+                    json={"contents": contents},
+                    headers={"content-type": "application/json"},
+                )
+                resp.raise_for_status()
+                result = resp.json()
+                content = (
+                    result.get("candidates", [{}])[0]
+                    .get("content", {})
+                    .get("parts", [{}])[0]
+                    .get("text", "")
+                )
+                return {"role": "assistant", "content": content}
+
+            elif ptype == "azure":
+                endpoint = provider.get("azure_endpoint", "").rstrip("/")
+                deployment = provider.get("azure_deployment", "")
+                api_version = provider.get("api_version", "2024-12-01-preview")
+                url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+                headers = {"api-key": api_key, "content-type": "application/json"}
+                body = {"model": model, "messages": messages, "max_tokens": 4096}
+                resp = await client.post(url, headers=headers, json=body)
+                resp.raise_for_status()
+                result = resp.json()
+                content = result["choices"][0]["message"]["content"]
+                return {"role": "assistant", "content": content}
+
+            else:
+                # OpenAI-compatible: openai, mistral, deepseek, groq, moonshot, ollama
+                default_base = _LLM_BASE_URLS.get(ptype, "https://api.openai.com")
+                url = f"{base_url or default_base}/v1/chat/completions"
+                headers = {"content-type": "application/json"}
+                if api_key:
+                    headers["Authorization"] = f"Bearer {api_key}"
+                body = {"model": model, "messages": messages, "max_tokens": 4096}
+                resp = await client.post(url, headers=headers, json=body)
+                resp.raise_for_status()
+                result = resp.json()
+                content = result["choices"][0]["message"]["content"]
+                return {"role": "assistant", "content": content}
+
+    except httpx.HTTPStatusError as e:
+        error_body = e.response.text[:500]
+        raise HTTPException(e.response.status_code, f"Erreur LLM: {error_body}")
+    except httpx.ConnectError:
+        raise HTTPException(502, "Impossible de se connecter au provider LLM")
+    except Exception as e:
+        raise HTTPException(500, f"Erreur: {str(e)}")
 
 
 # ── API: Git operations ───────────────────────────
