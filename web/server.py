@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import io
 import json
+import logging
 import os
 import secrets
 import subprocess
@@ -44,6 +45,15 @@ MCP_CATALOG_FILE = SCRIPTS / "Infra" / "mcp_catalog.csv" if not DOCKER_MODE else
 AGENTS_FILE = CONFIGS / "agents_registry.json"
 LLM_PROVIDERS_FILE = CONFIGS / "llm_providers.json"
 TEAMS_FILE = CONFIGS / "teams.json"
+
+logging.basicConfig(
+    level=logging.DEBUG if os.environ.get("DEBUG") else logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+log = logging.getLogger("landgraph-admin")
+
+log.info("DOCKER_MODE=%s  ENV_FILE=%s  CONFIGS=%s  PROMPTS=%s", DOCKER_MODE, ENV_FILE, CONFIGS, PROMPTS)
 
 app = FastAPI(title="LandGraph Admin")
 _AUTH_SECRET = secrets.token_hex(32)  # session signing key (regenerated on restart)
@@ -141,7 +151,8 @@ app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), na
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    """Cookie-based auth: redirect to login page if not authenticated."""
+    """Cookie-based auth + request logging."""
+    log.debug("%s %s", request.method, request.url.path)
     creds = _get_auth_credentials()
     if creds is not None:
         path = request.url.path
@@ -150,7 +161,7 @@ async def auth_middleware(request: Request, call_next):
             return await call_next(request)
         token = request.cookies.get("lg_session", "")
         if not _verify_session_token(token):
-            # API calls get 401 JSON, browser requests get login page
+            log.debug("Auth refused: %s %s", request.method, path)
             if path.startswith("/api/"):
                 return Response(
                     content='{"detail":"Non authentifie"}',
@@ -173,7 +184,9 @@ async def auth_login(req: _LoginRequest):
         return {"ok": True}
     if not (secrets.compare_digest(req.username.encode(), creds[0].encode())
             and secrets.compare_digest(req.password.encode(), creds[1].encode())):
+        log.warning("Login failed for user '%s'", req.username)
         raise HTTPException(status_code=401, detail="Identifiants incorrects")
+    log.info("Login success for user '%s'", req.username)
     token = _make_session_token(req.username)
     response = Response(content='{"ok":true}', media_type="application/json")
     response.set_cookie("lg_session", token, httponly=True, samesite="lax", max_age=86400 * 7)
@@ -197,10 +210,17 @@ async def index():
 def _read_json(path: Path) -> dict:
     if not path.exists():
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    content = path.read_text(encoding="utf-8").strip()
+    if not content:
+        return {}
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        return {}
 
 
 def _write_json(path: Path, data: dict):
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
@@ -924,7 +944,7 @@ async def add_team(team_id: str, entry: TeamEntry):
 @app.put("/api/teams/{team_id}")
 async def update_team(team_id: str, entry: TeamEntry):
     data = _read_json(TEAMS_FILE)
-    teams = data.get("teams", {})
+    teams = data.setdefault("teams", {})
     if team_id not in teams:
         raise HTTPException(404, f"Equipe '{team_id}' introuvable")
     teams[team_id] = entry.model_dump()
@@ -936,7 +956,7 @@ async def update_team(team_id: str, entry: TeamEntry):
 @app.delete("/api/teams/{team_id}")
 async def delete_team(team_id: str):
     data = _read_json(TEAMS_FILE)
-    teams = data.get("teams", {})
+    teams = data.setdefault("teams", {})
     if team_id not in teams:
         raise HTTPException(404, f"Equipe '{team_id}' introuvable")
     if team_id == "default":

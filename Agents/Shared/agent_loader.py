@@ -7,6 +7,16 @@ from agents.shared.base_agent import BaseAgent
 
 logger = logging.getLogger(__name__)
 
+import re
+
+VALID_ID = re.compile(r'^[a-z0-9][a-z0-9_-]*$')
+
+
+def _validate_id(team_id: str) -> bool:
+    """Verifie que l'ID est valide : lowercase, alphanumerique, tirets, underscores."""
+    return bool(VALID_ID.match(team_id))
+
+
 CPATHS = [
     os.path.join(os.path.dirname(__file__), "..", "config"),
     os.path.join(os.path.dirname(__file__), "config"),
@@ -35,7 +45,12 @@ def _load_mcp_access(filename="agent_mcp_access.json"):
 
 
 def _load_teams_config():
-    return _load_json("teams.json")
+    config = _load_json("teams.json")
+    # Valider les IDs des equipes
+    for team_id in list(config.get("teams", {}).keys()):
+        if not _validate_id(team_id):
+            logger.error(f"Team ID invalide: '{team_id}'. Utiliser uniquement : a-z, 0-9, - et _")
+    return config
 
 
 def _create_agent(agent_id, conf, has_mcp):
