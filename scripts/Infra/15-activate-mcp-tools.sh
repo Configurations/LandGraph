@@ -54,7 +54,7 @@ def _format_deliverable(key, val):
         return val[:1500] + "..." if len(val) > 1500 else val
     elif isinstance(val, dict):
         parts = []
-        for k, v in list(val.items())[:20]:
+        for k, v in list(val.items())[:10]:
             if isinstance(v, str):
                 parts.append(f"**{k}** : {v[:300]}{'...' if len(v)>300 else ''}")
             elif isinstance(v, list):
@@ -227,7 +227,21 @@ class BaseAgent:
                 for tool in tools:
                     if tool.name == tool_name:
                         try:
-                            result = tool.invoke(tool_args)
+                            # MCP tools sont async — essayer ainvoke d'abord, fallback sur invoke
+                            if hasattr(tool, 'ainvoke'):
+                                import asyncio
+                                try:
+                                    loop = asyncio.get_event_loop()
+                                    if loop.is_running():
+                                        import concurrent.futures
+                                        with concurrent.futures.ThreadPoolExecutor() as pool:
+                                            result = pool.submit(asyncio.run, tool.ainvoke(tool_args)).result()
+                                    else:
+                                        result = asyncio.run(tool.ainvoke(tool_args))
+                                except RuntimeError:
+                                    result = asyncio.run(tool.ainvoke(tool_args))
+                            else:
+                                result = tool.invoke(tool_args)
                             if isinstance(result, (dict, list)):
                                 result = json.dumps(result, ensure_ascii=False, default=str)
                             result = str(result)[:5000]
