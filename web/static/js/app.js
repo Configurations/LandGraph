@@ -1257,6 +1257,7 @@ async function loadGit() {
     document.getElementById('git-branch').textContent = inited ? (status.branch || 'inconnu') : 'Non initialise';
     document.getElementById('git-status').textContent = inited ? (status.status || '(aucun changement)') : 'Git non initialise. Enregistrez la configuration pour initialiser.';
     document.getElementById('git-log').textContent = inited ? (status.log || '(vide)') : '';
+    document.getElementById('btn-git-init').disabled = inited;
     document.getElementById('btn-git-pull').disabled = !inited;
     document.getElementById('btn-git-commit').disabled = !inited;
     document.getElementById('git-cfg-path').value = cfg.path || '';
@@ -1274,6 +1275,14 @@ async function saveGitConfig() {
   try {
     await api('/api/git/config', { method: 'PUT', body });
     toast('Configuration Git enregistree', 'success');
+    loadGit();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function gitInit() {
+  try {
+    const data = await api('/api/git/init', { method: 'POST' });
+    toast(data.ok ? 'Repository initialise' : (data.message || 'Erreur'), data.ok ? 'success' : 'error');
     loadGit();
   } catch (e) { toast(e.message, 'error'); }
 }

@@ -1103,8 +1103,52 @@ async def git_status():
         raise HTTPException(500, str(e))
 
 
+@app.post("/api/git/init")
+async def git_init():
+    """Initialize a git repo in GIT_DIR (git init + configure remote)."""
+    log.info("Button pressed: Init Repository")
+    try:
+        git_dir = GIT_DIR / ".git"
+        if git_dir.exists():
+            return {"ok": True, "message": "Depot deja initialise"}
+        log.info("git init in %s", GIT_DIR)
+        result = subprocess.run(
+            ["git", "init"],
+            cwd=str(GIT_DIR), capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            log.error("git init failed (code %d): %s", result.returncode, result.stderr)
+            raise HTTPException(500, result.stderr)
+        _ensure_gitignore()
+        # Configure remote origin if git config exists
+        cfg = _read_json(GIT_CONFIG_FILE)
+        repo_path = cfg.get("path", "").strip()
+        if repo_path:
+            login = cfg.get("login", "").strip()
+            password = cfg.get("password", "").strip()
+            if login and password:
+                if "://" in repo_path:
+                    scheme, rest = repo_path.split("://", 1)
+                    remote_url = f"{scheme}://{login}:{password}@{rest}"
+                else:
+                    remote_url = f"https://{login}:{password}@{repo_path}"
+            else:
+                remote_url = repo_path if "://" in repo_path else f"https://{repo_path}"
+            subprocess.run(["git", "remote", "remove", "origin"], cwd=str(GIT_DIR), capture_output=True, text=True, timeout=5)
+            subprocess.run(["git", "remote", "add", "origin", remote_url], cwd=str(GIT_DIR), capture_output=True, text=True, timeout=5)
+            log.info("Git remote origin set to %s", repo_path)
+        log.info("git init success")
+        return {"ok": True, "message": "Depot initialise avec succes"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("git init exception")
+        raise HTTPException(500, str(e))
+
+
 @app.post("/api/git/pull")
 async def git_pull():
+    log.info("Button pressed: Pull")
     try:
         git_dir = GIT_DIR / ".git"
         if not git_dir.exists():
@@ -1160,6 +1204,7 @@ class GitCommitRequest(BaseModel):
 @app.post("/api/git/commit")
 async def git_commit(req: GitCommitRequest):
     """Stage all files in /project, commit and push."""
+    log.info("Button pressed: Commit & Push")
     try:
         git_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
         # Build remote URL with credentials for push
