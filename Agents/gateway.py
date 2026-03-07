@@ -174,7 +174,18 @@ async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="defau
     except Exception as e:
         logger.error(f"Could not save state for {thread_id}: {e}")
 
-    await post_to_discord(channel_id, f"📋 Agents termines : {', '.join(merged.keys())}")
+    # Message de fin lisible — pas de doublon avec ce que l'agent a deja poste
+    # L'agent poste ses propres resultats detailles, ici on poste juste le recap si plusieurs agents
+    if len(agents_to_run) > 1:
+        names = []
+        for a in agents_to_run:
+            aid = a["agent_id"]
+            output = merged.get(aid, {})
+            name = output.get("agent_name", getattr(a.get("agent"), "agent_name", aid))
+            status = output.get("status", "?")
+            emoji = "✅" if status == "complete" else "❌" if status == "blocked" else "⏳"
+            names.append(f"{emoji} {name}")
+        await post_to_discord(channel_id, f"📋 **Recap** : {' | '.join(names)}")
 
 
 async def run_orchestrated(state, decisions, channel_id, thread_id="default"):
@@ -237,17 +248,19 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
 
             state = load_or_create_state(request.thread_id, msgs, request.project_id, channel_id)
 
+            # Trouver le nom lisible
+            agent_display = getattr(agent_callable, "agent_name", canonical_id)
+
             background_tasks.add_task(
                 run_agents_parallel,
                 [{"agent_id": canonical_id, "agent": agent_callable}],
                 state, channel_id, request.thread_id)
 
-            # Info contexte
             existing = list(state.get("agent_outputs", {}).keys())
-            ctx_info = f"\n📦 Contexte : {', '.join(existing)}" if existing else ""
+            ctx_info = f"\n📦 Contexte charge : {len(existing)} livrables" if existing else ""
 
             return InvokeResponse(
-                output=f"⚡ **{canonical_id}** lance directement.{ctx_info}\nResultats dans ce channel.",
+                output=f"⏳ **{agent_display}** travaille...{ctx_info}",
                 thread_id=request.thread_id, agents_dispatched=[canonical_id])
 
         # ── Mode orchestrateur ───────────────

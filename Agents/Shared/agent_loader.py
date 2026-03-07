@@ -47,6 +47,7 @@ def _create_agent(agent_id, conf, has_mcp):
         "prompt_filename": conf.get("prompt", f"{agent_id}.md"),
         "pipeline_steps": conf.get("pipeline_steps", []),
         "use_tools": use_tools,
+        "requires_approval": conf.get("requires_approval", False),
     }
 
     AgentClass = type(f"Agent_{agent_id}", (BaseAgent,), attrs)

@@ -59,6 +59,7 @@ class BaseAgent:
     prompt_filename = "base.md"
     pipeline_steps = []
     use_tools = False
+    requires_approval = False
 
     def __init__(self):
         self.model = os.getenv(f"{self.agent_id.upper()}_MODEL", self.default_model)
@@ -91,7 +92,45 @@ class BaseAgent:
             except Exception as e:
                 logger.warning(f"[{self.agent_id}] MCP tools failed: {e}")
                 self._tools = []
+
+            # Ajouter le tool ask_human pour la boucle conversationnelle
+            try:
+                self._tools = list(self._tools or [])
+                self._tools.append(self._create_ask_human_tool())
+                logger.info(f"[{self.agent_id}] ask_human tool added")
+            except Exception as e:
+                logger.warning(f"[{self.agent_id}] ask_human tool failed: {e}")
+
         return self._tools or []
+
+    def _create_ask_human_tool(self):
+        """Cree un tool LangChain pour poser des questions aux humains."""
+        from langchain_core.tools import tool
+        agent_name = self.agent_name
+
+        @tool
+        def ask_human(question: str, context: str = "") -> str:
+            """Pose une question a l'humain via Discord et attend sa reponse.
+            Utilise ce tool quand tu as besoin d'une clarification, d'un choix,
+            ou d'une information que seul l'humain peut fournir.
+            Args:
+                question: La question a poser
+                context: Contexte optionnel pour aider l'humain a repondre
+            Returns:
+                La reponse de l'humain ou un message de timeout
+            """
+            from agents.shared.agent_conversation import ask_human_sync
+            # Recuperer le channel_id depuis les env vars
+            channel_id = os.getenv("DISCORD_CHANNEL_COMMANDS", "")
+            result = ask_human_sync(agent_name, question, channel_id, context, timeout=300)
+            if result["answered"]:
+                return f"Reponse de {result['author']}: {result['response']}"
+            elif result["timed_out"]:
+                return "Pas de reponse (timeout 5 min). Continue avec ton meilleur jugement."
+            else:
+                return "Erreur de communication. Continue avec ton meilleur jugement."
+
+        return ask_human
 
     def _extract_brief(self, state):
         m = state.get("project_metadata", {})
@@ -143,6 +182,7 @@ class BaseAgent:
     # ── Appels LLM ───────────────────────────────────────────────────────────
 
     def _call_llm(self, instruction, context, previous_results=None):
+        from agents.shared.rate_limiter import throttled_invoke
         llm = self.get_llm()
         uc = f"Contexte:\n```json\n{json.dumps(context, indent=2, default=str)}\n```\n\n"
         if previous_results:
@@ -151,15 +191,17 @@ class BaseAgent:
                 ps = ps[:15000] + "\n...(tronque)"
             uc += f"Precedents:\n```json\n{ps}\n```\n\n"
         uc += f"Instruction: {instruction}\n\nReponds UNIQUEMENT en JSON valide."
-        r = llm.invoke([
+        msgs = [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": uc},
-        ])
+        ]
+        r = throttled_invoke(llm, msgs, model=self.model)
         raw = r.content if isinstance(r.content, str) else str(r.content)
         logger.info(f"[{self.agent_id}] LLM: {len(raw)}c")
         return raw
 
     def _call_llm_with_tools(self, instruction, context, previous_results=None):
+        from agents.shared.rate_limiter import throttled_invoke
         tools = self.get_tools()
         if not tools:
             return self._call_llm(instruction, context, previous_results)
@@ -181,7 +223,7 @@ class BaseAgent:
         ]
 
         for iteration in range(10):
-            resp = llm_t.invoke(msgs)
+            resp = throttled_invoke(llm_t, msgs, model=self.model)
             msgs.append(resp)
 
             if not resp.tool_calls:
@@ -257,7 +299,7 @@ class BaseAgent:
                 dl[ok] = {"raw": raw[:8000], "parse_error": str(e)[:100]}
                 _post_to_discord_sync(ch, f"⚠️ **{self.agent_name}** — **{sn}** : output brut preserve.")
 
-        _post_to_discord_sync(ch, f"📋 **{self.agent_name}** termine — {len(self.pipeline_steps)} etapes.\nLivrables : {', '.join(dl.keys())}")
+        _post_to_discord_sync(ch, f"📋 **{self.agent_name}** — {len(self.pipeline_steps)} etapes terminees ✅")
         return {
             "agent_id": self.agent_id, "status": "complete", "confidence": 0.85,
             "deliverables": dl, "pipeline_steps_completed": len(self.pipeline_steps),
@@ -267,7 +309,6 @@ class BaseAgent:
     def _run_single(self, state):
         ctx = self.build_context(state)
         ch = self._get_channel_id(state)
-        _post_to_discord_sync(ch, f"⏳ **{self.agent_name}** travaille...")
 
         if self.use_tools:
             raw = self._call_llm_with_tools(ctx.get("task", "Produis ton livrable."), ctx)
@@ -285,12 +326,21 @@ class BaseAgent:
         output["agent_id"] = self.agent_id
         output["timestamp"] = datetime.now(timezone.utc).isoformat()
 
-        s, c, d = output.get("status"), output.get("confidence", "N/A"), output.get("deliverables", {})
-        msg = f"✅ **{self.agent_name}** — status={s}, confidence={c}\n"
-        if isinstance(d, dict):
-            for k in list(d.keys())[:5]:
-                msg += f"\n**{k}** :\n{_format_deliverable(k, d[k])}\n"
-        _post_to_discord_sync(ch, msg)
+        s = output.get("status", "unknown")
+        d = output.get("deliverables", {})
+
+        if s == "complete":
+            msg = f"✅ **{self.agent_name}** termine\n"
+            if isinstance(d, dict) and d:
+                for k in list(d.keys())[:5]:
+                    msg += f"\n**{k}** :\n{_format_deliverable(k, d[k])}\n"
+            _post_to_discord_sync(ch, msg)
+        elif s == "blocked":
+            reason = output.get("error", output.get("deliverables", {}).get("raw_output", "")[:300])
+            _post_to_discord_sync(ch, f"⚠️ **{self.agent_name}** bloque : {reason[:500]}")
+        else:
+            _post_to_discord_sync(ch, f"ℹ️ **{self.agent_name}** — status: {s}")
+
         return output
 
     # ── Point d'entree ───────────────────────────────────────────────────────
@@ -299,6 +349,45 @@ class BaseAgent:
         try:
             logger.info(f"[{self.agent_id}] Start — pipeline={len(self.pipeline_steps)}, tools={self.use_tools}")
             output = self._run_pipeline(state) if self.pipeline_steps else self._run_single(state)
+
+            # Human gate — demander validation si configure
+            if self.requires_approval and output.get("status") == "complete":
+                ch = self._get_channel_id(state)
+                logger.info(f"[{self.agent_id}] Requesting human approval...")
+                _post_to_discord_sync(ch, f"🔒 **{self.agent_name}** a termine. Validation en attente dans #human-review...")
+
+                try:
+                    from agents.shared.human_gate import request_approval_sync
+                    deliverables = output.get("deliverables", {})
+                    summary = f"{self.agent_name} a produit : {', '.join(deliverables.keys())}"
+                    details = ""
+                    for k in list(deliverables.keys())[:3]:
+                        details += f"**{k}** : {_format_deliverable(k, deliverables[k])[:500]}\n\n"
+
+                    approval = request_approval_sync(
+                        agent_name=self.agent_name,
+                        summary=summary,
+                        details=details,
+                        timeout=300,
+                    )
+
+                    if approval["approved"]:
+                        output["human_approval"] = {"status": "approved", "reviewer": approval["reviewer"]}
+                        _post_to_discord_sync(ch, f"✅ **{self.agent_name}** approuve par {approval['reviewer']}")
+                        logger.info(f"[{self.agent_id}] Approved by {approval['reviewer']}")
+                    elif approval["timed_out"]:
+                        output["human_approval"] = {"status": "timeout"}
+                        output["status"] = "pending_review"
+                        _post_to_discord_sync(ch, f"⏰ **{self.agent_name}** — timeout, en attente de review")
+                        logger.warning(f"[{self.agent_id}] Approval timeout")
+                    else:
+                        output["human_approval"] = {"status": "revision", "feedback": approval["response"], "reviewer": approval["reviewer"]}
+                        output["status"] = "revision_requested"
+                        _post_to_discord_sync(ch, f"🔄 **{self.agent_name}** — revision demandee par {approval['reviewer']}: {approval['response'][:200]}")
+                        logger.info(f"[{self.agent_id}] Revision requested: {approval['response'][:100]}")
+                except Exception as e:
+                    logger.error(f"[{self.agent_id}] Human gate error: {e}")
+                    output["human_approval"] = {"status": "error", "detail": str(e)}
 
             ao = dict(state.get("agent_outputs", {}))
             ao[self.agent_id] = output

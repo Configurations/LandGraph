@@ -46,7 +46,7 @@ echo "  -> ${AGENT_COUNT} agents dans le registry"
 
 # ── 4. Code Python (Shared + gateway + discord) ─
 echo "[4/7] Code Python..."
-SHARED_FILES=(base_agent.py mcp_client.py agent_loader.py state.py discord_tools.py __init__.py)
+SHARED_FILES=(base_agent.py mcp_client.py agent_loader.py state.py discord_tools.py human_gate.py agent_conversation.py rate_limiter.py __init__.py)
 for f in "${SHARED_FILES[@]}"; do
     wget -qO "agents/shared/${f}" "${REPO_RAW}/Agents/Shared/${f}" 2>/dev/null || true
 done

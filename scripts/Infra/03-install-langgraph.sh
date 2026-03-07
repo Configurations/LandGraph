@@ -29,6 +29,7 @@ fi
 # ── 1. Arborescence ──────────────────────────
 echo "[1/6] Arborescence..."
 mkdir -p "${PROJECT_DIR}"/{agents/shared,config,data/backups,prompts/v1}
+mkdir -p /opt/langgraph-data/{postgres,redis}
 cd "${PROJECT_DIR}"
 
 # ── 2. Fichiers de config depuis GitHub ──────
