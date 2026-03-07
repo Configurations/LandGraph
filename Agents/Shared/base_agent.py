@@ -480,7 +480,9 @@ class BaseAgent:
         elif s == "blocked":
             reason = output.get("error", "")
             if not reason and isinstance(d, dict):
-                reason = d.get("raw_output", d.get("response", ""))[:300]
+                reason = d.get("raw_output", d.get("response", ""))
+            if not isinstance(reason, str):
+                reason = json.dumps(reason, ensure_ascii=False, default=str)
             _post_to_discord_sync(ch, f"⚠️ **{self.agent_name}** bloque : {reason[:500]}")
         else:
             _post_to_discord_sync(ch, f"ℹ️ **{self.agent_name}** — status: {s}")
