@@ -8,11 +8,11 @@ import secrets
 import subprocess
 import asyncio
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
+from dotenv import load_dotenv
 import httpx
 
 # In Docker: /project is the host's langgraph-project dir
@@ -35,6 +35,8 @@ else:
     ENV_FILE = PROJECT_DIR / ".env" if PROJECT_DIR.exists() else ROOT / ".env"
     GIT_DIR = ROOT
 
+load_dotenv(ENV_FILE, override=False)
+
 MCP_SERVERS_FILE = CONFIGS / "mcp_servers.json"
 MCP_ACCESS_FILE = CONFIGS / "agent_mcp_access.json"
 MCP_CATALOG_FILE = SCRIPTS / "Infra" / "mcp_catalog.csv" if not DOCKER_MODE else CONFIGS / "mcp_catalog.csv"
@@ -42,7 +44,6 @@ AGENTS_FILE = CONFIGS / "agents_registry.json"
 LLM_PROVIDERS_FILE = CONFIGS / "llm_providers.json"
 
 app = FastAPI(title="LandGraph Admin")
-security = HTTPBasic(auto_error=False)
 
 # ── Auth ───────────────────────────────────────────
 
@@ -56,48 +57,26 @@ def _get_auth_credentials() -> tuple[str, str] | None:
     return None
 
 
-def _check_auth(credentials: HTTPBasicCredentials | None) -> bool:
-    creds = _get_auth_credentials()
-    if creds is None:
-        return True  # no credentials configured → open access
-    if credentials is None:
-        return False
-    ok_user = secrets.compare_digest(credentials.username.encode(), creds[0].encode())
-    ok_pass = secrets.compare_digest(credentials.password.encode(), creds[1].encode())
-    return ok_user and ok_pass
-
-
-async def require_auth(credentials: HTTPBasicCredentials | None = Depends(security)):
-    if not _check_auth(credentials):
-        raise HTTPException(
-            status_code=401,
-            detail="Unauthorized",
-            headers={"WWW-Authenticate": "Basic realm=\"LandGraph Admin\""},
-        )
-
-app.router.dependencies = [Depends(require_auth)]
-
-# ── Static files (protected via middleware) ────────
+# ── Static files ───────────────────────────────────
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    """Protect static files with Basic Auth (API routes use Depends)."""
-    if request.url.path.startswith("/static") or request.url.path == "/favicon.ico":
-        creds = _get_auth_credentials()
-        if creds is not None:
-            auth_header = request.headers.get("authorization", "")
-            if not auth_header.startswith("Basic "):
-                return Response(status_code=401, headers={"WWW-Authenticate": "Basic realm=\"LandGraph Admin\""})
-            try:
-                decoded = base64.b64decode(auth_header[6:]).decode()
-                username, password = decoded.split(":", 1)
-            except Exception:
-                return Response(status_code=401, headers={"WWW-Authenticate": "Basic realm=\"LandGraph Admin\""})
-            if not (secrets.compare_digest(username.encode(), creds[0].encode())
-                    and secrets.compare_digest(password.encode(), creds[1].encode())):
-                return Response(status_code=401, headers={"WWW-Authenticate": "Basic realm=\"LandGraph Admin\""})
+    """Protect all routes with HTTP Basic Auth."""
+    creds = _get_auth_credentials()
+    if creds is not None:
+        auth_header = request.headers.get("authorization", "")
+        if not auth_header.startswith("Basic "):
+            return Response(status_code=401, headers={"WWW-Authenticate": "Basic realm=\"LandGraph Admin\""})
+        try:
+            decoded = base64.b64decode(auth_header[6:]).decode()
+            username, password = decoded.split(":", 1)
+        except Exception:
+            return Response(status_code=401, headers={"WWW-Authenticate": "Basic realm=\"LandGraph Admin\""})
+        if not (secrets.compare_digest(username.encode(), creds[0].encode())
+                and secrets.compare_digest(password.encode(), creds[1].encode())):
+            return Response(status_code=401, headers={"WWW-Authenticate": "Basic realm=\"LandGraph Admin\""})
     return await call_next(request)
 
 
