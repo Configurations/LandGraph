@@ -36,7 +36,7 @@ if DOCKER_MODE:
         capture_output=True, timeout=5
     )
     # Generate .gitignore if missing
-    gitignore = PROJECT_DIR / ".gitignore"
+    gitignore = Path("/project") / ".gitignore"
     if not gitignore.exists():
         gitignore.write_text(
             ".env\n*.key\n.venv/\n__pycache__/\n*.pyc\n"
