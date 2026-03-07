@@ -22,14 +22,6 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
         Secrets (.env)
       </div>
-      <div class="nav-item" data-section="mcp" onclick="showSection('mcp')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
-        Services MCP
-      </div>
-      <div class="nav-item" data-section="agents" onclick="showSection('agents')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-        Agents
-      </div>
       <div class="nav-item" data-section="llm" onclick="showSection('llm')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a4 4 0 0 1 4 4v1a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z"/><path d="M6 10a6 6 0 0 0 12 0"/><path d="M12 16v6"/><path d="M8 22h8"/></svg>
         Modeles LLM
@@ -37,6 +29,14 @@
       <div class="nav-item" data-section="teams" onclick="showSection('teams')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
         Equipes
+      </div>
+      <div class="nav-item" data-section="agents" onclick="showSection('agents')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        Agents
+      </div>
+      <div class="nav-item" data-section="mcp" onclick="showSection('mcp')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+        Services MCP
       </div>
 
       <div class="nav-section">Outils</div>
@@ -217,6 +217,32 @@
           <button class="btn btn-outline btn-sm" onclick="loadGit()">Rafraichir</button>
         </div>
         <div class="card">
+          <div class="card-header">
+            <h3>Depot distant</h3>
+            <button class="btn btn-primary btn-sm" onclick="saveGitConfig()">Enregistrer</button>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Serveur Git</label>
+              <input id="git-cfg-server" placeholder="https://github.com" />
+            </div>
+            <div class="form-group">
+              <label>Chemin (path)</label>
+              <input id="git-cfg-path" placeholder="org/repo.git" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Login</label>
+              <input id="git-cfg-login" placeholder="username" autocomplete="off" />
+            </div>
+            <div class="form-group">
+              <label>Password / Token</label>
+              <input id="git-cfg-password" type="password" placeholder="token ou mot de passe" autocomplete="off" />
+            </div>
+          </div>
+        </div>
+        <div class="card" style="margin-top:1rem">
           <div class="form-row">
             <div>
               <label>Branche</label>

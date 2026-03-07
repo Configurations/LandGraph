@@ -45,6 +45,7 @@ MCP_CATALOG_FILE = SCRIPTS / "Infra" / "mcp_catalog.csv" if not DOCKER_MODE else
 AGENTS_FILE = CONFIGS / "agents_registry.json"
 LLM_PROVIDERS_FILE = CONFIGS / "llm_providers.json"
 TEAMS_FILE = CONFIGS / "teams.json"
+GIT_CONFIG_FILE = CONFIGS / "git.json"
 
 logging.basicConfig(
     level=logging.DEBUG if os.environ.get("DEBUG") else logging.INFO,
@@ -1022,6 +1023,26 @@ def _rebuild_channel_mapping(data: dict):
             if ch:
                 mapping[ch] = tid
     data["channel_mapping"] = mapping
+
+
+# ── API: Git config ───────────────────────────────
+
+@app.get("/api/git/config")
+async def get_git_config():
+    return _read_json(GIT_CONFIG_FILE)
+
+
+class GitConfig(BaseModel):
+    server: str = ""
+    path: str = ""
+    login: str = ""
+    password: str = ""
+
+
+@app.put("/api/git/config")
+async def update_git_config(cfg: GitConfig):
+    _write_json(GIT_CONFIG_FILE, cfg.model_dump())
+    return {"ok": True}
 
 
 # ── API: Git operations ───────────────────────────

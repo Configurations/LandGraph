@@ -1249,10 +1249,30 @@ async function runScript(name) {
 // ═══════════════════════════════════════════════════
 async function loadGit() {
   try {
-    const data = await api('/api/git/status');
-    document.getElementById('git-branch').textContent = data.branch || 'inconnu';
-    document.getElementById('git-status').textContent = data.status || '(aucun changement)';
-    document.getElementById('git-log').textContent = data.log || '(vide)';
+    const [status, cfg] = await Promise.all([
+      api('/api/git/status'),
+      api('/api/git/config'),
+    ]);
+    document.getElementById('git-branch').textContent = status.branch || 'inconnu';
+    document.getElementById('git-status').textContent = status.status || '(aucun changement)';
+    document.getElementById('git-log').textContent = status.log || '(vide)';
+    document.getElementById('git-cfg-server').value = cfg.server || '';
+    document.getElementById('git-cfg-path').value = cfg.path || '';
+    document.getElementById('git-cfg-login').value = cfg.login || '';
+    document.getElementById('git-cfg-password').value = cfg.password || '';
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function saveGitConfig() {
+  const body = {
+    server: document.getElementById('git-cfg-server').value.trim(),
+    path: document.getElementById('git-cfg-path').value.trim(),
+    login: document.getElementById('git-cfg-login').value.trim(),
+    password: document.getElementById('git-cfg-password').value.trim(),
+  };
+  try {
+    await api('/api/git/config', { method: 'PUT', body });
+    toast('Configuration Git enregistree', 'success');
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -1337,8 +1357,8 @@ function _teamSlug(name) {
   return name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '').toLowerCase();
 }
 
-function _teamComputedFields(name) {
-  const slug = _teamSlug(name);
+function _teamComputedFields(id) {
+  const slug = _teamSlug(id);
   return {
     agents_registry: `agents_registry_${slug}.json`,
     prompts_dir: slug,
@@ -1355,11 +1375,11 @@ function _teamModalHtml(title, id, t, isNew) {
     </div>
     ${isNew ? `<div class="form-group">
       <label>Identifiant</label>
-      <input id="team-id" value="${escHtml(id)}" placeholder="ex: data_team" />
+      <input id="team-id" value="${escHtml(id)}" placeholder="ex: data_team" oninput="_onTeamIdChange()" />
     </div>` : ''}
     <div class="form-group">
       <label>Nom</label>
-      <input id="team-name" value="${escHtml(t.name || '')}" placeholder="Equipe Produit" ${isNew ? 'oninput="_onTeamNameChange()"' : ''} />
+      <input id="team-name" value="${escHtml(t.name || '')}" placeholder="Equipe Produit" />
     </div>
     <div class="form-group">
       <label>Description</label>
@@ -1395,16 +1415,13 @@ function _teamModalHtml(title, id, t, isNew) {
     </div>`;
 }
 
-function _onTeamNameChange() {
-  const name = document.getElementById('team-name').value.trim();
-  if (!name) return;
-  const computed = _teamComputedFields(name);
+function _onTeamIdChange() {
+  const id = document.getElementById('team-id').value.trim();
+  if (!id) return;
+  const computed = _teamComputedFields(id);
   document.getElementById('team-agents').value = computed.agents_registry;
   document.getElementById('team-prompts').value = computed.prompts_dir;
   document.getElementById('team-mcp').value = computed.mcp_access;
-  // Also auto-fill team ID if empty
-  const idField = document.getElementById('team-id');
-  if (idField && !idField._userEdited) idField.value = _teamSlug(name);
 }
 
 function _readTeamForm() {
