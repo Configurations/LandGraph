@@ -1116,7 +1116,6 @@ async def git_pull():
             login = cfg.get("login", "").strip()
             password = cfg.get("password", "").strip()
             if login and password:
-                # Insert credentials into URL: https://login:password@host/path
                 if "://" in repo_path:
                     scheme, rest = repo_path.split("://", 1)
                     clone_url = f"{scheme}://{login}:{password}@{rest}"
@@ -1124,24 +1123,33 @@ async def git_pull():
                     clone_url = f"https://{login}:{password}@{repo_path}"
             else:
                 clone_url = repo_path if "://" in repo_path else f"https://{repo_path}"
-            log.info("Cloning %s into %s", repo_path, GIT_DIR)
-            # Clone into a temp dir then move contents (GIT_DIR may already have files)
+            log.info("git pull: cloning %s into %s", repo_path, GIT_DIR)
             result = subprocess.run(
                 ["git", "clone", clone_url, "."],
                 cwd=str(GIT_DIR), capture_output=True, text=True, timeout=120,
                 env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
             )
             _ensure_gitignore()
+            if result.returncode != 0:
+                log.error("git clone failed (code %d): %s", result.returncode, result.stderr)
+            else:
+                log.info("git clone success")
             return {"stdout": result.stdout, "stderr": result.stderr, "code": result.returncode}
         else:
+            log.info("git pull in %s", GIT_DIR)
             result = subprocess.run(
                 ["git", "pull"],
                 cwd=str(GIT_DIR), capture_output=True, text=True, timeout=60
             )
+            if result.returncode != 0:
+                log.error("git pull failed (code %d): stdout=%s stderr=%s", result.returncode, result.stdout, result.stderr)
+            else:
+                log.info("git pull success: %s", result.stdout.strip())
             return {"stdout": result.stdout, "stderr": result.stderr, "code": result.returncode}
     except HTTPException:
         raise
     except Exception as e:
+        log.exception("git pull exception")
         raise HTTPException(500, str(e))
 
 
