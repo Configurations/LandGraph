@@ -21,6 +21,13 @@ import httpx
 # Local dev: use parent of web/
 DOCKER_MODE = Path("/project").exists()
 
+# Fix git ownership issue in Docker (mounted volume has different owner)
+if DOCKER_MODE:
+    subprocess.run(
+        ["git", "config", "--global", "--add", "safe.directory", "/project"],
+        capture_output=True, timeout=5
+    )
+
 if DOCKER_MODE:
     PROJECT_DIR = Path("/project")
     CONFIGS = PROJECT_DIR / "config"
