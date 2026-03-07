@@ -317,12 +317,22 @@ class BaseAgent:
 
         try:
             output = self.parse_response(raw)
-        except json.JSONDecodeError as e:
+            # Si le JSON n'a pas de deliverables, tout le contenu sauf les meta-champs devient deliverables
+            if "deliverables" not in output:
+                meta_keys = {"agent_id", "status", "confidence", "timestamp", "parse_note"}
+                deliverables = {k: v for k, v in output.items() if k not in meta_keys}
+                if deliverables:
+                    output["deliverables"] = deliverables
+                else:
+                    output["deliverables"] = {"response": raw[:8000]}
+        except (json.JSONDecodeError, ValueError):
+            # Pas du JSON — c'est une reponse texte libre (typique apres ReAct avec tools)
             output = {
-                "agent_id": self.agent_id, "status": "complete", "confidence": 0.6,
-                "deliverables": {"raw_output": raw[:8000]}, "parse_note": str(e)[:100],
+                "agent_id": self.agent_id, "status": "complete", "confidence": 0.8,
+                "deliverables": {"response": raw[:8000]},
             }
 
+        output.setdefault("status", "complete")
         output["agent_id"] = self.agent_id
         output["timestamp"] = datetime.now(timezone.utc).isoformat()
 
@@ -334,9 +344,13 @@ class BaseAgent:
             if isinstance(d, dict) and d:
                 for k in list(d.keys())[:5]:
                     msg += f"\n**{k}** :\n{_format_deliverable(k, d[k])}\n"
+            elif isinstance(d, str):
+                msg += f"\n{d[:1500]}\n"
             _post_to_discord_sync(ch, msg)
         elif s == "blocked":
-            reason = output.get("error", output.get("deliverables", {}).get("raw_output", "")[:300])
+            reason = output.get("error", "")
+            if not reason and isinstance(d, dict):
+                reason = d.get("raw_output", d.get("response", ""))[:300]
             _post_to_discord_sync(ch, f"⚠️ **{self.agent_name}** bloque : {reason[:500]}")
         else:
             _post_to_discord_sync(ch, f"ℹ️ **{self.agent_name}** — status: {s}")
