@@ -22,7 +22,7 @@ DOCKER_MODE = Path("/project").exists()
 if DOCKER_MODE:
     PROJECT_DIR = Path("/project")
     CONFIGS = PROJECT_DIR / "config"
-    PROMPTS = PROJECT_DIR / "prompts"
+    PROMPTS = PROJECT_DIR / "prompts" / "v1"
     SCRIPTS = PROJECT_DIR
     ENV_FILE = PROJECT_DIR / ".env"
     GIT_DIR = PROJECT_DIR
@@ -30,7 +30,7 @@ else:
     ROOT = Path(__file__).resolve().parent.parent
     PROJECT_DIR = ROOT / "langgraph-project"
     CONFIGS = ROOT / "Configs"
-    PROMPTS = ROOT / "prompts"
+    PROMPTS = ROOT / "prompts" / "v1"
     SCRIPTS = ROOT / "scripts"
     ENV_FILE = PROJECT_DIR / ".env" if PROJECT_DIR.exists() else ROOT / ".env"
     GIT_DIR = ROOT
