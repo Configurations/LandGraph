@@ -167,17 +167,28 @@ async def run_single_agent(agent_id, agent_callable, state, channel_id):
         return state
 
 
-async def run_agents_parallel(agents_to_run, state, channel_id):
+async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="default"):
     tasks = [run_single_agent(a["agent_id"], a["agent"], dict(state), channel_id) for a in agents_to_run]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     merged = dict(state.get("agent_outputs", {}))
     for r in results:
         if isinstance(r, dict) and "agent_outputs" in r:
             merged.update(r.get("agent_outputs", {}))
+
+    # Sauvegarder le state mis a jour dans le checkpointer
+    state["agent_outputs"] = merged
+    try:
+        graph = get_orchestrator_graph()
+        config = {"configurable": {"thread_id": thread_id}}
+        graph.update_state(config, state)
+        logger.info(f"State saved for {thread_id} — {len(merged)} outputs: {list(merged.keys())}")
+    except Exception as e:
+        logger.error(f"Could not save state for {thread_id}: {e}")
+
     await post_to_discord(channel_id, f"📋 Agents termines : {', '.join(merged.keys())}")
 
 
-async def run_orchestrated(state, decisions, channel_id):
+async def run_orchestrated(state, decisions, channel_id, thread_id="default"):
     agents = []
     for d in decisions:
         for a in d.get("actions", []):
@@ -186,7 +197,7 @@ async def run_orchestrated(state, decisions, channel_id):
                 if t in CANONICAL_AGENTS:
                     agents.append({"agent_id": t, "agent": CANONICAL_AGENTS[t]})
     if agents:
-        await run_agents_parallel(agents, state, channel_id)
+        await run_agents_parallel(agents, state, channel_id, thread_id)
     else:
         await post_to_discord(channel_id, "Aucun agent dispatche.")
 
@@ -240,7 +251,7 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
             background_tasks.add_task(
                 run_agents_parallel,
                 [{"agent_id": canonical_id, "agent": agent_callable}],
-                state, channel_id)
+                state, channel_id, request.thread_id)
 
             # Info contexte
             existing = list(state.get("agent_outputs", {}).keys())
@@ -286,7 +297,7 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
 
         if agents_dispatched:
             result["_discord_channel_id"] = channel_id
-            background_tasks.add_task(run_orchestrated, result, decisions, channel_id)
+            background_tasks.add_task(run_orchestrated, result, decisions, channel_id, request.thread_id)
 
         return InvokeResponse(
             output=output_text, thread_id=request.thread_id,
