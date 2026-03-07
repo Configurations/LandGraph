@@ -16,48 +16,37 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelna
 
 app = FastAPI(title="LangGraph Multi-Agent API", version="0.6.0")
 
-from agents.requirements_analyst import agent as analyst_agent
-from agents.ux_designer import agent as ux_agent
-from agents.architect import agent as architect_agent
-from agents.planner import agent as planner_agent
-from agents.lead_dev import agent as lead_dev_agent
-from agents.dev_frontend_web import agent as frontend_agent
-from agents.dev_backend_api import agent as backend_agent
-from agents.dev_mobile import agent as mobile_agent
-from agents.qa_engineer import agent as qa_agent
-from agents.devops_engineer import agent as devops_agent
-from agents.docs_writer import agent as docs_agent
-from agents.legal_advisor import agent as legal_agent
-
+from agents.shared.agent_loader import get_agents
 from agents.orchestrator import orchestrator_node, route_after_orchestrator
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.postgres import PostgresSaver
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")
 
-AGENT_MAP = {
-    "requirements_analyst": analyst_agent, "analyste": analyst_agent,
-    "ux_designer": ux_agent, "designer": ux_agent,
-    "architect": architect_agent, "architecte": architect_agent,
-    "planner": planner_agent, "planificateur": planner_agent,
-    "lead_dev": lead_dev_agent,
-    "dev_frontend_web": frontend_agent, "frontend": frontend_agent,
-    "dev_backend_api": backend_agent, "backend": backend_agent,
-    "dev_mobile": mobile_agent, "mobile": mobile_agent,
-    "qa_engineer": qa_agent, "qa": qa_agent,
-    "devops_engineer": devops_agent, "devops": devops_agent,
-    "docs_writer": docs_agent, "documentaliste": docs_agent, "docs": docs_agent,
-    "legal_advisor": legal_agent, "avocat": legal_agent,
+# Charger tous les agents depuis config/agents_registry.json
+CANONICAL_AGENTS = get_agents()
+
+# Aliases pour les commandes Discord (francais, raccourcis)
+ALIASES = {
+    "analyste": "requirements_analyst", "analyst": "requirements_analyst",
+    "designer": "ux_designer", "ux": "ux_designer",
+    "architecte": "architect", "archi": "architect",
+    "planificateur": "planner", "planning": "planner",
+    "lead": "lead_dev", "leaddev": "lead_dev",
+    "frontend": "dev_frontend_web", "front": "dev_frontend_web",
+    "backend": "dev_backend_api", "back": "dev_backend_api",
+    "mobile": "dev_mobile",
+    "qa": "qa_engineer", "test": "qa_engineer", "qualite": "qa_engineer",
+    "devops": "devops_engineer", "ops": "devops_engineer",
+    "docs": "docs_writer", "doc": "docs_writer", "documentaliste": "docs_writer",
+    "avocat": "legal_advisor", "legal": "legal_advisor", "juridique": "legal_advisor",
 }
 
-CANONICAL_AGENTS = {
-    "requirements_analyst": analyst_agent, "ux_designer": ux_agent,
-    "architect": architect_agent, "planner": planner_agent,
-    "lead_dev": lead_dev_agent, "dev_frontend_web": frontend_agent,
-    "dev_backend_api": backend_agent, "dev_mobile": mobile_agent,
-    "qa_engineer": qa_agent, "devops_engineer": devops_agent,
-    "docs_writer": docs_agent, "legal_advisor": legal_agent,
-}
+# Map complet : ID canoniques + aliases
+AGENT_MAP = dict(CANONICAL_AGENTS)
+for alias, canonical_id in ALIASES.items():
+    if canonical_id in CANONICAL_AGENTS:
+        AGENT_MAP[alias] = CANONICAL_AGENTS[canonical_id]
 
 
 # ── Discord ──────────────────────────────────
