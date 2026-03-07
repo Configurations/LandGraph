@@ -178,4 +178,8 @@ def create_llm(provider_name: str = None, temperature: float = 0.3, max_tokens: 
 
     logger.info(f"LLM: {provider_name} -> {provider_type}/{model}")
 
-    return factory(model=model, temperature=temperature, max_tokens=max_tokens, **conf)
+    # Filtrer les cles deja passees explicitement ou non pertinentes pour la factory
+    skip_keys = {"type", "model", "description"}
+    extra = {k: v for k, v in conf.items() if k not in skip_keys}
+
+    return factory(model=model, temperature=temperature, max_tokens=max_tokens, **extra)
