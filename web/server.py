@@ -27,6 +27,22 @@ if DOCKER_MODE:
         ["git", "config", "--global", "--add", "safe.directory", "/project"],
         capture_output=True, timeout=5
     )
+    subprocess.run(
+        ["git", "config", "--global", "user.email", os.environ.get("GIT_USER_EMAIL", "admin@langgraph.local")],
+        capture_output=True, timeout=5
+    )
+    subprocess.run(
+        ["git", "config", "--global", "user.name", os.environ.get("GIT_USER_NAME", "LandGraph Admin")],
+        capture_output=True, timeout=5
+    )
+    # Generate .gitignore if missing
+    gitignore = PROJECT_DIR / ".gitignore"
+    if not gitignore.exists():
+        gitignore.write_text(
+            ".env\n*.key\n.venv/\n__pycache__/\n*.pyc\n"
+            "data/backups/\n*.bak\n*.sh\n*.save\n*.example\n*.py\n",
+            encoding="utf-8",
+        )
 
 if DOCKER_MODE:
     PROJECT_DIR = Path("/project")
