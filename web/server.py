@@ -560,17 +560,32 @@ async def update_mcp_access(data: MCPAccessUpdate):
 
 @app.get("/api/agents")
 async def get_agents():
-    data = _read_json(AGENTS_FILE)
-    agents = data.get("agents", {})
-    # Attach prompt content
-    result = {}
-    for aid, acfg in agents.items():
-        prompt_file = PROMPTS / acfg.get("prompt", f"{aid}.md")
-        prompt_content = ""
-        if prompt_file.exists():
-            prompt_content = prompt_file.read_text(encoding="utf-8")
-        result[aid] = {**acfg, "prompt_content": prompt_content}
-    return {"agents": result}
+    teams_data = _read_json(TEAMS_FILE)
+    teams = teams_data.get("teams", {})
+    # Fallback: if no teams configured, use the default AGENTS_FILE
+    if not teams:
+        teams = {"default": {"name": "Equipe par defaut", "agents_registry": AGENTS_FILE.name, "prompts_dir": PROMPTS.name}}
+    groups = []
+    for tid, tcfg in teams.items():
+        registry_file = CONFIGS / tcfg.get("agents_registry", "agents_registry.json")
+        prompts_dir = PROMPTS.parent / tcfg.get("prompts_dir", "v1")
+        data = _read_json(registry_file)
+        agents = data.get("agents", {})
+        result = {}
+        for aid, acfg in agents.items():
+            prompt_file = prompts_dir / acfg.get("prompt", f"{aid}.md")
+            prompt_content = ""
+            if prompt_file.exists():
+                prompt_content = prompt_file.read_text(encoding="utf-8")
+            result[aid] = {**acfg, "prompt_content": prompt_content}
+        groups.append({
+            "team_id": tid,
+            "team_name": tcfg.get("name", tid),
+            "registry": tcfg.get("agents_registry", "agents_registry.json"),
+            "prompts_dir": tcfg.get("prompts_dir", "v1"),
+            "agents": result,
+        })
+    return {"groups": groups}
 
 
 class AgentConfig(BaseModel):
@@ -583,11 +598,20 @@ class AgentConfig(BaseModel):
     model: str = ""
     type: str = ""
     pipeline_steps: list = []
+    registry: str = "agents_registry.json"
+    prompts_dir: str = "v1"
+
+
+def _resolve_agent_paths(cfg_or_registry: str, prompts_dir: str = "v1"):
+    registry_path = CONFIGS / cfg_or_registry
+    prompts_path = PROMPTS.parent / prompts_dir
+    return registry_path, prompts_path
 
 
 @app.post("/api/agents")
 async def add_agent(cfg: AgentConfig):
-    data = _read_json(AGENTS_FILE)
+    registry_path, prompts_path = _resolve_agent_paths(cfg.registry, cfg.prompts_dir)
+    data = _read_json(registry_path)
     if "agents" not in data:
         data["agents"] = {}
     if cfg.id in data["agents"]:
@@ -608,10 +632,11 @@ async def add_agent(cfg: AgentConfig):
         agent_data["pipeline_steps"] = cfg.pipeline_steps
 
     data["agents"][cfg.id] = agent_data
-    _write_json(AGENTS_FILE, data)
+    _write_json(registry_path, data)
 
     # Create prompt file
-    prompt_path = PROMPTS / prompt_file
+    prompts_path.mkdir(parents=True, exist_ok=True)
+    prompt_path = prompts_path / prompt_file
     if not prompt_path.exists():
         prompt_path.write_text(cfg.prompt_content or f"# {cfg.name}\n\n", encoding="utf-8")
 
@@ -620,7 +645,8 @@ async def add_agent(cfg: AgentConfig):
 
 @app.put("/api/agents/{agent_id}")
 async def update_agent(agent_id: str, cfg: AgentConfig):
-    data = _read_json(AGENTS_FILE)
+    registry_path, prompts_path = _resolve_agent_paths(cfg.registry, cfg.prompts_dir)
+    data = _read_json(registry_path)
     if agent_id not in data.get("agents", {}):
         raise HTTPException(404, f"Agent {agent_id} not found")
 
@@ -640,23 +666,24 @@ async def update_agent(agent_id: str, cfg: AgentConfig):
         del existing["pipeline_steps"]
 
     data["agents"][agent_id] = existing
-    _write_json(AGENTS_FILE, data)
+    _write_json(registry_path, data)
 
     # Update prompt
     if cfg.prompt_content is not None:
-        prompt_path = PROMPTS / existing.get("prompt", f"{agent_id}.md")
+        prompt_path = prompts_path / existing.get("prompt", f"{agent_id}.md")
         prompt_path.write_text(cfg.prompt_content, encoding="utf-8")
 
     return {"ok": True}
 
 
 @app.delete("/api/agents/{agent_id}")
-async def delete_agent(agent_id: str):
-    data = _read_json(AGENTS_FILE)
+async def delete_agent(agent_id: str, registry: str = "agents_registry.json"):
+    registry_path = CONFIGS / registry
+    data = _read_json(registry_path)
     if agent_id not in data.get("agents", {}):
         raise HTTPException(404, f"Agent {agent_id} not found")
     del data["agents"][agent_id]
-    _write_json(AGENTS_FILE, data)
+    _write_json(registry_path, data)
     return {"ok": True}
 
 
@@ -929,6 +956,24 @@ class TeamEntry(BaseModel):
     discord_channels: list[str] = []
 
 
+def _ensure_team_config_files(entry: TeamEntry):
+    """Create referenced config files and prompts dir if they don't exist."""
+    defaults = {
+        entry.agents_registry: {"agents": {}},
+        entry.llm_providers: {"providers": {}, "throttling": {}, "default": ""},
+        entry.mcp_access: {},
+    }
+    for filename, skeleton in defaults.items():
+        path = CONFIGS / filename
+        if not path.exists():
+            log.info("Creating missing config file: %s", path)
+            _write_json(path, skeleton)
+    prompts_path = PROMPTS.parent / entry.prompts_dir
+    if not prompts_path.exists():
+        log.info("Creating missing prompts dir: %s", prompts_path)
+        prompts_path.mkdir(parents=True, exist_ok=True)
+
+
 @app.post("/api/teams/{team_id}")
 async def add_team(team_id: str, entry: TeamEntry):
     data = _read_json(TEAMS_FILE)
@@ -937,6 +982,7 @@ async def add_team(team_id: str, entry: TeamEntry):
         raise HTTPException(409, f"L'equipe '{team_id}' existe deja")
     teams[team_id] = entry.model_dump()
     _rebuild_channel_mapping(data)
+    _ensure_team_config_files(entry)
     _write_json(TEAMS_FILE, data)
     return {"ok": True}
 
@@ -949,6 +995,7 @@ async def update_team(team_id: str, entry: TeamEntry):
         raise HTTPException(404, f"Equipe '{team_id}' introuvable")
     teams[team_id] = entry.model_dump()
     _rebuild_channel_mapping(data)
+    _ensure_team_config_files(entry)
     _write_json(TEAMS_FILE, data)
     return {"ok": True}
 

@@ -6,6 +6,7 @@ let mcpServers = {};
 let mcpCatalog = [];
 let mcpAccess = {};
 let agents = {};
+let agentGroups = [];
 let llmProviders = {};
 
 // ── Utils ──────────────────────────────────────────
@@ -526,7 +527,12 @@ async function loadAgents() {
       api('/api/mcp/access'),
       api('/api/mcp/catalog'),
     ]);
-    agents = agentsData.agents;
+    agentGroups = agentsData.groups || [];
+    // Flat map for edit/save lookups
+    agents = {};
+    agentGroups.forEach(g => Object.entries(g.agents).forEach(([id, a]) => {
+      agents[id] = { ...a, _registry: g.registry, _prompts_dir: g.prompts_dir };
+    }));
     llmProviders = llmData;
     mcpAccess = accessData;
     mcpCatalog = mcpData.servers;
@@ -536,29 +542,34 @@ async function loadAgents() {
 
 function renderAgents() {
   const grid = document.getElementById('agents-grid');
-  const providerNames = Object.keys(llmProviders.providers || {});
 
-  grid.innerHTML = Object.entries(agents).map(([id, a]) => {
-    const mcpList = (mcpAccess[id] || []);
-    return `<div class="agent-card" onclick="editAgent('${escHtml(id)}')">
-      <div class="agent-card-header">
-        <div>
-          <h4>${escHtml(a.name)}</h4>
-          <code style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(id)}</code>
+  grid.innerHTML = agentGroups.map(g => {
+    const agentCards = Object.entries(g.agents).map(([id, a]) => {
+      const mcpList = (mcpAccess[id] || []);
+      return `<div class="agent-card" onclick="editAgent('${escHtml(id)}')">
+        <div class="agent-card-header">
+          <div>
+            <h4>${escHtml(a.name)}</h4>
+            <code style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(id)}</code>
+          </div>
+          <button class="btn-icon danger" onclick="event.stopPropagation();deleteAgent('${escHtml(id)}')" title="Supprimer">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </button>
         </div>
-        <button class="btn-icon danger" onclick="event.stopPropagation();deleteAgent('${escHtml(id)}')" title="Supprimer">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-        </button>
-      </div>
-      <div class="agent-meta">
-        <span class="tag tag-blue">temp: ${a.temperature}</span>
-        <span class="tag tag-blue">tokens: ${a.max_tokens}</span>
-        ${a.model ? `<span class="tag tag-yellow">${escHtml(a.model)}</span>` : ''}
-        ${a.type ? `<span class="tag tag-gray">${escHtml(a.type)}</span>` : ''}
-      </div>
-      ${mcpList.length ? `<div class="agent-meta" style="margin-top:0.5rem">
-        ${mcpList.map(m => `<span class="tag tag-green">${escHtml(m)}</span>`).join('')}
-      </div>` : ''}
+        <div class="agent-meta">
+          <span class="tag tag-blue">temp: ${a.temperature}</span>
+          <span class="tag tag-blue">tokens: ${a.max_tokens}</span>
+          ${a.model ? `<span class="tag tag-yellow">${escHtml(a.model)}</span>` : ''}
+          ${a.type ? `<span class="tag tag-gray">${escHtml(a.type)}</span>` : ''}
+        </div>
+        ${mcpList.length ? `<div class="agent-meta" style="margin-top:0.5rem">
+          ${mcpList.map(m => `<span class="tag tag-green">${escHtml(m)}</span>`).join('')}
+        </div>` : ''}
+      </div>`;
+    }).join('');
+    return `<div class="agent-group">
+      <h3 class="agent-group-title">${escHtml(g.team_name)}<span style="font-weight:400;font-size:0.75rem;color:var(--text-secondary);margin-left:0.5rem">${escHtml(g.registry)}</span></h3>
+      <div class="agents-grid">${agentCards || '<p style="color:var(--text-secondary);padding:0.5rem">Aucun agent dans cette equipe.</p>'}</div>
     </div>`;
   }).join('');
 }
@@ -667,7 +678,7 @@ async function saveAgent(id) {
     await Promise.all([
       api(`/api/agents/${id}`, {
         method: 'PUT',
-        body: { id, name, model, temperature, max_tokens, prompt_content, prompt_file: '', type: agents[id].type || '', pipeline_steps: agents[id].pipeline_steps || [] }
+        body: { id, name, model, temperature, max_tokens, prompt_content, prompt_file: '', type: agents[id].type || '', pipeline_steps: agents[id].pipeline_steps || [], registry: agents[id]._registry || 'agents_registry.json', prompts_dir: agents[id]._prompts_dir || 'v1' }
       }),
       api('/api/mcp/access', { method: 'PUT', body: { agent_id: id, servers: mcpList } }),
     ]);
@@ -679,6 +690,7 @@ async function saveAgent(id) {
 
 function showAddAgentModal() {
   const providerNames = Object.keys(llmProviders.providers || {});
+  const teamOpts = agentGroups.map(g => `<option value="${escHtml(g.registry)}|${escHtml(g.prompts_dir)}">${escHtml(g.team_name)}</option>`).join('');
   showModal(`
     <div class="modal-header">
       <h3>Nouvel agent</h3>
@@ -696,16 +708,20 @@ function showAddAgentModal() {
     </div>
     <div class="form-row">
       <div class="form-group">
+        <label>Equipe</label>
+        <select id="agent-new-team">${teamOpts}</select>
+      </div>
+      <div class="form-group">
         <label>Modele LLM</label>
         <select id="agent-new-model">
           <option value="">-- Defaut --</option>
           ${providerNames.map(p => `<option value="${p}">${escHtml(p)}</option>`).join('')}
         </select>
       </div>
-      <div class="form-group">
-        <label>Temperature</label>
-        <input id="agent-new-temp" type="number" step="0.1" min="0" max="2" value="0.2" />
-      </div>
+    </div>
+    <div class="form-group">
+      <label>Temperature</label>
+      <input id="agent-new-temp" type="number" step="0.1" min="0" max="2" value="0.2" />
     </div>
     <div class="form-group">
       <label>Prompt initial</label>
@@ -724,11 +740,12 @@ async function addAgent() {
   const model = document.getElementById('agent-new-model').value;
   const temperature = parseFloat(document.getElementById('agent-new-temp').value);
   const prompt_content = document.getElementById('agent-new-prompt').value;
+  const [registry, prompts_dir] = (document.getElementById('agent-new-team')?.value || '').split('|');
   if (!id || !name) { toast('ID et nom requis', 'error'); return; }
   try {
     await api('/api/agents', {
       method: 'POST',
-      body: { id, name, model, temperature, max_tokens: 32768, prompt_content, prompt_file: '', type: '', pipeline_steps: [] }
+      body: { id, name, model, temperature, max_tokens: 32768, prompt_content, prompt_file: '', type: '', pipeline_steps: [], registry: registry || 'agents_registry.json', prompts_dir: prompts_dir || 'v1' }
     });
     toast('Agent cree', 'success');
     closeModal();
@@ -738,8 +755,9 @@ async function addAgent() {
 
 async function deleteAgent(id) {
   if (!confirm(`Supprimer l'agent "${id}" ?`)) return;
+  const reg = agents[id]?._registry || 'agents_registry.json';
   try {
-    await api(`/api/agents/${id}`, { method: 'DELETE' });
+    await api(`/api/agents/${id}?registry=${encodeURIComponent(reg)}`, { method: 'DELETE' });
     toast('Agent supprime', 'success');
     loadAgents();
   } catch (e) { toast(e.message, 'error'); }
@@ -1346,7 +1364,7 @@ function _teamModalHtml(title, id, t, isNew) {
     <div class="form-row">
       <div class="form-group">
         <label>Dossier prompts</label>
-        <input id="team-prompts" value="${escHtml(t.prompts_dir || 'v1')}" />
+        <input id="team-prompts" value="${escHtml(t.prompts_dir || 'v1')}" ${isNew ? '' : 'readonly style="opacity:0.6;cursor:not-allowed"'} />
       </div>
       <div class="form-group">
         <label>MCP access</label>
