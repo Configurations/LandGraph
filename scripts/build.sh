@@ -1,5 +1,5 @@
 #!/bin/bash
-cd ~/langgraph-project
+cd "$(dirname "$0")"
 docker compose up -d --build langgraph-api discord-bot
 sleep 12
 echo ""

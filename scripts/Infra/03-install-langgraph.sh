@@ -46,11 +46,10 @@ wget -qO .gitignore "${REPO_RAW}/Configs/gitignore" 2>/dev/null || true
 echo "  -> Fichiers telecharges"
 
 # Scripts utilitaires (start, restart, build)
-mkdir -p scripts
 for s in start.sh restart.sh build.sh; do
-    wget -qO "scripts/${s}" "${REPO_RAW}/scripts/Infra/${s}" 2>/dev/null || true
+    wget -qO "${s}" "${REPO_RAW}/scripts/${s}" 2>/dev/null || true
 done
-chmod +x scripts/*.sh
+chmod +x start.sh restart.sh build.sh
 echo "  -> Scripts : start.sh, restart.sh, build.sh"
 
 # ── 3. Fichier .env ──────────────────────────

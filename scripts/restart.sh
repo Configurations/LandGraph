@@ -1,5 +1,5 @@
 #!/bin/bash
-cd ~/langgraph-project
+cd "$(dirname "$0")"
 docker compose down
 docker compose up -d
 echo ""
