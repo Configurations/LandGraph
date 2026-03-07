@@ -1025,6 +1025,14 @@ def _rebuild_channel_mapping(data: dict):
     data["channel_mapping"] = mapping
 
 
+def _ensure_gitignore():
+    """Create .gitignore with default patterns if it doesn't exist."""
+    gitignore = GIT_DIR / ".gitignore"
+    if not gitignore.exists():
+        log.info("Creating .gitignore in %s", GIT_DIR)
+        gitignore.write_text("*.sh\n", encoding="utf-8")
+
+
 # ── API: Git config ───────────────────────────────
 
 @app.get("/api/git/config")
@@ -1098,6 +1106,7 @@ async def git_pull():
                 cwd=str(GIT_DIR), capture_output=True, text=True, timeout=120,
                 env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
             )
+            _ensure_gitignore()
             return {"stdout": result.stdout, "stderr": result.stderr, "code": result.returncode}
         else:
             result = subprocess.run(
@@ -1126,6 +1135,7 @@ async def git_commit(req: GitCommitRequest):
         login = cfg.get("login", "").strip()
         password = cfg.get("password", "").strip()
 
+        _ensure_gitignore()
         # Stage everything
         subprocess.run(
             ["git", "add", "-A"],
