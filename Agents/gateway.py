@@ -212,6 +212,24 @@ async def status():
     return {"agents": list(CANONICAL_AGENTS) + ["orchestrator"], "total_agents": len(CANONICAL_AGENTS) + 1}
 
 
+class ResetRequest(BaseModel):
+    thread_id: str
+
+@app.post("/reset")
+async def reset(request: ResetRequest):
+    """Purge le state d'un thread."""
+    try:
+        graph = get_orchestrator_graph()
+        config = {"configurable": {"thread_id": request.thread_id}}
+        # Ecraser avec un state vierge
+        graph.update_state(config, new_state([], "default", ""))
+        logger.info(f"State reset for {request.thread_id}")
+        return {"status": "ok", "thread_id": request.thread_id}
+    except Exception as e:
+        logger.error(f"Reset error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 class InvokeRequest(BaseModel):
     messages: list[dict]
     thread_id: str = "default"

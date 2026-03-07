@@ -69,6 +69,24 @@ async def on_message(message):
         await message.reply(f"🆕 **{project_name}** — nouveau contexte.")
         return
 
+    # ── !reset — purger le state du channel ──
+    if content.lower() == "!reset":
+        thread_id = get_thread_id(message)
+        try:
+            async with aiohttp.ClientSession() as session:
+                payload = {"thread_id": thread_id}
+                async with session.post(
+                    f"{API_URL}/reset", json=payload,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status == 200:
+                        await message.reply("🗑️ State reinitialise. Nouveau depart.")
+                    else:
+                        await message.reply(f"Erreur reset: {resp.status}")
+        except Exception as e:
+            await message.reply(f"Erreur: {str(e)[:200]}")
+        return
+
     # ── !status ──────────────────────────────
     if content.lower() == "!status":
         try:

@@ -293,15 +293,17 @@ class BaseAgent:
 
     def build_context(self, state):
         o = state.get("agent_outputs", {})
+        # Ne garder que les outputs reussis dans le contexte
+        successful = {k: v for k, v in o.items() if isinstance(v, dict) and v.get("status") == "complete"}
         return {
             "project_phase": state.get("project_phase", "unknown"),
             "project_metadata": state.get("project_metadata", {}),
             "brief": self._extract_brief(state),
             "task": self._extract_task(state),
-            "existing_outputs": list(o.keys()),
+            "existing_outputs": list(successful.keys()),
             "relevant_outputs": {
                 k: {"status": v.get("status"), "keys": list(v.get("deliverables", {}).keys())}
-                for k, v in o.items() if v.get("status") == "complete"
+                for k, v in successful.items()
             },
         }
 
