@@ -1112,6 +1112,10 @@ async def git_init():
         if git_dir.exists():
             return {"ok": True, "message": "Depot deja initialise"}
         log.info("git init in %s", GIT_DIR)
+        subprocess.run(
+            ["git", "config", "--global", "--add", "safe.directory", str(GIT_DIR)],
+            capture_output=True, text=True, timeout=5,
+        )
         result = subprocess.run(
             ["git", "init"],
             cwd=str(GIT_DIR), capture_output=True, text=True, timeout=10,
