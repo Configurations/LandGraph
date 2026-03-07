@@ -126,6 +126,15 @@ def _create_deepseek(model: str, temperature: float, max_tokens: int, env_key: s
     )
 
 
+def _create_moonshot(model: str, temperature: float, max_tokens: int, env_key: str, base_url: str = None, **kwargs):
+    from langchain_openai import ChatOpenAI
+    return ChatOpenAI(
+        model=model, temperature=temperature, max_tokens=max_tokens,
+        api_key=os.getenv(env_key, ""),
+        base_url=base_url or "https://api.moonshot.cn/v1",
+    )
+
+
 # Registry des factories — extensible
 FACTORIES = {
     "anthropic": _create_anthropic,
@@ -136,6 +145,7 @@ FACTORIES = {
     "ollama": _create_ollama,
     "groq": _create_groq,
     "deepseek": _create_deepseek,
+    "moonshot": _create_moonshot,
 }
 
 
@@ -147,6 +157,7 @@ def _detect_type(model: str) -> str:
     if "gemini" in m: return "google"
     if "mistral" in m or "mixtral" in m: return "mistral"
     if "deepseek" in m: return "deepseek"
+    if "kimi" in m or "moonshot" in m: return "moonshot"
     if "llama" in m or "qwen" in m or "phi" in m: return "ollama"
     return "anthropic"
 

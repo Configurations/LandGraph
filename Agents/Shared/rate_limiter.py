@@ -1,4 +1,5 @@
-"""Rate Limiter — Throttling generique multi-provider avec retry exponential backoff."""
+"""Rate Limiter — Throttling par env_key depuis llm_providers.json."""
+import json
 import logging
 import os
 import threading
@@ -9,54 +10,86 @@ from dotenv import load_dotenv
 load_dotenv()
 logger = logging.getLogger("rate_limiter")
 
-# ── Configuration par provider ───────────────
-# Format : {provider: {"rpm": requests_per_minute, "tpm": tokens_per_minute}}
-# Configurable via env vars : RATELIMIT_<PROVIDER>_RPM, RATELIMIT_<PROVIDER>_TPM
-
-DEFAULT_LIMITS = {
-    "anthropic": {"rpm": 25, "tpm": 25000},     # Tier 1 conservateur
-    "openai": {"rpm": 60, "tpm": 60000},
-    "google": {"rpm": 60, "tpm": 60000},
-    "mistral": {"rpm": 60, "tpm": 60000},
-    "groq": {"rpm": 30, "tpm": 30000},
-    "ollama": {"rpm": 999, "tpm": 999999},       # Local, pas de limite
-    "deepseek": {"rpm": 60, "tpm": 60000},
-    "default": {"rpm": 30, "tpm": 30000},
-}
-
 # Retry config
 MAX_RETRIES = 20
-INITIAL_BACKOFF = 5      # secondes
-BACKOFF_MULTIPLIER = 2   # exponentiel
-MAX_BACKOFF = 120        # cap a 2 min max entre deux retries
+INITIAL_BACKOFF = 5
+BACKOFF_MULTIPLIER = 2
+MAX_BACKOFF = 120
+
+CPATHS = [
+    os.path.join(os.path.dirname(__file__), "..", "config"),
+    os.path.join(os.path.dirname(__file__), "config"),
+    os.path.join("/app", "config"),
+]
+
+_throttling_config = None
 
 
-def _get_limits(provider: str) -> dict:
-    """Charge les limites depuis env vars ou defaults."""
-    p = provider.upper()
-    rpm = int(os.getenv(f"RATELIMIT_{p}_RPM", DEFAULT_LIMITS.get(provider, DEFAULT_LIMITS["default"])["rpm"]))
-    tpm = int(os.getenv(f"RATELIMIT_{p}_TPM", DEFAULT_LIMITS.get(provider, DEFAULT_LIMITS["default"])["tpm"]))
-    return {"rpm": rpm, "tpm": tpm}
+def _find_file(filename):
+    for b in CPATHS:
+        p = os.path.join(os.path.abspath(b), filename)
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def _load_throttling():
+    """Charge la config throttling depuis llm_providers.json."""
+    global _throttling_config
+    if _throttling_config is None:
+        path = _find_file("llm_providers.json")
+        if path:
+            with open(path) as f:
+                data = json.load(f)
+            _throttling_config = data.get("throttling", {})
+            logger.info(f"Throttling loaded: {list(_throttling_config.keys())}")
+        else:
+            _throttling_config = {}
+    return _throttling_config
+
+
+def _get_limits(env_key: str) -> dict:
+    """Retourne les limites RPM/TPM pour une env_key."""
+    config = _load_throttling()
+    if env_key in config:
+        return config[env_key]
+    # Fallback conservateur
+    return {"rpm": 30, "tpm": 30000}
+
+
+def _get_env_key_for_provider(provider_name: str) -> str:
+    """Trouve l'env_key d'un provider depuis llm_providers.json."""
+    path = _find_file("llm_providers.json")
+    if not path:
+        return "_default"
+    with open(path) as f:
+        data = json.load(f)
+    providers = data.get("providers", {})
+    if provider_name in providers:
+        return providers[provider_name].get("env_key", "_default")
+    # Chercher par type ou model
+    for pid, conf in providers.items():
+        if conf.get("model") == provider_name or conf.get("type") == provider_name:
+            return conf.get("env_key", "_default")
+    return "_default"
 
 
 class ProviderThrottle:
-    """Throttle pour un provider — sliding window RPM + TPM."""
+    """Throttle par env_key — sliding window RPM + TPM."""
 
-    def __init__(self, provider: str):
-        self.provider = provider
-        self.limits = _get_limits(provider)
+    def __init__(self, env_key: str):
+        self.env_key = env_key
+        self.limits = _get_limits(env_key)
         self._lock = threading.Lock()
-        self._request_times = deque()     # timestamps des requetes (sliding window 60s)
-        self._token_usage = deque()       # (timestamp, token_count) pairs
-        logger.info(f"Throttle [{provider}]: RPM={self.limits['rpm']}, TPM={self.limits['tpm']}")
+        self._request_times = deque()
+        self._token_usage = deque()
+        logger.info(f"Throttle [{env_key}]: RPM={self.limits['rpm']}, TPM={self.limits['tpm']}")
 
     def wait_if_needed(self, estimated_tokens: int = 1000):
-        """Bloque si on depasse les limites. Retourne quand c'est safe."""
         with self._lock:
             now = time.time()
             window = now - 60
 
-            # Nettoyer les entrees hors fenetre
             while self._request_times and self._request_times[0] < window:
                 self._request_times.popleft()
             while self._token_usage and self._token_usage[0][0] < window:
@@ -67,11 +100,10 @@ class ProviderThrottle:
             if current_rpm >= self.limits["rpm"]:
                 oldest = self._request_times[0]
                 wait_time = 60 - (now - oldest) + 1
-                logger.info(f"Throttle [{self.provider}]: RPM limit ({current_rpm}/{self.limits['rpm']}), waiting {wait_time:.1f}s")
+                logger.info(f"Throttle [{self.env_key}]: RPM limit ({current_rpm}/{self.limits['rpm']}), wait {wait_time:.1f}s")
                 self._lock.release()
                 time.sleep(wait_time)
                 self._lock.acquire()
-                # Re-nettoyer apres attente
                 now = time.time()
                 window = now - 60
                 while self._request_times and self._request_times[0] < window:
@@ -85,76 +117,53 @@ class ProviderThrottle:
                     wait_time = 60 - (now - oldest) + 1
                 else:
                     wait_time = 5
-                logger.info(f"Throttle [{self.provider}]: TPM limit ({current_tpm}/{self.limits['tpm']}), waiting {wait_time:.1f}s")
+                logger.info(f"Throttle [{self.env_key}]: TPM limit ({current_tpm}/{self.limits['tpm']}), wait {wait_time:.1f}s")
                 self._lock.release()
                 time.sleep(wait_time)
                 self._lock.acquire()
 
-            # Enregistrer cette requete
             self._request_times.append(time.time())
             self._token_usage.append((time.time(), estimated_tokens))
 
     def record_usage(self, actual_tokens: int):
-        """Met a jour l'usage reel apres la requete (corrige l'estimation)."""
         with self._lock:
             if self._token_usage:
-                # Remplacer la derniere estimation par l'usage reel
                 ts, _ = self._token_usage.pop()
                 self._token_usage.append((ts, actual_tokens))
 
 
-# ── Singleton par provider ───────────────────
+# Singleton par env_key
 _throttles = {}
 _throttles_lock = threading.Lock()
 
 
-def get_throttle(provider: str) -> ProviderThrottle:
-    """Retourne le throttle pour un provider (singleton)."""
+def get_throttle(env_key: str) -> ProviderThrottle:
     with _throttles_lock:
-        if provider not in _throttles:
-            _throttles[provider] = ProviderThrottle(provider)
-        return _throttles[provider]
+        if env_key not in _throttles:
+            _throttles[env_key] = ProviderThrottle(env_key)
+        return _throttles[env_key]
 
 
-def detect_provider(model: str) -> str:
-    """Detecte le provider depuis le nom du modele."""
-    model_lower = model.lower()
-    if "claude" in model_lower or "anthropic" in model_lower:
-        return "anthropic"
-    elif "gpt" in model_lower or "o1" in model_lower or "o3" in model_lower:
-        return "openai"
-    elif "gemini" in model_lower:
-        return "google"
-    elif "mistral" in model_lower or "mixtral" in model_lower:
-        return "mistral"
-    elif "llama" in model_lower or "groq" in model_lower:
-        return "groq"
-    elif "deepseek" in model_lower:
-        return "deepseek"
-    elif "ollama" in model_lower:
-        return "ollama"
-    return "default"
-
-
-def throttled_invoke(llm, messages, model: str = "", estimated_tokens: int = 1000):
+def throttled_invoke(llm, messages, provider_name: str = "", model: str = "", estimated_tokens: int = 1000):
     """
-    Appel LLM avec throttling + retry exponential backoff.
-
-    Usage:
-        response = throttled_invoke(llm, messages, model="claude-sonnet-4-5-20250929")
+    Appel LLM avec throttling par env_key + retry exponential backoff.
     """
-    provider = detect_provider(model or getattr(llm, "model", "default"))
-    throttle = get_throttle(provider)
+    # Determiner l'env_key pour le throttling
+    env_key = "_default"
+    if provider_name:
+        env_key = _get_env_key_for_provider(provider_name)
+    elif model:
+        env_key = _get_env_key_for_provider(model)
+
+    throttle = get_throttle(env_key)
 
     last_error = None
     for attempt in range(MAX_RETRIES + 1):
-        # Attendre si necessaire
         throttle.wait_if_needed(estimated_tokens)
 
         try:
             response = llm.invoke(messages)
 
-            # Enregistrer l'usage reel si disponible
             if hasattr(response, "usage_metadata"):
                 total = getattr(response.usage_metadata, "total_tokens", estimated_tokens)
                 throttle.record_usage(total)
@@ -165,22 +174,18 @@ def throttled_invoke(llm, messages, model: str = "", estimated_tokens: int = 100
             error_str = str(e)
             last_error = e
 
-            # Rate limit error — retry avec backoff
             if "rate_limit" in error_str.lower() or "429" in error_str:
                 wait = min(INITIAL_BACKOFF * (BACKOFF_MULTIPLIER ** attempt), MAX_BACKOFF)
-                logger.warning(f"Throttle [{provider}]: Rate limit hit (attempt {attempt + 1}/{MAX_RETRIES + 1}), backoff {wait}s")
+                logger.warning(f"Throttle [{env_key}]: Rate limit (attempt {attempt + 1}/{MAX_RETRIES + 1}), backoff {wait}s")
                 time.sleep(wait)
                 continue
 
-            # Overloaded — retry avec backoff
             if "overloaded" in error_str.lower() or "529" in error_str:
                 wait = min(INITIAL_BACKOFF * (BACKOFF_MULTIPLIER ** attempt), MAX_BACKOFF)
-                logger.warning(f"Throttle [{provider}]: Overloaded (attempt {attempt + 1}/{MAX_RETRIES + 1}), backoff {wait}s")
+                logger.warning(f"Throttle [{env_key}]: Overloaded (attempt {attempt + 1}/{MAX_RETRIES + 1}), backoff {wait}s")
                 time.sleep(wait)
                 continue
 
-            # Autre erreur — ne pas retry
             raise
 
-    # Toutes les tentatives echouees
     raise last_error

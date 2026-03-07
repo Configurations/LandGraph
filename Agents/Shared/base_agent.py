@@ -338,7 +338,7 @@ class BaseAgent:
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": uc},
         ]
-        r = throttled_invoke(llm, msgs, model=self.model)
+        r = throttled_invoke(llm, msgs, provider_name=self.llm_provider, model=self.model)
         raw = r.content if isinstance(r.content, str) else str(r.content)
         logger.info(f"[{self.agent_id}] LLM: {len(raw)}c")
         return raw
@@ -366,7 +366,7 @@ class BaseAgent:
         ]
 
         for iteration in range(10):
-            resp = throttled_invoke(llm_t, msgs, model=self.model)
+            resp = throttled_invoke(llm_t, msgs, provider_name=self.llm_provider, model=self.model)
             msgs.append(resp)
 
             if not resp.tool_calls:
