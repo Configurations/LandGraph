@@ -1,4 +1,4 @@
-"""Agent Loader — Charge les agents depuis agents_registry.json + auto-detecte use_tools."""
+"""Agent Loader — Multi-equipes. Charge les agents depuis teams.json + agents_registry."""
 import json
 import logging
 import os
@@ -22,21 +22,23 @@ def _find_file(filename):
     return None
 
 
-def _load_mcp_access():
-    """Charge agent_mcp_access.json pour savoir quels agents ont des MCP."""
-    path = _find_file("agent_mcp_access.json")
+def _load_json(filename):
+    path = _find_file(filename)
     if not path:
         return {}
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except Exception:
-        return {}
+    with open(path) as f:
+        return json.load(f)
+
+
+def _load_mcp_access(filename="agent_mcp_access.json"):
+    return _load_json(filename)
+
+
+def _load_teams_config():
+    return _load_json("teams.json")
 
 
 def _create_agent(agent_id, conf, has_mcp):
-    """Cree dynamiquement une classe agent depuis la config."""
-    # use_tools = True si explicite dans le registry OU si l'agent a des MCP configures
     use_tools = conf.get("use_tools", has_mcp)
 
     attrs = {
@@ -56,18 +58,24 @@ def _create_agent(agent_id, conf, has_mcp):
     return AgentClass()
 
 
-def load_agents():
-    """Charge tous les agents depuis le registry. Retourne un dict {agent_id: instance}."""
-    path = _find_file("agents_registry.json")
-    if not path:
-        logger.error("agents_registry.json not found")
+def load_agents_for_team(team_id="default"):
+    """Charge les agents d'une equipe specifique."""
+    teams_config = _load_teams_config()
+    teams = teams_config.get("teams", {})
+
+    if team_id not in teams:
+        team_id = "default"
+
+    team = teams.get(team_id, {})
+    registry_file = team.get("agents_registry", "agents_registry.json")
+    mcp_file = team.get("mcp_access", "agent_mcp_access.json")
+
+    registry = _load_json(registry_file)
+    mcp_access = _load_json(mcp_file)
+
+    if not registry:
+        logger.error(f"Registry {registry_file} not found for team {team_id}")
         return {}
-
-    with open(path) as f:
-        registry = json.load(f)
-
-    # Charger le mapping MCP pour auto-detecter use_tools
-    mcp_access = _load_mcp_access()
 
     agents = {}
     for agent_id, conf in registry.get("agents", {}).items():
@@ -75,25 +83,39 @@ def load_agents():
             has_mcp = len(mcp_access.get(agent_id, [])) > 0
             agents[agent_id] = _create_agent(agent_id, conf, has_mcp)
             tools_info = "tools=True" if agents[agent_id].use_tools else "tools=False"
-            logger.info(f"Loaded agent: {agent_id} ({conf['name']}) [{tools_info}]")
+            logger.info(f"[{team_id}] Loaded: {agent_id} ({conf['name']}) [{tools_info}]")
         except Exception as e:
-            logger.error(f"Failed to load agent {agent_id}: {e}")
+            logger.error(f"[{team_id}] Failed: {agent_id}: {e}")
 
-    logger.info(f"Total agents loaded: {len(agents)}")
+    logger.info(f"[{team_id}] {len(agents)} agents loaded")
     return agents
 
 
-# Singleton
-_agents = None
+def get_team_for_channel(channel_id: str) -> str:
+    """Retourne l'ID de l'equipe pour un channel Discord donne."""
+    teams_config = _load_teams_config()
+    mapping = teams_config.get("channel_mapping", {})
+    return mapping.get(channel_id, "default")
 
 
-def get_agents():
-    global _agents
-    if _agents is None:
-        _agents = load_agents()
-    return _agents
+# ── Cache par equipe ─────────────────────────
+_teams_agents = {}
 
 
-def get_agent(agent_id):
-    agents = get_agents()
+def get_agents(team_id: str = "default"):
+    """Retourne les agents d'une equipe (cache)."""
+    if team_id not in _teams_agents:
+        _teams_agents[team_id] = load_agents_for_team(team_id)
+    return _teams_agents[team_id]
+
+
+def get_agent(agent_id: str, team_id: str = "default"):
+    """Retourne un agent specifique d'une equipe."""
+    agents = get_agents(team_id)
     return agents.get(agent_id)
+
+
+def get_all_team_ids():
+    """Liste toutes les equipes configurees."""
+    teams_config = _load_teams_config()
+    return list(teams_config.get("teams", {}).keys())

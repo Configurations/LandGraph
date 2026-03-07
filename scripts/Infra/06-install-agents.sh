@@ -42,6 +42,7 @@ echo "  -> ${DL}/${#PROMPTS[@]} prompts"
 echo "[3/7] Config..."
 wget -qO config/agents_registry.json "${REPO_RAW}/Configs/agents_registry.json" 2>/dev/null || echo "  -> agents_registry.json: conserve local"
 wget -qO config/llm_providers.json "${REPO_RAW}/Configs/llm_providers.json" 2>/dev/null || echo "  -> llm_providers.json: conserve local"
+wget -qO config/teams.json "${REPO_RAW}/Configs/teams.json" 2>/dev/null || echo "  -> teams.json: conserve local"
 AGENT_COUNT=$(python3 -c "import json;print(len(json.load(open('config/agents_registry.json')).get('agents',{})))" 2>/dev/null || echo 0)
 echo "  -> ${AGENT_COUNT} agents dans le registry"
 

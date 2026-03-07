@@ -49,7 +49,7 @@ function showSection(name) {
   document.querySelector(`.nav-item[data-section="${name}"]`).classList.add('active');
 
   // Load data on section switch
-  const loaders = { secrets: loadEnv, mcp: loadMCP, agents: loadAgents, llm: loadLLM, chat: loadChat, scripts: loadScripts, git: loadGit };
+  const loaders = { secrets: loadEnv, mcp: loadMCP, agents: loadAgents, llm: loadLLM, teams: loadTeams, chat: loadChat, scripts: loadScripts, git: loadGit };
   if (loaders[name]) loaders[name]();
 }
 
@@ -1272,6 +1272,148 @@ async function gitCommit() {
     toast(data.code === 0 ? 'Commit effectue' : (data.stderr || 'Erreur commit'), data.code === 0 ? 'success' : 'error');
     closeModal();
     loadGit();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════
+// TEAMS
+// ═══════════════════════════════════════════════════
+let teamsData = {};
+
+async function loadTeams() {
+  try {
+    const data = await api('/api/teams');
+    teamsData = data.teams || {};
+    renderTeams();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function renderTeams() {
+  const grid = document.getElementById('teams-grid');
+  grid.innerHTML = Object.entries(teamsData).map(([id, t]) => {
+    const channels = (t.discord_channels || []).filter(c => c);
+    return `<div class="agent-card" onclick="editTeam('${escHtml(id)}')">
+      <div class="agent-card-header">
+        <div>
+          <h4>${escHtml(t.name || id)}</h4>
+          <code style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(id)}</code>
+        </div>
+        ${id !== 'default' ? `<button class="btn-icon danger" onclick="event.stopPropagation();deleteTeam('${escHtml(id)}')" title="Supprimer">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>` : ''}
+      </div>
+      ${t.description ? `<p style="font-size:0.8rem;color:var(--text-secondary);margin:0.5rem 0">${escHtml(t.description)}</p>` : ''}
+      <div class="agent-meta">
+        <span class="tag tag-blue">${escHtml(t.prompts_dir || 'v1')}</span>
+        <span class="tag tag-gray">${escHtml(t.agents_registry || '')}</span>
+        <span class="tag tag-yellow">${escHtml(t.llm_providers || '')}</span>
+      </div>
+      ${channels.length ? `<div class="agent-meta" style="margin-top:0.5rem">
+        ${channels.map(c => `<span class="tag tag-green">#${escHtml(c)}</span>`).join('')}
+      </div>` : ''}
+    </div>`;
+  }).join('') || '<p style="color:var(--text-secondary);padding:1rem">Aucune equipe configuree.</p>';
+}
+
+function _teamModalHtml(title, id, t, isNew) {
+  return `
+    <div class="modal-header">
+      <h3>${title}</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    ${isNew ? `<div class="form-group">
+      <label>Identifiant</label>
+      <input id="team-id" value="${escHtml(id)}" placeholder="ex: data_team" />
+    </div>` : ''}
+    <div class="form-group">
+      <label>Nom</label>
+      <input id="team-name" value="${escHtml(t.name || '')}" placeholder="Equipe Produit" />
+    </div>
+    <div class="form-group">
+      <label>Description</label>
+      <input id="team-desc" value="${escHtml(t.description || '')}" placeholder="Description de l'equipe" />
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Agents registry</label>
+        <input id="team-agents" value="${escHtml(t.agents_registry || 'agents_registry.json')}" />
+      </div>
+      <div class="form-group">
+        <label>LLM providers</label>
+        <input id="team-llm" value="${escHtml(t.llm_providers || 'llm_providers.json')}" />
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Dossier prompts</label>
+        <input id="team-prompts" value="${escHtml(t.prompts_dir || 'v1')}" />
+      </div>
+      <div class="form-group">
+        <label>MCP access</label>
+        <input id="team-mcp" value="${escHtml(t.mcp_access || 'agent_mcp_access.json')}" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Channels Discord (un par ligne)</label>
+      <textarea id="team-channels" rows="3" placeholder="1234567890">${(t.discord_channels || []).join('\n')}</textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="${isNew ? 'addTeam()' : `saveTeam('${escHtml(id)}')`}">Enregistrer</button>
+    </div>`;
+}
+
+function _readTeamForm() {
+  return {
+    name: document.getElementById('team-name').value.trim(),
+    description: document.getElementById('team-desc').value.trim(),
+    agents_registry: document.getElementById('team-agents').value.trim(),
+    llm_providers: document.getElementById('team-llm').value.trim(),
+    prompts_dir: document.getElementById('team-prompts').value.trim(),
+    mcp_access: document.getElementById('team-mcp').value.trim(),
+    discord_channels: document.getElementById('team-channels').value.split('\n').map(s => s.trim()).filter(Boolean),
+  };
+}
+
+function showAddTeamModal() {
+  showModal(_teamModalHtml('Nouvelle equipe', '', {}, true));
+}
+
+function editTeam(id) {
+  const t = teamsData[id];
+  showModal(_teamModalHtml('Modifier: ' + (t.name || id), id, t, false));
+}
+
+async function addTeam() {
+  const id = (document.getElementById('team-id')?.value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
+  if (!id) { toast('Identifiant requis', 'error'); return; }
+  const body = _readTeamForm();
+  if (!body.name) { toast('Nom requis', 'error'); return; }
+  try {
+    await api(`/api/teams/${encodeURIComponent(id)}`, { method: 'POST', body });
+    toast('Equipe ajoutee', 'success');
+    closeModal();
+    loadTeams();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function saveTeam(id) {
+  const body = _readTeamForm();
+  if (!body.name) { toast('Nom requis', 'error'); return; }
+  try {
+    await api(`/api/teams/${encodeURIComponent(id)}`, { method: 'PUT', body });
+    toast('Equipe mise a jour', 'success');
+    closeModal();
+    loadTeams();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteTeam(id) {
+  if (!confirm(`Supprimer l'equipe "${id}" ?`)) return;
+  try {
+    await api(`/api/teams/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    toast('Equipe supprimee', 'success');
+    loadTeams();
   } catch (e) { toast(e.message, 'error'); }
 }
 

@@ -1,6 +1,7 @@
 """LandGraph Admin — FastAPI backend."""
-import base64
 import csv
+import hashlib
+import hmac
 import io
 import json
 import os
@@ -10,7 +11,7 @@ import asyncio
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import httpx
@@ -42,8 +43,10 @@ MCP_ACCESS_FILE = CONFIGS / "agent_mcp_access.json"
 MCP_CATALOG_FILE = SCRIPTS / "Infra" / "mcp_catalog.csv" if not DOCKER_MODE else CONFIGS / "mcp_catalog.csv"
 AGENTS_FILE = CONFIGS / "agents_registry.json"
 LLM_PROVIDERS_FILE = CONFIGS / "llm_providers.json"
+TEAMS_FILE = CONFIGS / "teams.json"
 
 app = FastAPI(title="LandGraph Admin")
+_AUTH_SECRET = secrets.token_hex(32)  # session signing key (regenerated on restart)
 
 # ── Auth ───────────────────────────────────────────
 
@@ -57,27 +60,131 @@ def _get_auth_credentials() -> tuple[str, str] | None:
     return None
 
 
+def _make_session_token(username: str) -> str:
+    sig = hmac.new(_AUTH_SECRET.encode(), username.encode(), hashlib.sha256).hexdigest()
+    return f"{username}:{sig}"
+
+
+def _verify_session_token(token: str) -> bool:
+    if ":" not in token:
+        return False
+    username, sig = token.split(":", 1)
+    expected = hmac.new(_AUTH_SECRET.encode(), username.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(sig, expected)
+
+
+_LOGIN_PAGE = """<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LandGraph — Connexion</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Inter',sans-serif;background:#0f1117;color:#e4e4e7;display:flex;align-items:center;justify-content:center;min-height:100vh}
+    .login-card{background:#1a1b23;border:1px solid #2a2b35;border-radius:12px;padding:2.5rem;width:100%;max-width:380px;box-shadow:0 8px 32px rgba(0,0,0,0.4)}
+    .login-logo{text-align:center;margin-bottom:2rem}
+    .login-logo h1{font-size:1.5rem;font-weight:700;background:linear-gradient(135deg,#818cf8,#6366f1);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+    .login-logo span{display:block;font-size:0.8rem;color:#71717a;margin-top:0.25rem}
+    .form-group{margin-bottom:1.25rem}
+    .form-group label{display:block;font-size:0.8rem;font-weight:500;color:#a1a1aa;margin-bottom:0.4rem}
+    .form-group input{width:100%;padding:0.6rem 0.75rem;background:#12131a;border:1px solid #2a2b35;border-radius:8px;color:#e4e4e7;font-size:0.9rem;font-family:inherit;outline:none;transition:border-color 0.2s}
+    .form-group input:focus{border-color:#6366f1}
+    .btn-login{width:100%;padding:0.65rem;background:linear-gradient(135deg,#6366f1,#818cf8);color:#fff;border:none;border-radius:8px;font-size:0.9rem;font-weight:600;font-family:inherit;cursor:pointer;transition:opacity 0.2s}
+    .btn-login:hover{opacity:0.9}
+    .error-msg{background:#371520;border:1px solid #5c1d33;color:#f87171;padding:0.5rem 0.75rem;border-radius:8px;font-size:0.8rem;margin-bottom:1rem;display:none}
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <div class="login-logo">
+      <h1>LandGraph</h1>
+      <span>Administration</span>
+    </div>
+    <div class="error-msg" id="error-msg">Identifiants incorrects</div>
+    <form onsubmit="return doLogin(event)">
+      <div class="form-group">
+        <label>Utilisateur</label>
+        <input type="text" id="username" autocomplete="username" autofocus required>
+      </div>
+      <div class="form-group">
+        <label>Mot de passe</label>
+        <input type="password" id="password" autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="btn-login">Se connecter</button>
+    </form>
+  </div>
+  <script>
+    async function doLogin(e) {
+      e.preventDefault();
+      document.getElementById('error-msg').style.display = 'none';
+      const res = await fetch('/auth/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          username: document.getElementById('username').value,
+          password: document.getElementById('password').value
+        })
+      });
+      if (res.ok) { window.location.href = '/'; }
+      else { document.getElementById('error-msg').style.display = 'block'; }
+    }
+  </script>
+</body>
+</html>"""
+
+
 # ── Static files ───────────────────────────────────
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    """Protect all routes with HTTP Basic Auth."""
+    """Cookie-based auth: redirect to login page if not authenticated."""
     creds = _get_auth_credentials()
     if creds is not None:
-        auth_header = request.headers.get("authorization", "")
-        if not auth_header.startswith("Basic "):
-            return Response(status_code=401, headers={"WWW-Authenticate": "Basic realm=\"LandGraph Admin\""})
-        try:
-            decoded = base64.b64decode(auth_header[6:]).decode()
-            username, password = decoded.split(":", 1)
-        except Exception:
-            return Response(status_code=401, headers={"WWW-Authenticate": "Basic realm=\"LandGraph Admin\""})
-        if not (secrets.compare_digest(username.encode(), creds[0].encode())
-                and secrets.compare_digest(password.encode(), creds[1].encode())):
-            return Response(status_code=401, headers={"WWW-Authenticate": "Basic realm=\"LandGraph Admin\""})
+        path = request.url.path
+        # Allow login routes and static assets for login page (fonts)
+        if path in ("/auth/login", "/auth/logout"):
+            return await call_next(request)
+        token = request.cookies.get("lg_session", "")
+        if not _verify_session_token(token):
+            # API calls get 401 JSON, browser requests get login page
+            if path.startswith("/api/"):
+                return Response(
+                    content='{"detail":"Non authentifie"}',
+                    status_code=401,
+                    media_type="application/json",
+                )
+            return HTMLResponse(_LOGIN_PAGE, status_code=401)
     return await call_next(request)
+
+
+class _LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/auth/login")
+async def auth_login(req: _LoginRequest):
+    creds = _get_auth_credentials()
+    if creds is None:
+        return {"ok": True}
+    if not (secrets.compare_digest(req.username.encode(), creds[0].encode())
+            and secrets.compare_digest(req.password.encode(), creds[1].encode())):
+        raise HTTPException(status_code=401, detail="Identifiants incorrects")
+    token = _make_session_token(req.username)
+    response = Response(content='{"ok":true}', media_type="application/json")
+    response.set_cookie("lg_session", token, httponly=True, samesite="lax", max_age=86400 * 7)
+    return response
+
+
+@app.get("/auth/logout")
+async def auth_logout():
+    response = RedirectResponse("/", status_code=302)
+    response.delete_cookie("lg_session")
+    return response
 
 
 @app.get("/")
@@ -779,6 +886,75 @@ async def chat(req: ChatRequest):
         raise HTTPException(502, "Impossible de se connecter au provider LLM")
     except Exception as e:
         raise HTTPException(500, f"Erreur: {str(e)}")
+
+
+# ── API: Teams ────────────────────────────────────
+
+@app.get("/api/teams")
+async def get_teams():
+    data = _read_json(TEAMS_FILE)
+    return {
+        "teams": data.get("teams", {}),
+        "channel_mapping": data.get("channel_mapping", {}),
+    }
+
+
+class TeamEntry(BaseModel):
+    name: str
+    description: str = ""
+    agents_registry: str = "agents_registry.json"
+    llm_providers: str = "llm_providers.json"
+    prompts_dir: str = "v1"
+    mcp_access: str = "agent_mcp_access.json"
+    discord_channels: list[str] = []
+
+
+@app.post("/api/teams/{team_id}")
+async def add_team(team_id: str, entry: TeamEntry):
+    data = _read_json(TEAMS_FILE)
+    teams = data.setdefault("teams", {})
+    if team_id in teams:
+        raise HTTPException(409, f"L'equipe '{team_id}' existe deja")
+    teams[team_id] = entry.model_dump()
+    _rebuild_channel_mapping(data)
+    _write_json(TEAMS_FILE, data)
+    return {"ok": True}
+
+
+@app.put("/api/teams/{team_id}")
+async def update_team(team_id: str, entry: TeamEntry):
+    data = _read_json(TEAMS_FILE)
+    teams = data.get("teams", {})
+    if team_id not in teams:
+        raise HTTPException(404, f"Equipe '{team_id}' introuvable")
+    teams[team_id] = entry.model_dump()
+    _rebuild_channel_mapping(data)
+    _write_json(TEAMS_FILE, data)
+    return {"ok": True}
+
+
+@app.delete("/api/teams/{team_id}")
+async def delete_team(team_id: str):
+    data = _read_json(TEAMS_FILE)
+    teams = data.get("teams", {})
+    if team_id not in teams:
+        raise HTTPException(404, f"Equipe '{team_id}' introuvable")
+    if team_id == "default":
+        raise HTTPException(400, "Impossible de supprimer l'equipe par defaut")
+    del teams[team_id]
+    _rebuild_channel_mapping(data)
+    _write_json(TEAMS_FILE, data)
+    return {"ok": True}
+
+
+def _rebuild_channel_mapping(data: dict):
+    """Rebuild channel_mapping from discord_channels in each team."""
+    mapping = {}
+    for tid, t in data.get("teams", {}).items():
+        for ch in t.get("discord_channels", []):
+            if ch:
+                mapping[ch] = tid
+    data["channel_mapping"] = mapping
 
 
 # ── API: Git operations ───────────────────────────

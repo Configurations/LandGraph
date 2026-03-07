@@ -34,6 +34,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a4 4 0 0 1 4 4v1a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z"/><path d="M6 10a6 6 0 0 0 12 0"/><path d="M12 16v6"/><path d="M8 22h8"/></svg>
         Modeles LLM
       </div>
+      <div class="nav-item" data-section="teams" onclick="showSection('teams')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        Equipes
+      </div>
 
       <div class="nav-section">Outils</div>
       <div class="nav-item" data-section="chat" onclick="showSection('chat')">
@@ -49,6 +53,13 @@
       <div class="nav-item" data-section="git" onclick="showSection('git')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/></svg>
         Git
+      </div>
+
+      <div class="sidebar-footer">
+        <a href="/auth/logout" class="nav-item" style="color:var(--text-secondary)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          Deconnexion
+        </a>
       </div>
     </nav>
 
@@ -148,6 +159,18 @@
           </div>
           <div class="table-container" id="llm-throttling-table"></div>
         </div>
+      </div>
+
+      <!-- TEAMS SECTION -->
+      <div class="section" id="section-teams">
+        <div class="page-header">
+          <h2>Equipes</h2>
+          <div style="display:flex;gap:0.5rem">
+            <button class="btn btn-outline btn-sm" onclick="loadTeams()">Rafraichir</button>
+            <button class="btn btn-primary btn-sm" onclick="showAddTeamModal()">+ Ajouter</button>
+          </div>
+        </div>
+        <div class="agents-grid" id="teams-grid"></div>
       </div>
 
       <!-- CHAT SECTION -->

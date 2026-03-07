@@ -16,15 +16,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelna
 
 app = FastAPI(title="LangGraph Multi-Agent API", version="0.6.0")
 
-from agents.shared.agent_loader import get_agents
+from agents.shared.agent_loader import get_agents, get_team_for_channel
 from agents.orchestrator import orchestrator_node, route_after_orchestrator
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.postgres import PostgresSaver
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")
-
-# Charger tous les agents depuis config/agents_registry.json
-CANONICAL_AGENTS = get_agents()
 
 # Aliases pour les commandes Discord (francais, raccourcis)
 ALIASES = {
@@ -42,11 +39,16 @@ ALIASES = {
     "avocat": "legal_advisor", "legal": "legal_advisor", "juridique": "legal_advisor",
 }
 
-# Map complet : ID canoniques + aliases
-AGENT_MAP = dict(CANONICAL_AGENTS)
-for alias, canonical_id in ALIASES.items():
-    if canonical_id in CANONICAL_AGENTS:
-        AGENT_MAP[alias] = CANONICAL_AGENTS[canonical_id]
+
+def resolve_agents(channel_id: str = ""):
+    """Resout les agents pour un channel (equipe)."""
+    team_id = get_team_for_channel(channel_id) if channel_id else "default"
+    canonical = get_agents(team_id)
+    agent_map = dict(canonical)
+    for alias, cid in ALIASES.items():
+        if cid in canonical:
+            agent_map[alias] = canonical[cid]
+    return canonical, agent_map, team_id
 
 
 # ── Discord ──────────────────────────────────
@@ -188,14 +190,16 @@ async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="defau
         await post_to_discord(channel_id, f"📋 **Recap** : {' | '.join(names)}")
 
 
-async def run_orchestrated(state, decisions, channel_id, thread_id="default"):
+async def run_orchestrated(state, decisions, channel_id, thread_id="default", canonical_agents=None):
+    if canonical_agents is None:
+        canonical_agents, _, _ = resolve_agents(channel_id)
     agents = []
     for d in decisions:
         for a in d.get("actions", []):
             if isinstance(a, dict) and a.get("action") == "dispatch_agent":
                 t = a.get("target", "")
-                if t in CANONICAL_AGENTS:
-                    agents.append({"agent_id": t, "agent": CANONICAL_AGENTS[t]})
+                if t in canonical_agents:
+                    agents.append({"agent_id": t, "agent": canonical_agents[t]})
     if agents:
         await run_agents_parallel(agents, state, channel_id, thread_id)
     else:
@@ -209,7 +213,14 @@ async def health():
 
 @app.get("/status")
 async def status():
-    return {"agents": list(CANONICAL_AGENTS) + ["orchestrator"], "total_agents": len(CANONICAL_AGENTS) + 1}
+    from agents.shared.agent_loader import get_all_team_ids
+    teams = get_all_team_ids()
+    default_agents, _, _ = resolve_agents()
+    return {
+        "agents": list(default_agents) + ["orchestrator"],
+        "total_agents": len(default_agents) + 1,
+        "teams": teams,
+    }
 
 
 class ResetRequest(BaseModel):
@@ -250,17 +261,21 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
         channel_id = request.channel_id
         msgs = [(m.get("role", "user"), m.get("content", "")) for m in request.messages]
 
+        # Resoudre l'equipe pour ce channel
+        canonical_agents, agent_map, team_id = resolve_agents(channel_id)
+        logger.info(f"Team: {team_id} ({len(canonical_agents)} agents)")
+
         # ── Mode direct ──────────────────────
         if request.direct_agent:
             agent_id = request.direct_agent.lower().strip()
-            if agent_id not in AGENT_MAP:
+            if agent_id not in agent_map:
                 return InvokeResponse(
-                    output=f"Agent inconnu : {agent_id}\nDisponibles : {', '.join(CANONICAL_AGENTS.keys())}",
+                    output=f"Agent inconnu : {agent_id}\nDisponibles : {', '.join(canonical_agents.keys())}",
                     thread_id=request.thread_id)
 
-            agent_callable = AGENT_MAP[agent_id]
+            agent_callable = agent_map[agent_id]
             canonical_id = agent_id
-            for cid, ca in CANONICAL_AGENTS.items():
+            for cid, ca in canonical_agents.items():
                 if ca is agent_callable:
                     canonical_id = cid; break
 
@@ -317,7 +332,7 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
 
         if agents_dispatched:
             result["_discord_channel_id"] = channel_id
-            background_tasks.add_task(run_orchestrated, result, decisions, channel_id, request.thread_id)
+            background_tasks.add_task(run_orchestrated, result, decisions, channel_id, request.thread_id, canonical_agents)
 
         return InvokeResponse(
             output=output_text, thread_id=request.thread_id,
