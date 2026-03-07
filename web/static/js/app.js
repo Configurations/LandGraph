@@ -1333,7 +1333,21 @@ function renderTeams() {
   }).join('') || '<p style="color:var(--text-secondary);padding:1rem">Aucune equipe configuree.</p>';
 }
 
+function _teamSlug(name) {
+  return name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '').toLowerCase();
+}
+
+function _teamComputedFields(name) {
+  const slug = _teamSlug(name);
+  return {
+    agents_registry: `agents_registry_${slug}.json`,
+    prompts_dir: slug,
+    mcp_access: `agent_mcp_access_${slug}.json`,
+  };
+}
+
 function _teamModalHtml(title, id, t, isNew) {
+  const ro = 'readonly style="opacity:0.6;cursor:not-allowed"';
   return `
     <div class="modal-header">
       <h3>${title}</h3>
@@ -1345,7 +1359,7 @@ function _teamModalHtml(title, id, t, isNew) {
     </div>` : ''}
     <div class="form-group">
       <label>Nom</label>
-      <input id="team-name" value="${escHtml(t.name || '')}" placeholder="Equipe Produit" />
+      <input id="team-name" value="${escHtml(t.name || '')}" placeholder="Equipe Produit" ${isNew ? 'oninput="_onTeamNameChange()"' : ''} />
     </div>
     <div class="form-group">
       <label>Description</label>
@@ -1354,21 +1368,21 @@ function _teamModalHtml(title, id, t, isNew) {
     <div class="form-row">
       <div class="form-group">
         <label>Agents registry</label>
-        <input id="team-agents" value="${escHtml(t.agents_registry || 'agents_registry.json')}" />
+        <input id="team-agents" value="${escHtml(t.agents_registry || 'agents_registry.json')}" ${ro} />
       </div>
       <div class="form-group">
         <label>LLM providers</label>
-        <input id="team-llm" value="${escHtml(t.llm_providers || 'llm_providers.json')}" />
+        <input id="team-llm" value="${escHtml(t.llm_providers || 'llm_providers.json')}" ${isNew ? '' : ro} />
       </div>
     </div>
     <div class="form-row">
       <div class="form-group">
         <label>Dossier prompts</label>
-        <input id="team-prompts" value="${escHtml(t.prompts_dir || 'v1')}" ${isNew ? '' : 'readonly style="opacity:0.6;cursor:not-allowed"'} />
+        <input id="team-prompts" value="${escHtml(t.prompts_dir || 'v1')}" ${ro} />
       </div>
       <div class="form-group">
         <label>MCP access</label>
-        <input id="team-mcp" value="${escHtml(t.mcp_access || 'agent_mcp_access.json')}" />
+        <input id="team-mcp" value="${escHtml(t.mcp_access || 'agent_mcp_access.json')}" ${ro} />
       </div>
     </div>
     <div class="form-group">
@@ -1379,6 +1393,18 @@ function _teamModalHtml(title, id, t, isNew) {
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
       <button class="btn btn-primary" onclick="${isNew ? 'addTeam()' : `saveTeam('${escHtml(id)}')`}">Enregistrer</button>
     </div>`;
+}
+
+function _onTeamNameChange() {
+  const name = document.getElementById('team-name').value.trim();
+  if (!name) return;
+  const computed = _teamComputedFields(name);
+  document.getElementById('team-agents').value = computed.agents_registry;
+  document.getElementById('team-prompts').value = computed.prompts_dir;
+  document.getElementById('team-mcp').value = computed.mcp_access;
+  // Also auto-fill team ID if empty
+  const idField = document.getElementById('team-id');
+  if (idField && !idField._userEdited) idField.value = _teamSlug(name);
 }
 
 function _readTeamForm() {
