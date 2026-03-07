@@ -13,8 +13,8 @@
 0|time|Time|Fuseaux horaires conversions date heure|npx|-y @modelcontextprotocol/server-time|stdio|
 #
 # == Code et Repositories ==
+0|github|GitHub|Repos PRs issues branches commits code search|npx|-y @modelcontextprotocol/server-github|stdio|GITHUB_PERSONAL_ACCESS_TOKEN:GitHub PAT (scopes repo read:org)
 1|github-legacy|GitHub (legacy)|Repos PRs issues branches commits code search|npx|-y @modelcontextprotocol/server-github|stdio|GITHUB_PERSONAL_ACCESS_TOKEN:GitHub PAT (scopes repo read:org)
-0|github|GitHub|Repos PRs issues branches commits code search (officiel GitHub)|npx|-y @github/mcp-server|stdio|GITHUB_PERSONAL_ACCESS_TOKEN:GitHub PAT (scopes repo read:org)
 1|gitlab-legacy|GitLab (legacy)|Projets merge requests issues pipelines|uvx|mcp-server-gitlab|stdio|GITLAB_PERSONAL_ACCESS_TOKEN:GitLab PAT,GITLAB_API_URL:URL API GitLab
 0|gitlab|GitLab|Projets merge requests issues pipelines CI/CD|npx|-y @gitlab-org/gitlab-mcp-server|stdio|GITLAB_PERSONAL_ACCESS_TOKEN:GitLab PAT,GITLAB_API_URL:URL API GitLab
 #

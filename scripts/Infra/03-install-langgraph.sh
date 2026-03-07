@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
-# Script 3/3 : Installation de LangGraph + Infrastructure de donnees
-# VERSION CONSOLIDEE (integre les fix 07 et 08)
+# Script 3 : Installation de LangGraph + Infrastructure de donnees
+# VERSION CONSOLIDEE (integre fix 07, 08, nodejs, MCP deps)
 #
 # A executer depuis la VM Ubuntu (apres le script 02).
 # Usage : ./03-install-langgraph.sh
@@ -178,7 +178,7 @@ services:
     container_name: langgraph-api
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8123:8000"
+      - "0.0.0.0:8123:8000"
     depends_on:
       langgraph-postgres:
         condition: service_healthy
@@ -203,17 +203,22 @@ services:
       - langgraph-net
 YAML
 
-# ── 5. Dockerfile (inclut prompts/) ─────────────────────────────────────────
+# ── 5. Dockerfile (Node.js + uv pour MCP servers npx et uvx) ────────────────
 echo "[5/8] Creation du Dockerfile et requirements.txt..."
 cat > Dockerfile << 'DOCKERFILE'
 FROM python:3.11-slim
 
 WORKDIR /app
 
+# System deps + Node.js (pour MCP servers npx)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential libpq-dev curl git \
+    build-essential libpq-dev curl git nodejs npm \
     && rm -rf /var/lib/apt/lists/*
 
+# uv + uvx (pour MCP servers Python)
+RUN pip install --no-cache-dir uv
+
+# Python deps
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -243,6 +248,11 @@ fastapi>=0.115.0
 uvicorn>=0.32.0
 voyageai>=0.3.0
 tiktoken>=0.7.0
+langchain-mcp-adapters>=0.2.0
+mcp>=1.0.0
+requests>=2.31.0
+aiohttp>=3.9.0
+discord.py>=2.3.0
 TXT
 
 # ── 6. Gateway avec vrai graphe multi-agent ──────────────────────────────────
@@ -385,7 +395,8 @@ pip install -q \
   langchain-anthropic langchain-core langsmith \
   anthropic pydantic 'psycopg[binary]' psycopg-pool \
   redis python-dotenv fastapi uvicorn \
-  voyageai tiktoken
+  voyageai tiktoken langchain-mcp-adapters mcp \
+  requests aiohttp discord.py
 
 # ── 8. Demarrage infra ──────────────────────────────────────────────────────
 echo "[8/8] Demarrage de PostgreSQL + Redis..."
