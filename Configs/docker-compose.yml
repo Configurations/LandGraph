@@ -1,0 +1,113 @@
+volumes:
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+
+networks:
+  langgraph-net:
+    driver: bridge
+
+services:
+  langgraph-postgres:
+    image: pgvector/pgvector:pg16
+    container_name: langgraph-postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./config/init.sql:/docker-entrypoint-initdb.d/init.sql
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=vector
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=1GB
+      - -c
+      - work_mem=16MB
+    healthcheck:
+      test: pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    networks:
+      - langgraph-net
+
+  langgraph-redis:
+    image: redis:7-alpine
+    container_name: langgraph-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD}
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: redis-cli -a ${REDIS_PASSWORD} ping
+      interval: 5s
+      timeout: 2s
+      retries: 5
+    networks:
+      - langgraph-net
+
+  langgraph-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: langgraph-api
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:8123:8000"
+    depends_on:
+      langgraph-postgres:
+        condition: service_healthy
+      langgraph-redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URI: ${DATABASE_URI}
+      REDIS_URI: ${REDIS_URI}
+    volumes:
+      - ./agents:/app/agents
+      - ./config:/app/config
+      - ./prompts:/app/prompts
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - langgraph-net
+
+  discord-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.discord
+    container_name: langgraph-discord
+    restart: unless-stopped
+    depends_on:
+      langgraph-api:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      LANGGRAPH_API_URL: http://langgraph-api:8000
+    networks:
+      - langgraph-net

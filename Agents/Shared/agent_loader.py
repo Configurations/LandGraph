@@ -1,4 +1,4 @@
-"""Agent Loader — Charge tous les agents depuis config/agents_registry.json."""
+"""Agent Loader — Charge les agents depuis agents_registry.json + auto-detecte use_tools."""
 import json
 import logging
 import os
@@ -14,16 +14,31 @@ CPATHS = [
 ]
 
 
-def _find_registry():
+def _find_file(filename):
     for b in CPATHS:
-        p = os.path.join(os.path.abspath(b), "agents_registry.json")
+        p = os.path.join(os.path.abspath(b), filename)
         if os.path.exists(p):
             return p
     return None
 
 
-def _create_agent(agent_id, conf):
+def _load_mcp_access():
+    """Charge agent_mcp_access.json pour savoir quels agents ont des MCP."""
+    path = _find_file("agent_mcp_access.json")
+    if not path:
+        return {}
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _create_agent(agent_id, conf, has_mcp):
     """Cree dynamiquement une classe agent depuis la config."""
+    # use_tools = True si explicite dans le registry OU si l'agent a des MCP configures
+    use_tools = conf.get("use_tools", has_mcp)
+
     attrs = {
         "agent_id": agent_id,
         "agent_name": conf["name"],
@@ -31,17 +46,16 @@ def _create_agent(agent_id, conf):
         "default_max_tokens": conf.get("max_tokens", 32768),
         "prompt_filename": conf.get("prompt", f"{agent_id}.md"),
         "pipeline_steps": conf.get("pipeline_steps", []),
-        "use_tools": conf.get("use_tools", False),
+        "use_tools": use_tools,
     }
 
-    # Creer la classe dynamiquement
     AgentClass = type(f"Agent_{agent_id}", (BaseAgent,), attrs)
     return AgentClass()
 
 
 def load_agents():
     """Charge tous les agents depuis le registry. Retourne un dict {agent_id: instance}."""
-    path = _find_registry()
+    path = _find_file("agents_registry.json")
     if not path:
         logger.error("agents_registry.json not found")
         return {}
@@ -49,11 +63,16 @@ def load_agents():
     with open(path) as f:
         registry = json.load(f)
 
+    # Charger le mapping MCP pour auto-detecter use_tools
+    mcp_access = _load_mcp_access()
+
     agents = {}
     for agent_id, conf in registry.get("agents", {}).items():
         try:
-            agents[agent_id] = _create_agent(agent_id, conf)
-            logger.info(f"Loaded agent: {agent_id} ({conf['name']})")
+            has_mcp = len(mcp_access.get(agent_id, [])) > 0
+            agents[agent_id] = _create_agent(agent_id, conf, has_mcp)
+            tools_info = "tools=True" if agents[agent_id].use_tools else "tools=False"
+            logger.info(f"Loaded agent: {agent_id} ({conf['name']}) [{tools_info}]")
         except Exception as e:
             logger.error(f"Failed to load agent {agent_id}: {e}")
 
@@ -61,7 +80,7 @@ def load_agents():
     return agents
 
 
-# Singleton — charge une seule fois
+# Singleton
 _agents = None
 
 
