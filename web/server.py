@@ -1939,8 +1939,11 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
         _ensure_gitignore(target_dir)
 
         # 2. Configure remote origin with credentials
-        if repo_path and login and password:
+        if repo_path:
             _git_configure_remote(target_dir, repo_path, login, password)
+            log.info("git remote configured (%s): %s", repo_key, repo_path)
+        else:
+            log.warning("git commit (%s): no repo_path configured, push will use default remote", repo_key)
 
         # 3. Get current branch name
         branch_result = subprocess.run(
@@ -1948,29 +1951,36 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
             cwd=str(target_dir), capture_output=True, text=True, timeout=10
         )
         branch = branch_result.stdout.strip() or "master"
-        log.info("git commit flow (%s): branch=%s", repo_key, branch)
+        log.info("git commit flow (%s): branch=%s, dir=%s", repo_key, branch, target_dir)
 
-        # 4. Pull --rebase to sync with remote before committing
-        if repo_path:
-            pull_result = subprocess.run(
-                ["git", "pull", "--rebase", "origin", branch],
-                cwd=str(target_dir), capture_output=True, text=True, timeout=60,
-                env=git_env,
-            )
-            if pull_result.returncode != 0:
-                log.warning("git pull --rebase failed (%s, code %d): %s",
-                            repo_key, pull_result.returncode, _sanitize(pull_result.stderr[:500]))
-            else:
-                log.info("git pull --rebase OK (%s)", repo_key)
+        # 4. Set upstream tracking
+        subprocess.run(
+            ["git", "branch", "--set-upstream-to", f"origin/{branch}", branch],
+            cwd=str(target_dir), capture_output=True, text=True, timeout=10
+        )
 
-        # 5. Stage all
+        # 5. Pull --rebase to sync with remote before committing
+        pull_result = subprocess.run(
+            ["git", "pull", "--rebase", "origin", branch],
+            cwd=str(target_dir), capture_output=True, text=True, timeout=60,
+            env=git_env,
+        )
+        if pull_result.returncode != 0:
+            log.warning("git pull --rebase failed (%s, code %d): stdout=%s stderr=%s",
+                        repo_key, pull_result.returncode,
+                        _sanitize(pull_result.stdout[:300]),
+                        _sanitize(pull_result.stderr[:500]))
+        else:
+            log.info("git pull --rebase OK (%s): %s", repo_key, pull_result.stdout.strip()[:200])
+
+        # 6. Stage all
         add_result = subprocess.run(
             ["git", "add", "-A"],
             cwd=str(target_dir), capture_output=True, text=True, timeout=10
         )
         log.info("git add -A (%s): code=%d", repo_key, add_result.returncode)
 
-        # 6. Remove git.json from staging (root + subdirs)
+        # 7. Remove git.json from staging (root + subdirs)
         subprocess.run(
             ["git", "rm", "-r", "--cached", "--ignore-unmatch", "git.json"],
             cwd=str(target_dir), capture_output=True, text=True, timeout=10
@@ -1986,7 +1996,7 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
                     cwd=str(target_dir), capture_output=True, text=True, timeout=10
                 )
 
-        # 7. Commit
+        # 8. Commit
         commit_result = subprocess.run(
             ["git", "commit", "-m", req.message],
             cwd=str(target_dir), capture_output=True, text=True, timeout=30
@@ -1997,7 +2007,7 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
         if commit_result.returncode != 0:
             return {"stdout": commit_result.stdout, "stderr": commit_result.stderr, "code": commit_result.returncode}
 
-        # 8. Push
+        # 9. Push
         if repo_path:
             push_result = subprocess.run(
                 ["git", "push", "origin", branch],
