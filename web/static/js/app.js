@@ -3340,7 +3340,8 @@ function wfRender() {
       <div class="wf-phase${sel}" id="wf-p-${id}" data-id="${id}"
            style="left:${pos.x}px;top:${pos.y}px"
            onmousedown="wfPhaseMouseDown(event,'${id}')"
-           onclick="wfSelectPhase(event,'${id}')">
+           onclick="wfSelectPhase(event,'${id}')"
+           oncontextmenu="wfPhaseContextMenu(event,'${id}')">
         <div class="wf-phase-head">
           <span>${escHtml(p.name || id)}</span>
           <span class="wf-phase-order">${p.order || '?'}</span>
@@ -3372,35 +3373,22 @@ function wfRenderArrows() {
     const fromPos = _wf.positions[t.from];
     const toPos = _wf.positions[t.to];
     if (!fromPos || !toPos) continue;
-    // Determine arrow direction
+    // Always: output from right edge, input to left edge
     const fromEl = document.getElementById(`wf-p-${t.from}`);
     const toEl = document.getElementById(`wf-p-${t.to}`);
     const fw = fromEl ? fromEl.offsetWidth : 200;
-    const tw = toEl ? toEl.offsetWidth : 200;
     const fh = fromEl ? fromEl.offsetHeight : 80;
     const th = toEl ? toEl.offsetHeight : 80;
 
-    let sx, sy, ex, ey;
-    // Connect right side of from to left side of to (horizontal flow)
-    if (toPos.x > fromPos.x + fw/2) {
-      sx = fromPos.x + fw; sy = fromPos.y + fh/2;
-      ex = toPos.x; ey = toPos.y + th/2;
-    } else if (toPos.x < fromPos.x - tw/2) {
-      sx = fromPos.x; sy = fromPos.y + fh/2;
-      ex = toPos.x + tw; ey = toPos.y + th/2;
-    } else {
-      // Vertical
-      if (toPos.y > fromPos.y) {
-        sx = fromPos.x + fw/2; sy = fromPos.y + fh;
-        ex = toPos.x + tw/2; ey = toPos.y;
-      } else {
-        sx = fromPos.x + fw/2; sy = fromPos.y;
-        ex = toPos.x + tw/2; ey = toPos.y + th;
-      }
-    }
+    const sx = fromPos.x + fw, sy = fromPos.y + fh / 2;
+    const ex = toPos.x, ey = toPos.y + th / 2;
     const midX = (sx + ex) / 2;
     const gate = t.human_gate ? '(HG)' : '';
-    paths += `<path d="M${sx},${sy} C${midX},${sy} ${midX},${ey} ${ex},${ey}" />`;
+    const d = `M${sx},${sy} C${midX},${sy} ${midX},${ey} ${ex},${ey}`;
+    // Invisible wide hit area for right-click
+    const idx = transitions.indexOf(t);
+    paths += `<path d="${d}" stroke="transparent" stroke-width="14" fill="none" style="pointer-events:stroke;cursor:pointer" oncontextmenu="wfArrowContextMenu(event,${idx})" />`;
+    paths += `<path d="${d}" />`;
     // Label
     const lx = (sx + ex) / 2, ly = (sy + ey) / 2 - 8;
     if (gate) paths += `<text x="${lx}" y="${ly}" fill="var(--warning)" font-size="10" text-anchor="middle">${gate}</text>`;
@@ -3444,13 +3432,22 @@ function _wfRenderWorkspaceProps(el) {
     </div>
   `).join('');
 
-  let rulesHtml = Object.entries(rules).map(([k, v]) => `
-    <div class="wf-rule-item">
-      <code>${escHtml(k)}</code>
-      <span>${typeof v === 'boolean' ? (v ? 'true' : 'false') : escHtml(String(v))}</span>
-      <button class="btn-icon danger" onclick="wfDeleteRule('${escHtml(k)}')">x</button>
-    </div>
-  `).join('');
+  const WF_BOOL_RULES = [
+    { key: 'critical_alert_blocks_transition', label: 'Alerte critique bloque la transition' },
+    { key: 'human_gate_required_for_all_transitions', label: 'Human gate sur toutes les transitions' },
+    { key: 'lead_dev_only_dispatcher_for_devs', label: 'Lead dev seul dispatcher pour les devs' },
+    { key: 'qa_must_run_after_dev', label: 'QA doit tourner apres les devs' },
+  ];
+  let rulesHtml = WF_BOOL_RULES.map(r => {
+    const checked = !!rules[r.key];
+    return `<label class="wf-rule-check"><input type="checkbox" ${checked ? 'checked' : ''} onchange="wfToggleRule('${r.key}',this.checked)" /><span>${escHtml(r.label)}</span></label>`;
+  }).join('');
+  const maxPar = rules.max_agents_parallel;
+  rulesHtml += `<div class="form-group" style="margin-top:0.5rem">
+    <label>Max agents en parallele</label>
+    <input type="number" min="1" max="20" value="${maxPar != null ? maxPar : ''}" placeholder="ex: 3"
+           onchange="wfSetMaxParallel(this.value)" style="width:80px" />
+  </div>`;
 
   // Build parallel groups list with usage check
   const pgOrder = pg.order || [];
@@ -3487,11 +3484,8 @@ function _wfRenderWorkspaceProps(el) {
     </div>
 
     <div class="wf-props-section">
-      <div class="wf-props-section-title">
-        Regles
-        <button class="btn-icon" style="font-size:0.75rem" onclick="wfAddRule()">+</button>
-      </div>
-      ${rulesHtml || '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucune regle</div>'}
+      <div class="wf-props-section-title">Regles</div>
+      ${rulesHtml}
     </div>
   `;
 }
@@ -3584,6 +3578,7 @@ function _wfRenderPhaseProps(el, phaseId) {
 
 // ── Workspace interactions ──
 function wfWorkspaceClick(e) {
+  wfCloseContextMenu();
   if (e.target.closest('.wf-phase')) return;
   _wf.selected = null;
   wfRender();
@@ -3592,6 +3587,75 @@ function wfWorkspaceClick(e) {
 function wfSelectPhase(e, id) {
   e.stopPropagation();
   _wf.selected = id;
+  wfRender();
+}
+
+// ── Context menu ──
+function wfPhaseContextMenu(e, id) {
+  e.preventDefault();
+  e.stopPropagation();
+  wfCloseContextMenu();
+  const ws = document.getElementById('wf-workspace');
+  const rect = ws.getBoundingClientRect();
+  const x = e.clientX - rect.left + ws.scrollLeft;
+  const y = e.clientY - rect.top + ws.scrollTop;
+  const menu = document.createElement('div');
+  menu.className = 'wf-ctx-menu';
+  menu.id = 'wf-ctx-menu';
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  menu.innerHTML = `
+    <div class="wf-ctx-item wf-ctx-danger" onclick="wfCtxDeletePhase('${id}')">Supprimer la phase</div>
+  `;
+  document.getElementById('wf-workspace-inner').appendChild(menu);
+  setTimeout(() => document.addEventListener('mousedown', _wfCloseCtxOnClick, { once: true }), 0);
+}
+
+function wfArrowContextMenu(e, idx) {
+  e.preventDefault();
+  e.stopPropagation();
+  wfCloseContextMenu();
+  const ws = document.getElementById('wf-workspace');
+  const rect = ws.getBoundingClientRect();
+  const x = e.clientX - rect.left + ws.scrollLeft;
+  const y = e.clientY - rect.top + ws.scrollTop;
+  const t = (_wf.data.transitions || [])[idx];
+  if (!t) return;
+  const menu = document.createElement('div');
+  menu.className = 'wf-ctx-menu';
+  menu.id = 'wf-ctx-menu';
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  menu.innerHTML = `
+    <div class="wf-ctx-item" style="font-size:0.7rem;color:var(--text-secondary);cursor:default">${escHtml(t.from)} → ${escHtml(t.to)}</div>
+    <div class="wf-ctx-item wf-ctx-danger" onclick="wfCtxDeleteTransition(${idx})">Supprimer la transition</div>
+  `;
+  document.getElementById('wf-workspace-inner').appendChild(menu);
+  setTimeout(() => document.addEventListener('mousedown', _wfCloseCtxOnClick, { once: true }), 0);
+}
+
+function wfCtxDeleteTransition(idx) {
+  wfCloseContextMenu();
+  _wf.data.transitions.splice(idx, 1);
+  wfRender();
+}
+
+function _wfCloseCtxOnClick(e) {
+  if (!e.target.closest('.wf-ctx-menu')) wfCloseContextMenu();
+}
+
+function wfCloseContextMenu() {
+  const m = document.getElementById('wf-ctx-menu');
+  if (m) m.remove();
+}
+
+async function wfCtxDeletePhase(id) {
+  wfCloseContextMenu();
+  if (!(await confirmModal(`Supprimer la phase "${_wf.data.phases[id]?.name || id}" et toutes ses transitions ?`))) return;
+  delete _wf.data.phases[id];
+  delete _wf.positions[id];
+  _wf.data.transitions = (_wf.data.transitions || []).filter(t => t.from !== id && t.to !== id);
+  _wf.selected = null;
   wfRender();
 }
 
@@ -3974,37 +4038,23 @@ function wfDeleteTransition(idx) {
 }
 
 // ── Rules CRUD ──
-function wfAddRule() {
-  showModal(`
-    <div class="modal-header">
-      <h3>Ajouter une regle</h3>
-      <button class="btn-icon" onclick="closeModal();wfRender()">&times;</button>
-    </div>
-    <div class="form-group"><label>Cle</label><input id="wf-new-rule-key" placeholder="ex: max_agents_parallel" /></div>
-    <div class="form-group"><label>Valeur</label><input id="wf-new-rule-val" placeholder="true, false, ou un nombre" /></div>
-    <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal();wfRender()">Annuler</button>
-      <button class="btn btn-primary" onclick="_wfDoAddRule()">Ajouter</button>
-    </div>
-  `, 'modal-confirm');
-}
-
-function _wfDoAddRule() {
-  const k = document.getElementById('wf-new-rule-key').value.trim();
-  let v = document.getElementById('wf-new-rule-val').value.trim();
-  if (!k) { toast('Cle requise', 'error'); return; }
-  if (v === 'true') v = true;
-  else if (v === 'false') v = false;
-  else if (!isNaN(v) && v !== '') v = Number(v);
+function wfToggleRule(key, checked) {
   if (!_wf.data.rules) _wf.data.rules = {};
-  _wf.data.rules[k] = v;
-  closeModal();
-  wfRender();
+  if (checked) {
+    _wf.data.rules[key] = true;
+  } else {
+    delete _wf.data.rules[key];
+  }
 }
 
-function wfDeleteRule(key) {
-  delete _wf.data.rules[key];
-  wfRender();
+function wfSetMaxParallel(val) {
+  if (!_wf.data.rules) _wf.data.rules = {};
+  const n = parseInt(val, 10);
+  if (isNaN(n) || val.trim() === '') {
+    delete _wf.data.rules.max_agents_parallel;
+  } else {
+    _wf.data.rules.max_agents_parallel = n;
+  }
 }
 
 // ── Parallel groups ──

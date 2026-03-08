@@ -1232,6 +1232,33 @@ tr:hover { background: rgba(255,255,255,0.02); }
   transform: translateY(-50%) scale(1.3);
 }
 
+/* Context menu */
+.wf-ctx-menu {
+  position: absolute;
+  z-index: 10;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.25rem 0;
+  min-width: 180px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+}
+.wf-ctx-item {
+  padding: 0.45rem 0.75rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.wf-ctx-item:hover {
+  background: rgba(255,255,255,0.06);
+}
+.wf-ctx-item.wf-ctx-danger {
+  color: var(--danger);
+}
+.wf-ctx-item.wf-ctx-danger:hover {
+  background: rgba(239,68,68,0.12);
+}
+
 /* Sidebar right */
 .wf-sidebar {
   width: 320px;
@@ -1369,6 +1396,25 @@ tr:hover { background: rgba(255,255,255,0.02); }
   font-size: 0.78rem;
 }
 .wf-rule-item code { font-size: 0.75rem; color: #60a5fa; flex: 1; }
+
+/* Rule checkboxes */
+.wf-rule-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.4rem;
+  margin-bottom: 0.2rem;
+  border-radius: 0.35rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.wf-rule-check:hover { background: rgba(255,255,255,0.04); }
+.wf-rule-check input[type=checkbox] {
+  width: auto;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
 
 /* Responsive sidebar collapse */
 @media (max-width: 900px) {
