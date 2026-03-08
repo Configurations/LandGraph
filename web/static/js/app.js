@@ -3188,7 +3188,7 @@ async function loadTplMCP() {
 
 function renderTplMCP() {
   // Top: only services WITH env_vars (parameterized)
-  const withParams = tplMcpCatalog.filter(c => c.env_vars.length > 0);
+  const withParams = tplMcpCatalog.filter(c => c.env_vars.length > 0 && c.installed);
   // Bottom: only services WITHOUT env_vars
   const noParams = tplMcpCatalog.filter(c => c.env_vars.length === 0 && (tplMcpShowDeprecated || !c.deprecated));
 
