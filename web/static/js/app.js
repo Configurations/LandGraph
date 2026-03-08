@@ -1613,6 +1613,7 @@ function renderTeams() {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
           </button>
           <button class="btn btn-primary btn-sm" onclick="showAddCfgAgentModal('${escHtml(dir)}')">+ Agent</button>
+          <button class="btn btn-outline btn-sm" onclick="showCfgWorkflow('${escHtml(dir)}')">Workflow</button>
           <button class="btn btn-outline btn-sm" onclick="showCfgRawRegistry('${escHtml(dir)}')">Raw</button>
           <button class="btn btn-outline btn-sm" style="color:var(--error)" onclick="deleteTeam('${escHtml(t.id)}')">Suppr</button>
         </div>
@@ -1911,6 +1912,37 @@ async function saveCfgRawRegistry(dir) {
     toast('Registry sauvegarde', 'success');
     closeModal();
     loadTeams();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function showCfgWorkflow(dir) {
+  try {
+    const data = await api(`/api/workflow/${encodeURIComponent(dir)}`);
+    const json = Object.keys(data).length ? JSON.stringify(data, null, 2) : '{\n  "phases": {},\n  "transitions": [],\n  "rules": {}\n}';
+    showModal(`
+      <div class="modal-header">
+        <h3>Workflow — Configs/Teams/${escHtml(dir)}/</h3>
+        <button class="btn-icon" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="form-group">
+        <textarea id="cfg-workflow-json" style="min-height:450px;font-family:monospace;font-size:0.8rem;white-space:pre;tab-size:2">${escHtml(json)}</textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+        <button class="btn btn-primary" onclick="saveCfgWorkflow('${escHtml(dir)}')">Sauvegarder</button>
+      </div>
+    `, 'modal-wide');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function saveCfgWorkflow(dir) {
+  const raw = document.getElementById('cfg-workflow-json').value;
+  let data;
+  try { data = JSON.parse(raw); } catch { toast('JSON invalide', 'error'); return; }
+  try {
+    await api(`/api/workflow/${encodeURIComponent(dir)}`, { method: 'PUT', body: data });
+    toast('Workflow sauvegarde', 'success');
+    closeModal();
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -2769,7 +2801,11 @@ function renderTplTeams() {
           <span class="tag tag-blue" style="margin-left:0.5rem">${agentEntries.length} agent${agentEntries.length > 1 ? 's' : ''}</span>
         </div>
         <div style="display:flex;gap:0.5rem">
+          <button class="btn-icon" onclick="event.stopPropagation();editTplTeamQuick(${i})" title="Modifier l'equipe" style="opacity:0.5">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+          </button>
           <button class="btn btn-primary btn-sm" onclick="showAddTplAgentModal('${escHtml(dir)}')">+ Agent</button>
+          <button class="btn btn-outline btn-sm" onclick="showTplWorkflow('${escHtml(dir)}')">Workflow</button>
           <button class="btn btn-outline btn-sm" onclick="showTplRawRegistry('${escHtml(dir)}')">Raw</button>
           <button class="btn btn-outline btn-sm" style="color:var(--error)" onclick="deleteTplTeam(${i})">Suppr</button>
         </div>
@@ -3071,6 +3107,37 @@ async function saveTplRawRegistry(dir) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+async function showTplWorkflow(dir) {
+  try {
+    const data = await api(`/api/templates/workflow/${encodeURIComponent(dir)}`);
+    const json = Object.keys(data).length ? JSON.stringify(data, null, 2) : '{\n  "phases": {},\n  "transitions": [],\n  "rules": {}\n}';
+    showModal(`
+      <div class="modal-header">
+        <h3>Workflow — Shared/Teams/${escHtml(dir)}/</h3>
+        <button class="btn-icon" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="form-group">
+        <textarea id="tpl-workflow-json" style="min-height:450px;font-family:monospace;font-size:0.8rem;white-space:pre;tab-size:2">${escHtml(json)}</textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+        <button class="btn btn-primary" onclick="saveTplWorkflow('${escHtml(dir)}')">Sauvegarder</button>
+      </div>
+    `, 'modal-wide');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function saveTplWorkflow(dir) {
+  const raw = document.getElementById('tpl-workflow-json').value;
+  let data;
+  try { data = JSON.parse(raw); } catch { toast('JSON invalide', 'error'); return; }
+  try {
+    await api(`/api/templates/workflow/${encodeURIComponent(dir)}`, { method: 'PUT', body: data });
+    toast('Workflow sauvegarde', 'success');
+    closeModal();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
 async function _saveTplTeams() {
   await api('/api/templates/teams', { method: 'PUT', body: tplTeamsData });
   toast('Equipes sauvegardees');
@@ -3176,6 +3243,41 @@ function editTplTeam(idx) {
       <button class="btn btn-primary" onclick="saveTplTeam(${idx})">Sauvegarder</button>
     </div>
   `);
+}
+
+function editTplTeamQuick(idx) {
+  const t = tplTeamsData.teams[idx];
+  showModal(`
+    <div class="modal-header">
+      <h3>Equipe: ${escHtml(t.name || t.id)}</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-group">
+      <label>Nom</label>
+      <input id="m-tpl-team-qname" value="${escHtml(t.name || '')}" />
+    </div>
+    <div class="form-group">
+      <label>Description</label>
+      <input id="m-tpl-team-qdesc" value="${escHtml(t.description || '')}" />
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="saveTplTeamQuick(${idx})">Sauvegarder</button>
+    </div>
+  `, 'modal-confirm');
+}
+
+async function saveTplTeamQuick(idx) {
+  const name = document.getElementById('m-tpl-team-qname').value.trim();
+  if (!name) { toast('Nom requis', 'error'); return; }
+  tplTeamsData.teams[idx] = {
+    ...tplTeamsData.teams[idx],
+    name,
+    description: document.getElementById('m-tpl-team-qdesc').value.trim(),
+  };
+  await _saveTplTeams();
+  closeModal();
+  loadTplTeamsList();
 }
 
 async function saveTplTeam(idx) {

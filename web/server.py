@@ -829,6 +829,44 @@ async def put_templates_registry(directory: str, request: Request):
     return {"ok": True}
 
 
+# ── API: Workflow (per team) ──────────────────────
+
+@app.get("/api/templates/workflow/{directory}")
+async def get_template_workflow(directory: str):
+    """Return Workflow.json for a Shared template directory."""
+    tdir = SHARED_TEAMS_DIR / directory
+    path = tdir / "Workflow.json"
+    return _read_json(path) if path.exists() else {}
+
+
+@app.put("/api/templates/workflow/{directory}")
+async def put_template_workflow(directory: str, request: Request):
+    """Overwrite Workflow.json for a Shared template directory."""
+    data = await request.json()
+    tdir = SHARED_TEAMS_DIR / directory
+    tdir.mkdir(parents=True, exist_ok=True)
+    _write_json(tdir / "Workflow.json", data)
+    return {"ok": True}
+
+
+@app.get("/api/workflow/{directory}")
+async def get_workflow(directory: str):
+    """Return Workflow.json for a Configs team directory."""
+    tdir = TEAMS_DIR / directory
+    path = tdir / "Workflow.json"
+    return _read_json(path) if path.exists() else {}
+
+
+@app.put("/api/workflow/{directory}")
+async def put_workflow(directory: str, request: Request):
+    """Overwrite Workflow.json for a Configs team directory."""
+    data = await request.json()
+    tdir = TEAMS_DIR / directory
+    tdir.mkdir(parents=True, exist_ok=True)
+    _write_json(tdir / "Workflow.json", data)
+    return {"ok": True}
+
+
 # ── API: LLM Providers ────────────────────────────
 
 @app.get("/api/llm/providers")
