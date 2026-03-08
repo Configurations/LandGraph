@@ -39,6 +39,7 @@ wget -qO docker-compose.yml "${REPO_RAW}/docker-compose.yml" 2>/dev/null || { ec
 wget -qO env.example "${REPO_RAW}/env.example" 2>/dev/null || { echo "ERREUR: env.example"; exit 1; }
 wget -qO Dockerfile "${REPO_RAW}/Dockerfile" 2>/dev/null || { echo "ERREUR: Dockerfile"; exit 1; }
 wget -qO Dockerfile.admin "${REPO_RAW}/Dockerfile.admin" 2>/dev/null || true
+wget -qO Dockerfile.discord "${REPO_RAW}/Dockerfile.discord" 2>/dev/null || true
 wget -qO requirements.txt "${REPO_RAW}/requirements.txt" 2>/dev/null || { echo "ERREUR: requirements.txt"; exit 1; }
 wget -qO scripts/init.sql "${REPO_RAW}/scripts/init.sql" 2>/dev/null || { echo "ERREUR: init.sql"; exit 1; }
 wget -qO Shared/Teams/llm_providers.json "${REPO_RAW}/Shared/Teams/llm_providers.json" 2>/dev/null || true
@@ -70,6 +71,23 @@ fi
 # ── 4. Init Python ───────────────────────────
 echo "[4/6] Touches Python..."
 touch agents/__init__.py agents/shared/__init__.py
+
+
+# ── 4b. Code Python agents ──────────────────
+echo "[4b/6] Code Python agents..."
+
+# Shared modules
+SHARED_FILES=(base_agent.py agent_loader.py llm_provider.py rate_limiter.py mcp_client.py team_resolver.py workflow_engine.py human_gate.py agent_conversation.py discord_tools.py state.py __init__.py)
+for f in "${SHARED_FILES[@]}"; do
+    wget -qO "agents/shared/${f}" "${REPO_RAW}/Agents/Shared/${f}" 2>/dev/null || true
+done
+
+# Main agents
+MAIN_FILES=(orchestrator.py gateway.py discord_listener.py)
+for f in "${MAIN_FILES[@]}"; do
+    wget -qO "agents/${f}" "${REPO_RAW}/Agents/${f}" 2>/dev/null || true
+done
+
 
 # ── 5. Environnement Python local ───────────
 echo "[5/6] Environnement Python local..."
