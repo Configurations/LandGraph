@@ -3356,7 +3356,7 @@ function wfRender() {
         </div>
         <div class="wf-connect-handle wf-handle-in wf-handle-left" title="Entree"></div>
         <div class="wf-connect-handle wf-handle-in wf-handle-top" title="Entree"></div>
-        <div class="wf-connect-handle wf-handle-in wf-handle-right-in" title="Entree"></div>
+        <div class="wf-connect-handle wf-handle-in wf-handle-bottom" title="Entree"></div>
         <div class="wf-connect-handle wf-handle-out" title="Tirer pour creer une transition"
              onmousedown="wfLinkStart(event,'${id}')"></div>
       </div>`;
@@ -3393,15 +3393,15 @@ function wfRenderArrows() {
     const toCx = toPos.x + tw / 2, toCy = toPos.y + th / 2;
     let ex, ey, d;
     if (toCx < fromCx - fw * 0.3) {
-      // Target is to the left → enter from right
-      ex = toPos.x + tw; ey = toPos.y + th / 2;
+      // Target is to the left → enter from bottom
+      ex = toPos.x + tw / 2; ey = toPos.y + th;
       const cpx = Math.max(sx, ex) + 80;
-      d = `M${sx},${sy} C${cpx},${sy} ${cpx},${ey} ${ex},${ey}`;
+      d = `M${sx},${sy} C${cpx},${sy} ${cpx},${ey + 60} ${ex},${ey}`;
     } else if (toCy < fromCy - fh * 0.5) {
-      // Target is above → enter from bottom (top of target)
+      // Target is above → enter from bottom
       ex = toPos.x + tw / 2; ey = toPos.y + th;
       const midX = (sx + ex) / 2;
-      d = `M${sx},${sy} C${midX},${sy} ${midX},${ey} ${ex},${ey}`;
+      d = `M${sx},${sy} C${midX},${sy} ${midX},${ey + 40} ${ex},${ey}`;
     } else {
       // Default: enter from left
       ex = toPos.x; ey = toPos.y + th / 2;

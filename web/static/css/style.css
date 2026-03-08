@@ -1249,10 +1249,10 @@ tr:hover { background: rgba(255,255,255,0.02); }
   left: 50%;
   transform: translateX(-50%);
 }
-.wf-handle-right-in {
-  right: -5px;
-  top: 30%;
-  transform: translateY(-50%);
+.wf-handle-bottom {
+  bottom: -5px;
+  left: 50%;
+  transform: translateX(-50%);
 }
 
 /* Context menu */
