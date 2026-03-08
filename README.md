@@ -21,26 +21,6 @@ Plateforme multi-agents LangGraph auto-hebergee sur une VM ou un LXC Proxmox, av
 └─────────────────────────────────────────────────┘
 ```
 
-## Agents
-
-Le systeme comporte 13 agents specialises :
-
-| Agent | Profil | Prompt |
-|-------|--------|--------|
-| Orchestrateur | [orchestrator](Agents/orchestrator-agent-profile.md) | [prompt](prompts/orchestrator.md) |
-| Architecte | [architect](Agents/architect-agent-profile.md) | [prompt](prompts/architect.md) |
-| UX Designer | [ux-designer](Agents/ux-designer-agent-profile.md) | [prompt](prompts/ux_designer.md) |
-| Analyste | [analyst](Agents/analyst-agent-profile.md) | [prompt](prompts/requirements_analyst.md) |
-| Lead Dev | — | [prompt](prompts/lead_dev.md) |
-| Planificateur | [planner](Agents/planner-agent-profile.md) | [prompt](prompts/planner.md) |
-| Dev Backend API | [dev-backend-api](Agents/dev-backend-api-agent-profile.md) | [prompt](prompts/dev_backend_api.md) |
-| Dev Mobile | [dev-mobile](Agents/dev-mobile-agent-profile.md) | [prompt](prompts/dev_mobile.md) |
-| Dev Frontend Web | [dev-frontend-web](Agents/dev-frontend-web-agent-profile.md) | [prompt](prompts/dev_frontend_web.md) |
-| QA Engineer | [qa-engineer](Agents/qa-engineer-agent-profile.md) | [prompt](prompts/qa_engineer.md) |
-| DevOps Engineer | [devops-engineer](Agents/devops-engineer-agent-profile.md) | [prompt](prompts/devops_engineer.md) |
-| Docs Writer | [docs-writer](Agents/docs-writer-agent-profile.md) | [prompt](prompts/docs_writer.md) |
-| Legal Advisor | [legal-advisor](Agents/legal-advisor-agent-profile.md) | [prompt](prompts/legal_advisor.md) |
-
 ## Prerequis
 
 - Serveur **Proxmox VE 8.x / 9.x**
@@ -62,7 +42,7 @@ L'installation se deroule en plusieurs etapes sequentielles. Chaque script est t
 **Ou** : sur le shell de l'hote Proxmox.
 
 ```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/00-configure-lxc.sh)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/00-create-lxc.sh)"
 ```
 
 Ce script cree une VM avec la configuration suivante :
@@ -70,7 +50,7 @@ Ce script cree une VM avec la configuration suivante :
 | Parametre | Valeur par defaut  |
 |-----------|--------------------|
 | Nom       | `langgraph-agents` |
-| CPU       | 8 cores            |
+| CPU       | 4 cores            |
 | RAM       | 8 Go               |
 | Disque    | 30 Go (local-lvm)  |
 | Reseau    | `vmbr0`            |
@@ -82,7 +62,7 @@ Le VMID est optionnel (defaut : `200`).
 ---
 
 
-### Etape 1 — Configurer un LXC pour Docker (optionnel)
+### Etape 1 — Configurer un LXC pour Docker
 
 **Ou** : sur le shell de l'hote Proxmox (uniquement si vous utilisez un container LXC au lieu d'une VM).
 
