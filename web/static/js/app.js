@@ -98,6 +98,57 @@ function _confirmAnswer(val) {
   if (_confirmResolve) { _confirmResolve(val); _confirmResolve = null; }
 }
 
+// ── Pipeline Steps helpers ────────────────────────
+
+function renderPipelineSteps(containerId, steps) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  const rows = (steps || []).map((s, i) => `
+    <div class="pipeline-step" data-idx="${i}">
+      <div class="pipeline-step-header">
+        <span class="pipeline-step-num">${i + 1}</span>
+        <input class="pipeline-step-name" value="${escHtml(s.name || '')}" placeholder="Nom de l'etape" />
+        <input class="pipeline-step-key" value="${escHtml(s.output_key || '')}" placeholder="output_key" />
+        <button class="btn-icon pipeline-step-up" onclick="movePipelineStep('${containerId}',${i},-1)" title="Monter" ${i === 0 ? 'disabled' : ''}>&uarr;</button>
+        <button class="btn-icon pipeline-step-down" onclick="movePipelineStep('${containerId}',${i},1)" title="Descendre" ${i === steps.length - 1 ? 'disabled' : ''}>&darr;</button>
+        <button class="btn-icon pipeline-step-del" onclick="removePipelineStep('${containerId}',${i})" title="Supprimer">&times;</button>
+      </div>
+      <textarea class="pipeline-step-instr" placeholder="Instruction...">${escHtml(s.instruction || '')}</textarea>
+    </div>
+  `).join('');
+  el.innerHTML = rows + `<button class="btn btn-outline btn-sm" onclick="addPipelineStep('${containerId}')" style="margin-top:0.5rem">+ Etape</button>`;
+}
+
+function getPipelineSteps(containerId) {
+  const el = document.getElementById(containerId);
+  if (!el) return [];
+  return [...el.querySelectorAll('.pipeline-step')].map(row => ({
+    name: row.querySelector('.pipeline-step-name').value.trim(),
+    output_key: row.querySelector('.pipeline-step-key').value.trim(),
+    instruction: row.querySelector('.pipeline-step-instr').value.trim(),
+  })).filter(s => s.name);
+}
+
+function addPipelineStep(containerId) {
+  const steps = getPipelineSteps(containerId);
+  steps.push({ name: '', output_key: '', instruction: '' });
+  renderPipelineSteps(containerId, steps);
+}
+
+function removePipelineStep(containerId, idx) {
+  const steps = getPipelineSteps(containerId);
+  steps.splice(idx, 1);
+  renderPipelineSteps(containerId, steps);
+}
+
+function movePipelineStep(containerId, idx, dir) {
+  const steps = getPipelineSteps(containerId);
+  const target = idx + dir;
+  if (target < 0 || target >= steps.length) return;
+  [steps[idx], steps[target]] = [steps[target], steps[idx]];
+  renderPipelineSteps(containerId, steps);
+}
+
 // ═══════════════════════════════════════════════════
 // SECRETS (.env)
 // ═══════════════════════════════════════════════════
@@ -680,6 +731,7 @@ function editAgent(id) {
 
   const promptRaw = a.prompt_content || '';
   const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
+  const hasPipeline = a.type === 'pipeline' || (a.pipeline_steps && a.pipeline_steps.length > 0);
 
   showModal(`
     <div class="modal-header">
@@ -710,6 +762,17 @@ function editAgent(id) {
       </div>
     </div>
     <div class="form-group">
+      <label>Type</label>
+      <select id="agent-edit-type" onchange="document.getElementById('agent-edit-pipeline-wrap').style.display=this.value==='pipeline'?'':'none'">
+        <option value="single" ${!hasPipeline ? 'selected' : ''}>Single</option>
+        <option value="pipeline" ${hasPipeline ? 'selected' : ''}>Pipeline</option>
+      </select>
+    </div>
+    <div id="agent-edit-pipeline-wrap" class="form-group" style="${hasPipeline ? '' : 'display:none'}">
+      <label>Pipeline Steps</label>
+      <div id="agent-edit-pipeline-steps" class="pipeline-steps-container"></div>
+    </div>
+    <div class="form-group">
       <label>Prompt (${escHtml(a.prompt)})</label>
       <div class="prompt-tabs">
         <div class="prompt-tab active" id="prompt-tab-preview" onclick="switchPromptTab('preview')">Apercu</div>
@@ -729,6 +792,7 @@ function editAgent(id) {
       <button class="btn btn-primary" onclick="saveAgent('${escHtml(id)}')">Sauvegarder</button>
     </div>
   `, 'modal-wide');
+  renderPipelineSteps('agent-edit-pipeline-steps', a.pipeline_steps || []);
 }
 
 function switchPromptTab(tab) {
@@ -757,6 +821,8 @@ async function saveAgent(id) {
   const temperature = parseFloat(document.getElementById('agent-edit-temp').value);
   const max_tokens = parseInt(document.getElementById('agent-edit-tokens').value);
   const prompt_content = document.getElementById('agent-edit-prompt').value;
+  const agentType = document.getElementById('agent-edit-type').value;
+  const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('agent-edit-pipeline-steps') : [];
   const mcpCheckboxes = document.querySelectorAll('.agent-mcp-cb:checked');
   const mcpList = Array.from(mcpCheckboxes).map(cb => cb.value);
 
@@ -765,7 +831,7 @@ async function saveAgent(id) {
     await Promise.all([
       api(`/api/agents/${id}`, {
         method: 'PUT',
-        body: { id, name, model, temperature, max_tokens, prompt_content, prompt_file: '', type: agents[id].type || '', pipeline_steps: agents[id].pipeline_steps || [], team_id: agents[id]._team_id || 'default' }
+        body: { id, name, model, temperature, max_tokens, prompt_content, prompt_file: '', type: agentType, pipeline_steps, team_id: agents[id]._team_id || 'default' }
       }),
       api(`/api/agents/mcp-access/${encodeURIComponent(teamDir)}/${encodeURIComponent(id)}`, { method: 'PUT', body: { servers: mcpList } }),
     ]);
@@ -815,6 +881,17 @@ function showAddAgentModal() {
       <input id="agent-new-temp" type="number" step="0.1" min="0" max="2" value="0.2" />
     </div>
     <div class="form-group">
+      <label>Type</label>
+      <select id="agent-new-type" onchange="document.getElementById('agent-new-pipeline-wrap').style.display=this.value==='pipeline'?'':'none'">
+        <option value="single" selected>Single</option>
+        <option value="pipeline">Pipeline</option>
+      </select>
+    </div>
+    <div id="agent-new-pipeline-wrap" class="form-group" style="display:none">
+      <label>Pipeline Steps</label>
+      <div id="agent-new-pipeline-steps" class="pipeline-steps-container"></div>
+    </div>
+    <div class="form-group">
       <label>Services MCP</label>
       <div class="mcp-check-tags">${mcpTags}</div>
     </div>
@@ -827,6 +904,7 @@ function showAddAgentModal() {
       <button class="btn btn-primary" onclick="addAgent()">Creer</button>
     </div>
   `);
+  renderPipelineSteps('agent-new-pipeline-steps', []);
 }
 
 async function addAgent() {
@@ -837,12 +915,14 @@ async function addAgent() {
   const prompt_content = document.getElementById('agent-new-prompt').value;
   const team_id = document.getElementById('agent-new-team')?.value || 'default';
   if (!id || !name) { toast('ID et nom requis', 'error'); return; }
+  const agentType = document.getElementById('agent-new-type').value;
+  const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('agent-new-pipeline-steps') : [];
   const mcpChecked = [...document.querySelectorAll('#modal-container .mcp-check-tag input:checked')].map(cb => cb.value);
   const teamDir = agentGroups.find(g => g.team_id === team_id)?.team_dir || team_id;
   try {
     await api('/api/agents', {
       method: 'POST',
-      body: { id, name, model, temperature, max_tokens: 32768, prompt_content, prompt_file: '', type: '', pipeline_steps: [], team_id }
+      body: { id, name, model, temperature, max_tokens: 32768, prompt_content, prompt_file: '', type: agentType, pipeline_steps, team_id }
     });
     if (mcpChecked.length) {
       await api(`/api/agents/mcp-access/${encodeURIComponent(teamDir)}/${encodeURIComponent(id)}`, { method: 'PUT', body: { servers: mcpChecked } });
@@ -1579,6 +1659,17 @@ async function showAddCfgAgentModal(dir) {
       </div>
     </div>
     <div class="form-group">
+      <label>Type</label>
+      <select id="cfg-agent-new-type" onchange="document.getElementById('cfg-new-pipeline-wrap').style.display=this.value==='pipeline'?'':'none'">
+        <option value="single" selected>Single</option>
+        <option value="pipeline">Pipeline</option>
+      </select>
+    </div>
+    <div id="cfg-new-pipeline-wrap" class="form-group" style="display:none">
+      <label>Pipeline Steps</label>
+      <div id="cfg-new-pipeline-steps" class="pipeline-steps-container"></div>
+    </div>
+    <div class="form-group">
       <label>Services MCP</label>
       <div class="mcp-check-tags">${mcpTags}</div>
     </div>
@@ -1591,6 +1682,7 @@ async function showAddCfgAgentModal(dir) {
       <button class="btn btn-primary" onclick="addCfgAgent('${escHtml(dir)}')">Ajouter</button>
     </div>
   `);
+  renderPipelineSteps('cfg-new-pipeline-steps', []);
 }
 
 async function addCfgAgent(dir) {
@@ -1600,6 +1692,8 @@ async function addCfgAgent(dir) {
   const llm = document.getElementById('cfg-agent-new-llm').value;
   const temperature = parseFloat(document.getElementById('cfg-agent-new-temp').value) || 0.3;
   const max_tokens = parseInt(document.getElementById('cfg-agent-new-tokens').value) || 32768;
+  const agentType = document.getElementById('cfg-agent-new-type').value;
+  const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('cfg-new-pipeline-steps') : [];
   const prompt_content = document.getElementById('cfg-agent-new-prompt').value || `# ${name}\n\n`;
   const mcpChecked = [...document.querySelectorAll('#modal-container .mcp-check-tag input:checked')].map(cb => cb.value);
   try {
@@ -1607,6 +1701,8 @@ async function addCfgAgent(dir) {
       id, name, llm, temperature, max_tokens,
       prompt_content,
       prompt_file: `${id}.md`,
+      type: agentType,
+      pipeline_steps,
       team_id: dir,
     }});
     if (mcpChecked.length) {
@@ -1647,6 +1743,7 @@ async function editCfgAgent(dir, agentId) {
 
   const promptRaw = a.prompt_content || '';
   const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
+  const hasPipeline = a.type === 'pipeline' || (a.pipeline_steps && a.pipeline_steps.length > 0);
 
   showModal(`
     <div class="modal-header">
@@ -1674,6 +1771,17 @@ async function editCfgAgent(dir, agentId) {
       </div>
     </div>
     <div class="form-group">
+      <label>Type</label>
+      <select id="cfg-agent-edit-type" onchange="document.getElementById('cfg-pipeline-wrap').style.display=this.value==='pipeline'?'':'none'">
+        <option value="single" ${!hasPipeline ? 'selected' : ''}>Single</option>
+        <option value="pipeline" ${hasPipeline ? 'selected' : ''}>Pipeline</option>
+      </select>
+    </div>
+    <div id="cfg-pipeline-wrap" class="form-group" style="${hasPipeline ? '' : 'display:none'}">
+      <label>Pipeline Steps</label>
+      <div id="cfg-pipeline-steps" class="pipeline-steps-container"></div>
+    </div>
+    <div class="form-group">
       <label>Prompt (${escHtml(a.prompt || agentId + '.md')})</label>
       <div class="prompt-tabs">
         <div class="prompt-tab active" id="cfg-prompt-tab-preview" onclick="switchCfgPromptTab('preview')">Apercu</div>
@@ -1693,6 +1801,7 @@ async function editCfgAgent(dir, agentId) {
       <button class="btn btn-primary" onclick="saveCfgAgent('${escHtml(dir)}','${escHtml(agentId)}')">Sauvegarder</button>
     </div>
   `, 'modal-wide');
+  renderPipelineSteps('cfg-pipeline-steps', a.pipeline_steps || []);
 }
 
 function switchCfgPromptTab(tab) {
@@ -1722,9 +1831,10 @@ async function saveCfgAgent(dir, agentId) {
   const temperature = parseFloat(document.getElementById('cfg-agent-edit-temp').value);
   const max_tokens = parseInt(document.getElementById('cfg-agent-edit-tokens').value);
   const prompt_content = document.getElementById('cfg-agent-edit-prompt').value;
+  const agentType = document.getElementById('cfg-agent-edit-type').value;
+  const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('cfg-pipeline-steps') : [];
   const team = teamsData.find(t => (t.directory || t.id) === dir);
   const a = team.agents[agentId];
-  // Collect checked MCP servers
   const mcpChecked = [...document.querySelectorAll('#cfg-agent-mcp-tags input[type=checkbox]:checked')].map(cb => cb.value);
   try {
     await Promise.all([
@@ -1732,8 +1842,8 @@ async function saveCfgAgent(dir, agentId) {
         id: agentId, name, llm, temperature, max_tokens,
         prompt_content,
         prompt_file: a.prompt || `${agentId}.md`,
-        type: a.type || '',
-        pipeline_steps: a.pipeline_steps || [],
+        type: agentType,
+        pipeline_steps,
         team_id: dir,
       }}),
       api(`/api/agents/mcp-access/${encodeURIComponent(dir)}/${encodeURIComponent(agentId)}`, { method: 'PUT', body: { servers: mcpChecked }}),
@@ -2689,6 +2799,17 @@ async function showAddTplAgentModal(dir) {
       </div>
     </div>
     <div class="form-group">
+      <label>Type</label>
+      <select id="tpl-agent-new-type" onchange="document.getElementById('tpl-new-pipeline-wrap').style.display=this.value==='pipeline'?'':'none'">
+        <option value="single" selected>Single</option>
+        <option value="pipeline">Pipeline</option>
+      </select>
+    </div>
+    <div id="tpl-new-pipeline-wrap" class="form-group" style="display:none">
+      <label>Pipeline Steps</label>
+      <div id="tpl-new-pipeline-steps" class="pipeline-steps-container"></div>
+    </div>
+    <div class="form-group">
       <label>Services MCP</label>
       <div class="mcp-check-tags">${mcpTags}</div>
     </div>
@@ -2701,6 +2822,7 @@ async function showAddTplAgentModal(dir) {
       <button class="btn btn-primary" onclick="addTplAgent('${escHtml(dir)}')">Ajouter</button>
     </div>
   `);
+  renderPipelineSteps('tpl-new-pipeline-steps', []);
 }
 
 async function addTplAgent(dir) {
@@ -2710,6 +2832,8 @@ async function addTplAgent(dir) {
   const llm = document.getElementById('tpl-agent-new-llm').value;
   const temperature = parseFloat(document.getElementById('tpl-agent-new-temp').value) || 0.3;
   const max_tokens = parseInt(document.getElementById('tpl-agent-new-tokens').value) || 32768;
+  const agentType = document.getElementById('tpl-agent-new-type').value;
+  const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('tpl-new-pipeline-steps') : [];
   const prompt_content = document.getElementById('tpl-agent-new-prompt').value || `# ${name}\n\n`;
   const mcpChecked = [...document.querySelectorAll('#modal-container .mcp-check-tag input:checked')].map(cb => cb.value);
   try {
@@ -2717,6 +2841,8 @@ async function addTplAgent(dir) {
       id, name, llm, temperature, max_tokens,
       prompt_content,
       prompt_file: `${id}.md`,
+      type: agentType,
+      pipeline_steps,
       team_id: dir,
     }});
     if (mcpChecked.length) {
@@ -2757,6 +2883,7 @@ async function editTplAgent(dir, agentId) {
 
   const promptRaw = a.prompt_content || '';
   const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
+  const hasPipeline = a.type === 'pipeline' || (a.pipeline_steps && a.pipeline_steps.length > 0);
 
   showModal(`
     <div class="modal-header">
@@ -2784,6 +2911,17 @@ async function editTplAgent(dir, agentId) {
       </div>
     </div>
     <div class="form-group">
+      <label>Type</label>
+      <select id="tpl-agent-edit-type" onchange="document.getElementById('tpl-pipeline-wrap').style.display=this.value==='pipeline'?'':'none'">
+        <option value="single" ${!hasPipeline ? 'selected' : ''}>Single</option>
+        <option value="pipeline" ${hasPipeline ? 'selected' : ''}>Pipeline</option>
+      </select>
+    </div>
+    <div id="tpl-pipeline-wrap" class="form-group" style="${hasPipeline ? '' : 'display:none'}">
+      <label>Pipeline Steps</label>
+      <div id="tpl-pipeline-steps" class="pipeline-steps-container"></div>
+    </div>
+    <div class="form-group">
       <label>Prompt (${escHtml(a.prompt || agentId + '.md')})</label>
       <div class="prompt-tabs">
         <div class="prompt-tab active" id="tpl-prompt-tab-preview" onclick="switchTplPromptTab('preview')">Apercu</div>
@@ -2803,6 +2941,7 @@ async function editTplAgent(dir, agentId) {
       <button class="btn btn-primary" onclick="saveTplAgent('${escHtml(dir)}','${escHtml(agentId)}')">Sauvegarder</button>
     </div>
   `, 'modal-wide');
+  renderPipelineSteps('tpl-pipeline-steps', a.pipeline_steps || []);
 }
 
 function switchTplPromptTab(tab) {
@@ -2832,6 +2971,8 @@ async function saveTplAgent(dir, agentId) {
   const temperature = parseFloat(document.getElementById('tpl-agent-edit-temp').value);
   const max_tokens = parseInt(document.getElementById('tpl-agent-edit-tokens').value);
   const prompt_content = document.getElementById('tpl-agent-edit-prompt').value;
+  const agentType = document.getElementById('tpl-agent-edit-type').value;
+  const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('tpl-pipeline-steps') : [];
   const tpl = tplTemplatesData.find(tp => tp.id === dir);
   const a = tpl.agents[agentId];
   const mcpChecked = [...document.querySelectorAll('#tpl-agent-mcp-tags input[type=checkbox]:checked')].map(cb => cb.value);
@@ -2841,8 +2982,8 @@ async function saveTplAgent(dir, agentId) {
         id: agentId, name, llm, temperature, max_tokens,
         prompt_content,
         prompt_file: a.prompt || `${agentId}.md`,
-        type: a.type || '',
-        pipeline_steps: a.pipeline_steps || [],
+        type: agentType,
+        pipeline_steps,
         team_id: dir,
       }}),
       api(`/api/templates/mcp-access/${encodeURIComponent(dir)}/${encodeURIComponent(agentId)}`, { method: 'PUT', body: { servers: mcpChecked }}),
