@@ -42,6 +42,8 @@ STORAGE="local-lvm"
 BRIDGE="vmbr0"
 SSH_KEY_DIR="/root/.ssh/lxc-keys"
 DOCKER_SCRIPT_URL="https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/01-install-docker.sh"
+LANGGRAPH_SCRIPT_URL="https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/02-install-langgraph.sh"
+RAG_SCRIPT_URL="https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/03-install-rag.sh"
 
 if [ -z "${CTID}" ]; then
     echo "Usage: $0 <CTID>"
@@ -365,7 +367,9 @@ echo "[${STEP_DOCKER}/${STEP_TOTAL}] Installation de Docker dans le container...
 echo "  -> Telechargement et execution de 01-install-docker.sh..."
 echo ""
 
-pct exec "${CTID}" -- bash -c "$(wget -qLO - "${DOCKER_SCRIPT_URL}" 2>/dev/null || echo 'echo ERREUR : impossible de telecharger 01-install-docker.sh')"
+# pct exec "${CTID}" -- bash -c "$(wget -qLO - "${DOCKER_SCRIPT_URL}" 2>/dev/null || echo 'echo ERREUR : impossible de telecharger ${DOCKER_SCRIPT_URL}')"
+# pct exec "${CTID}" -- bash -c "$(wget -qLO - "${LANGGRAPH_SCRIPT_URL}" 2>/dev/null || echo 'echo ERREUR : impossible de telecharger ${LANGGRAPH_SCRIPT_URL}')"
+# pct exec "${CTID}" -- bash -c "$(wget -qLO - "${RAG_SCRIPT_URL}" 2>/dev/null || echo 'echo ERREUR : impossible de telecharger ${RAG_SCRIPT_URL}')"
 
 # ── Recuperer l'IP finale ────────────────────────────────────────────────────
 CT_IP=$(pct exec "${CTID}" -- bash -c "ip -4 addr show eth0 2>/dev/null | grep inet | awk '{print \$2}' | cut -d/ -f1 | head -1")
@@ -403,11 +407,5 @@ docker_version=$(pct exec "${CTID}" -- docker --version 2>/dev/null || echo "non
 compose_version=$(pct exec "${CTID}" -- docker compose version 2>/dev/null || echo "non installe")
 echo "    ${docker_version}"
 echo "    ${compose_version}"
-echo ""
-echo ""
-echo "  Prochaine etape :"
-echo "  Executer 01-install-docker.sh dans le container"
-echo ""
-echo "bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/01-install-docker.sh)" _ ${CTID}"
 echo ""
 echo "==========================================="
