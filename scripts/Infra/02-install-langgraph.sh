@@ -35,19 +35,19 @@ cd "${PROJECT_DIR}"
 # ── 2. Fichiers de config depuis GitHub ──────
 echo "[2/6] Telechargement des fichiers de config..."
 
-wget -qO docker-compose.yml "${REPO_RAW}/Configs/docker-compose.yml" 2>/dev/null || { echo "ERREUR: docker-compose.yml"; exit 1; }
-wget -qO Dockerfile "${REPO_RAW}/Configs/Dockerfile" 2>/dev/null || { echo "ERREUR: Dockerfile"; exit 1; }
-wget -qO Dockerfile.discord "${REPO_RAW}/scripts/Infra/Dockerfile.discord" 2>/dev/null || true
-wget -qO requirements.txt "${REPO_RAW}/Configs/requirements.txt" 2>/dev/null || { echo "ERREUR: requirements.txt"; exit 1; }
-wget -qO config/init.sql "${REPO_RAW}/Configs/init.sql" 2>/dev/null || { echo "ERREUR: init.sql"; exit 1; }
-wget -qO langgraph.json "${REPO_RAW}/Configs/langgraph.json" 2>/dev/null || true
-wget -qO .gitignore "${REPO_RAW}/Configs/gitignore" 2>/dev/null || true
+wget -qO docker-compose.yml "${REPO_RAW}/docker-compose.yml" 2>/dev/null || { echo "ERREUR: docker-compose.yml"; exit 1; }
+wget -qO Dockerfile "${REPO_RAW}/Dockerfile" 2>/dev/null || { echo "ERREUR: Dockerfile"; exit 1; }
+wget -qO Dockerfile.admin "${REPO_RAW}/Dockerfile.admin" 2>/dev/null || true
+wget -qO requirements.txt "${REPO_RAW}/requirements.txt" 2>/dev/null || { echo "ERREUR: requirements.txt"; exit 1; }
+wget -qO scripts/init.sql "${REPO_RAW}/scripts/init.sql" 2>/dev/null || { echo "ERREUR: init.sql"; exit 1; }
+wget -qO /Configs/.gitignore "${REPO_RAW}/gitignore" 2>/dev/null || true
+wget -qO /Shared/.gitignore "${REPO_RAW}/gitignore" 2>/dev/null || true
 
 echo "  -> Fichiers telecharges"
 
 # Scripts utilitaires (start, stop, restart, build)
 for s in start.sh stop.sh restart.sh build.sh; do
-    wget -qO "${s}" "${REPO_RAW}/scripts/${s}" 2>/dev/null || true
+    wget -qO "${s}" "${REPO_RAW}/${s}" 2>/dev/null || true
 done
 chmod +x start.sh stop.sh restart.sh build.sh
 echo "  -> Scripts : start.sh, stop.sh, restart.sh, build.sh"
@@ -55,7 +55,7 @@ echo "  -> Scripts : start.sh, stop.sh, restart.sh, build.sh"
 # ── 3. Fichier .env ──────────────────────────
 echo "[3/6] Fichier .env..."
 if [ ! -f .env ]; then
-    wget -qO .env "${REPO_RAW}/Configs/env.example" 2>/dev/null || {
+    wget -qO .env "${REPO_RAW}/env.example" 2>/dev/null || {
         echo "ERREUR: env.example non trouve"
         exit 1
     }
