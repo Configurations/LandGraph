@@ -1950,7 +1950,24 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             cwd=str(target_dir), capture_output=True, text=True, timeout=10
         )
-        branch = branch_result.stdout.strip() or "master"
+        branch = branch_result.stdout.strip()
+        # If detached HEAD or empty, try symbolic-ref, then fall back to master/main
+        if not branch or branch == "HEAD":
+            sym_result = subprocess.run(
+                ["git", "symbolic-ref", "--short", "HEAD"],
+                cwd=str(target_dir), capture_output=True, text=True, timeout=10
+            )
+            branch = sym_result.stdout.strip()
+        if not branch or branch == "HEAD":
+            # Check if remote has main or master
+            remote_result = subprocess.run(
+                ["git", "branch", "-r"],
+                cwd=str(target_dir), capture_output=True, text=True, timeout=10
+            )
+            if "origin/main" in remote_result.stdout:
+                branch = "main"
+            else:
+                branch = "master"
         log.info("git commit flow (%s): branch=%s, dir=%s", repo_key, branch, target_dir)
 
         # 4. Set upstream tracking
@@ -2007,16 +2024,18 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
         if commit_result.returncode != 0:
             return {"stdout": commit_result.stdout, "stderr": commit_result.stderr, "code": commit_result.returncode}
 
-        # 9. Push
-        if repo_path:
+        # 9. Push (retry with --force-with-lease if non-fast-forward)
+        push_cmd = ["git", "push", "origin", branch] if repo_path else ["git", "push"]
+        push_result = subprocess.run(
+            push_cmd,
+            cwd=str(target_dir), capture_output=True, text=True, timeout=60,
+            env=git_env,
+        )
+        if push_result.returncode != 0 and "non-fast-forward" in push_result.stderr:
+            log.warning("git push rejected non-fast-forward (%s), retrying with --force-with-lease", repo_key)
+            push_cmd_force = ["git", "push", "--force-with-lease", "origin", branch] if repo_path else ["git", "push", "--force-with-lease"]
             push_result = subprocess.run(
-                ["git", "push", "origin", branch],
-                cwd=str(target_dir), capture_output=True, text=True, timeout=60,
-                env=git_env,
-            )
-        else:
-            push_result = subprocess.run(
-                ["git", "push"],
+                push_cmd_force,
                 cwd=str(target_dir), capture_output=True, text=True, timeout=60,
                 env=git_env,
             )
