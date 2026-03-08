@@ -1450,17 +1450,17 @@ async function runScript(name) {
 // ═══════════════════════════════════════════════════
 async function loadGit() {
   try {
-    const [cfgStatus, sharedStatus, cfg] = await Promise.all([
+    const [cfgStatus, sharedStatus, cfgCfg, sharedCfg] = await Promise.all([
       api('/api/git/configs/status'),
       api('/api/git/shared/status'),
-      api('/api/git/config'),
+      api('/api/git/repo-config/configs'),
+      api('/api/git/repo-config/shared'),
     ]);
-    const repos = cfg.repos || {};
 
     // Configs repo
-    _fillGitRepoUI('configs', cfgStatus, repos.configs || {});
+    _fillGitRepoUI('configs', cfgStatus, cfgCfg);
     // Shared repo
-    _fillGitRepoUI('shared', sharedStatus, repos.shared || {});
+    _fillGitRepoUI('shared', sharedStatus, sharedCfg);
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -1478,22 +1478,25 @@ function _fillGitRepoUI(key, status, cfg) {
 }
 
 async function saveGitConfig() {
-  const body = {
-    repos: {
-      configs: {
-        path: document.getElementById('git-cfg-configs-path').value.trim(),
-        login: document.getElementById('git-cfg-configs-login').value.trim(),
-        password: document.getElementById('git-cfg-configs-password').value.trim(),
-      },
-      shared: {
-        path: document.getElementById('git-cfg-shared-path').value.trim(),
-        login: document.getElementById('git-cfg-shared-login').value.trim(),
-        password: document.getElementById('git-cfg-shared-password').value.trim(),
-      },
-    },
-  };
   try {
-    await api('/api/git/config', { method: 'PUT', body });
+    await Promise.all([
+      api('/api/git/repo-config/configs', {
+        method: 'PUT',
+        body: {
+          path: document.getElementById('git-cfg-configs-path').value.trim(),
+          login: document.getElementById('git-cfg-configs-login').value.trim(),
+          password: document.getElementById('git-cfg-configs-password').value.trim(),
+        },
+      }),
+      api('/api/git/repo-config/shared', {
+        method: 'PUT',
+        body: {
+          path: document.getElementById('git-cfg-shared-path').value.trim(),
+          login: document.getElementById('git-cfg-shared-login').value.trim(),
+          password: document.getElementById('git-cfg-shared-password').value.trim(),
+        },
+      }),
+    ]);
     toast('Configuration Git enregistree', 'success');
     loadGit();
   } catch (e) { toast(e.message, 'error'); }

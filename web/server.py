@@ -1533,11 +1533,23 @@ async def delete_template_agent(agent_id: str, team_id: str = ""):
 
 
 def _ensure_gitignore(target_dir: Path):
-    """Create .gitignore with default patterns if it doesn't exist."""
+    """Create or update .gitignore with required patterns."""
     gitignore = target_dir / ".gitignore"
-    if not gitignore.exists():
+    required = ["*.sh", "git.json"]
+    if gitignore.exists():
+        content = gitignore.read_text(encoding="utf-8")
+        lines = [l.strip() for l in content.splitlines()]
+        added = False
+        for pat in required:
+            if pat not in lines:
+                content = content.rstrip("\n") + f"\n{pat}\n"
+                added = True
+        if added:
+            gitignore.write_text(content, encoding="utf-8")
+            log.info("Updated .gitignore in %s (added git.json)", target_dir)
+    else:
         log.info("Creating .gitignore in %s", target_dir)
-        gitignore.write_text("*.sh\n", encoding="utf-8")
+        gitignore.write_text("\n".join(required) + "\n", encoding="utf-8")
 
 
 def _build_remote_url(repo_path: str, login: str, password: str) -> str:
@@ -1909,6 +1921,11 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
         password = cfg.get("password", "").strip()
 
         _ensure_gitignore(target_dir)
+        # Remove git.json from tracking if it was previously committed
+        subprocess.run(
+            ["git", "rm", "--cached", "--ignore-unmatch", "git.json"],
+            cwd=str(target_dir), capture_output=True, text=True, timeout=10
+        )
         subprocess.run(
             ["git", "add", "-A"],
             cwd=str(target_dir), capture_output=True, text=True, timeout=10
