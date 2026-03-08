@@ -1870,11 +1870,11 @@ async def git_push_only(repo_key: str):
             cwd=str(target_dir), capture_output=True, text=True, timeout=60,
             env=git_env,
         )
-        # Retry with --force-with-lease if rejected
-        if push_result.returncode != 0 and ("non-fast-forward" in push_result.stderr or "secret" in push_result.stderr.lower()):
-            log.warning("git push rejected (%s), retrying with --force-with-lease", repo_key)
+        # Retry with --force if rejected (stale info from prior filter-branch, or non-fast-forward)
+        if push_result.returncode != 0 and ("non-fast-forward" in push_result.stderr or "stale info" in push_result.stderr or "secret" in push_result.stderr.lower()):
+            log.warning("git push rejected (%s), retrying with --force", repo_key)
             push_result = subprocess.run(
-                ["git", "push", "--force-with-lease", "origin", branch],
+                ["git", "push", "--force", "origin", branch],
                 cwd=str(target_dir), capture_output=True, text=True, timeout=60,
                 env=git_env,
             )
@@ -2138,62 +2138,63 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
             return {"stdout": commit_result.stdout, "stderr": commit_result.stderr, "code": commit_result.returncode}
         # Always attempt push — there may be previous local commits not yet pushed
 
-        # 9. Purge sensitive files from entire history (GitHub Push Protection)
-        # Diagnostic: list all files ever committed that might contain secrets
+        # 9. Purge sensitive files from history ONLY if they actually exist
+        history_rewritten = False
         diag_result = subprocess.run(
             ["git", "log", "--all", "--diff-filter=A", "--name-only", "--pretty=format:"],
             cwd=str(target_dir), capture_output=True, text=True, timeout=30
         )
         all_files = set(f.strip() for f in diag_result.stdout.splitlines() if f.strip())
-        sensitive_in_history = [f for f in all_files if any(p in f.lower() for p in ['git.json', '.env', '.key', '.pem', 'secret', 'token', 'credential'])]
+        sensitive_patterns = ['git.json', '.env', '.key', '.pem']
+        sensitive_in_history = [f for f in all_files if any(f.lower().endswith(p) or f.lower() == p for p in sensitive_patterns)]
         if sensitive_in_history:
-            log.warning("Sensitive files found in history (%s): %s", repo_key, sensitive_in_history)
-        sensitive_files = "git rm -r --cached --ignore-unmatch git.json .env *.key *.pem"
-        purge_result = subprocess.run(
-            ["git", "filter-branch", "--force", "--index-filter",
-             sensitive_files,
-             "--prune-empty", "--", "--all"],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=120,
-            env={**git_env, "FILTER_BRANCH_SQUELCH_WARNING": "1"},
-        )
-        log.info("git filter-branch (%s): code=%d stdout=%s stderr=%s",
-                 repo_key, purge_result.returncode,
-                 purge_result.stdout[:300], purge_result.stderr[:300])
-        # Clean up filter-branch refs
-        if purge_result.returncode == 0:
-            subprocess.run(
-                ["git", "for-each-ref", "--format=%(refname)", "refs/original/"],
-                cwd=str(target_dir), capture_output=True, text=True, timeout=10
+            log.warning("Sensitive files in history (%s): %s — running filter-branch", repo_key, sensitive_in_history)
+            sensitive_files = "git rm -r --cached --ignore-unmatch git.json .env *.key *.pem"
+            purge_result = subprocess.run(
+                ["git", "filter-branch", "--force", "--index-filter",
+                 sensitive_files,
+                 "--prune-empty", "--", "--all"],
+                cwd=str(target_dir), capture_output=True, text=True, timeout=120,
+                env={**git_env, "FILTER_BRANCH_SQUELCH_WARNING": "1"},
             )
-            subprocess.run(
-                ["git", "update-ref", "-d", "refs/original/refs/heads/" + branch],
-                cwd=str(target_dir), capture_output=True, text=True, timeout=10
-            )
-            subprocess.run(
-                ["git", "reflog", "expire", "--expire=now", "--all"],
-                cwd=str(target_dir), capture_output=True, text=True, timeout=10
-            )
-            subprocess.run(
-                ["git", "gc", "--prune=now"],
-                cwd=str(target_dir), capture_output=True, text=True, timeout=30
-            )
-            log.info("git filter-branch cleanup done (%s)", repo_key)
+            log.info("git filter-branch (%s): code=%d stdout=%s stderr=%s",
+                     repo_key, purge_result.returncode,
+                     purge_result.stdout[:300], purge_result.stderr[:300])
+            # Check if history was actually changed (not just "unchanged")
+            history_rewritten = purge_result.returncode == 0 and "is unchanged" not in purge_result.stderr
+            if purge_result.returncode == 0:
+                subprocess.run(
+                    ["git", "update-ref", "-d", "refs/original/refs/heads/" + branch],
+                    cwd=str(target_dir), capture_output=True, text=True, timeout=10
+                )
+                subprocess.run(
+                    ["git", "reflog", "expire", "--expire=now", "--all"],
+                    cwd=str(target_dir), capture_output=True, text=True, timeout=10
+                )
+                subprocess.run(
+                    ["git", "gc", "--prune=now"],
+                    cwd=str(target_dir), capture_output=True, text=True, timeout=30
+                )
+                log.info("git filter-branch cleanup done (%s)", repo_key)
+        else:
+            log.info("No sensitive files in history (%s), skipping filter-branch", repo_key)
 
-        # 10. Push (use --force-with-lease since filter-branch rewrites history)
-        history_rewritten = purge_result.returncode == 0
+        # 10. Push (use --force only if history was actually rewritten)
         if history_rewritten:
-            log.info("History was rewritten, using --force-with-lease for push (%s)", repo_key)
-        push_cmd = ["git", "push", "--force-with-lease", "origin", branch] if (repo_path and history_rewritten) else (
-            ["git", "push", "origin", branch] if repo_path else ["git", "push"]
-        )
+            log.info("History was rewritten, using --force for push (%s)", repo_key)
+            push_cmd = ["git", "push", "--force", "origin", branch]
+        elif repo_path:
+            push_cmd = ["git", "push", "origin", branch]
+        else:
+            push_cmd = ["git", "push"]
         push_result = subprocess.run(
             push_cmd,
             cwd=str(target_dir), capture_output=True, text=True, timeout=60,
             env=git_env,
         )
-        if push_result.returncode != 0 and ("non-fast-forward" in push_result.stderr or "secret" in push_result.stderr.lower()):
-            log.warning("git push rejected (%s), retrying with --force-with-lease", repo_key)
-            push_cmd_force = ["git", "push", "--force-with-lease", "origin", branch] if repo_path else ["git", "push", "--force-with-lease"]
+        if push_result.returncode != 0 and "non-fast-forward" in push_result.stderr:
+            log.warning("git push rejected non-fast-forward (%s), retrying with --force", repo_key)
+            push_cmd_force = ["git", "push", "--force", "origin", branch]
             push_result = subprocess.run(
                 push_cmd_force,
                 cwd=str(target_dir), capture_output=True, text=True, timeout=60,
