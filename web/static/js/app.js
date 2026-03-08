@@ -3352,7 +3352,8 @@ function wfRender() {
           <div class="wf-mini-label">Livrables (${delIds.length})</div>
           <div class="wf-mini-list">${delIds.map(d => `<span class="wf-mini-chip${(p.deliverables[d]||{}).required?' required':''}">${escHtml(d)}</span>`).join('')}</div>
         </div>
-        <div class="wf-connect-handle" title="Tirer pour creer une transition"
+        <div class="wf-connect-handle wf-handle-in" title="Entree"></div>
+        <div class="wf-connect-handle wf-handle-out" title="Tirer pour creer une transition"
              onmousedown="wfLinkStart(event,'${id}')"></div>
       </div>`;
   }
@@ -3389,7 +3390,7 @@ function wfRenderArrows() {
     const idx = transitions.indexOf(t);
     paths += `<path d="${d}" stroke="transparent" stroke-width="14" fill="none" style="pointer-events:stroke;cursor:pointer" onclick="wfSelectTransition(event,${idx})" oncontextmenu="wfArrowContextMenu(event,${idx})" />`;
     const isSel = _wf.selected && typeof _wf.selected === 'object' && _wf.selected.type === 'transition' && _wf.selected.idx === idx;
-    paths += `<path d="${d}" ${isSel ? 'stroke="var(--accent)" stroke-width="3"' : ''} />`;
+    paths += `<path d="${d}" ${isSel ? 'stroke="var(--accent)" stroke-width="3"' : ''} marker-end="url(#wf-arrowhead)" />`;
     // Label
     const lx = (sx + ex) / 2, ly = (sy + ey) / 2 - 8;
     if (gate) paths += `<text x="${lx}" y="${ly}" fill="var(--warning)" font-size="10" text-anchor="middle">${gate}</text>`;
@@ -3988,6 +3989,8 @@ function _wfDoAddTransition() {
   const to = document.getElementById('wf-new-tr-to').value;
   if (from === to) { toast('De et Vers doivent etre differents', 'error'); return; }
   if (!_wf.data.transitions) _wf.data.transitions = [];
+  const exists = _wf.data.transitions.some(t => t.from === from && t.to === to);
+  if (exists) { toast('Cette transition existe deja', 'error'); return; }
   _wf.data.transitions.push({
     from, to,
     human_gate: document.getElementById('wf-new-tr-hg').value === 'true'
