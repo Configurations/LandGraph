@@ -27,7 +27,7 @@ cd "${PROJECT_DIR}"
 echo "[1/4] Telechargement des fichiers admin web..."
 mkdir -p web/static/css web/static/js
 
-wget -qO Dockerfile.admin "${REPO_RAW}/Configs/Dockerfile.admin" 2>/dev/null || { echo "ERREUR: Dockerfile.admin"; exit 1; }
+wget -qO Dockerfile.admin "${REPO_RAW}/Dockerfile.admin" 2>/dev/null || { echo "ERREUR: Dockerfile.admin"; exit 1; }
 wget -qO web/requirements.txt "${REPO_RAW}/web/requirements.txt" 2>/dev/null || { echo "ERREUR: web/requirements.txt"; exit 1; }
 wget -qO web/server.py "${REPO_RAW}/web/server.py" 2>/dev/null || { echo "ERREUR: web/server.py"; exit 1; }
 wget -qO web/static/index.html "${REPO_RAW}/web/static/index.html" 2>/dev/null || { echo "ERREUR: index.html"; exit 1; }
@@ -38,7 +38,7 @@ echo "  -> Fichiers telecharges"
 
 # ── 2. Mettre a jour docker-compose.yml ──────
 echo "[2/4] Mise a jour docker-compose.yml..."
-wget -qO docker-compose.yml "${REPO_RAW}/Configs/docker-compose.yml" 2>/dev/null || { echo "ERREUR: docker-compose.yml"; exit 1; }
+wget -qO docker-compose.yml "${REPO_RAW}/docker-compose.yml" 2>/dev/null || { echo "ERREUR: docker-compose.yml"; exit 1; }
 echo "  -> docker-compose.yml mis a jour"
 
 # ── 3. Configs MCP (si absentes) ─────────────
@@ -58,7 +58,7 @@ if [ ! -f config/mcp_catalog.csv ]; then
 fi
 # Copier llm_providers.json si absent
 if [ ! -f config/llm_providers.json ]; then
-    wget -qO config/llm_providers.json "${REPO_RAW}/Configs/llm_providers.json" 2>/dev/null || true
+    wget -qO config/llm_providers.json "${REPO_RAW}/Configs/Teams/llm_providers.json" 2>/dev/null || true
     echo "  -> llm_providers.json copie"
 fi
 
