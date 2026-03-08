@@ -44,7 +44,7 @@ SSH_KEY_DIR="/root/.ssh/lxc-keys"
 DOCKER_SCRIPT_URL="https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/01-install-docker.sh"
 LANGGRAPH_SCRIPT_URL="https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/02-install-langgraph.sh"
 RAG_SCRIPT_URL="https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/03-install-rag.sh"
-WEB_SCRIPT_URL="https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/04-install-web.sh"
+WEB_SCRIPT_URL="https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/04-install-admin.sh"
 
 if [ -z "${CTID}" ]; then
     echo "Usage: $0 <CTID>"
