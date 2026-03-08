@@ -12,7 +12,7 @@ VMID=${1:-200}
 VM_NAME="langgraph-agents"
 CORES=4
 MEMORY=8192
-DISK_SIZE="30G"
+DISK_SIZE=30
 STORAGE="local-lvm"
 BRIDGE="vmbr0"
 ISO_PATH="local:iso/ubuntu-24.04-live-server-amd64.iso"
@@ -25,7 +25,7 @@ echo "  VM ID     : ${VMID}"
 echo "  Nom       : ${VM_NAME}"
 echo "  CPU       : ${CORES} cores"
 echo "  RAM       : ${MEMORY} MB"
-echo "  Disque    : ${DISK_SIZE}"
+echo "  Disque    : ${DISK_SIZE}G"
 echo "  Reseau    : ${BRIDGE}"
 echo ""
 
