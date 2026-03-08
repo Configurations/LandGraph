@@ -62,7 +62,7 @@ Le VMID est optionnel (defaut : `200`).
 ---
 
 
-### Etape 1 — Configurer un LXC existant pour Docker
+### Etape 1 — Configurer un LXC pour Docker (si déjà existant)
 
 **Ou** : sur le shell de l'hote Proxmox (uniquement si vous utilisez un container LXC au lieu d'une VM).
 
