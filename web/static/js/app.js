@@ -3343,7 +3343,7 @@ function wfRender() {
            style="left:${pos.x}px;top:${pos.y}px"
            onmousedown="wfPhaseMouseDown(event,'${id}')"
            onclick="wfSelectPhase(event,'${id}')"
-           oncontextmenu="wfPhaseContextMenu(event,'${id}')">
+           oncontextmenu="event.preventDefault()">
         <div class="wf-phase-head">
           <span>${escHtml(p.name || id)}</span>
           <span class="wf-phase-order">${p.order || '?'}</span>
@@ -3354,7 +3354,9 @@ function wfRender() {
           <div class="wf-mini-label">Livrables (${delIds.length})</div>
           <div class="wf-mini-list">${delIds.map(d => `<span class="wf-mini-chip${(p.deliverables[d]||{}).required?' required':''}">${escHtml(d)}</span>`).join('')}</div>
         </div>
-        <div class="wf-connect-handle wf-handle-in" title="Entree"></div>
+        <div class="wf-connect-handle wf-handle-in wf-handle-left" title="Entree"></div>
+        <div class="wf-connect-handle wf-handle-in wf-handle-top" title="Entree"></div>
+        <div class="wf-connect-handle wf-handle-in wf-handle-right-in" title="Entree"></div>
         <div class="wf-connect-handle wf-handle-out" title="Tirer pour creer une transition"
              onmousedown="wfLinkStart(event,'${id}')"></div>
       </div>`;
@@ -3381,13 +3383,32 @@ function wfRenderArrows() {
     const toEl = document.getElementById(`wf-p-${t.to}`);
     const fw = fromEl ? fromEl.offsetWidth : 200;
     const fh = fromEl ? fromEl.offsetHeight : 80;
+    const tw = toEl ? toEl.offsetWidth : 200;
     const th = toEl ? toEl.offsetHeight : 80;
 
+    // Exit always from right
     const sx = fromPos.x + fw, sy = fromPos.y + fh / 2;
-    const ex = toPos.x, ey = toPos.y + th / 2;
-    const midX = (sx + ex) / 2;
+    // Entry: pick best side (left, top, or right) based on relative position
+    const fromCx = fromPos.x + fw / 2, fromCy = fromPos.y + fh / 2;
+    const toCx = toPos.x + tw / 2, toCy = toPos.y + th / 2;
+    let ex, ey, d;
+    if (toCx < fromCx - fw * 0.3) {
+      // Target is to the left → enter from right
+      ex = toPos.x + tw; ey = toPos.y + th / 2;
+      const cpx = Math.max(sx, ex) + 80;
+      d = `M${sx},${sy} C${cpx},${sy} ${cpx},${ey} ${ex},${ey}`;
+    } else if (toCy < fromCy - fh * 0.5) {
+      // Target is above → enter from bottom (top of target)
+      ex = toPos.x + tw / 2; ey = toPos.y + th;
+      const midX = (sx + ex) / 2;
+      d = `M${sx},${sy} C${midX},${sy} ${midX},${ey} ${ex},${ey}`;
+    } else {
+      // Default: enter from left
+      ex = toPos.x; ey = toPos.y + th / 2;
+      const midX = (sx + ex) / 2;
+      d = `M${sx},${sy} C${midX},${sy} ${midX},${ey} ${ex},${ey}`;
+    }
     const gate = t.human_gate ? '(HG)' : '';
-    const d = `M${sx},${sy} C${midX},${sy} ${midX},${ey} ${ex},${ey}`;
     // Invisible wide hit area for right-click
     const idx = transitions.indexOf(t);
     paths += `<path d="${d}" stroke="transparent" stroke-width="14" fill="none" style="pointer-events:stroke;cursor:pointer" onclick="wfSelectTransition(event,${idx})" oncontextmenu="wfArrowContextMenu(event,${idx})" />`;
@@ -3569,12 +3590,15 @@ function _wfRenderPhaseProps(el, phaseId) {
   const agentIds = Object.keys(agents);
   let delsHtml = Object.entries(deliverables).map(([id, d]) => {
     const agOpts = agentIds.map(a => `<option value="${escHtml(a)}" ${a===d.agent?'selected':''}>${a}</option>`).join('');
-    return `<div class="wf-inline-block">
-      <div class="wf-inline-head">
+    const colKey = `${phaseId}:del:${id}`;
+    const collapsed = _wf._collapsed && _wf._collapsed[colKey];
+    return `<div class="wf-inline-block${collapsed ? ' collapsed' : ''}">
+      <div class="wf-inline-head" onclick="wfToggleCollapseKey('${colKey}',this)">
+        <span class="wf-collapse-arrow">${collapsed ? '\u25b6' : '\u25bc'}</span>
         <span class="wf-inline-id">${escHtml(id)}</span>
-        <button class="btn-icon danger" onclick="wfRemoveDeliverable('${phaseId}','${escHtml(id)}')">x</button>
+        <button class="btn-icon danger" onclick="event.stopPropagation();wfRemoveDeliverable('${phaseId}','${escHtml(id)}')">x</button>
       </div>
-      <div class="wf-inline-fields">
+      <div class="wf-inline-fields"${collapsed ? ' style="display:none"' : ''}>
         <input placeholder="Description" value="${escHtml(d.description || '')}" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','description',this.value)" />
         <div style="display:flex;gap:0.3rem">
           <select style="flex:1" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','agent',this.value)">${agOpts}</select>
@@ -3910,6 +3934,24 @@ function wfToggleCollapse(phaseId, agentId) {
   const key = `${phaseId}:${agentId}`;
   _wf._collapsed[key] = !_wf._collapsed[key];
   const block = document.getElementById(`wf-agent-sel-${phaseId}-${agentId}`)?.closest('.wf-inline-block');
+  if (!block) return;
+  const fields = block.querySelector('.wf-inline-fields');
+  const arrow = block.querySelector('.wf-collapse-arrow');
+  if (_wf._collapsed[key]) {
+    block.classList.add('collapsed');
+    if (fields) fields.style.display = 'none';
+    if (arrow) arrow.textContent = '\u25b6';
+  } else {
+    block.classList.remove('collapsed');
+    if (fields) fields.style.display = '';
+    if (arrow) arrow.textContent = '\u25bc';
+  }
+}
+
+function wfToggleCollapseKey(key, headEl) {
+  if (!_wf._collapsed) _wf._collapsed = {};
+  _wf._collapsed[key] = !_wf._collapsed[key];
+  const block = headEl.closest('.wf-inline-block');
   if (!block) return;
   const fields = block.querySelector('.wf-inline-fields');
   const arrow = block.querySelector('.wf-collapse-arrow');
