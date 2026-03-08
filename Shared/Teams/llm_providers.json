@@ -1,0 +1,132 @@
+{
+  "throttling": {
+    "ANTHROPIC_API_KEY": { "rpm": 25, "tpm": 25000 },
+    "OPENAI_API_KEY": { "rpm": 60, "tpm": 60000 },
+    "AZURE_OPENAI_API_KEY": { "rpm": 60, "tpm": 60000 },
+    "GOOGLE_API_KEY": { "rpm": 60, "tpm": 60000 },
+    "MISTRAL_API_KEY": { "rpm": 60, "tpm": 60000 },
+    "DEEPSEEK_API_KEY": { "rpm": 60, "tpm": 60000 },
+    "MOONSHOT_API_KEY": { "rpm": 30, "tpm": 30000 },
+    "GROQ_API_KEY": { "rpm": 30, "tpm": 30000 },
+    "_ollama": { "rpm": 999, "tpm": 999999 }
+  },
+
+  "providers": {
+
+    "claude-sonnet": {
+      "type": "anthropic",
+      "model": "claude-sonnet-4-5-20250929",
+      "env_key": "ANTHROPIC_API_KEY",
+      "description": "Claude Sonnet 4.5 — equilibre qualite/vitesse"
+    },
+    "claude-opus": {
+      "type": "anthropic",
+      "model": "claude-opus-4-5-20250929",
+      "env_key": "ANTHROPIC_API_KEY",
+      "description": "Claude Opus 4.5 — maximum intelligence"
+    },
+    "claude-haiku": {
+      "type": "anthropic",
+      "model": "claude-haiku-3-5-20241022",
+      "env_key": "ANTHROPIC_API_KEY",
+      "description": "Claude Haiku 3.5 — rapide et economique"
+    },
+
+    "gpt-4o": {
+      "type": "openai",
+      "model": "gpt-4o",
+      "env_key": "OPENAI_API_KEY",
+      "description": "GPT-4o — multimodal, rapide"
+    },
+    "gpt-4o-mini": {
+      "type": "openai",
+      "model": "gpt-4o-mini",
+      "env_key": "OPENAI_API_KEY",
+      "description": "GPT-4o Mini — economique"
+    },
+
+    "azure-gpt4o": {
+      "type": "azure",
+      "model": "gpt-4o",
+      "env_key": "AZURE_OPENAI_API_KEY",
+      "azure_endpoint": "",
+      "azure_deployment": "gpt-4o",
+      "api_version": "2024-12-01-preview",
+      "description": "GPT-4o via Azure OpenAI — donnees souveraines"
+    },
+
+    "gemini-flash": {
+      "type": "google",
+      "model": "gemini-2.0-flash",
+      "env_key": "GOOGLE_API_KEY",
+      "description": "Gemini 2.0 Flash — rapide, grand contexte"
+    },
+    "gemini-pro": {
+      "type": "google",
+      "model": "gemini-2.5-pro",
+      "env_key": "GOOGLE_API_KEY",
+      "description": "Gemini 2.5 Pro — raisonnement avance"
+    },
+
+    "mistral-large": {
+      "type": "mistral",
+      "model": "mistral-large-latest",
+      "env_key": "MISTRAL_API_KEY",
+      "description": "Mistral Large — modele europeen performant"
+    },
+
+    "deepseek-chat": {
+      "type": "deepseek",
+      "model": "deepseek-chat",
+      "env_key": "DEEPSEEK_API_KEY",
+      "description": "DeepSeek Chat — economique, bon en code"
+    },
+    "deepseek-coder": {
+      "type": "deepseek",
+      "model": "deepseek-coder",
+      "env_key": "DEEPSEEK_API_KEY",
+      "description": "DeepSeek Coder — specialise code"
+    },
+
+    "kimi-k2": {
+      "type": "moonshot",
+      "model": "kimi-k2",
+      "env_key": "MOONSHOT_API_KEY",
+      "description": "Kimi K2 — 1T params MoE, agentic, 128K contexte"
+    },
+    "kimi-k2.5": {
+      "type": "moonshot",
+      "model": "kimi-k2.5",
+      "env_key": "MOONSHOT_API_KEY",
+      "description": "Kimi K2.5 — thinking + vision + agent swarm"
+    },
+
+    "groq-llama70b": {
+      "type": "groq",
+      "model": "llama-3.3-70b-versatile",
+      "env_key": "GROQ_API_KEY",
+      "description": "Llama 3.3 70B via Groq — ultra rapide"
+    },
+
+    "ollama-llama3": {
+      "type": "ollama",
+      "model": "llama3",
+      "base_url": "http://localhost:11434",
+      "description": "Llama 3 local — gratuit, donnees privees"
+    },
+    "ollama-codestral": {
+      "type": "ollama",
+      "model": "codestral",
+      "base_url": "http://localhost:11434",
+      "description": "Codestral local — specialise code"
+    },
+    "ollama-qwen": {
+      "type": "ollama",
+      "model": "qwen2.5",
+      "base_url": "http://localhost:11434",
+      "description": "Qwen 2.5 local — bon en multilangue"
+    }
+  },
+
+  "default": "claude-sonnet"
+}

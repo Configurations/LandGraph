@@ -73,6 +73,8 @@ LLM_PROVIDERS_FILE = TEAMS_DIR / "llm_providers.json"
 TEAMS_FILE = TEAMS_DIR / "teams.json"
 GIT_CONFIG_FILE = TEAMS_DIR / "git.json"
 SHARED_TEAMS_DIR = SHARED_DIR / "Teams"
+SHARED_LLM_FILE = SHARED_TEAMS_DIR / "llm_providers.json"
+SHARED_MCP_FILE = SHARED_TEAMS_DIR / "mcp_servers.json"
 
 logging.basicConfig(
     level=logging.DEBUG if os.environ.get("DEBUG") else logging.INFO,
@@ -1083,6 +1085,34 @@ async def list_templates():
                     "has_mcp_access": (d / "agent_mcp_access.json").exists(),
                 })
     return {"templates": templates}
+
+
+@app.get("/api/templates/llm")
+async def get_template_llm():
+    """Read shared LLM providers template."""
+    return _read_json(SHARED_LLM_FILE)
+
+
+@app.put("/api/templates/llm")
+async def save_template_llm(request: Request):
+    """Write shared LLM providers template."""
+    data = await request.json()
+    _write_json(SHARED_LLM_FILE, data)
+    return {"ok": True}
+
+
+@app.get("/api/templates/mcp")
+async def get_template_mcp():
+    """Read shared MCP servers template."""
+    return _read_json(SHARED_MCP_FILE)
+
+
+@app.put("/api/templates/mcp")
+async def save_template_mcp(request: Request):
+    """Write shared MCP servers template."""
+    data = await request.json()
+    _write_json(SHARED_MCP_FILE, data)
+    return {"ok": True}
 
 
 def _ensure_gitignore(target_dir: Path):

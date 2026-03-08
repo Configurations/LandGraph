@@ -180,13 +180,63 @@
       <!-- TEMPLATES SECTION -->
       <div class="section" id="section-templates">
         <div class="page-header">
-          <h2>Templates d'equipe</h2>
+          <h2>Templates</h2>
           <button class="btn btn-outline btn-sm" onclick="loadTemplates()">Rafraichir</button>
         </div>
-        <p style="color:var(--text-secondary);margin-bottom:1rem;font-size:0.85rem">
-          Les templates sont des modeles d'equipe stockes dans <code>Shared/Teams/</code>. Ils servent de base pour creer de nouvelles equipes.
+        <p style="color:var(--text-secondary);margin-bottom:0.75rem;font-size:0.85rem">
+          Configuration des templates partages (<code>Shared/Teams/</code>) utilises comme base pour creer de nouvelles equipes.
         </p>
-        <div class="agents-grid" id="templates-grid"></div>
+
+        <!-- Sub-tabs -->
+        <div class="prompt-tabs" style="margin-bottom:1rem">
+          <div class="prompt-tab active" data-tpl-tab="tpl-llm" onclick="showTemplateTab('tpl-llm')">Modeles LLM</div>
+          <div class="prompt-tab" data-tpl-tab="tpl-mcp" onclick="showTemplateTab('tpl-mcp')">Services MCP</div>
+          <div class="prompt-tab" data-tpl-tab="tpl-teams" onclick="showTemplateTab('tpl-teams')">Equipes</div>
+        </div>
+
+        <!-- Sub-tab: LLM -->
+        <div class="tpl-tab-content active" id="tpl-tab-tpl-llm">
+          <div class="card">
+            <div class="card-header">
+              <h3>Modele par defaut</h3>
+            </div>
+            <div class="form-row" style="align-items:flex-end">
+              <div class="form-group" style="margin-bottom:0">
+                <select id="tpl-llm-default-select" onchange="setTplLLMDefault(this.value)"></select>
+              </div>
+            </div>
+          </div>
+          <div class="card" style="margin-top:1rem">
+            <div class="card-header">
+              <h3>Providers</h3>
+              <button class="btn btn-primary btn-sm" onclick="showAddTplProviderModal()">+ Ajouter</button>
+            </div>
+            <div class="table-container" id="tpl-llm-providers-table"></div>
+          </div>
+          <div class="card" style="margin-top:1rem">
+            <div class="card-header">
+              <h3>Throttling</h3>
+              <button class="btn btn-primary btn-sm" onclick="showAddTplThrottlingModal()">+ Ajouter</button>
+            </div>
+            <div class="table-container" id="tpl-llm-throttling-table"></div>
+          </div>
+        </div>
+
+        <!-- Sub-tab: MCP -->
+        <div class="tpl-tab-content" id="tpl-tab-tpl-mcp">
+          <div class="card">
+            <div class="card-header">
+              <h3>Serveurs MCP du template</h3>
+              <button class="btn btn-primary btn-sm" onclick="showAddTplMcpModal()">+ Ajouter</button>
+            </div>
+            <div class="table-container" id="tpl-mcp-table"></div>
+          </div>
+        </div>
+
+        <!-- Sub-tab: Teams -->
+        <div class="tpl-tab-content" id="tpl-tab-tpl-teams">
+          <div class="agents-grid" id="templates-grid"></div>
+        </div>
       </div>
 
       <!-- CHAT SECTION -->

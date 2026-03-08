@@ -1488,17 +1488,424 @@ async function deleteTeam(id) {
 }
 
 // ═══════════════════════════════════════════════════
-// TEMPLATES
+// TEMPLATES (sub-tabs: LLM, MCP, Teams)
 // ═══════════════════════════════════════════════════
+let tplLlmData = {};
+let tplMcpData = {};
+
+function showTemplateTab(tabId) {
+  document.querySelectorAll('.tpl-tab-content').forEach(c => c.classList.remove('active'));
+  document.querySelectorAll('[data-tpl-tab]').forEach(t => t.classList.remove('active'));
+  document.getElementById('tpl-tab-' + tabId).classList.add('active');
+  document.querySelector(`[data-tpl-tab="${tabId}"]`).classList.add('active');
+  if (tabId === 'tpl-llm') loadTplLLM();
+  else if (tabId === 'tpl-mcp') loadTplMCP();
+  else if (tabId === 'tpl-teams') loadTplTeamsList();
+}
+
 async function loadTemplates() {
+  // Load active sub-tab
+  const active = document.querySelector('[data-tpl-tab].active');
+  const tab = active ? active.getAttribute('data-tpl-tab') : 'tpl-llm';
+  showTemplateTab(tab);
+}
+
+// ── Template LLM ──────────────────────────────────
+async function loadTplLLM() {
   try {
-    const data = await api('/api/templates');
-    templatesData = data.templates || [];
-    renderTemplates();
+    tplLlmData = await api('/api/templates/llm');
+    renderTplLLM();
   } catch (e) { toast(e.message, 'error'); }
 }
 
-function renderTemplates() {
+function renderTplLLM() {
+  const providers = tplLlmData.providers || {};
+  const throttling = tplLlmData.throttling || {};
+  const defaultId = tplLlmData.default || '';
+
+  // Default select
+  const sel = document.getElementById('tpl-llm-default-select');
+  sel.innerHTML = `<option value="">-- Aucun --</option>` +
+    Object.entries(providers).map(([id, p]) =>
+      `<option value="${escHtml(id)}" ${id === defaultId ? 'selected' : ''}>${escHtml(id)} — ${escHtml(p.description || p.model)}</option>`
+    ).join('');
+
+  // Providers table
+  const tbl = document.getElementById('tpl-llm-providers-table');
+  if (Object.keys(providers).length === 0) {
+    tbl.innerHTML = '<p style="color:var(--text-secondary);text-align:center;padding:1rem">Aucun provider configure.</p>';
+  } else {
+    tbl.innerHTML = `<table>
+      <thead><tr><th>ID</th><th>Type</th><th>Modele</th><th>Cle API</th><th>Description</th><th style="width:100px">Actions</th></tr></thead>
+      <tbody>${Object.entries(providers).map(([id, p]) => {
+        const isDefault = id === defaultId;
+        return `<tr>
+          <td><strong>${escHtml(id)}</strong>${isDefault ? '<span class="tag tag-green" style="margin-left:0.5rem">defaut</span>' : ''}</td>
+          <td><span class="tag tag-blue">${escHtml(p.type)}</span></td>
+          <td><code style="font-size:0.8rem">${escHtml(p.model)}</code></td>
+          <td>${p.env_key ? `<code style="font-size:0.75rem">${escHtml(p.env_key)}</code>` : '<span style="color:var(--text-secondary)">—</span>'}</td>
+          <td style="font-size:0.8rem;color:var(--text-secondary)">${escHtml(p.description || '')}</td>
+          <td>
+            <button class="btn-icon" onclick="editTplProvider('${escHtml(id)}')" title="Modifier">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            </button>
+            <button class="btn-icon danger" onclick="deleteTplProvider('${escHtml(id)}')" title="Supprimer">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </button>
+          </td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
+  }
+
+  // Throttling table
+  const ttbl = document.getElementById('tpl-llm-throttling-table');
+  if (Object.keys(throttling).length === 0) {
+    ttbl.innerHTML = '<p style="color:var(--text-secondary);text-align:center;padding:1rem">Aucune regle de throttling.</p>';
+  } else {
+    ttbl.innerHTML = `<table>
+      <thead><tr><th>Cle API</th><th>RPM</th><th>TPM</th><th style="width:100px">Actions</th></tr></thead>
+      <tbody>${Object.entries(throttling).map(([key, t]) => `<tr>
+        <td><code>${escHtml(key)}</code></td>
+        <td>${t.rpm}</td>
+        <td>${t.tpm.toLocaleString()}</td>
+        <td>
+          <button class="btn-icon" onclick="editTplThrottling('${escHtml(key)}', ${t.rpm}, ${t.tpm})" title="Modifier">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          </button>
+          <button class="btn-icon danger" onclick="deleteTplThrottling('${escHtml(key)}')" title="Supprimer">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </button>
+        </td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+  }
+}
+
+async function setTplLLMDefault(providerId) {
+  tplLlmData.default = providerId;
+  try {
+    await api('/api/templates/llm', { method: 'PUT', body: tplLlmData });
+    toast('Modele par defaut du template mis a jour', 'success');
+    loadTplLLM();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function showAddTplProviderModal() {
+  showModal(`
+    <div class="modal-header">
+      <h3>Ajouter un provider (template)</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>ID (unique)</label><input id="prov-id" placeholder="mon-modele" /></div>
+      <div class="form-group"><label>Type</label>
+        <select id="prov-type" onchange="_updateProviderTypeFields()">
+          ${LLM_TYPES.map(t => `<option value="${t}">${t}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Modele</label><input id="prov-model" placeholder="gpt-4o, claude-sonnet-4-5..." /></div>
+      <div class="form-group"><label>Cle API (env var)</label><input id="prov-envkey" placeholder="OPENAI_API_KEY" /></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Description</label><input id="prov-desc" placeholder="Description du modele" /></div>
+      <div class="form-group"><label>Base URL</label><input id="prov-base-url" value="" placeholder="https://..." /></div>
+    </div>
+    ${_providerTypeFields('anthropic')}
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="addTplProvider()">Ajouter</button>
+    </div>
+  `);
+}
+
+function _readProviderForm() {
+  const id = document.getElementById('prov-id').value.trim();
+  const type = document.getElementById('prov-type').value;
+  const model = document.getElementById('prov-model').value.trim();
+  const env_key = document.getElementById('prov-envkey').value.trim();
+  const description = document.getElementById('prov-desc').value.trim();
+  const base_url = (document.getElementById('prov-base-url')?.value || '').trim();
+  const prov = { type, model, description };
+  if (env_key) prov.env_key = env_key;
+  if (base_url) prov.base_url = base_url;
+  if (type === 'azure') {
+    const ae = (document.getElementById('prov-azure-endpoint')?.value || '').trim();
+    const ad = (document.getElementById('prov-azure-deployment')?.value || '').trim();
+    const av = (document.getElementById('prov-api-version')?.value || '').trim();
+    if (ae) prov.azure_endpoint = ae;
+    if (ad) prov.azure_deployment = ad;
+    if (av) prov.api_version = av;
+  }
+  return { id, prov };
+}
+
+async function addTplProvider() {
+  const { id, prov } = _readProviderForm();
+  if (!id || !prov.model) { toast('ID et modele requis', 'error'); return; }
+  if (!tplLlmData.providers) tplLlmData.providers = {};
+  if (tplLlmData.providers[id]) { toast(`Provider "${id}" existe deja`, 'error'); return; }
+  tplLlmData.providers[id] = prov;
+  try {
+    await api('/api/templates/llm', { method: 'PUT', body: tplLlmData });
+    toast('Provider ajoute au template', 'success');
+    closeModal();
+    loadTplLLM();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function editTplProvider(id) {
+  const p = tplLlmData.providers[id];
+  if (!p) return;
+  showModal(`
+    <div class="modal-header">
+      <h3>Modifier (template) : ${escHtml(id)}</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>ID</label><input id="prov-id" value="${escHtml(id)}" /></div>
+      <div class="form-group"><label>Type</label>
+        <select id="prov-type" onchange="_updateProviderTypeFields()">
+          ${LLM_TYPES.map(t => `<option value="${t}" ${t === p.type ? 'selected' : ''}>${t}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Modele</label><input id="prov-model" value="${escHtml(p.model)}" /></div>
+      <div class="form-group"><label>Cle API (env var)</label><input id="prov-envkey" value="${escHtml(p.env_key || '')}" /></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Description</label><input id="prov-desc" value="${escHtml(p.description || '')}" /></div>
+      <div class="form-group"><label>Base URL</label><input id="prov-base-url" value="${escHtml(p.base_url || '')}" placeholder="https://..." /></div>
+    </div>
+    ${_providerTypeFields(p.type, p)}
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="saveTplProvider('${escHtml(id)}')">Sauvegarder</button>
+    </div>
+  `);
+}
+
+async function saveTplProvider(originalId) {
+  const { id, prov } = _readProviderForm();
+  if (!id || !prov.model) { toast('ID et modele requis', 'error'); return; }
+  if (id !== originalId) {
+    delete tplLlmData.providers[originalId];
+    if (tplLlmData.default === originalId) tplLlmData.default = id;
+  }
+  tplLlmData.providers[id] = prov;
+  try {
+    await api('/api/templates/llm', { method: 'PUT', body: tplLlmData });
+    toast('Provider mis a jour', 'success');
+    closeModal();
+    loadTplLLM();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteTplProvider(id) {
+  if (!confirm(`Supprimer le provider "${id}" du template ?`)) return;
+  delete tplLlmData.providers[id];
+  if (tplLlmData.default === id) tplLlmData.default = '';
+  try {
+    await api('/api/templates/llm', { method: 'PUT', body: tplLlmData });
+    toast('Provider supprime du template', 'success');
+    loadTplLLM();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function showAddTplThrottlingModal() {
+  showModal(`
+    <div class="modal-header">
+      <h3>Ajouter throttling (template)</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-group"><label>Cle API (env var)</label><input id="throttle-key" placeholder="OPENAI_API_KEY" /></div>
+    <div class="form-row">
+      <div class="form-group"><label>RPM (requetes/min)</label><input id="throttle-rpm" type="number" value="60" /></div>
+      <div class="form-group"><label>TPM (tokens/min)</label><input id="throttle-tpm" type="number" value="60000" /></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="saveTplThrottling()">Ajouter</button>
+    </div>
+  `);
+}
+
+function editTplThrottling(key, rpm, tpm) {
+  showModal(`
+    <div class="modal-header">
+      <h3>Modifier throttling (template) : ${escHtml(key)}</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-group"><label>Cle API</label><input id="throttle-key" value="${escHtml(key)}" disabled style="opacity:0.5" /></div>
+    <div class="form-row">
+      <div class="form-group"><label>RPM (requetes/min)</label><input id="throttle-rpm" type="number" value="${rpm}" /></div>
+      <div class="form-group"><label>TPM (tokens/min)</label><input id="throttle-tpm" type="number" value="${tpm}" /></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="saveTplThrottling()">Sauvegarder</button>
+    </div>
+  `);
+}
+
+async function saveTplThrottling() {
+  const env_key = document.getElementById('throttle-key').value.trim();
+  const rpm = parseInt(document.getElementById('throttle-rpm').value);
+  const tpm = parseInt(document.getElementById('throttle-tpm').value);
+  if (!env_key) { toast('Cle API requise', 'error'); return; }
+  if (!tplLlmData.throttling) tplLlmData.throttling = {};
+  tplLlmData.throttling[env_key] = { rpm, tpm };
+  try {
+    await api('/api/templates/llm', { method: 'PUT', body: tplLlmData });
+    toast('Throttling template mis a jour', 'success');
+    closeModal();
+    loadTplLLM();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteTplThrottling(key) {
+  if (!confirm(`Supprimer le throttling pour "${key}" du template ?`)) return;
+  delete tplLlmData.throttling[key];
+  try {
+    await api('/api/templates/llm', { method: 'PUT', body: tplLlmData });
+    toast('Throttling supprime du template', 'success');
+    loadTplLLM();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ── Template MCP ──────────────────────────────────
+async function loadTplMCP() {
+  try {
+    tplMcpData = await api('/api/templates/mcp');
+    renderTplMCP();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function renderTplMCP() {
+  const servers = tplMcpData.servers || {};
+  const tbl = document.getElementById('tpl-mcp-table');
+  if (Object.keys(servers).length === 0) {
+    tbl.innerHTML = '<p style="color:var(--text-secondary);text-align:center;padding:1rem">Aucun serveur MCP dans le template. Ajoutez-en pour les inclure automatiquement dans les nouvelles equipes.</p>';
+  } else {
+    tbl.innerHTML = `<table>
+      <thead><tr><th>ID</th><th>Commande</th><th>Arguments</th><th>Env</th><th style="width:100px">Actions</th></tr></thead>
+      <tbody>${Object.entries(servers).map(([id, s]) => `<tr>
+        <td><strong>${escHtml(id)}</strong></td>
+        <td><code style="font-size:0.8rem">${escHtml(s.command || '')}</code></td>
+        <td style="font-size:0.8rem;max-width:300px;overflow:hidden;text-overflow:ellipsis">${escHtml((s.args || []).join(' '))}</td>
+        <td>${s.env ? Object.keys(s.env).map(k => `<code style="font-size:0.7rem">${escHtml(k)}</code>`).join(' ') : '<span style="color:var(--text-secondary)">—</span>'}</td>
+        <td>
+          <button class="btn-icon" onclick="editTplMcp('${escHtml(id)}')" title="Modifier">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          </button>
+          <button class="btn-icon danger" onclick="deleteTplMcp('${escHtml(id)}')" title="Supprimer">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </button>
+        </td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+  }
+}
+
+function showAddTplMcpModal() {
+  showModal(`
+    <div class="modal-header">
+      <h3>Ajouter un serveur MCP (template)</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-group"><label>ID (unique)</label><input id="mcp-tpl-id" placeholder="github, notion..." /></div>
+    <div class="form-row">
+      <div class="form-group"><label>Commande</label><input id="mcp-tpl-cmd" placeholder="npx, uvx, node..." /></div>
+      <div class="form-group"><label>Arguments (separes par des espaces)</label><input id="mcp-tpl-args" placeholder="-y @modelcontextprotocol/server-github" /></div>
+    </div>
+    <div class="form-group"><label>Variables d'env (JSON, ex: {"TOKEN":"xxx"})</label><input id="mcp-tpl-env" placeholder='{}' value="{}" /></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="addTplMcp()">Ajouter</button>
+    </div>
+  `);
+}
+
+async function addTplMcp() {
+  const id = document.getElementById('mcp-tpl-id').value.trim();
+  const command = document.getElementById('mcp-tpl-cmd').value.trim();
+  const argsStr = document.getElementById('mcp-tpl-args').value.trim();
+  const envStr = document.getElementById('mcp-tpl-env').value.trim();
+  if (!id || !command) { toast('ID et commande requis', 'error'); return; }
+  let env = {};
+  try { env = JSON.parse(envStr || '{}'); } catch { toast('JSON env invalide', 'error'); return; }
+  if (!tplMcpData.servers) tplMcpData.servers = {};
+  tplMcpData.servers[id] = { command, args: argsStr ? argsStr.split(/\s+/) : [], env };
+  try {
+    await api('/api/templates/mcp', { method: 'PUT', body: tplMcpData });
+    toast('Serveur MCP ajoute au template', 'success');
+    closeModal();
+    loadTplMCP();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function editTplMcp(id) {
+  const s = tplMcpData.servers[id];
+  if (!s) return;
+  showModal(`
+    <div class="modal-header">
+      <h3>Modifier MCP (template) : ${escHtml(id)}</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-group"><label>ID</label><input id="mcp-tpl-id" value="${escHtml(id)}" /></div>
+    <div class="form-row">
+      <div class="form-group"><label>Commande</label><input id="mcp-tpl-cmd" value="${escHtml(s.command || '')}" /></div>
+      <div class="form-group"><label>Arguments</label><input id="mcp-tpl-args" value="${escHtml((s.args || []).join(' '))}" /></div>
+    </div>
+    <div class="form-group"><label>Variables d'env (JSON)</label><input id="mcp-tpl-env" value="${escHtml(JSON.stringify(s.env || {}))}" /></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="saveTplMcp('${escHtml(id)}')">Sauvegarder</button>
+    </div>
+  `);
+}
+
+async function saveTplMcp(originalId) {
+  const id = document.getElementById('mcp-tpl-id').value.trim();
+  const command = document.getElementById('mcp-tpl-cmd').value.trim();
+  const argsStr = document.getElementById('mcp-tpl-args').value.trim();
+  const envStr = document.getElementById('mcp-tpl-env').value.trim();
+  if (!id || !command) { toast('ID et commande requis', 'error'); return; }
+  let env = {};
+  try { env = JSON.parse(envStr || '{}'); } catch { toast('JSON env invalide', 'error'); return; }
+  if (id !== originalId) delete tplMcpData.servers[originalId];
+  tplMcpData.servers[id] = { command, args: argsStr ? argsStr.split(/\s+/) : [], env };
+  try {
+    await api('/api/templates/mcp', { method: 'PUT', body: tplMcpData });
+    toast('Serveur MCP mis a jour', 'success');
+    closeModal();
+    loadTplMCP();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteTplMcp(id) {
+  if (!confirm(`Supprimer le serveur MCP "${id}" du template ?`)) return;
+  delete tplMcpData.servers[id];
+  try {
+    await api('/api/templates/mcp', { method: 'PUT', body: tplMcpData });
+    toast('Serveur MCP supprime du template', 'success');
+    loadTplMCP();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ── Template Teams list ───────────────────────────
+async function loadTplTeamsList() {
+  try {
+    const data = await api('/api/templates');
+    templatesData = data.templates || [];
+    renderTplTeams();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function renderTplTeams() {
   const grid = document.getElementById('templates-grid');
   grid.innerHTML = templatesData.map(tpl => `
     <div class="agent-card">
