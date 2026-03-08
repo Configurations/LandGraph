@@ -1468,6 +1468,19 @@ tr:hover { background: rgba(255,255,255,0.02); }
   font-size: 0.65rem;
   padding: 0 0.25rem;
 }
+.wf-inline-agent-select {
+  flex: 1;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+.wf-inline-agent-select:focus {
+  outline: none;
+}
 .wf-inline-label {
   font-size: 0.65rem;
   color: var(--text-secondary);

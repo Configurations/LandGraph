@@ -3424,18 +3424,6 @@ function wfRenderProps() {
 function _wfRenderWorkspaceProps(el) {
   const pg = _wf.data.parallel_groups || { description: '', order: ['A','B','C'] };
   const rules = _wf.data.rules || {};
-  const transitions = _wf.data.transitions || [];
-
-  let trHtml = transitions.map((t, i) => `
-    <div class="wf-transition-item">
-      <span>${escHtml(t.from)}</span>
-      <span class="wf-t-arrow">&rarr;</span>
-      <span>${escHtml(t.to)}</span>
-      ${t.human_gate ? '<span class="tag tag-yellow" style="font-size:0.6rem;padding:0.05rem 0.3rem">HG</span>' : ''}
-      <button class="btn-icon danger" style="margin-left:auto" onclick="wfDeleteTransition(${i})">x</button>
-    </div>
-  `).join('');
-
   const WF_BOOL_RULES = [
     { key: 'critical_alert_blocks_transition', label: 'Alerte critique bloque la transition' },
     { key: 'human_gate_required_for_all_transitions', label: 'Human gate sur toutes les transitions' },
@@ -3479,13 +3467,6 @@ function _wfRenderWorkspaceProps(el) {
         <input value="${escHtml(pg.description || '')}" onchange="wfSetPGDesc(this.value)" />
       </div>
       ${pgHtml || '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucun groupe</div>'}
-    </div>
-
-    <div class="wf-props-section">
-      <div class="wf-props-section-title">
-        Transitions (${transitions.length})
-      </div>
-      ${trHtml || '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucune transition</div>'}
     </div>
 
     <div class="wf-props-section">
@@ -3561,7 +3542,7 @@ function _wfRenderPhaseProps(el, phaseId) {
     ).join('') : '<span style="font-size:0.65rem;color:var(--text-secondary)">--</span>';
     return `<div class="wf-inline-block">
       <div class="wf-inline-head">
-        <span class="wf-inline-id">${escHtml(id)}</span>
+        <select class="wf-inline-agent-select" onchange="_wfChangeAgent('${phaseId}','${escHtml(id)}',this.value)" id="wf-agent-sel-${phaseId}-${escHtml(id)}"></select>
         <button class="btn-icon danger" onclick="wfRemoveAgent('${phaseId}','${escHtml(id)}')">x</button>
       </div>
       <div class="wf-inline-fields">
@@ -3655,6 +3636,23 @@ function _wfRenderPhaseProps(el, phaseId) {
     <div class="wf-props-section">
       <div class="wf-props-section-title">Conditions de sortie</div>
       ${condsHtml}
+    </div>
+
+    <div class="wf-props-section">
+      <div class="wf-props-section-title">Transitions sortantes</div>
+      ${(() => {
+        const transitions = _wf.data.transitions || [];
+        const outgoing = transitions.map((t, i) => ({ t, i })).filter(({ t }) => t.from === phaseId);
+        if (outgoing.length === 0) return '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucune transition</div>';
+        return outgoing.map(({ t, i }) => {
+          const toName = _wf.data.phases[t.to]?.name || t.to;
+          return `<div class="wf-transition-item" style="cursor:pointer" onclick="wfSelectTransition(event,${i})">
+            <span>Vers ${escHtml(toName)}</span>
+            ${t.human_gate ? '<span class="tag tag-yellow" style="font-size:0.6rem;padding:0.05rem 0.3rem">HG</span>' : ''}
+            <button class="btn-icon danger" style="margin-left:auto" onclick="event.stopPropagation();wfDeleteTransition(${i})">x</button>
+          </div>`;
+        }).join('');
+      })()}
     </div>
   `;
   setTimeout(() => _wfLoadAgentSelect(phaseId), 0);
@@ -3892,25 +3890,67 @@ function wfAddAgent(phaseId, agentId) {
 }
 
 async function _wfLoadAgentSelect(phaseId) {
-  const sel = document.getElementById(`wf-add-agent-${phaseId}`);
-  if (!sel || sel.options.length > 1) return;
   const assigned = new Set(Object.keys(_wf.data.phases[phaseId].agents || {}));
   const registryBase = _wf.apiBase.includes('templates') ? '/api/templates/registry' : '/api/agents/registry';
+  let allAgents = [];
   try {
     const reg = await api(`${registryBase}/${encodeURIComponent(_wf.dir)}`);
-    const allAgents = Object.keys(reg.agents || reg || {});
+    allAgents = Object.keys(reg.agents || reg || {});
+  } catch {}
+  // Populate the "add agent" select
+  const addSel = document.getElementById(`wf-add-agent-${phaseId}`);
+  if (addSel && addSel.options.length <= 1) {
     const available = allAgents.filter(a => !assigned.has(a));
     available.forEach(a => {
       const opt = document.createElement('option');
       opt.value = a;
       opt.textContent = a;
-      sel.appendChild(opt);
+      addSel.appendChild(opt);
     });
     if (available.length === 0) {
-      sel.options[0].textContent = '(tous assignes)';
-      sel.disabled = true;
+      addSel.options[0].textContent = '(tous assignes)';
+      addSel.disabled = true;
     }
-  } catch {}
+  }
+  // Populate each agent's identity select (current + available from registry)
+  for (const agentId of assigned) {
+    const sel = document.getElementById(`wf-agent-sel-${phaseId}-${agentId}`);
+    if (!sel || sel.options.length > 0) continue;
+    // Current agent (selected)
+    const cur = document.createElement('option');
+    cur.value = agentId;
+    cur.textContent = agentId;
+    cur.selected = true;
+    sel.appendChild(cur);
+    // Other available agents from registry (not already assigned)
+    const others = allAgents.filter(a => a !== agentId && !assigned.has(a));
+    others.forEach(a => {
+      const opt = document.createElement('option');
+      opt.value = a;
+      opt.textContent = a;
+      sel.appendChild(opt);
+    });
+  }
+}
+
+function _wfChangeAgent(phaseId, oldId, newId) {
+  if (!newId || newId === oldId) return;
+  const phase = _wf.data.phases[phaseId];
+  if (!phase || !phase.agents) return;
+  if (phase.agents[newId]) { toast('Agent deja dans cette phase', 'error'); wfRender(); return; }
+  // Move agent data from oldId to newId
+  phase.agents[newId] = phase.agents[oldId];
+  delete phase.agents[oldId];
+  // Update deliverables referencing old agent
+  for (const d of Object.values(phase.deliverables || {})) {
+    if (d.agent === oldId) d.agent = newId;
+  }
+  // Update depends_on / can_delegate_to referencing old agent
+  for (const a of Object.values(phase.agents)) {
+    if (a.depends_on) a.depends_on = a.depends_on.map(x => x === oldId ? newId : x);
+    if (a.can_delegate_to) a.can_delegate_to = a.can_delegate_to.map(x => x === oldId ? newId : x);
+  }
+  wfRender();
 }
 
 // Inline field setters for agents
