@@ -424,8 +424,11 @@ def _get_mcp_full() -> list[dict]:
         item["agents"] = [
             aid for aid, sids in access.items() if item["id"] in sids
         ]
+        env_map = srv.get("env", {}) if srv else {}
         for ev in item.get("env_vars", []):
-            val = env_entries.get(ev["var"], "")
+            mapped_name = env_map.get(ev["var"], ev["var"])
+            ev["mapped_var"] = mapped_name
+            val = env_entries.get(mapped_name, "")
             ev["configured"] = bool(val) and val != "A_CONFIGURER"
     return catalog
 
@@ -1364,8 +1367,11 @@ def _get_mcp_full_shared() -> list[dict]:
         item["installed"] = srv is not None
         item["enabled"] = srv.get("enabled", True) if srv else False
         item["agents"] = []
+        env_map = srv.get("env", {}) if srv else {}
         for ev in item.get("env_vars", []):
-            val = env_entries.get(ev["var"], "")
+            mapped_name = env_map.get(ev["var"], ev["var"])
+            ev["mapped_var"] = mapped_name
+            val = env_entries.get(mapped_name, "")
             ev["configured"] = bool(val) and val != "A_CONFIGURER"
     return catalog
 

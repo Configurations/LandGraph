@@ -305,7 +305,7 @@ function renderMCP() {
         const envStatus = c.env_vars.length === 0
           ? '<span class="tag tag-gray">aucune</span>'
           : c.env_vars.map(v =>
-              `<span class="tag ${v.configured ? 'tag-green' : 'tag-red'}" title="${escHtml(v.desc)}">${escHtml(v.var)}</span>`
+              `<span class="tag ${v.configured ? 'tag-green' : 'tag-red'}" title="${escHtml(v.desc)}">${escHtml(v.mapped_var || v.var)}</span>`
             ).join(' ');
         const agentTags = c.agents.length
           ? c.agents.map(a => `<span class="tag tag-blue">${escHtml(a)}</span>`).join(' ')
@@ -356,7 +356,7 @@ function renderMCP() {
       <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.5rem">${escHtml(c.description)}</p>
       <code style="font-size:0.7rem;color:var(--text-secondary)">${escHtml(c.command)} ${escHtml(c.args)}</code>
       ${c.env_vars.length ? `<div style="margin-top:0.5rem">${c.env_vars.map(v =>
-        `<span class="tag ${v.configured ? 'tag-green' : 'tag-yellow'}" style="margin:0.1rem" title="${escHtml(v.desc)}">${escHtml(v.var)}</span>`
+        `<span class="tag ${v.configured ? 'tag-green' : 'tag-yellow'}" style="margin:0.1rem" title="${escHtml(v.desc)}">${escHtml(v.mapped_var || v.var)}</span>`
       ).join('')}</div>` : ''}
     </div>`;
   }).join('');
@@ -572,15 +572,15 @@ function showMCPEnvModal(id) {
       ${item.env_vars.map(v => `
         <div class="env-var-row">
           <div class="env-var-info">
-            <code>${escHtml(v.var)}</code>
+            <code>${escHtml(v.mapped_var || v.var)}</code>
             <span class="env-var-desc">${escHtml(v.desc)}</span>
             ${v.configured
               ? '<span class="tag tag-green">configure</span>'
               : '<span class="tag tag-red">manquant</span>'}
           </div>
           <div class="env-var-action">
-            <input class="mcp-env-field" data-var="${escHtml(v.var)}" placeholder="Nouvelle valeur..." />
-            <button class="btn btn-sm btn-outline" onclick="setEnvVarFromInstall('${escHtml(v.var)}', this)" title="Enregistrer dans .env">
+            <input class="mcp-env-field" data-var="${escHtml(v.mapped_var || v.var)}" placeholder="Nouvelle valeur..." />
+            <button class="btn btn-sm btn-outline" onclick="setEnvVarFromInstall('${escHtml(v.mapped_var || v.var)}', this)" title="Enregistrer dans .env">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
             </button>
           </div>
@@ -2424,7 +2424,7 @@ function renderCfgMCP() {
         const envStatus = c.env_vars.length === 0
           ? '<span class="tag tag-gray">aucune</span>'
           : c.env_vars.map(v =>
-              `<span class="tag ${v.configured ? 'tag-green' : 'tag-red'}" title="${escHtml(v.desc)}">${escHtml(v.var)}</span>`
+              `<span class="tag ${v.configured ? 'tag-green' : 'tag-red'}" title="${escHtml(v.desc)}">${escHtml(v.mapped_var || v.var)}</span>`
             ).join(' ');
         const agentTags = c.agents.length
           ? c.agents.map(a => `<span class="tag tag-blue">${escHtml(a)}</span>`).join(' ')
@@ -2479,7 +2479,7 @@ function renderCfgMCP() {
       <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.5rem">${escHtml(c.description)}</p>
       <code style="font-size:0.7rem;color:var(--text-secondary)">${escHtml(c.command)} ${escHtml(c.args)}</code>
       ${c.env_vars.length ? `<div style="margin-top:0.5rem">${c.env_vars.map(v =>
-        `<span class="tag ${v.configured ? 'tag-green' : 'tag-yellow'}" style="margin:0.1rem" title="${escHtml(v.desc)}">${escHtml(v.var)}</span>`
+        `<span class="tag ${v.configured ? 'tag-green' : 'tag-yellow'}" style="margin:0.1rem" title="${escHtml(v.desc)}">${escHtml(v.mapped_var || v.var)}</span>`
       ).join('')}</div>` : ''}
     </div>`;
   }).join('');
@@ -2573,15 +2573,15 @@ function showCfgMCPEnvModal(id) {
       ${item.env_vars.map(v => `
         <div class="env-var-row">
           <div class="env-var-info">
-            <code>${escHtml(v.var)}</code>
+            <code>${escHtml(v.mapped_var || v.var)}</code>
             <span class="env-var-desc">${escHtml(v.desc)}</span>
             ${v.configured
               ? '<span class="tag tag-green">configure</span>'
               : '<span class="tag tag-red">manquant</span>'}
           </div>
           <div class="env-var-action">
-            <input class="mcp-env-field" data-var="${escHtml(v.var)}" placeholder="Nouvelle valeur..." />
-            <button class="btn btn-sm btn-outline" onclick="setEnvVarFromInstall('${escHtml(v.var)}', this)" title="Enregistrer dans .env">
+            <input class="mcp-env-field" data-var="${escHtml(v.mapped_var || v.var)}" placeholder="Nouvelle valeur..." />
+            <button class="btn btn-sm btn-outline" onclick="setEnvVarFromInstall('${escHtml(v.mapped_var || v.var)}', this)" title="Enregistrer dans .env">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
             </button>
           </div>
@@ -3201,7 +3201,7 @@ function renderTplMCP() {
       <thead><tr><th>Service</th><th>Commande</th><th>Env</th><th>Actif</th><th>Actions</th></tr></thead>
       <tbody>${withParams.map(c => {
         const envStatus = c.env_vars.map(v =>
-              `<span class="tag ${v.configured ? 'tag-green' : 'tag-red'}" title="${escHtml(v.desc)}">${escHtml(v.var)}</span>`
+              `<span class="tag ${v.configured ? 'tag-green' : 'tag-red'}" title="${escHtml(v.desc)}">${escHtml(v.mapped_var || v.var)}</span>`
             ).join(' ');
         const installed = c.installed;
         return `<tr>
@@ -3342,15 +3342,15 @@ function showTplMCPEnvModal(id) {
       ${item.env_vars.map(v => `
         <div class="env-var-row">
           <div class="env-var-info">
-            <code>${escHtml(v.var)}</code>
+            <code>${escHtml(v.mapped_var || v.var)}</code>
             <span class="env-var-desc">${escHtml(v.desc)}</span>
             ${v.configured
               ? '<span class="tag tag-green">configure</span>'
               : '<span class="tag tag-red">manquant</span>'}
           </div>
           <div class="env-var-action">
-            <input class="mcp-env-field" data-var="${escHtml(v.var)}" placeholder="Nouvelle valeur..." />
-            <button class="btn btn-sm btn-outline" onclick="setEnvVarFromInstall('${escHtml(v.var)}', this)" title="Enregistrer dans .env">
+            <input class="mcp-env-field" data-var="${escHtml(v.mapped_var || v.var)}" placeholder="Nouvelle valeur..." />
+            <button class="btn btn-sm btn-outline" onclick="setEnvVarFromInstall('${escHtml(v.mapped_var || v.var)}', this)" title="Enregistrer dans .env">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
             </button>
           </div>
