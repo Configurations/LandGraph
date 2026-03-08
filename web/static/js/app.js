@@ -1974,7 +1974,7 @@ async function showAddTeamModal() {
     </div>
     <div class="form-group">
       <label>Identifiant</label>
-      <input id="team-id" placeholder="ex: data_team" oninput="document.getElementById('team-dir').value = this.value ? 'Configs/Teams/' + this.value : ''" />
+      <input id="team-id" placeholder="ex: data_team" oninput="this.value = this.value.replace(/[^a-z0-9_-]/gi, '').toLowerCase(); document.getElementById('team-dir').value = this.value ? 'Configs/Teams/' + this.value : ''" />
     </div>
     <div class="form-group">
       <label>Nom</label>
@@ -3756,7 +3756,8 @@ function _onTplTeamIdInput() {
   const el = document.getElementById('m-tpl-team-id');
   const errEl = document.getElementById('m-tpl-team-id-error');
   const dirEl = document.getElementById('m-tpl-team-dir');
-  const raw = el.value.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
+  el.value = el.value.replace(/[^a-z0-9_-]/gi, '').toLowerCase();
+  const raw = el.value;
   // Capitalize first letter of each segment for directory name
   const dir = raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : '';
   dirEl.value = dir;
