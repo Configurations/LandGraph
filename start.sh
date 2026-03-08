@@ -4,3 +4,4 @@ cd "${PROJECT_DIR}"
 docker compose up -d
 echo ""
 docker compose ps
+docker compose logs --tail 30
