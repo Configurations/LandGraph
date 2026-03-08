@@ -2080,6 +2080,20 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
                 branch = "master"
         log.info("git commit flow (%s): branch=%s, dir=%s", repo_key, branch, target_dir)
 
+        # 3b. Fix detached HEAD — checkout the branch
+        head_check = subprocess.run(
+            ["git", "symbolic-ref", "-q", "HEAD"],
+            cwd=str(target_dir), capture_output=True, text=True, timeout=10
+        )
+        if head_check.returncode != 0:
+            log.warning("Detached HEAD detected (%s), checking out %s", repo_key, branch)
+            checkout_result = subprocess.run(
+                ["git", "checkout", "-B", branch],
+                cwd=str(target_dir), capture_output=True, text=True, timeout=10
+            )
+            log.info("git checkout -B %s (%s): code=%d stderr=%s",
+                     branch, repo_key, checkout_result.returncode, checkout_result.stderr.strip()[:200])
+
         # 4. Set upstream tracking
         subprocess.run(
             ["git", "branch", "--set-upstream-to", f"origin/{branch}", branch],
