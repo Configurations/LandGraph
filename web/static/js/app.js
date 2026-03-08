@@ -2045,35 +2045,127 @@ function renderTplMCP() {
   </table>`;
 }
 
-function showAddTplMcpModal() {
+let tplMcpCatalog = [];
+
+async function showAddTplMcpModal() {
+  // Load catalog
+  try {
+    const data = await api('/api/mcp/catalog');
+    tplMcpCatalog = data.servers || [];
+  } catch (e) { tplMcpCatalog = []; }
+  const existing = Object.keys(tplMcpData.servers || {});
+  const available = tplMcpCatalog.filter(c => !c.deprecated && !existing.includes(c.id));
+  if (available.length === 0) {
+    toast('Tous les services du catalogue sont deja ajoutes', 'info');
+    return;
+  }
+  const options = available.map(c =>
+    `<option value="${escHtml(c.id)}">${escHtml(c.label)} — ${escHtml(c.description)}</option>`
+  ).join('');
   showModal(`
     <div class="modal-header">
       <h3>Ajouter un serveur MCP (template)</h3>
       <button class="btn-icon" onclick="closeModal()">&times;</button>
     </div>
-    <div class="form-group"><label>ID (unique)</label><input id="mcp-tpl-id" placeholder="github, notion..." /></div>
-    <div class="form-row">
-      <div class="form-group"><label>Commande</label><input id="mcp-tpl-cmd" placeholder="npx, uvx, node..." /></div>
-      <div class="form-group"><label>Arguments (separes par des espaces)</label><input id="mcp-tpl-args" placeholder="-y @modelcontextprotocol/server-github" /></div>
+    <div class="form-group">
+      <label>Service</label>
+      <select id="mcp-tpl-select" onchange="onTplMcpSelected()">
+        ${options}
+      </select>
     </div>
-    <div class="form-group"><label>Variables d'env (JSON, ex: {"TOKEN":"xxx"})</label><input id="mcp-tpl-env" placeholder='{}' value="{}" /></div>
+    <div id="mcp-tpl-details"></div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
       <button class="btn btn-primary" onclick="addTplMcp()">Ajouter</button>
     </div>
-  `);
+  `, 'modal-wide');
+  onTplMcpSelected();
+}
+
+function onTplMcpSelected() {
+  const id = document.getElementById('mcp-tpl-select').value;
+  const item = tplMcpCatalog.find(c => c.id === id);
+  if (!item) return;
+  document.getElementById('mcp-tpl-details').innerHTML = _renderTplMcpDetails(item);
+}
+
+function _renderTplMcpDetails(item) {
+  const hasEnv = item.env_vars && item.env_vars.length > 0;
+  const prefix = item.id.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
+
+  const idHtml = hasEnv ? `
+    <div class="form-group" style="margin-top:0.5rem">
+      <label>ID de l'instance</label>
+      <input id="mcp-tpl-instance" value="${escHtml(item.id)}" oninput="_updateTplMcpEnvNames()" />
+    </div>` : '';
+
+  const envHtml = hasEnv
+    ? `<div style="margin-top:1rem">
+        <label>Variables d'environnement</label>
+        <div class="env-var-list" id="mcp-tpl-env-list">
+          ${item.env_vars.map(v => {
+            const envName = `${prefix}_${v.var}`;
+            return `
+            <div class="env-var-row">
+              <div class="env-var-info">
+                <span style="font-size:0.85rem">${escHtml(v.desc || v.var)}</span>
+              </div>
+              <div class="env-var-action" style="flex:none">
+                <code class="mcp-tpl-env-computed" data-base="${escHtml(v.var)}" style="font-size:0.8rem;white-space:nowrap">${escHtml(envName)}</code>
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`
+    : '<p style="color:var(--text-secondary);font-size:0.85rem;margin-top:1rem">Aucune variable d\'environnement requise.</p>';
+
+  return `
+    ${idHtml}
+    <div class="form-row" style="margin-top:0.5rem">
+      <div class="form-group">
+        <label>Commande</label>
+        <input value="${escHtml(item.command)}" readonly style="opacity:0.6" />
+      </div>
+      <div class="form-group">
+        <label>Arguments</label>
+        <input value="${escHtml(item.args)}" readonly style="opacity:0.6" />
+      </div>
+    </div>
+    ${envHtml}
+  `;
+}
+
+function _updateTplMcpEnvNames() {
+  const name = document.getElementById('mcp-tpl-instance')?.value.trim() || '';
+  const prefix = name.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase() || 'INSTANCE';
+  document.querySelectorAll('.mcp-tpl-env-computed').forEach(el => {
+    const base = el.getAttribute('data-base');
+    el.textContent = `${prefix}_${base}`;
+  });
 }
 
 async function addTplMcp() {
-  const id = document.getElementById('mcp-tpl-id').value.trim();
-  const command = document.getElementById('mcp-tpl-cmd').value.trim();
-  const argsStr = document.getElementById('mcp-tpl-args').value.trim();
-  const envStr = document.getElementById('mcp-tpl-env').value.trim();
-  if (!id || !command) { toast('ID et commande requis', 'error'); return; }
-  let env = {};
-  try { env = JSON.parse(envStr || '{}'); } catch { toast('JSON env invalide', 'error'); return; }
+  const selectEl = document.getElementById('mcp-tpl-select');
+  const catalogId = selectEl.value;
+  const item = tplMcpCatalog.find(c => c.id === catalogId);
+  if (!item) { toast('Service introuvable', 'error'); return; }
+  const instanceEl = document.getElementById('mcp-tpl-instance');
+  const id = instanceEl ? instanceEl.value.trim() : catalogId;
+  if (!id) { toast('ID requis', 'error'); return; }
+
+  // Build env mapping from computed names
+  const env = {};
+  document.querySelectorAll('.mcp-tpl-env-computed').forEach(el => {
+    const envName = el.textContent;
+    env[el.getAttribute('data-base')] = `\${${envName}}`;
+  });
+
   if (!tplMcpData.servers) tplMcpData.servers = {};
-  tplMcpData.servers[id] = { command, args: argsStr ? argsStr.split(/\s+/) : [], env };
+  tplMcpData.servers[id] = {
+    command: item.command,
+    args: item.args ? item.args.split(/\s+/) : [],
+    env,
+  };
   try {
     await api('/api/templates/mcp', { method: 'PUT', body: tplMcpData });
     toast('Serveur MCP ajoute au template', 'success');
@@ -2085,40 +2177,42 @@ async function addTplMcp() {
 function editTplMcp(id) {
   const s = tplMcpData.servers[id];
   if (!s) return;
+  // Try to find in catalog for env var descriptions
+  const catalogItem = tplMcpCatalog.length ? tplMcpCatalog.find(c => c.id === id) : null;
+  const envEntries = Object.entries(s.env || {});
+  const envRows = envEntries.length
+    ? envEntries.map(([k, v]) => {
+        const desc = catalogItem ? (catalogItem.env_vars.find(ev => ev.var === k) || {}).desc || k : k;
+        return `<div class="env-var-row">
+          <div class="env-var-info"><span style="font-size:0.85rem">${escHtml(desc)}</span></div>
+          <div class="env-var-action" style="flex:none"><code style="font-size:0.8rem">${escHtml(v)}</code></div>
+        </div>`;
+      }).join('')
+    : '<p style="color:var(--text-secondary);font-size:0.85rem">Aucune variable.</p>';
+
   showModal(`
     <div class="modal-header">
-      <h3>Modifier MCP (template) : ${escHtml(id)}</h3>
+      <h3>MCP (template) : ${escHtml(id)}</h3>
       <button class="btn-icon" onclick="closeModal()">&times;</button>
     </div>
-    <div class="form-group"><label>ID</label><input id="mcp-tpl-id" value="${escHtml(id)}" /></div>
     <div class="form-row">
-      <div class="form-group"><label>Commande</label><input id="mcp-tpl-cmd" value="${escHtml(s.command || '')}" /></div>
-      <div class="form-group"><label>Arguments</label><input id="mcp-tpl-args" value="${escHtml((s.args || []).join(' '))}" /></div>
+      <div class="form-group">
+        <label>Commande</label>
+        <input value="${escHtml(s.command || '')}" readonly style="opacity:0.6" />
+      </div>
+      <div class="form-group">
+        <label>Arguments</label>
+        <input value="${escHtml((s.args || []).join(' '))}" readonly style="opacity:0.6" />
+      </div>
     </div>
-    <div class="form-group"><label>Variables d'env (JSON)</label><input id="mcp-tpl-env" value="${escHtml(JSON.stringify(s.env || {}))}" /></div>
+    <div style="margin-top:0.5rem">
+      <label>Variables d'environnement</label>
+      <div class="env-var-list">${envRows}</div>
+    </div>
     <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
-      <button class="btn btn-primary" onclick="saveTplMcp('${escHtml(id)}')">Sauvegarder</button>
+      <button class="btn btn-outline" onclick="closeModal()">Fermer</button>
     </div>
-  `);
-}
-
-async function saveTplMcp(originalId) {
-  const id = document.getElementById('mcp-tpl-id').value.trim();
-  const command = document.getElementById('mcp-tpl-cmd').value.trim();
-  const argsStr = document.getElementById('mcp-tpl-args').value.trim();
-  const envStr = document.getElementById('mcp-tpl-env').value.trim();
-  if (!id || !command) { toast('ID et commande requis', 'error'); return; }
-  let env = {};
-  try { env = JSON.parse(envStr || '{}'); } catch { toast('JSON env invalide', 'error'); return; }
-  if (id !== originalId) delete tplMcpData.servers[originalId];
-  tplMcpData.servers[id] = { command, args: argsStr ? argsStr.split(/\s+/) : [], env };
-  try {
-    await api('/api/templates/mcp', { method: 'PUT', body: tplMcpData });
-    toast('Serveur MCP mis a jour', 'success');
-    closeModal();
-    loadTplMCP();
-  } catch (e) { toast(e.message, 'error'); }
+  `, 'modal-wide');
 }
 
 async function deleteTplMcp(id) {
