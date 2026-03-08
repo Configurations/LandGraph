@@ -46,7 +46,7 @@ if DOCKER_MODE:
 
 if DOCKER_MODE:
     PROJECT_DIR = Path("/project")
-    CONFIGS = PROJECT_DIR / "Configs"
+    CONFIGS = PROJECT_DIR / "config"
     TEAMS_DIR = CONFIGS / "Teams"
     SHARED_DIR = PROJECT_DIR / "Shared"
     PROMPTS = TEAMS_DIR / "default"
@@ -56,7 +56,7 @@ if DOCKER_MODE:
 else:
     ROOT = Path(__file__).resolve().parent.parent
     PROJECT_DIR = ROOT / "langgraph-project"
-    CONFIGS = ROOT / "Configs"
+    CONFIGS = ROOT / "config"
     TEAMS_DIR = CONFIGS / "Teams"
     SHARED_DIR = ROOT / "Shared"
     PROMPTS = TEAMS_DIR / "default"

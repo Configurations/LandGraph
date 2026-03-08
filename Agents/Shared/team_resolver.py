@@ -10,7 +10,7 @@ _ROOT = os.path.join(_HERE, "..", "..")
 
 # Chemins possibles pour trouver le dossier de config racine
 CONFIGS_ROOTS = [
-    os.path.join(_ROOT, "Configs"),       # dev local
+    os.path.join(_ROOT, "config"),        # dev local
     os.path.join(_HERE, "..", "config"),   # relatif au code
     os.path.join("/app", "config"),        # Docker
 ]

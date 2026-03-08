@@ -1625,7 +1625,7 @@ function renderTeams() {
           <h3 style="margin:0">
             ${escHtml(t.name || t.id)}
             <span style="font-weight:400;font-size:0.75rem;color:var(--text-secondary)">${escHtml(t.id)}</span>
-            <code style="font-weight:400;font-size:0.7rem;color:var(--text-secondary)">Configs/Teams/${escHtml(dir)}/</code>
+            <code style="font-weight:400;font-size:0.7rem;color:var(--text-secondary)">config/Teams/${escHtml(dir)}/</code>
           </h3>
           <span class="tag tag-blue" style="margin-left:0.5rem">${agentEntries.length} agent${agentEntries.length > 1 ? 's' : ''}</span>
         </div>
@@ -1930,7 +1930,7 @@ async function showCfgRawRegistry(dir) {
     const json = JSON.stringify(data, null, 2);
     showModal(`
       <div class="modal-header">
-        <h3>Registry JSON — Configs/Teams/${escHtml(dir)}/</h3>
+        <h3>Registry JSON — config/Teams/${escHtml(dir)}/</h3>
         <button class="btn-icon" onclick="closeModal()">&times;</button>
       </div>
       <div class="form-group">
@@ -1974,7 +1974,7 @@ async function showAddTeamModal() {
     </div>
     <div class="form-group">
       <label>Identifiant</label>
-      <input id="team-id" placeholder="ex: data_team" oninput="this.value = this.value.replace(/[^a-z0-9_-]/gi, '').toLowerCase(); document.getElementById('team-dir').value = this.value ? 'Configs/Teams/' + this.value : ''" />
+      <input id="team-id" placeholder="ex: data_team" oninput="this.value = this.value.replace(/[^a-z0-9_-]/gi, '').toLowerCase(); document.getElementById('team-dir').value = this.value ? 'config/Teams/' + this.value : ''" />
     </div>
     <div class="form-group">
       <label>Nom</label>
@@ -2030,7 +2030,7 @@ function editTeam(idx) {
     </div>
     <div class="form-group">
       <label>Repertoire</label>
-      <input id="team-dir" value="Configs/Teams/${escHtml(t.id)}" readonly style="background:var(--bg-tertiary);color:var(--text-secondary)" />
+      <input id="team-dir" value="config/Teams/${escHtml(t.id)}" readonly style="background:var(--bg-tertiary);color:var(--text-secondary)" />
     </div>
     <div class="form-group">
       <label>Orchestrateur</label>
