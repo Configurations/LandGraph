@@ -3271,43 +3271,46 @@ async function openWorkflowEditor(dir, apiBase, label) {
       positions: (design && design.positions) ? design.positions : {},
       dragging: null,
       dragOffset: { x: 0, y: 0 },
-      linking: null,    // phase id when drawing an arrow
-      linkMouse: null,  // {x,y} current mouse pos during linking
+      linking: null,
+      linkMouse: null,
     };
     _wfCalcPositions();
-
-    const html = `
-      <div class="wf-toolbar">
-        <h3>Workflow — ${escHtml(label)}/${escHtml(dir)}/</h3>
-        <div class="wf-toolbar-actions">
-          <button class="btn btn-outline btn-sm" onclick="wfShowJSON()">JSON</button>
-          <button class="btn btn-primary btn-sm" onclick="wfSave()">Sauvegarder</button>
-          <button class="btn-icon" onclick="closeModal()">&times;</button>
-        </div>
-      </div>
-      <div class="wf-body">
-        <div class="wf-workspace" id="wf-workspace" onmousedown="wfWorkspaceClick(event)">
-          <svg class="wf-arrows" id="wf-arrows">
-            <defs>
-              <marker id="wf-arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
-                <polygon points="0 0, 10 3.5, 0 7" fill="var(--text-secondary)" />
-              </marker>
-            </defs>
-          </svg>
-          <div class="wf-workspace-inner" id="wf-workspace-inner"></div>
-        </div>
-        <div class="wf-sidebar">
-          <div class="wf-toolbox" id="wf-toolbox">
-            <h4>Boite a outils</h4>
-            <button class="wf-toolbox-btn" onclick="wfAddPhase()">+ Ajouter une Phase</button>
-          </div>
-          <div class="wf-props" id="wf-props"></div>
-        </div>
-      </div>
-    `;
-    showModal(html, 'modal-workflow');
-    wfRender();
+    _wfOpenEditorUI();
   } catch (e) { toast(e.message, 'error'); }
+}
+
+function _wfOpenEditorUI() {
+  const html = `
+    <div class="wf-toolbar">
+      <h3>Workflow — ${escHtml(_wf.label)}/${escHtml(_wf.dir)}/</h3>
+      <div class="wf-toolbar-actions">
+        <button class="btn btn-outline btn-sm" onclick="wfShowJSON()">JSON</button>
+        <button class="btn btn-primary btn-sm" onclick="wfSave()">Sauvegarder</button>
+        <button class="btn-icon" onclick="closeModal()">&times;</button>
+      </div>
+    </div>
+    <div class="wf-body">
+      <div class="wf-workspace" id="wf-workspace" onmousedown="wfWorkspaceClick(event)">
+        <svg class="wf-arrows" id="wf-arrows">
+          <defs>
+            <marker id="wf-arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+              <polygon points="0 0, 10 3.5, 0 7" fill="var(--text-secondary)" />
+            </marker>
+          </defs>
+        </svg>
+        <div class="wf-workspace-inner" id="wf-workspace-inner"></div>
+      </div>
+      <div class="wf-sidebar">
+        <div class="wf-toolbox" id="wf-toolbox">
+          <h4>Boite a outils</h4>
+          <button class="wf-toolbox-btn" onclick="wfAddPhase()">+ Ajouter une Phase</button>
+        </div>
+        <div class="wf-props" id="wf-props"></div>
+      </div>
+    </div>
+  `;
+  showModal(html, 'modal-workflow');
+  wfRender();
 }
 
 function _wfCalcPositions() {
@@ -3737,8 +3740,6 @@ function wfCloseContextMenu() {
 
 function wfCtxDeletePhase(id) {
   wfCloseContextMenu();
-  const name = _wf.data.phases[id]?.name || id;
-  if (!confirm(`Supprimer la phase "${name}" et toutes ses transitions ?`)) return;
   delete _wf.data.phases[id];
   delete _wf.positions[id];
   _wf.data.transitions = (_wf.data.transitions || []).filter(t => t.from !== id && t.to !== id);
@@ -3864,8 +3865,6 @@ function wfAddPhase() {
 }
 
 function wfDeletePhase(id) {
-  const name = _wf.data.phases[id]?.name || id;
-  if (!confirm(`Supprimer la phase "${name}" et toutes ses transitions ?`)) return;
   delete _wf.data.phases[id];
   delete _wf.positions[id];
   _wf.data.transitions = (_wf.data.transitions || []).filter(t => t.from !== id && t.to !== id);
@@ -4157,17 +4156,13 @@ function wfImportJSON() {
   try { data = JSON.parse(raw); } catch { toast('JSON invalide', 'error'); return; }
   _wf.data = data;
   _wf.positions = {};
-  _wfCalcPositions();
   _wf.selected = null;
-  _wfSaveDesign();
+  _wf._collapsed = {};
+  // Close the JSON modal and reopen the workflow editor with new data
   closeModal();
-  // Re-open visual editor
-  const inner = document.getElementById('wf-workspace-inner');
-  if (inner) {
-    wfRender();
-  } else {
-    openWorkflowEditor(_wf.dir, _wf.apiBase, _wf.label);
-  }
+  _wfCalcPositions();
+  _wfSaveDesign();
+  _wfOpenEditorUI();
 }
 
 // ── Save ──
