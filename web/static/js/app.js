@@ -1916,34 +1916,7 @@ async function saveCfgRawRegistry(dir) {
 }
 
 async function showCfgWorkflow(dir) {
-  try {
-    const data = await api(`/api/workflow/${encodeURIComponent(dir)}`);
-    const json = Object.keys(data).length ? JSON.stringify(data, null, 2) : '{\n  "phases": {},\n  "transitions": [],\n  "rules": {}\n}';
-    showModal(`
-      <div class="modal-header">
-        <h3>Workflow — Configs/Teams/${escHtml(dir)}/</h3>
-        <button class="btn-icon" onclick="closeModal()">&times;</button>
-      </div>
-      <div class="form-group">
-        <textarea id="cfg-workflow-json" style="min-height:450px;font-family:monospace;font-size:0.8rem;white-space:pre;tab-size:2">${escHtml(json)}</textarea>
-      </div>
-      <div class="modal-actions">
-        <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
-        <button class="btn btn-primary" onclick="saveCfgWorkflow('${escHtml(dir)}')">Sauvegarder</button>
-      </div>
-    `, 'modal-wide');
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-async function saveCfgWorkflow(dir) {
-  const raw = document.getElementById('cfg-workflow-json').value;
-  let data;
-  try { data = JSON.parse(raw); } catch { toast('JSON invalide', 'error'); return; }
-  try {
-    await api(`/api/workflow/${encodeURIComponent(dir)}`, { method: 'PUT', body: data });
-    toast('Workflow sauvegarde', 'success');
-    closeModal();
-  } catch (e) { toast(e.message, 'error'); }
+  openWorkflowEditor(dir, '/api/workflow', 'Configs/Teams');
 }
 
 async function showAddTeamModal() {
@@ -3107,35 +3080,8 @@ async function saveTplRawRegistry(dir) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-async function showTplWorkflow(dir) {
-  try {
-    const data = await api(`/api/templates/workflow/${encodeURIComponent(dir)}`);
-    const json = Object.keys(data).length ? JSON.stringify(data, null, 2) : '{\n  "phases": {},\n  "transitions": [],\n  "rules": {}\n}';
-    showModal(`
-      <div class="modal-header">
-        <h3>Workflow — Shared/Teams/${escHtml(dir)}/</h3>
-        <button class="btn-icon" onclick="closeModal()">&times;</button>
-      </div>
-      <div class="form-group">
-        <textarea id="tpl-workflow-json" style="min-height:450px;font-family:monospace;font-size:0.8rem;white-space:pre;tab-size:2">${escHtml(json)}</textarea>
-      </div>
-      <div class="modal-actions">
-        <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
-        <button class="btn btn-primary" onclick="saveTplWorkflow('${escHtml(dir)}')">Sauvegarder</button>
-      </div>
-    `, 'modal-wide');
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-async function saveTplWorkflow(dir) {
-  const raw = document.getElementById('tpl-workflow-json').value;
-  let data;
-  try { data = JSON.parse(raw); } catch { toast('JSON invalide', 'error'); return; }
-  try {
-    await api(`/api/templates/workflow/${encodeURIComponent(dir)}`, { method: 'PUT', body: data });
-    toast('Workflow sauvegarde', 'success');
-    closeModal();
-  } catch (e) { toast(e.message, 'error'); }
+function showTplWorkflow(dir) {
+  openWorkflowEditor(dir, '/api/templates/workflow', 'Shared/Teams');
 }
 
 async function _saveTplTeams() {
@@ -3303,6 +3249,857 @@ async function deleteTplTeam(idx) {
   tplTeamsData.teams.splice(idx, 1);
   await _saveTplTeams();
   loadTplTeamsList();
+}
+
+// ═══════════════════════════════════════════════════
+// VISUAL WORKFLOW EDITOR
+// ═══════════════════════════════════════════════════
+
+let _wf = null; // current workflow editor state
+
+async function openWorkflowEditor(dir, apiBase, label) {
+  try {
+    const raw = await api(`${apiBase}/${encodeURIComponent(dir)}`);
+    const designBase = apiBase.replace('/workflow', '/workflow-design');
+    let design = {};
+    try { design = await api(`${designBase}/${encodeURIComponent(dir)}`); } catch {}
+    const data = (raw && Object.keys(raw).length) ? raw : { phases: {}, transitions: [], parallel_groups: { description: '', order: ['A','B','C'] }, rules: {} };
+    _wf = {
+      dir, apiBase, designBase, label,
+      data: JSON.parse(JSON.stringify(data)),
+      selected: null,
+      positions: (design && design.positions) ? design.positions : {},
+      dragging: null,
+      dragOffset: { x: 0, y: 0 },
+      linking: null,    // phase id when drawing an arrow
+      linkMouse: null,  // {x,y} current mouse pos during linking
+    };
+    _wfCalcPositions();
+
+    const html = `
+      <div class="wf-toolbar">
+        <h3>Workflow — ${escHtml(label)}/${escHtml(dir)}/</h3>
+        <div class="wf-toolbar-actions">
+          <button class="btn btn-outline btn-sm" onclick="wfShowJSON()">JSON</button>
+          <button class="btn btn-primary btn-sm" onclick="wfSave()">Sauvegarder</button>
+          <button class="btn-icon" onclick="closeModal()">&times;</button>
+        </div>
+      </div>
+      <div class="wf-body">
+        <div class="wf-workspace" id="wf-workspace" onmousedown="wfWorkspaceClick(event)">
+          <svg class="wf-arrows" id="wf-arrows">
+            <defs>
+              <marker id="wf-arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="var(--text-secondary)" />
+              </marker>
+            </defs>
+          </svg>
+          <div class="wf-workspace-inner" id="wf-workspace-inner"></div>
+        </div>
+        <div class="wf-sidebar">
+          <div class="wf-toolbox" id="wf-toolbox">
+            <h4>Boite a outils</h4>
+            <button class="wf-toolbox-btn" onclick="wfAddPhase()">+ Ajouter une Phase</button>
+            <button class="wf-toolbox-btn" onclick="wfAddTransition()">+ Ajouter une Transition</button>
+          </div>
+          <div class="wf-props" id="wf-props"></div>
+        </div>
+      </div>
+    `;
+    showModal(html, 'modal-workflow');
+    wfRender();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function _wfCalcPositions() {
+  const phases = Object.entries(_wf.data.phases || {});
+  phases.sort((a, b) => (a[1].order || 0) - (b[1].order || 0));
+  const startX = 60, startY = 80, spacingX = 280;
+  phases.forEach(([id, _p], i) => {
+    if (!_wf.positions[id]) {
+      _wf.positions[id] = { x: startX + i * spacingX, y: startY };
+    }
+  });
+}
+
+function wfRender() {
+  if (!_wf) return;
+  const inner = document.getElementById('wf-workspace-inner');
+  if (!inner) return;
+
+  // Render phase blocks
+  const phases = Object.entries(_wf.data.phases || {});
+  phases.sort((a, b) => (a[1].order || 0) - (b[1].order || 0));
+  let html = '';
+  for (const [id, p] of phases) {
+    const pos = _wf.positions[id] || { x: 100, y: 100 };
+    const sel = _wf.selected === id ? ' wf-selected' : '';
+    const agentIds = Object.keys(p.agents || {});
+    const delIds = Object.keys(p.deliverables || {});
+    html += `
+      <div class="wf-phase${sel}" id="wf-p-${id}" data-id="${id}"
+           style="left:${pos.x}px;top:${pos.y}px"
+           onmousedown="wfPhaseMouseDown(event,'${id}')"
+           onclick="wfSelectPhase(event,'${id}')">
+        <div class="wf-phase-head">
+          <span>${escHtml(p.name || id)}</span>
+          <span class="wf-phase-order">${p.order || '?'}</span>
+        </div>
+        <div class="wf-phase-body">
+          <div class="wf-mini-label">Agents (${agentIds.length})</div>
+          <div class="wf-mini-list">${agentIds.map(a => `<span class="wf-mini-chip${(p.agents[a]||{}).required?' required':''}">${escHtml(a)}</span>`).join('')}</div>
+          <div class="wf-mini-label">Livrables (${delIds.length})</div>
+          <div class="wf-mini-list">${delIds.map(d => `<span class="wf-mini-chip${(p.deliverables[d]||{}).required?' required':''}">${escHtml(d)}</span>`).join('')}</div>
+        </div>
+        <div class="wf-connect-handle" title="Tirer pour creer une transition"
+             onmousedown="wfLinkStart(event,'${id}')"></div>
+      </div>`;
+  }
+  inner.innerHTML = html;
+
+  // Render arrows
+  wfRenderArrows();
+  // Render property grid
+  wfRenderProps();
+}
+
+function wfRenderArrows() {
+  const svg = document.getElementById('wf-arrows');
+  if (!svg) return;
+  const transitions = _wf.data.transitions || [];
+  let paths = '';
+  for (const t of transitions) {
+    const fromPos = _wf.positions[t.from];
+    const toPos = _wf.positions[t.to];
+    if (!fromPos || !toPos) continue;
+    // Determine arrow direction
+    const fromEl = document.getElementById(`wf-p-${t.from}`);
+    const toEl = document.getElementById(`wf-p-${t.to}`);
+    const fw = fromEl ? fromEl.offsetWidth : 200;
+    const tw = toEl ? toEl.offsetWidth : 200;
+    const fh = fromEl ? fromEl.offsetHeight : 80;
+    const th = toEl ? toEl.offsetHeight : 80;
+
+    let sx, sy, ex, ey;
+    // Connect right side of from to left side of to (horizontal flow)
+    if (toPos.x > fromPos.x + fw/2) {
+      sx = fromPos.x + fw; sy = fromPos.y + fh/2;
+      ex = toPos.x; ey = toPos.y + th/2;
+    } else if (toPos.x < fromPos.x - tw/2) {
+      sx = fromPos.x; sy = fromPos.y + fh/2;
+      ex = toPos.x + tw; ey = toPos.y + th/2;
+    } else {
+      // Vertical
+      if (toPos.y > fromPos.y) {
+        sx = fromPos.x + fw/2; sy = fromPos.y + fh;
+        ex = toPos.x + tw/2; ey = toPos.y;
+      } else {
+        sx = fromPos.x + fw/2; sy = fromPos.y;
+        ex = toPos.x + tw/2; ey = toPos.y + th;
+      }
+    }
+    const midX = (sx + ex) / 2;
+    const gate = t.human_gate ? '(HG)' : '';
+    paths += `<path d="M${sx},${sy} C${midX},${sy} ${midX},${ey} ${ex},${ey}" />`;
+    // Label
+    const lx = (sx + ex) / 2, ly = (sy + ey) / 2 - 8;
+    if (gate) paths += `<text x="${lx}" y="${ly}" fill="var(--warning)" font-size="10" text-anchor="middle">${gate}</text>`;
+  }
+  // Draw temporary linking line
+  if (_wf.linking && _wf.linkMouse) {
+    const fromPos = _wf.positions[_wf.linking];
+    if (fromPos) {
+      const fromEl = document.getElementById(`wf-p-${_wf.linking}`);
+      const fw = fromEl ? fromEl.offsetWidth : 200;
+      const fh = fromEl ? fromEl.offsetHeight : 80;
+      const sx = fromPos.x + fw, sy = fromPos.y + fh / 2;
+      paths += `<line x1="${sx}" y1="${sy}" x2="${_wf.linkMouse.x}" y2="${_wf.linkMouse.y}" stroke-dasharray="6,4" />`;
+    }
+  }
+  svg.innerHTML = `<defs><marker id="wf-arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="var(--text-secondary)" /></marker></defs>` + paths;
+}
+
+function wfRenderProps() {
+  const el = document.getElementById('wf-props');
+  if (!el) return;
+  if (_wf.selected && _wf.data.phases[_wf.selected]) {
+    _wfRenderPhaseProps(el, _wf.selected);
+  } else {
+    _wfRenderWorkspaceProps(el);
+  }
+}
+
+function _wfRenderWorkspaceProps(el) {
+  const pg = _wf.data.parallel_groups || { description: '', order: ['A','B','C'] };
+  const rules = _wf.data.rules || {};
+  const transitions = _wf.data.transitions || [];
+
+  let trHtml = transitions.map((t, i) => `
+    <div class="wf-transition-item">
+      <span>${escHtml(t.from)}</span>
+      <span class="wf-t-arrow">&rarr;</span>
+      <span>${escHtml(t.to)}</span>
+      ${t.human_gate ? '<span class="tag tag-yellow" style="font-size:0.6rem;padding:0.05rem 0.3rem">HG</span>' : ''}
+      <button class="btn-icon danger" style="margin-left:auto" onclick="wfDeleteTransition(${i})">x</button>
+    </div>
+  `).join('');
+
+  let rulesHtml = Object.entries(rules).map(([k, v]) => `
+    <div class="wf-rule-item">
+      <code>${escHtml(k)}</code>
+      <span>${typeof v === 'boolean' ? (v ? 'true' : 'false') : escHtml(String(v))}</span>
+      <button class="btn-icon danger" onclick="wfDeleteRule('${escHtml(k)}')">x</button>
+    </div>
+  `).join('');
+
+  // Build parallel groups list with usage check
+  const pgOrder = pg.order || [];
+  const pgUsed = _wfGetUsedGroups();
+  let pgHtml = pgOrder.map(g => {
+    const used = pgUsed.has(g);
+    return `<div class="wf-prop-item">
+      <span class="wf-item-label" style="font-weight:600">${escHtml(g)}</span>
+      ${used ? '<span style="font-size:0.65rem;color:var(--text-secondary)">utilise</span>' : ''}
+      <button class="btn-icon danger" onclick="wfRemovePG('${escHtml(g)}')" ${used ? 'disabled title="Groupe utilise par un agent"' : ''}>x</button>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <h4>Proprietes du Workflow</h4>
+
+    <div class="wf-props-section">
+      <div class="wf-props-section-title">
+        Groupes paralleles
+        <button class="btn-icon" style="font-size:0.75rem" onclick="wfAddPG()">+</button>
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <input value="${escHtml(pg.description || '')}" onchange="wfSetPGDesc(this.value)" />
+      </div>
+      ${pgHtml || '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucun groupe</div>'}
+    </div>
+
+    <div class="wf-props-section">
+      <div class="wf-props-section-title">
+        Transitions (${transitions.length})
+      </div>
+      ${trHtml || '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucune transition</div>'}
+    </div>
+
+    <div class="wf-props-section">
+      <div class="wf-props-section-title">
+        Regles
+        <button class="btn-icon" style="font-size:0.75rem" onclick="wfAddRule()">+</button>
+      </div>
+      ${rulesHtml || '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucune regle</div>'}
+    </div>
+  `;
+}
+
+function _wfRenderPhaseProps(el, phaseId) {
+  const p = _wf.data.phases[phaseId];
+  const agents = p.agents || {};
+  const deliverables = p.deliverables || {};
+  const exitConds = p.exit_conditions || {};
+
+  let agentsHtml = Object.entries(agents).map(([id, a]) => `
+    <div class="wf-prop-item">
+      <span class="wf-item-label" title="${escHtml(a.role || '')}">${escHtml(id)}</span>
+      <span class="wf-item-req">${a.required ? 'req' : 'opt'}</span>
+      <span style="font-size:0.65rem;color:var(--text-secondary)">${escHtml(a.parallel_group || '')}</span>
+      <button class="btn-icon" onclick="wfEditAgent('${phaseId}','${escHtml(id)}')">&#9998;</button>
+      <button class="btn-icon danger" onclick="wfRemoveAgent('${phaseId}','${escHtml(id)}')">x</button>
+    </div>
+  `).join('');
+
+  let delsHtml = Object.entries(deliverables).map(([id, d]) => `
+    <div class="wf-prop-item">
+      <span class="wf-item-label" title="${escHtml(d.description || '')}">${escHtml(id)}</span>
+      <span style="font-size:0.65rem;color:var(--text-secondary)">${escHtml(d.agent || '')}</span>
+      <span class="wf-item-req">${d.required ? 'req' : 'opt'}</span>
+      <button class="btn-icon" onclick="wfEditDeliverable('${phaseId}','${escHtml(id)}')">&#9998;</button>
+      <button class="btn-icon danger" onclick="wfRemoveDeliverable('${phaseId}','${escHtml(id)}')">x</button>
+    </div>
+  `).join('');
+
+  let condsHtml = Object.entries(exitConds).map(([k, v]) => `
+    <div class="wf-prop-item">
+      <span class="wf-item-label">${escHtml(k)}</span>
+      <span style="font-size:0.7rem">${typeof v === 'boolean' ? (v ? 'true' : 'false') : escHtml(String(v))}</span>
+      <button class="btn-icon danger" onclick="wfRemoveCondition('${phaseId}','${escHtml(k)}')">x</button>
+    </div>
+  `).join('');
+
+  el.innerHTML = `
+    <h4>
+      Phase : ${escHtml(p.name || phaseId)}
+      <button class="btn-icon danger" onclick="wfDeletePhase('${phaseId}')" title="Supprimer la phase">&#128465;</button>
+    </h4>
+
+    <div class="wf-props-section">
+      <div class="form-group">
+        <label>ID</label>
+        <input value="${escHtml(phaseId)}" disabled style="opacity:0.6" />
+      </div>
+      <div class="form-group">
+        <label>Nom</label>
+        <input value="${escHtml(p.name || '')}" onchange="wfSetPhaseField('${phaseId}','name',this.value)" />
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <input value="${escHtml(p.description || '')}" onchange="wfSetPhaseField('${phaseId}','description',this.value)" />
+      </div>
+      <div class="form-group">
+        <label>Ordre</label>
+        <input type="number" value="${p.order || 1}" min="1" onchange="wfSetPhaseField('${phaseId}','order',parseInt(this.value))" />
+      </div>
+      ${p.next_phase ? `<div class="form-group"><label>Phase suivante</label><input value="${escHtml(p.next_phase)}" onchange="wfSetPhaseField('${phaseId}','next_phase',this.value)" /></div>` : ''}
+    </div>
+
+    <div class="wf-props-section">
+      <div class="wf-props-section-title">
+        Agents (${Object.keys(agents).length})
+        <button class="btn-icon" style="font-size:0.75rem" onclick="wfAddAgent('${phaseId}')">+</button>
+      </div>
+      ${agentsHtml || '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucun agent</div>'}
+    </div>
+
+    <div class="wf-props-section">
+      <div class="wf-props-section-title">
+        Livrables (${Object.keys(deliverables).length})
+        <button class="btn-icon" style="font-size:0.75rem" onclick="wfAddDeliverable('${phaseId}')">+</button>
+      </div>
+      ${delsHtml || '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucun livrable</div>'}
+    </div>
+
+    <div class="wf-props-section">
+      <div class="wf-props-section-title">
+        Conditions de sortie (${Object.keys(exitConds).length})
+        <button class="btn-icon" style="font-size:0.75rem" onclick="wfAddCondition('${phaseId}')">+</button>
+      </div>
+      ${condsHtml || '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucune condition</div>'}
+    </div>
+  `;
+}
+
+// ── Workspace interactions ──
+function wfWorkspaceClick(e) {
+  if (e.target.closest('.wf-phase')) return;
+  _wf.selected = null;
+  wfRender();
+}
+
+function wfSelectPhase(e, id) {
+  e.stopPropagation();
+  _wf.selected = id;
+  wfRender();
+}
+
+// ── Drag phases ──
+function wfPhaseMouseDown(e, id) {
+  if (e.button !== 0) return;
+  const el = document.getElementById(`wf-p-${id}`);
+  if (!el) return;
+  _wf.dragging = id;
+  _wf.dragOffset = {
+    x: e.clientX - (_wf.positions[id]?.x || 0),
+    y: e.clientY - (_wf.positions[id]?.y || 0)
+  };
+  const ws = document.getElementById('wf-workspace');
+  const scrollLeft = ws.scrollLeft;
+  const scrollTop = ws.scrollTop;
+  const rect = ws.getBoundingClientRect();
+  _wf.dragOffset = {
+    x: e.clientX - rect.left + scrollLeft - (_wf.positions[id]?.x || 0),
+    y: e.clientY - rect.top + scrollTop - (_wf.positions[id]?.y || 0)
+  };
+  document.addEventListener('mousemove', _wfDragMove);
+  document.addEventListener('mouseup', _wfDragEnd);
+  e.preventDefault();
+}
+
+function _wfDragMove(e) {
+  if (!_wf || !_wf.dragging) return;
+  const ws = document.getElementById('wf-workspace');
+  const rect = ws.getBoundingClientRect();
+  const x = Math.max(0, e.clientX - rect.left + ws.scrollLeft - _wf.dragOffset.x);
+  const y = Math.max(0, e.clientY - rect.top + ws.scrollTop - _wf.dragOffset.y);
+  _wf.positions[_wf.dragging] = { x, y };
+  const el = document.getElementById(`wf-p-${_wf.dragging}`);
+  if (el) { el.style.left = x + 'px'; el.style.top = y + 'px'; }
+  wfRenderArrows();
+}
+
+function _wfDragEnd() {
+  if (_wf) {
+    _wf.dragging = null;
+    _wfSaveDesign();
+  }
+  document.removeEventListener('mousemove', _wfDragMove);
+  document.removeEventListener('mouseup', _wfDragEnd);
+}
+
+function _wfSaveDesign() {
+  if (!_wf) return;
+  api(`${_wf.designBase}/${encodeURIComponent(_wf.dir)}`, {
+    method: 'PUT',
+    body: { positions: _wf.positions }
+  }).catch(() => {});
+}
+
+// ── Link / draw arrows ──
+function wfLinkStart(e, fromId) {
+  e.stopPropagation();
+  e.preventDefault();
+  _wf.linking = fromId;
+  _wf.dragging = null; // cancel any drag
+  const ws = document.getElementById('wf-workspace');
+  const rect = ws.getBoundingClientRect();
+  _wf.linkMouse = { x: e.clientX - rect.left + ws.scrollLeft, y: e.clientY - rect.top + ws.scrollTop };
+  document.addEventListener('mousemove', _wfLinkMove);
+  document.addEventListener('mouseup', _wfLinkEnd);
+}
+
+function _wfLinkMove(e) {
+  if (!_wf || !_wf.linking) return;
+  const ws = document.getElementById('wf-workspace');
+  const rect = ws.getBoundingClientRect();
+  _wf.linkMouse = { x: e.clientX - rect.left + ws.scrollLeft, y: e.clientY - rect.top + ws.scrollTop };
+  wfRenderArrows();
+}
+
+function _wfLinkEnd(e) {
+  document.removeEventListener('mousemove', _wfLinkMove);
+  document.removeEventListener('mouseup', _wfLinkEnd);
+  if (!_wf || !_wf.linking) return;
+  const fromId = _wf.linking;
+  _wf.linking = null;
+  _wf.linkMouse = null;
+  // Find which phase the mouse landed on
+  const target = document.elementFromPoint(e.clientX, e.clientY);
+  const phaseEl = target ? target.closest('.wf-phase') : null;
+  if (phaseEl) {
+    const toId = phaseEl.dataset.id;
+    if (toId && toId !== fromId) {
+      // Check if transition already exists
+      const exists = (_wf.data.transitions || []).some(t => t.from === fromId && t.to === toId);
+      if (!exists) {
+        if (!_wf.data.transitions) _wf.data.transitions = [];
+        _wf.data.transitions.push({ from: fromId, to: toId, human_gate: true });
+      }
+    }
+  }
+  wfRender();
+}
+
+// ── Phase CRUD ──
+function wfAddPhase() {
+  const phases = _wf.data.phases || {};
+  let num = Object.keys(phases).length + 1;
+  let id = `phase_${num}`;
+  while (phases[id]) { num++; id = `phase_${num}`; }
+  const maxOrder = Object.values(phases).reduce((m, p) => Math.max(m, p.order || 0), 0);
+  _wf.data.phases[id] = {
+    name: `Phase ${num}`,
+    description: '',
+    order: maxOrder + 1,
+    agents: {},
+    deliverables: {},
+    exit_conditions: { human_gate: true }
+  };
+  _wfCalcPositions();
+  _wf.selected = id;
+  wfRender();
+}
+
+async function wfDeletePhase(id) {
+  if (!(await confirmModal(`Supprimer la phase "${_wf.data.phases[id]?.name || id}" ?`))) return;
+  delete _wf.data.phases[id];
+  delete _wf.positions[id];
+  _wf.data.transitions = (_wf.data.transitions || []).filter(t => t.from !== id && t.to !== id);
+  _wf.selected = null;
+  wfRender();
+}
+
+function wfSetPhaseField(phaseId, field, val) {
+  if (!_wf.data.phases[phaseId]) return;
+  _wf.data.phases[phaseId][field] = val;
+  if (field === 'order' || field === 'name') wfRender();
+}
+
+// ── Agent CRUD within a phase ──
+function wfAddAgent(phaseId) {
+  showModal(`
+    <div class="modal-header">
+      <h3>Ajouter un agent</h3>
+      <button class="btn-icon" onclick="closeModal();wfRender()">&times;</button>
+    </div>
+    <div class="form-group"><label>ID de l'agent</label><input id="wf-new-agent-id" placeholder="ex: requirements_analyst" /></div>
+    <div class="form-group"><label>Role</label><input id="wf-new-agent-role" placeholder="Description du role" /></div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Obligatoire</label>
+        <select id="wf-new-agent-req"><option value="true">Oui</option><option value="false">Non</option></select>
+      </div>
+      <div class="form-group">
+        <label>Groupe parallele</label>
+        <input id="wf-new-agent-pg" value="A" />
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal();wfRender()">Annuler</button>
+      <button class="btn btn-primary" onclick="_wfDoAddAgent('${phaseId}')">Ajouter</button>
+    </div>
+  `, 'modal-confirm');
+}
+
+function _wfDoAddAgent(phaseId) {
+  const id = document.getElementById('wf-new-agent-id').value.trim();
+  if (!id) { toast('ID requis', 'error'); return; }
+  if (!_wf.data.phases[phaseId].agents) _wf.data.phases[phaseId].agents = {};
+  _wf.data.phases[phaseId].agents[id] = {
+    role: document.getElementById('wf-new-agent-role').value.trim(),
+    required: document.getElementById('wf-new-agent-req').value === 'true',
+    parallel_group: document.getElementById('wf-new-agent-pg').value.trim() || 'A'
+  };
+  closeModal();
+  wfRender();
+}
+
+function wfEditAgent(phaseId, agentId) {
+  const a = _wf.data.phases[phaseId]?.agents?.[agentId];
+  if (!a) return;
+  showModal(`
+    <div class="modal-header">
+      <h3>Modifier l'agent : ${escHtml(agentId)}</h3>
+      <button class="btn-icon" onclick="closeModal();wfRender()">&times;</button>
+    </div>
+    <div class="form-group"><label>Role</label><input id="wf-edit-agent-role" value="${escHtml(a.role || '')}" /></div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Obligatoire</label>
+        <select id="wf-edit-agent-req"><option value="true" ${a.required?'selected':''}>Oui</option><option value="false" ${!a.required?'selected':''}>Non</option></select>
+      </div>
+      <div class="form-group">
+        <label>Groupe parallele</label>
+        <input id="wf-edit-agent-pg" value="${escHtml(a.parallel_group || '')}" />
+      </div>
+    </div>
+    <div class="form-group"><label>Depends on (IDs separes par des virgules)</label><input id="wf-edit-agent-deps" value="${escHtml((a.depends_on||[]).join(', '))}" /></div>
+    <div class="form-group"><label>Can delegate to (IDs separes par des virgules)</label><input id="wf-edit-agent-del" value="${escHtml((a.can_delegate_to||[]).join(', '))}" /></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal();wfRender()">Annuler</button>
+      <button class="btn btn-primary" onclick="_wfDoEditAgent('${phaseId}','${escHtml(agentId)}')">Sauvegarder</button>
+    </div>
+  `, 'modal-confirm');
+}
+
+function _wfDoEditAgent(phaseId, agentId) {
+  const ag = _wf.data.phases[phaseId].agents[agentId];
+  ag.role = document.getElementById('wf-edit-agent-role').value.trim();
+  ag.required = document.getElementById('wf-edit-agent-req').value === 'true';
+  ag.parallel_group = document.getElementById('wf-edit-agent-pg').value.trim() || 'A';
+  const deps = document.getElementById('wf-edit-agent-deps').value.trim();
+  if (deps) ag.depends_on = deps.split(',').map(s => s.trim()).filter(Boolean);
+  else delete ag.depends_on;
+  const del = document.getElementById('wf-edit-agent-del').value.trim();
+  if (del) ag.can_delegate_to = del.split(',').map(s => s.trim()).filter(Boolean);
+  else delete ag.can_delegate_to;
+  closeModal();
+  wfRender();
+}
+
+function wfRemoveAgent(phaseId, agentId) {
+  delete _wf.data.phases[phaseId].agents[agentId];
+  wfRender();
+}
+
+// ── Deliverable CRUD ──
+function wfAddDeliverable(phaseId) {
+  const agentIds = Object.keys(_wf.data.phases[phaseId].agents || {});
+  const agentOpts = agentIds.map(a => `<option value="${escHtml(a)}">${escHtml(a)}</option>`).join('');
+  showModal(`
+    <div class="modal-header">
+      <h3>Ajouter un livrable</h3>
+      <button class="btn-icon" onclick="closeModal();wfRender()">&times;</button>
+    </div>
+    <div class="form-group"><label>ID</label><input id="wf-new-del-id" placeholder="ex: prd" /></div>
+    <div class="form-group"><label>Description</label><input id="wf-new-del-desc" /></div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Agent responsable</label>
+        <select id="wf-new-del-agent"><option value="">--</option>${agentOpts}</select>
+      </div>
+      <div class="form-group">
+        <label>Obligatoire</label>
+        <select id="wf-new-del-req"><option value="true">Oui</option><option value="false">Non</option></select>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal();wfRender()">Annuler</button>
+      <button class="btn btn-primary" onclick="_wfDoAddDel('${phaseId}')">Ajouter</button>
+    </div>
+  `, 'modal-confirm');
+}
+
+function _wfDoAddDel(phaseId) {
+  const id = document.getElementById('wf-new-del-id').value.trim();
+  if (!id) { toast('ID requis', 'error'); return; }
+  if (!_wf.data.phases[phaseId].deliverables) _wf.data.phases[phaseId].deliverables = {};
+  _wf.data.phases[phaseId].deliverables[id] = {
+    agent: document.getElementById('wf-new-del-agent').value,
+    required: document.getElementById('wf-new-del-req').value === 'true',
+    description: document.getElementById('wf-new-del-desc').value.trim()
+  };
+  closeModal();
+  wfRender();
+}
+
+function wfEditDeliverable(phaseId, delId) {
+  const d = _wf.data.phases[phaseId]?.deliverables?.[delId];
+  if (!d) return;
+  const agentIds = Object.keys(_wf.data.phases[phaseId].agents || {});
+  const agentOpts = agentIds.map(a => `<option value="${escHtml(a)}" ${a===d.agent?'selected':''}>${escHtml(a)}</option>`).join('');
+  showModal(`
+    <div class="modal-header">
+      <h3>Modifier : ${escHtml(delId)}</h3>
+      <button class="btn-icon" onclick="closeModal();wfRender()">&times;</button>
+    </div>
+    <div class="form-group"><label>Description</label><input id="wf-edit-del-desc" value="${escHtml(d.description || '')}" /></div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Agent</label>
+        <select id="wf-edit-del-agent"><option value="">--</option>${agentOpts}</select>
+      </div>
+      <div class="form-group">
+        <label>Obligatoire</label>
+        <select id="wf-edit-del-req"><option value="true" ${d.required?'selected':''}>Oui</option><option value="false" ${!d.required?'selected':''}>Non</option></select>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal();wfRender()">Annuler</button>
+      <button class="btn btn-primary" onclick="_wfDoEditDel('${phaseId}','${escHtml(delId)}')">Sauvegarder</button>
+    </div>
+  `, 'modal-confirm');
+}
+
+function _wfDoEditDel(phaseId, delId) {
+  const d = _wf.data.phases[phaseId].deliverables[delId];
+  d.description = document.getElementById('wf-edit-del-desc').value.trim();
+  d.agent = document.getElementById('wf-edit-del-agent').value;
+  d.required = document.getElementById('wf-edit-del-req').value === 'true';
+  closeModal();
+  wfRender();
+}
+
+function wfRemoveDeliverable(phaseId, delId) {
+  delete _wf.data.phases[phaseId].deliverables[delId];
+  wfRender();
+}
+
+// ── Exit conditions CRUD ──
+function wfAddCondition(phaseId) {
+  showModal(`
+    <div class="modal-header">
+      <h3>Ajouter une condition de sortie</h3>
+      <button class="btn-icon" onclick="closeModal();wfRender()">&times;</button>
+    </div>
+    <div class="form-group"><label>Cle</label><input id="wf-new-cond-key" placeholder="ex: human_gate" /></div>
+    <div class="form-group">
+      <label>Valeur</label>
+      <select id="wf-new-cond-val"><option value="true">true</option><option value="false">false</option></select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal();wfRender()">Annuler</button>
+      <button class="btn btn-primary" onclick="_wfDoAddCond('${phaseId}')">Ajouter</button>
+    </div>
+  `, 'modal-confirm');
+}
+
+function _wfDoAddCond(phaseId) {
+  const k = document.getElementById('wf-new-cond-key').value.trim();
+  if (!k) { toast('Cle requise', 'error'); return; }
+  if (!_wf.data.phases[phaseId].exit_conditions) _wf.data.phases[phaseId].exit_conditions = {};
+  _wf.data.phases[phaseId].exit_conditions[k] = document.getElementById('wf-new-cond-val').value === 'true';
+  closeModal();
+  wfRender();
+}
+
+function wfRemoveCondition(phaseId, key) {
+  delete _wf.data.phases[phaseId].exit_conditions[key];
+  wfRender();
+}
+
+// ── Transitions CRUD ──
+function wfAddTransition() {
+  const phaseIds = Object.keys(_wf.data.phases || {});
+  if (phaseIds.length < 2) { toast('Il faut au moins 2 phases', 'error'); return; }
+  const opts = phaseIds.map(id => `<option value="${escHtml(id)}">${escHtml(_wf.data.phases[id].name || id)}</option>`).join('');
+  showModal(`
+    <div class="modal-header">
+      <h3>Ajouter une transition</h3>
+      <button class="btn-icon" onclick="closeModal();wfRender()">&times;</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>De</label><select id="wf-new-tr-from">${opts}</select></div>
+      <div class="form-group"><label>Vers</label><select id="wf-new-tr-to">${opts}</select></div>
+    </div>
+    <div class="form-group">
+      <label>Human Gate</label>
+      <select id="wf-new-tr-hg"><option value="true">Oui</option><option value="false">Non</option></select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal();wfRender()">Annuler</button>
+      <button class="btn btn-primary" onclick="_wfDoAddTransition()">Ajouter</button>
+    </div>
+  `, 'modal-confirm');
+}
+
+function _wfDoAddTransition() {
+  const from = document.getElementById('wf-new-tr-from').value;
+  const to = document.getElementById('wf-new-tr-to').value;
+  if (from === to) { toast('De et Vers doivent etre differents', 'error'); return; }
+  if (!_wf.data.transitions) _wf.data.transitions = [];
+  _wf.data.transitions.push({
+    from, to,
+    human_gate: document.getElementById('wf-new-tr-hg').value === 'true'
+  });
+  closeModal();
+  wfRender();
+}
+
+function wfDeleteTransition(idx) {
+  _wf.data.transitions.splice(idx, 1);
+  wfRender();
+}
+
+// ── Rules CRUD ──
+function wfAddRule() {
+  showModal(`
+    <div class="modal-header">
+      <h3>Ajouter une regle</h3>
+      <button class="btn-icon" onclick="closeModal();wfRender()">&times;</button>
+    </div>
+    <div class="form-group"><label>Cle</label><input id="wf-new-rule-key" placeholder="ex: max_agents_parallel" /></div>
+    <div class="form-group"><label>Valeur</label><input id="wf-new-rule-val" placeholder="true, false, ou un nombre" /></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal();wfRender()">Annuler</button>
+      <button class="btn btn-primary" onclick="_wfDoAddRule()">Ajouter</button>
+    </div>
+  `, 'modal-confirm');
+}
+
+function _wfDoAddRule() {
+  const k = document.getElementById('wf-new-rule-key').value.trim();
+  let v = document.getElementById('wf-new-rule-val').value.trim();
+  if (!k) { toast('Cle requise', 'error'); return; }
+  if (v === 'true') v = true;
+  else if (v === 'false') v = false;
+  else if (!isNaN(v) && v !== '') v = Number(v);
+  if (!_wf.data.rules) _wf.data.rules = {};
+  _wf.data.rules[k] = v;
+  closeModal();
+  wfRender();
+}
+
+function wfDeleteRule(key) {
+  delete _wf.data.rules[key];
+  wfRender();
+}
+
+// ── Parallel groups ──
+function wfSetPGDesc(val) {
+  if (!_wf.data.parallel_groups) _wf.data.parallel_groups = {};
+  _wf.data.parallel_groups.description = val;
+}
+
+function _wfGetUsedGroups() {
+  const used = new Set();
+  for (const phase of Object.values(_wf.data.phases || {})) {
+    for (const agent of Object.values(phase.agents || {})) {
+      if (agent.parallel_group) used.add(agent.parallel_group);
+    }
+  }
+  return used;
+}
+
+function wfAddPG() {
+  showModal(`
+    <div class="modal-header">
+      <h3>Ajouter un groupe parallele</h3>
+      <button class="btn-icon" onclick="closeModal();wfRender()">&times;</button>
+    </div>
+    <div class="form-group"><label>Nom du groupe (ex: D)</label><input id="wf-new-pg-name" placeholder="D" /></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal();wfRender()">Annuler</button>
+      <button class="btn btn-primary" onclick="_wfDoAddPG()">Ajouter</button>
+    </div>
+  `, 'modal-confirm');
+}
+
+function _wfDoAddPG() {
+  const name = document.getElementById('wf-new-pg-name').value.trim();
+  if (!name) { toast('Nom requis', 'error'); return; }
+  if (!_wf.data.parallel_groups) _wf.data.parallel_groups = { description: '', order: [] };
+  if (!_wf.data.parallel_groups.order) _wf.data.parallel_groups.order = [];
+  if (_wf.data.parallel_groups.order.includes(name)) { toast('Ce groupe existe deja', 'error'); return; }
+  _wf.data.parallel_groups.order.push(name);
+  closeModal();
+  wfRender();
+}
+
+function wfRemovePG(name) {
+  const used = _wfGetUsedGroups();
+  if (used.has(name)) { toast('Ce groupe est utilise par un agent, impossible de le supprimer', 'error'); return; }
+  if (!_wf.data.parallel_groups || !_wf.data.parallel_groups.order) return;
+  _wf.data.parallel_groups.order = _wf.data.parallel_groups.order.filter(g => g !== name);
+  wfRender();
+}
+
+// ── JSON view ──
+function wfShowJSON() {
+  showModal(`
+    <div class="modal-header">
+      <h3>Workflow JSON</h3>
+      <button class="btn-icon" onclick="closeModal();wfRender()">&times;</button>
+    </div>
+    <div class="form-group">
+      <textarea id="wf-raw-json" style="min-height:450px;font-family:monospace;font-size:0.8rem;white-space:pre;tab-size:2">${escHtml(JSON.stringify(_wf.data, null, 2))}</textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal();wfRender()">Annuler</button>
+      <button class="btn btn-primary" onclick="wfImportJSON()">Importer</button>
+    </div>
+  `, 'modal-wide');
+}
+
+function wfImportJSON() {
+  const raw = document.getElementById('wf-raw-json').value;
+  let data;
+  try { data = JSON.parse(raw); } catch { toast('JSON invalide', 'error'); return; }
+  _wf.data = data;
+  _wf.positions = {};
+  _wfCalcPositions();
+  _wf.selected = null;
+  closeModal();
+  // Re-open visual editor
+  const inner = document.getElementById('wf-workspace-inner');
+  if (inner) {
+    wfRender();
+  } else {
+    openWorkflowEditor(_wf.dir, _wf.apiBase, _wf.label);
+  }
+}
+
+// ── Save ──
+async function wfSave() {
+  try {
+    await Promise.all([
+      api(`${_wf.apiBase}/${encodeURIComponent(_wf.dir)}`, { method: 'PUT', body: _wf.data }),
+      api(`${_wf.designBase}/${encodeURIComponent(_wf.dir)}`, { method: 'PUT', body: { positions: _wf.positions } })
+    ]);
+    toast('Workflow sauvegarde', 'success');
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 // ═══════════════════════════════════════════════════

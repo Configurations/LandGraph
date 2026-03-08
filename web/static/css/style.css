@@ -1078,3 +1078,299 @@ tr:hover { background: rgba(255,255,255,0.02); }
   border-color: #ef4444;
   color: #ef4444;
 }
+
+/* ── Workflow Editor (full-screen) ── */
+.modal.modal-workflow {
+  max-width: 96vw;
+  width: 96vw;
+  height: 92vh;
+  max-height: 92vh;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.wf-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+.wf-toolbar h3 { font-size: 1rem; }
+.wf-toolbar-actions { display: flex; gap: 0.5rem; align-items: center; }
+
+.wf-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Workspace (center) */
+.wf-workspace {
+  flex: 1;
+  position: relative;
+  overflow: auto;
+  background:
+    radial-gradient(circle at 1px 1px, rgba(255,255,255,0.04) 1px, transparent 0) 0 0 / 24px 24px;
+  cursor: default;
+  min-width: 0;
+}
+.wf-workspace-inner {
+  position: relative;
+  min-width: 100%;
+  min-height: 100%;
+  padding: 2rem;
+}
+.wf-workspace svg.wf-arrows {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+}
+.wf-arrows line, .wf-arrows path {
+  stroke: var(--text-secondary);
+  stroke-width: 2;
+  fill: none;
+  marker-end: url(#wf-arrowhead);
+}
+
+/* Phase blocks */
+.wf-phase {
+  position: absolute;
+  min-width: 180px;
+  max-width: 260px;
+  background: var(--bg-card);
+  border: 2px solid var(--border);
+  border-radius: 0.75rem;
+  cursor: grab;
+  user-select: none;
+  z-index: 1;
+  transition: box-shadow 0.15s;
+}
+.wf-phase:hover { border-color: var(--accent); }
+.wf-phase.wf-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(59,130,246,0.3);
+}
+.wf-phase-head {
+  padding: 0.5rem 0.75rem;
+  background: rgba(59,130,246,0.12);
+  border-radius: 0.6rem 0.6rem 0 0;
+  font-weight: 700;
+  font-size: 0.85rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.wf-phase-order {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.wf-phase-body {
+  padding: 0.5rem 0.75rem 0.6rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+.wf-phase-body .wf-mini-label {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  margin-top: 0.35rem;
+  margin-bottom: 0.15rem;
+  font-weight: 600;
+}
+.wf-phase-body .wf-mini-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+}
+.wf-mini-chip {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.25rem;
+  font-size: 0.68rem;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--border);
+}
+.wf-mini-chip.required { border-color: var(--accent); color: #60a5fa; }
+
+/* Connection handle (right edge of phase) */
+.wf-connect-handle {
+  position: absolute;
+  right: -7px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  border: 2px solid var(--text-secondary);
+  cursor: crosshair;
+  z-index: 2;
+  transition: all 0.15s;
+}
+.wf-connect-handle:hover {
+  border-color: var(--accent);
+  background: var(--accent);
+  transform: translateY(-50%) scale(1.3);
+}
+
+/* Sidebar right */
+.wf-sidebar {
+  width: 320px;
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
+  background: var(--bg-secondary);
+}
+
+/* Toolbox */
+.wf-toolbox {
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.wf-toolbox h4 {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  margin-bottom: 0.5rem;
+}
+.wf-toolbox-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.35rem;
+  border-radius: 0.5rem;
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: all 0.15s;
+}
+.wf-toolbox-btn:hover {
+  border-color: var(--accent);
+  background: rgba(59,130,246,0.08);
+}
+
+/* Property Grid */
+.wf-props {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.75rem;
+}
+.wf-props h4 {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  margin-bottom: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.wf-props-section {
+  margin-bottom: 0.75rem;
+}
+.wf-props-section-title {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  font-weight: 600;
+  margin: 0.6rem 0 0.35rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.wf-props .form-group { margin-bottom: 0.5rem; }
+.wf-props label { font-size: 0.72rem; margin-bottom: 0.15rem; }
+.wf-props input, .wf-props select {
+  padding: 0.3rem 0.5rem;
+  font-size: 0.8rem;
+}
+.wf-props textarea {
+  min-height: 60px;
+  font-size: 0.78rem;
+  padding: 0.35rem 0.5rem;
+}
+
+/* Sub-items in props (agents, deliverables, conditions) */
+.wf-prop-item {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.4rem;
+  background: rgba(0,0,0,0.15);
+  border-radius: 0.35rem;
+  margin-bottom: 0.25rem;
+  font-size: 0.78rem;
+}
+.wf-prop-item .wf-item-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-prop-item .wf-item-req { color: var(--accent); font-size: 0.7rem; }
+.wf-prop-item .btn-icon { padding: 0.15rem; font-size: 0.75rem; }
+.wf-prop-item .btn-icon:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.wf-prop-add-row {
+  display: flex;
+  gap: 0.3rem;
+  margin-top: 0.25rem;
+}
+.wf-prop-add-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Transition arrows list in props */
+.wf-transition-item {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.4rem;
+  background: rgba(0,0,0,0.15);
+  border-radius: 0.35rem;
+  margin-bottom: 0.2rem;
+  font-size: 0.78rem;
+}
+.wf-transition-item .wf-t-arrow { color: var(--text-secondary); }
+
+/* Rule item */
+.wf-rule-item {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.4rem;
+  background: rgba(0,0,0,0.15);
+  border-radius: 0.35rem;
+  margin-bottom: 0.2rem;
+  font-size: 0.78rem;
+}
+.wf-rule-item code { font-size: 0.75rem; color: #60a5fa; flex: 1; }
+
+/* Responsive sidebar collapse */
+@media (max-width: 900px) {
+  .wf-sidebar { width: 260px; }
+}
