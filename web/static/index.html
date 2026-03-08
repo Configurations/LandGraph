@@ -30,6 +30,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
         Equipes
       </div>
+      <div class="nav-item" data-section="templates" onclick="showSection('templates')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        Templates
+      </div>
       <div class="nav-item" data-section="agents" onclick="showSection('agents')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         Agents
@@ -173,6 +177,18 @@
         <div class="agents-grid" id="teams-grid"></div>
       </div>
 
+      <!-- TEMPLATES SECTION -->
+      <div class="section" id="section-templates">
+        <div class="page-header">
+          <h2>Templates d'equipe</h2>
+          <button class="btn btn-outline btn-sm" onclick="loadTemplates()">Rafraichir</button>
+        </div>
+        <p style="color:var(--text-secondary);margin-bottom:1rem;font-size:0.85rem">
+          Les templates sont des modeles d'equipe stockes dans <code>Shared/Teams/</code>. Ils servent de base pour creer de nouvelles equipes.
+        </p>
+        <div class="agents-grid" id="templates-grid"></div>
+      </div>
+
       <!-- CHAT SECTION -->
       <div class="section" id="section-chat">
         <div class="page-header">
@@ -214,48 +230,98 @@
       <div class="section" id="section-git">
         <div class="page-header">
           <h2>Git</h2>
-          <button class="btn btn-outline btn-sm" onclick="loadGit()">Rafraichir</button>
+          <div style="display:flex;gap:0.5rem">
+            <button class="btn btn-outline btn-sm" onclick="loadGit()">Rafraichir</button>
+            <button class="btn btn-primary btn-sm" onclick="saveGitConfig()">Enregistrer tout</button>
+          </div>
         </div>
+
+        <!-- CONFIGS REPO -->
         <div class="card">
           <div class="card-header">
-            <h3>Depot distant</h3>
-            <button class="btn btn-primary btn-sm" onclick="saveGitConfig()">Enregistrer</button>
+            <h3>Depot Configs</h3>
+            <span class="tag tag-blue">Configs/</span>
           </div>
+          <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem">
+            Contient les equipes actives, teams.json, llm_providers.json, mcp_servers.json.
+          </p>
           <div class="form-group">
             <label>URL du depot</label>
-            <input id="git-cfg-path" placeholder="github.com/org/repo.git" />
+            <input id="git-cfg-configs-path" placeholder="github.com/org/my-configs.git" />
           </div>
           <div class="form-row">
             <div class="form-group">
               <label>Login</label>
-              <input id="git-cfg-login" placeholder="username" autocomplete="off" />
+              <input id="git-cfg-configs-login" placeholder="username" autocomplete="off" />
             </div>
             <div class="form-group">
               <label>Password / Token</label>
-              <input id="git-cfg-password" type="password" placeholder="token ou mot de passe" autocomplete="off" />
+              <input id="git-cfg-configs-password" type="password" placeholder="token ou mot de passe" autocomplete="off" />
             </div>
           </div>
-        </div>
-        <div class="card" style="margin-top:1rem">
-          <div class="form-row">
+          <div class="form-row" style="margin-top:0.5rem">
             <div>
               <label>Branche</label>
-              <div id="git-branch" style="font-size:1.1rem;font-weight:600;margin-top:0.25rem">-</div>
+              <div id="git-configs-branch" style="font-size:1.1rem;font-weight:600;margin-top:0.25rem">-</div>
             </div>
             <div style="display:flex;gap:0.5rem;align-items:flex-end">
-              <button class="btn btn-outline" id="btn-git-init" onclick="gitInit()" disabled>Init repository</button>
-              <button class="btn btn-primary" id="btn-git-pull" onclick="gitPull()" disabled>Pull (mise a jour)</button>
-              <button class="btn btn-success" id="btn-git-commit" onclick="showGitCommitModal()" disabled>Commit &amp; Push</button>
+              <button class="btn btn-outline btn-sm" id="btn-git-configs-init" onclick="gitInit('configs')" disabled>Init</button>
+              <button class="btn btn-primary btn-sm" id="btn-git-configs-pull" onclick="gitPull('configs')" disabled>Pull</button>
+              <button class="btn btn-success btn-sm" id="btn-git-configs-commit" onclick="showGitCommitModal('configs')" disabled>Commit &amp; Push</button>
             </div>
           </div>
+          <div style="margin-top:0.75rem">
+            <label>Status</label>
+            <div class="terminal" id="git-configs-status" style="max-height:120px">Chargement...</div>
+          </div>
+          <div style="margin-top:0.5rem">
+            <label>Historique</label>
+            <div class="terminal" id="git-configs-log" style="max-height:120px">Chargement...</div>
+          </div>
         </div>
+
+        <!-- SHARED REPO -->
         <div class="card" style="margin-top:1rem">
-          <h3 style="margin-bottom:0.75rem">Status</h3>
-          <div class="terminal" id="git-status">Chargement...</div>
-        </div>
-        <div class="card" style="margin-top:1rem">
-          <h3 style="margin-bottom:0.75rem">Historique recent</h3>
-          <div class="terminal" id="git-log">Chargement...</div>
+          <div class="card-header">
+            <h3>Depot Shared (Templates)</h3>
+            <span class="tag tag-yellow">Shared/</span>
+          </div>
+          <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem">
+            Contient les templates d'equipe dans Shared/Teams/. Sert de base pour creer de nouvelles equipes.
+          </p>
+          <div class="form-group">
+            <label>URL du depot</label>
+            <input id="git-cfg-shared-path" placeholder="github.com/org/my-shared-templates.git" />
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Login</label>
+              <input id="git-cfg-shared-login" placeholder="username" autocomplete="off" />
+            </div>
+            <div class="form-group">
+              <label>Password / Token</label>
+              <input id="git-cfg-shared-password" type="password" placeholder="token ou mot de passe" autocomplete="off" />
+            </div>
+          </div>
+          <div class="form-row" style="margin-top:0.5rem">
+            <div>
+              <label>Branche</label>
+              <div id="git-shared-branch" style="font-size:1.1rem;font-weight:600;margin-top:0.25rem">-</div>
+            </div>
+            <div style="display:flex;gap:0.5rem;align-items:flex-end">
+              <button class="btn btn-outline btn-sm" id="btn-git-shared-init" onclick="gitInit('shared')" disabled>Init</button>
+              <button class="btn btn-primary btn-sm" id="btn-git-shared-pull" onclick="gitPull('shared')" disabled>Pull</button>
+              <button class="btn btn-success btn-sm" id="btn-git-shared-commit" onclick="showGitCommitModal('shared')" disabled>Commit &amp; Push</button>
+            </div>
+          </div>
+          <div style="margin-top:0.75rem">
+            <label>Status</label>
+            <div class="terminal" id="git-shared-status" style="max-height:120px">Chargement...</div>
+          </div>
+          <div style="margin-top:0.5rem">
+            <label>Historique</label>
+            <div class="terminal" id="git-shared-log" style="max-height:120px">Chargement...</div>
+          </div>
         </div>
       </div>
     </main>

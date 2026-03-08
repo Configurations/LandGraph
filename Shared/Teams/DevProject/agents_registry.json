@@ -1,0 +1,87 @@
+{
+  "agents": {
+    "requirements_analyst": {
+      "name": "Analyste",
+      "temperature": 0.3,
+      "max_tokens": 32768,
+      "prompt": "requirements_analyst.md",
+      "type": "pipeline",
+      "pipeline_steps": [
+        {"name": "PRD", "output_key": "prd", "instruction": "Produis le PRD en JSON. Sections: context_and_problem, objectives (KPIs), personas (2-4), scope (in/out), functional_requirements, non_functional_requirements, constraints, assumptions_and_risks, glossary. Format: {\"prd\": {...}}"},
+        {"name": "User Stories", "output_key": "user_stories", "instruction": "A partir du PRD, genere les User Stories INVEST. Chaque: id (US-001), persona, action, benefit, acceptance_criteria (Given/When/Then). Format: {\"user_stories\": [...]}"},
+        {"name": "MoSCoW", "output_key": "moscow_matrix", "instruction": "Classe chaque User Story en MoSCoW avec justification. Format: {\"moscow_matrix\": {\"must_have\":[...], \"should_have\":[...], \"could_have\":[...], \"wont_have\":[...]}}"}
+      ]
+    },
+    "legal_advisor": {
+      "name": "Avocat",
+      "temperature": 0.2,
+      "max_tokens": 32768,
+      "prompt": "legal_advisor.md",
+      "type": "pipeline",
+      "pipeline_steps": [
+        {"name": "Audit reglementaire", "output_key": "regulatory_audit", "instruction": "Audit: juridictions, reglementations (RGPD, ePrivacy), donnees sensibles, consentement, risques. Disclaimer obligatoire. Format: {\"regulatory_audit\": {...}}"},
+        {"name": "Alertes", "output_key": "alerts", "instruction": "Alertes: info/warning/critical. Critical = bloquant. Format: {\"alerts\": [{\"level\":\"...\",\"category\":\"...\",\"description\":\"...\",\"recommendation\":\"...\"}]}"}
+      ]
+    },
+    "ux_designer": {
+      "name": "Designer UX",
+      "temperature": 0.4,
+      "max_tokens": 32768,
+      "prompt": "ux_designer.md"
+    },
+    "architect": {
+      "name": "Architecte",
+      "temperature": 0.2,
+      "max_tokens": 32768,
+      "prompt": "architect.md"
+    },
+    "planner": {
+      "name": "Planificateur",
+      "temperature": 0.2,
+      "max_tokens": 32768,
+      "prompt": "planner.md"
+    },
+    "lead_dev": {
+      "name": "Lead Dev",
+      "temperature": 0.2,
+      "max_tokens": 16384,
+      "prompt": "lead_dev.md"
+    },
+    "dev_frontend_web": {
+      "name": "Dev Frontend Web",
+      "temperature": 0.2,
+      "max_tokens": 32768,
+      "prompt": "dev_frontend_web.md"
+    },
+    "dev_backend_api": {
+      "name": "Dev Backend API",
+      "temperature": 0.2,
+      "max_tokens": 32768,
+      "prompt": "dev_backend_api.md"
+    },
+    "dev_mobile": {
+      "name": "Dev Mobile",
+      "temperature": 0.2,
+      "max_tokens": 32768,
+      "prompt": "dev_mobile.md"
+    },
+    "qa_engineer": {
+      "name": "QA Engineer",
+      "temperature": 0.2,
+      "max_tokens": 32768,
+      "prompt": "qa_engineer.md"
+    },
+    "devops_engineer": {
+      "name": "DevOps Engineer",
+      "temperature": 0.2,
+      "max_tokens": 32768,
+      "prompt": "devops_engineer.md"
+    },
+    "docs_writer": {
+      "name": "Documentaliste",
+      "temperature": 0.3,
+      "max_tokens": 32768,
+      "prompt": "docs_writer.md"
+    }
+  }
+}

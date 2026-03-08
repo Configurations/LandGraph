@@ -47,7 +47,9 @@ if DOCKER_MODE:
 if DOCKER_MODE:
     PROJECT_DIR = Path("/project")
     CONFIGS = PROJECT_DIR / "config"
-    PROMPTS = PROJECT_DIR / "prompts" / "v1"
+    TEAMS_DIR = CONFIGS / "Teams"
+    SHARED_DIR = PROJECT_DIR / "Shared"
+    PROMPTS = TEAMS_DIR / "default"
     SCRIPTS = PROJECT_DIR
     ENV_FILE = PROJECT_DIR / ".env"
     GIT_DIR = PROJECT_DIR
@@ -55,20 +57,22 @@ else:
     ROOT = Path(__file__).resolve().parent.parent
     PROJECT_DIR = ROOT / "langgraph-project"
     CONFIGS = ROOT / "Configs"
-    PROMPTS = ROOT / "prompts" / "v1"
+    TEAMS_DIR = CONFIGS / "Teams"
+    SHARED_DIR = ROOT / "Shared"
+    PROMPTS = TEAMS_DIR / "default"
     SCRIPTS = ROOT / "scripts"
     ENV_FILE = PROJECT_DIR / ".env" if PROJECT_DIR.exists() else ROOT / ".env"
     GIT_DIR = ROOT
 
 load_dotenv(ENV_FILE, override=False)
 
-MCP_SERVERS_FILE = CONFIGS / "mcp_servers.json"
-MCP_ACCESS_FILE = CONFIGS / "agent_mcp_access.json"
+MCP_SERVERS_FILE = TEAMS_DIR / "mcp_servers.json"
+MCP_ACCESS_FILE = TEAMS_DIR / "agent_mcp_access.json"
 MCP_CATALOG_FILE = SCRIPTS / "Infra" / "mcp_catalog.csv" if not DOCKER_MODE else CONFIGS / "mcp_catalog.csv"
-AGENTS_FILE = CONFIGS / "agents_registry.json"
-LLM_PROVIDERS_FILE = CONFIGS / "llm_providers.json"
-TEAMS_FILE = CONFIGS / "teams.json"
-GIT_CONFIG_FILE = CONFIGS / "git.json"
+LLM_PROVIDERS_FILE = TEAMS_DIR / "llm_providers.json"
+TEAMS_FILE = TEAMS_DIR / "teams.json"
+GIT_CONFIG_FILE = TEAMS_DIR / "git.json"
+SHARED_TEAMS_DIR = SHARED_DIR / "Teams"
 
 logging.basicConfig(
     level=logging.DEBUG if os.environ.get("DEBUG") else logging.INFO,
@@ -582,22 +586,26 @@ async def update_mcp_access(data: MCPAccessUpdate):
 
 # ── API: Agents ────────────────────────────────────
 
+def _team_dir(team_id: str) -> Path:
+    """Return the team folder path: Configs/Teams/<team_id>/."""
+    return TEAMS_DIR / team_id
+
+
 @app.get("/api/agents")
 async def get_agents():
     teams_data = _read_json(TEAMS_FILE)
     teams = teams_data.get("teams", {})
-    # Fallback: if no teams configured, use the default AGENTS_FILE
     if not teams:
-        teams = {"default": {"name": "Equipe par defaut", "agents_registry": AGENTS_FILE.name, "prompts_dir": PROMPTS.name}}
+        teams = {"default": {"name": "Equipe par defaut"}}
     groups = []
     for tid, tcfg in teams.items():
-        registry_file = CONFIGS / tcfg.get("agents_registry", "agents_registry.json")
-        prompts_dir = PROMPTS.parent / tcfg.get("prompts_dir", "v1")
+        tdir = _team_dir(tid)
+        registry_file = tdir / "agents_registry.json"
         data = _read_json(registry_file)
         agents = data.get("agents", {})
         result = {}
         for aid, acfg in agents.items():
-            prompt_file = prompts_dir / acfg.get("prompt", f"{aid}.md")
+            prompt_file = tdir / acfg.get("prompt", f"{aid}.md")
             prompt_content = ""
             if prompt_file.exists():
                 prompt_content = prompt_file.read_text(encoding="utf-8")
@@ -605,8 +613,7 @@ async def get_agents():
         groups.append({
             "team_id": tid,
             "team_name": tcfg.get("name", tid),
-            "registry": tcfg.get("agents_registry", "agents_registry.json"),
-            "prompts_dir": tcfg.get("prompts_dir", "v1"),
+            "team_dir": str(tdir),
             "agents": result,
         })
     return {"groups": groups}
@@ -622,19 +629,14 @@ class AgentConfig(BaseModel):
     model: str = ""
     type: str = ""
     pipeline_steps: list = []
-    registry: str = "agents_registry.json"
-    prompts_dir: str = "v1"
-
-
-def _resolve_agent_paths(cfg_or_registry: str, prompts_dir: str = "v1"):
-    registry_path = CONFIGS / cfg_or_registry
-    prompts_path = PROMPTS.parent / prompts_dir
-    return registry_path, prompts_path
+    team_id: str = "default"
 
 
 @app.post("/api/agents")
 async def add_agent(cfg: AgentConfig):
-    registry_path, prompts_path = _resolve_agent_paths(cfg.registry, cfg.prompts_dir)
+    tdir = _team_dir(cfg.team_id)
+    tdir.mkdir(parents=True, exist_ok=True)
+    registry_path = tdir / "agents_registry.json"
     data = _read_json(registry_path)
     if "agents" not in data:
         data["agents"] = {}
@@ -658,9 +660,8 @@ async def add_agent(cfg: AgentConfig):
     data["agents"][cfg.id] = agent_data
     _write_json(registry_path, data)
 
-    # Create prompt file
-    prompts_path.mkdir(parents=True, exist_ok=True)
-    prompt_path = prompts_path / prompt_file
+    # Create prompt file in team folder
+    prompt_path = tdir / prompt_file
     if not prompt_path.exists():
         prompt_path.write_text(cfg.prompt_content or f"# {cfg.name}\n\n", encoding="utf-8")
 
@@ -669,7 +670,8 @@ async def add_agent(cfg: AgentConfig):
 
 @app.put("/api/agents/{agent_id}")
 async def update_agent(agent_id: str, cfg: AgentConfig):
-    registry_path, prompts_path = _resolve_agent_paths(cfg.registry, cfg.prompts_dir)
+    tdir = _team_dir(cfg.team_id)
+    registry_path = tdir / "agents_registry.json"
     data = _read_json(registry_path)
     if agent_id not in data.get("agents", {}):
         raise HTTPException(404, f"Agent {agent_id} not found")
@@ -692,17 +694,18 @@ async def update_agent(agent_id: str, cfg: AgentConfig):
     data["agents"][agent_id] = existing
     _write_json(registry_path, data)
 
-    # Update prompt
+    # Update prompt in team folder
     if cfg.prompt_content is not None:
-        prompt_path = prompts_path / existing.get("prompt", f"{agent_id}.md")
+        prompt_path = tdir / existing.get("prompt", f"{agent_id}.md")
         prompt_path.write_text(cfg.prompt_content, encoding="utf-8")
 
     return {"ok": True}
 
 
 @app.delete("/api/agents/{agent_id}")
-async def delete_agent(agent_id: str, registry: str = "agents_registry.json"):
-    registry_path = CONFIGS / registry
+async def delete_agent(agent_id: str, team_id: str = "default"):
+    tdir = _team_dir(team_id)
+    registry_path = tdir / "agents_registry.json"
     data = _read_json(registry_path)
     if agent_id not in data.get("agents", {}):
         raise HTTPException(404, f"Agent {agent_id} not found")
@@ -973,29 +976,31 @@ async def get_teams():
 class TeamEntry(BaseModel):
     name: str
     description: str = ""
-    agents_registry: str = "agents_registry.json"
-    llm_providers: str = "llm_providers.json"
-    prompts_dir: str = "v1"
-    mcp_access: str = "agent_mcp_access.json"
     discord_channels: list[str] = []
+    template: str = ""  # template ID to copy from (only used on creation)
 
 
-def _ensure_team_config_files(entry: TeamEntry):
-    """Create referenced config files and prompts dir if they don't exist."""
-    defaults = {
-        entry.agents_registry: {"agents": {}},
-        entry.llm_providers: {"providers": {}, "throttling": {}, "default": ""},
-        entry.mcp_access: {},
-    }
-    for filename, skeleton in defaults.items():
-        path = CONFIGS / filename
-        if not path.exists():
-            log.info("Creating missing config file: %s", path)
-            _write_json(path, skeleton)
-    prompts_path = PROMPTS.parent / entry.prompts_dir
-    if not prompts_path.exists():
-        log.info("Creating missing prompts dir: %s", prompts_path)
-        prompts_path.mkdir(parents=True, exist_ok=True)
+def _ensure_team_folder(team_id: str, template: str = ""):
+    """Create or populate a team folder under Configs/Teams/<team_id>/.
+    If template is given, copy from Shared/Teams/<template>/.
+    Otherwise create skeleton files."""
+    import shutil
+    team_dir = TEAMS_DIR / team_id
+    if team_dir.exists():
+        return  # already exists, don't overwrite
+    if template:
+        src = SHARED_TEAMS_DIR / template
+        if src.is_dir():
+            shutil.copytree(str(src), str(team_dir))
+            log.info("Copied template '%s' to team '%s'", template, team_id)
+            return
+        else:
+            log.warning("Template '%s' not found, creating skeleton", template)
+    # Create skeleton
+    team_dir.mkdir(parents=True, exist_ok=True)
+    _write_json(team_dir / "agents_registry.json", {"agents": {}})
+    _write_json(team_dir / "agent_mcp_access.json", {})
+    log.info("Created skeleton team folder: %s", team_dir)
 
 
 @app.post("/api/teams/{team_id}")
@@ -1004,9 +1009,14 @@ async def add_team(team_id: str, entry: TeamEntry):
     teams = data.setdefault("teams", {})
     if team_id in teams:
         raise HTTPException(409, f"L'equipe '{team_id}' existe deja")
-    teams[team_id] = entry.model_dump()
+    team_data = {
+        "name": entry.name,
+        "description": entry.description,
+        "discord_channels": entry.discord_channels,
+    }
+    teams[team_id] = team_data
     _rebuild_channel_mapping(data)
-    _ensure_team_config_files(entry)
+    _ensure_team_folder(team_id, entry.template)
     _write_json(TEAMS_FILE, data)
     return {"ok": True}
 
@@ -1017,9 +1027,13 @@ async def update_team(team_id: str, entry: TeamEntry):
     teams = data.setdefault("teams", {})
     if team_id not in teams:
         raise HTTPException(404, f"Equipe '{team_id}' introuvable")
-    teams[team_id] = entry.model_dump()
+    team_data = {
+        "name": entry.name,
+        "description": entry.description,
+        "discord_channels": entry.discord_channels,
+    }
+    teams[team_id] = team_data
     _rebuild_channel_mapping(data)
-    _ensure_team_config_files(entry)
     _write_json(TEAMS_FILE, data)
     return {"ok": True}
 
@@ -1048,123 +1062,185 @@ def _rebuild_channel_mapping(data: dict):
     data["channel_mapping"] = mapping
 
 
-def _ensure_gitignore():
+# ── API: Templates ────────────────────────────────
+
+@app.get("/api/templates")
+async def list_templates():
+    """List available team templates from Shared/Teams/."""
+    templates = []
+    if SHARED_TEAMS_DIR.exists():
+        for d in sorted(SHARED_TEAMS_DIR.iterdir()):
+            if d.is_dir():
+                # Read agents_registry to count agents
+                reg = _read_json(d / "agents_registry.json")
+                agent_count = len(reg.get("agents", {}))
+                # Count prompt files
+                prompt_count = len([f for f in d.iterdir() if f.suffix == ".md"])
+                templates.append({
+                    "id": d.name,
+                    "agents": agent_count,
+                    "prompts": prompt_count,
+                    "has_mcp_access": (d / "agent_mcp_access.json").exists(),
+                })
+    return {"templates": templates}
+
+
+def _ensure_gitignore(target_dir: Path):
     """Create .gitignore with default patterns if it doesn't exist."""
-    gitignore = GIT_DIR / ".gitignore"
+    gitignore = target_dir / ".gitignore"
     if not gitignore.exists():
-        log.info("Creating .gitignore in %s", GIT_DIR)
+        log.info("Creating .gitignore in %s", target_dir)
         gitignore.write_text("*.sh\n", encoding="utf-8")
 
 
-# ── API: Git config ───────────────────────────────
+def _build_remote_url(repo_path: str, login: str, password: str) -> str:
+    """Build a git remote URL with optional credentials."""
+    if login and password:
+        if "://" in repo_path:
+            scheme, rest = repo_path.split("://", 1)
+            return f"{scheme}://{login}:{password}@{rest}"
+        return f"https://{login}:{password}@{repo_path}"
+    return repo_path if "://" in repo_path else f"https://{repo_path}"
+
+
+def _git_configure_remote(target_dir: Path, repo_path: str, login: str, password: str):
+    """Set origin remote on a git repo."""
+    remote_url = _build_remote_url(repo_path, login, password)
+    subprocess.run(["git", "remote", "remove", "origin"], cwd=str(target_dir), capture_output=True, text=True, timeout=5)
+    subprocess.run(["git", "remote", "add", "origin", remote_url], cwd=str(target_dir), capture_output=True, text=True, timeout=5)
+    log.info("Git remote origin set to %s in %s", repo_path, target_dir)
+
+
+# ── API: Git config (dual repo: configs + shared) ─
 
 @app.get("/api/git/config")
 async def get_git_config():
-    return _read_json(GIT_CONFIG_FILE)
+    data = _read_json(GIT_CONFIG_FILE)
+    # Migrate old single-repo format to dual-repo
+    if "repos" not in data:
+        old = {k: data.get(k, "") for k in ("path", "login", "password")}
+        data = {
+            "repos": {
+                "configs": old,
+                "shared": {"path": "", "login": "", "password": ""},
+            }
+        }
+        _write_json(GIT_CONFIG_FILE, data)
+    return data
 
 
-class GitConfig(BaseModel):
+class GitRepoConfig(BaseModel):
     path: str = ""
     login: str = ""
     password: str = ""
 
 
+class GitConfigDual(BaseModel):
+    repos: dict  # {"configs": {path, login, password}, "shared": {path, login, password}}
+
+
 @app.put("/api/git/config")
-async def update_git_config(cfg: GitConfig):
+async def update_git_config(cfg: GitConfigDual):
     _write_json(GIT_CONFIG_FILE, cfg.model_dump())
-    # Init git repo if not already initialized
-    if not (GIT_DIR / ".git").exists():
-        log.info("Initializing git repo in %s", GIT_DIR)
-        subprocess.run(["git", "init"], cwd=str(GIT_DIR), capture_output=True, text=True, timeout=10)
-        _ensure_gitignore()
-    # Configure remote origin
-    if cfg.path:
-        login = cfg.login.strip()
-        password = cfg.password.strip()
-        if login and password:
-            if "://" in cfg.path:
-                scheme, rest = cfg.path.split("://", 1)
-                remote_url = f"{scheme}://{login}:{password}@{rest}"
-            else:
-                remote_url = f"https://{login}:{password}@{cfg.path}"
-        else:
-            remote_url = cfg.path if "://" in cfg.path else f"https://{cfg.path}"
-        # Remove existing origin then add
-        subprocess.run(["git", "remote", "remove", "origin"], cwd=str(GIT_DIR), capture_output=True, text=True, timeout=5)
-        subprocess.run(["git", "remote", "add", "origin", remote_url], cwd=str(GIT_DIR), capture_output=True, text=True, timeout=5)
-        log.info("Git remote origin set to %s", cfg.path)
+    # Configure each repo
+    repo_dirs = {"configs": CONFIGS, "shared": SHARED_DIR}
+    for repo_key, target_dir in repo_dirs.items():
+        repo_cfg = cfg.repos.get(repo_key, {})
+        repo_path = repo_cfg.get("path", "").strip()
+        if not repo_path:
+            continue
+        target_dir.mkdir(parents=True, exist_ok=True)
+        login = repo_cfg.get("login", "").strip()
+        password = repo_cfg.get("password", "").strip()
+        if not (target_dir / ".git").exists():
+            log.info("Initializing git repo in %s", target_dir)
+            subprocess.run(
+                ["git", "config", "--global", "--add", "safe.directory", str(target_dir)],
+                capture_output=True, text=True, timeout=5,
+            )
+            subprocess.run(["git", "init"], cwd=str(target_dir), capture_output=True, text=True, timeout=10)
+            _ensure_gitignore(target_dir)
+        _git_configure_remote(target_dir, repo_path, login, password)
     return {"ok": True}
 
 
-# ── API: Git operations ───────────────────────────
+# ── API: Git operations (per-repo) ───────────────
 
-@app.get("/api/git/status")
-async def git_status():
+def _get_repo_dir(repo_key: str) -> Path:
+    """Return the directory for a repo key."""
+    dirs = {"configs": CONFIGS, "shared": SHARED_DIR}
+    d = dirs.get(repo_key)
+    if not d:
+        raise HTTPException(400, f"Repo inconnu: {repo_key}. Utiliser 'configs' ou 'shared'.")
+    return d
+
+
+def _get_repo_cfg(repo_key: str) -> dict:
+    """Return git config for a specific repo."""
+    data = _read_json(GIT_CONFIG_FILE)
+    repos = data.get("repos", {})
+    return repos.get(repo_key, {})
+
+
+@app.get("/api/git/{repo_key}/status")
+async def git_status(repo_key: str):
+    target_dir = _get_repo_dir(repo_key)
     try:
-        initialized = (GIT_DIR / ".git").exists()
+        initialized = (target_dir / ".git").exists()
         if not initialized:
             return {"initialized": False, "status": "", "branch": "", "log": ""}
         result = subprocess.run(
             ["git", "status", "--short"],
-            cwd=str(GIT_DIR), capture_output=True, text=True, timeout=10
+            cwd=str(target_dir), capture_output=True, text=True, timeout=10
         )
         branch = subprocess.run(
             ["git", "branch", "--show-current"],
-            cwd=str(GIT_DIR), capture_output=True, text=True, timeout=10
+            cwd=str(target_dir), capture_output=True, text=True, timeout=10
         )
-        log = subprocess.run(
+        git_log = subprocess.run(
             ["git", "log", "--oneline", "-10"],
-            cwd=str(GIT_DIR), capture_output=True, text=True, timeout=10
+            cwd=str(target_dir), capture_output=True, text=True, timeout=10
         )
         return {
             "initialized": True,
             "status": result.stdout,
             "branch": branch.stdout.strip(),
-            "log": log.stdout,
+            "log": git_log.stdout,
         }
     except Exception as e:
         raise HTTPException(500, str(e))
 
 
-@app.post("/api/git/init")
-async def git_init():
-    """Initialize a git repo in GIT_DIR (git init + configure remote)."""
-    log.info("Button pressed: Init Repository")
+@app.post("/api/git/{repo_key}/init")
+async def git_init(repo_key: str):
+    """Initialize a git repo."""
+    target_dir = _get_repo_dir(repo_key)
+    log.info("Button pressed: Init Repository (%s)", repo_key)
     try:
-        git_dir = GIT_DIR / ".git"
-        if git_dir.exists():
+        target_dir.mkdir(parents=True, exist_ok=True)
+        if (target_dir / ".git").exists():
             return {"ok": True, "message": "Depot deja initialise"}
-        log.info("git init in %s", GIT_DIR)
+        log.info("git init in %s", target_dir)
         subprocess.run(
-            ["git", "config", "--global", "--add", "safe.directory", str(GIT_DIR)],
+            ["git", "config", "--global", "--add", "safe.directory", str(target_dir)],
             capture_output=True, text=True, timeout=5,
         )
         result = subprocess.run(
             ["git", "init"],
-            cwd=str(GIT_DIR), capture_output=True, text=True, timeout=10,
+            cwd=str(target_dir), capture_output=True, text=True, timeout=10,
         )
         if result.returncode != 0:
             log.error("git init failed (code %d): %s", result.returncode, result.stderr)
             raise HTTPException(500, result.stderr)
-        _ensure_gitignore()
-        # Configure remote origin if git config exists
-        cfg = _read_json(GIT_CONFIG_FILE)
+        _ensure_gitignore(target_dir)
+        # Configure remote origin if config exists
+        cfg = _get_repo_cfg(repo_key)
         repo_path = cfg.get("path", "").strip()
         if repo_path:
             login = cfg.get("login", "").strip()
             password = cfg.get("password", "").strip()
-            if login and password:
-                if "://" in repo_path:
-                    scheme, rest = repo_path.split("://", 1)
-                    remote_url = f"{scheme}://{login}:{password}@{rest}"
-                else:
-                    remote_url = f"https://{login}:{password}@{repo_path}"
-            else:
-                remote_url = repo_path if "://" in repo_path else f"https://{repo_path}"
-            subprocess.run(["git", "remote", "remove", "origin"], cwd=str(GIT_DIR), capture_output=True, text=True, timeout=5)
-            subprocess.run(["git", "remote", "add", "origin", remote_url], cwd=str(GIT_DIR), capture_output=True, text=True, timeout=5)
-            log.info("Git remote origin set to %s", repo_path)
-        log.info("git init success")
+            _git_configure_remote(target_dir, repo_path, login, password)
+        log.info("git init success for %s", repo_key)
         return {"ok": True, "message": "Depot initialise avec succes"}
     except HTTPException:
         raise
@@ -1173,83 +1249,57 @@ async def git_init():
         raise HTTPException(500, str(e))
 
 
-@app.post("/api/git/pull")
-async def git_pull():
-    log.info("Button pressed: Pull")
+@app.post("/api/git/{repo_key}/pull")
+async def git_pull(repo_key: str):
+    target_dir = _get_repo_dir(repo_key)
+    log.info("Button pressed: Pull (%s)", repo_key)
     try:
-        git_dir = GIT_DIR / ".git"
-        if not git_dir.exists():
-            # Clone into GIT_DIR using git config credentials
-            cfg = _read_json(GIT_CONFIG_FILE)
-            repo_path = cfg.get("path", "").strip()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        cfg = _get_repo_cfg(repo_key)
+        repo_path = cfg.get("path", "").strip()
+        login = cfg.get("login", "").strip()
+        password = cfg.get("password", "").strip()
+
+        if not (target_dir / ".git").exists():
+            # Clone
             if not repo_path:
-                raise HTTPException(400, "Chemin du depot non configure (Git > Depot distant)")
-            login = cfg.get("login", "").strip()
-            password = cfg.get("password", "").strip()
-            if login and password:
-                if "://" in repo_path:
-                    scheme, rest = repo_path.split("://", 1)
-                    clone_url = f"{scheme}://{login}:{password}@{rest}"
-                else:
-                    clone_url = f"https://{login}:{password}@{repo_path}"
-            else:
-                clone_url = repo_path if "://" in repo_path else f"https://{repo_path}"
-            log.info("git pull: cloning %s into %s", repo_path, GIT_DIR)
+                raise HTTPException(400, "Chemin du depot non configure")
+            clone_url = _build_remote_url(repo_path, login, password)
+            log.info("git clone %s into %s", repo_path, target_dir)
             result = subprocess.run(
                 ["git", "clone", clone_url, "."],
-                cwd=str(GIT_DIR), capture_output=True, text=True, timeout=120,
+                cwd=str(target_dir), capture_output=True, text=True, timeout=120,
                 env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
             )
-            _ensure_gitignore()
+            _ensure_gitignore(target_dir)
             if result.returncode != 0:
                 log.error("git clone failed (code %d): %s", result.returncode, result.stderr)
             else:
-                log.info("git clone success")
+                log.info("git clone success for %s", repo_key)
             return {"stdout": result.stdout, "stderr": result.stderr, "code": result.returncode}
         else:
-            log.info("git pull in %s", GIT_DIR)
-            # Ensure remote origin is configured from git config
-            cfg = _read_json(GIT_CONFIG_FILE)
-            repo_path = cfg.get("path", "").strip()
+            # Pull
+            log.info("git pull in %s", target_dir)
             if repo_path:
-                login = cfg.get("login", "").strip()
-                password = cfg.get("password", "").strip()
-                if login and password:
-                    if "://" in repo_path:
-                        scheme, rest = repo_path.split("://", 1)
-                        remote_url = f"{scheme}://{login}:{password}@{rest}"
-                    else:
-                        remote_url = f"https://{login}:{password}@{repo_path}"
-                else:
-                    remote_url = repo_path if "://" in repo_path else f"https://{repo_path}"
-                subprocess.run(
-                    ["git", "remote", "remove", "origin"],
-                    cwd=str(GIT_DIR), capture_output=True, text=True, timeout=5
-                )
-                subprocess.run(
-                    ["git", "remote", "add", "origin", remote_url],
-                    cwd=str(GIT_DIR), capture_output=True, text=True, timeout=5
-                )
-            # Detect current branch
+                _git_configure_remote(target_dir, repo_path, login, password)
             branch_result = subprocess.run(
                 ["git", "branch", "--show-current"],
-                cwd=str(GIT_DIR), capture_output=True, text=True, timeout=10
+                cwd=str(target_dir), capture_output=True, text=True, timeout=10
             )
             branch = branch_result.stdout.strip() or "master"
-            # Set upstream
             subprocess.run(
                 ["git", "branch", "--set-upstream-to", f"origin/{branch}", branch],
-                cwd=str(GIT_DIR), capture_output=True, text=True, timeout=10
+                cwd=str(target_dir), capture_output=True, text=True, timeout=10
             )
             result = subprocess.run(
                 ["git", "pull", "origin", branch],
-                cwd=str(GIT_DIR), capture_output=True, text=True, timeout=60,
+                cwd=str(target_dir), capture_output=True, text=True, timeout=60,
                 env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
             )
             if result.returncode != 0:
-                log.error("git pull failed (code %d): stdout=%s stderr=%s", result.returncode, result.stdout, result.stderr)
+                log.error("git pull failed (code %d): %s %s", result.returncode, result.stdout, result.stderr)
             else:
-                log.info("git pull success: %s", result.stdout.strip())
+                log.info("git pull success for %s: %s", repo_key, result.stdout.strip())
             return {"stdout": result.stdout, "stderr": result.stderr, "code": result.returncode}
     except HTTPException:
         raise
@@ -1262,48 +1312,41 @@ class GitCommitRequest(BaseModel):
     message: str
 
 
-@app.post("/api/git/commit")
-async def git_commit(req: GitCommitRequest):
-    """Stage all files in /project, commit and push."""
-    log.info("Button pressed: Commit & Push")
+@app.post("/api/git/{repo_key}/commit")
+async def git_commit(repo_key: str, req: GitCommitRequest):
+    """Stage all, commit and push."""
+    target_dir = _get_repo_dir(repo_key)
+    log.info("Button pressed: Commit & Push (%s)", repo_key)
     try:
         git_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-        # Build remote URL with credentials for push
-        cfg = _read_json(GIT_CONFIG_FILE)
+        cfg = _get_repo_cfg(repo_key)
         repo_path = cfg.get("path", "").strip()
         login = cfg.get("login", "").strip()
         password = cfg.get("password", "").strip()
 
-        _ensure_gitignore()
-        # Stage everything
+        _ensure_gitignore(target_dir)
         subprocess.run(
             ["git", "add", "-A"],
-            cwd=str(GIT_DIR), capture_output=True, text=True, timeout=10
+            cwd=str(target_dir), capture_output=True, text=True, timeout=10
         )
-        # Commit
         commit_result = subprocess.run(
             ["git", "commit", "-m", req.message],
-            cwd=str(GIT_DIR), capture_output=True, text=True, timeout=30
+            cwd=str(target_dir), capture_output=True, text=True, timeout=30
         )
         if commit_result.returncode != 0:
             return {"stdout": commit_result.stdout, "stderr": commit_result.stderr, "code": commit_result.returncode}
 
-        # Push
         if repo_path and login and password:
-            if "://" in repo_path:
-                scheme, rest = repo_path.split("://", 1)
-                push_url = f"{scheme}://{login}:{password}@{rest}"
-            else:
-                push_url = f"https://{login}:{password}@{repo_path}"
+            push_url = _build_remote_url(repo_path, login, password)
             push_result = subprocess.run(
                 ["git", "push", push_url],
-                cwd=str(GIT_DIR), capture_output=True, text=True, timeout=60,
+                cwd=str(target_dir), capture_output=True, text=True, timeout=60,
                 env=git_env,
             )
         else:
             push_result = subprocess.run(
                 ["git", "push"],
-                cwd=str(GIT_DIR), capture_output=True, text=True, timeout=60,
+                cwd=str(target_dir), capture_output=True, text=True, timeout=60,
                 env=git_env,
             )
         return {"stdout": commit_result.stdout + "\n" + push_result.stdout,

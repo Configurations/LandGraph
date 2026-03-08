@@ -57,26 +57,7 @@ L'installation se deroule en plusieurs etapes sequentielles. Chaque script est t
 
 ---
 
-### Etape 0 — Configurer un LXC pour Docker (optionnel)
-
-**Ou** : sur le shell de l'hote Proxmox (uniquement si vous utilisez un container LXC au lieu d'une VM).
-
-```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/00-configure-lxc.sh)"
-```
-
-Ce script configure un container LXC existant pour supporter Docker :
-- AppArmor, nesting, cgroup permissions
-- Reseau (DHCP)
-- Sysctl necessaires pour Docker
-
-**Usage** : `./00-configure-lxc.sh <CTID>`
-
-> Si vous utilisez une VM, passez directement a l'etape 1.
-
----
-
-### Etape 1 — Creer la VM sur Proxmox
+### Etape 0 — Creer la VM sur Proxmox
 
 **Ou** : sur le shell de l'hote Proxmox.
 
@@ -86,12 +67,12 @@ bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGrap
 
 Ce script cree une VM avec la configuration suivante :
 
-| Parametre | Valeur par defaut |
-|-----------|-------------------|
+| Parametre | Valeur par defaut  |
+|-----------|--------------------|
 | Nom       | `langgraph-agents` |
 | CPU       | 8 cores            |
-| RAM       | 16 Go              |
-| Disque    | 100 Go (local-lvm) |
+| RAM       | 8 Go               |
+| Disque    | 30 Go (local-lvm)  |
 | Reseau    | `vmbr0`            |
 
 Le VMID est optionnel (defaut : `200`).
@@ -99,6 +80,27 @@ Le VMID est optionnel (defaut : `200`).
 **Apres execution** : installer Ubuntu 24.04 via la console VNC de Proxmox, configurer une IP statique, puis se connecter en SSH a la VM.
 
 ---
+
+
+### Etape 1 — Configurer un LXC pour Docker (optionnel)
+
+**Ou** : sur le shell de l'hote Proxmox (uniquement si vous utilisez un container LXC au lieu d'une VM).
+
+```bash
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/00-configure-lxc.sh)" _ <ID:111>
+```
+
+Ce script configure un container LXC existant pour supporter Docker :
+- AppArmor, nesting, cgroup permissions
+- Reseau (DHCP)
+- Sysctl necessaires pour Docker
+
+**Usage** : `./00-configure-lxc.sh _ <CTID>`
+
+> Si vous utilisez une VM, passez directement a l'etape 1.
+
+---
+
 
 ### Etape 2 — Installer Docker
 

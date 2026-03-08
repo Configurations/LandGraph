@@ -129,8 +129,8 @@ AGENT_IDS = [
 def load_system_prompt() -> str:
     """Charge le system prompt depuis le fichier versionne."""
     prompt_paths = [
-        os.path.join(os.path.dirname(__file__), "..", "prompts", "v1", "orchestrator.md"),
-        os.path.join(os.path.dirname(__file__), "prompts", "v1", "orchestrator.md"),
+        os.path.join(os.path.dirname(__file__), "..", "Configs", "Teams", "Team1", "v1", "orchestrator.md"),
+        os.path.join("/app", "config", "Teams", "Team1", "v1", "orchestrator.md"),
     ]
     for path in prompt_paths:
         if os.path.exists(path):

@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY agents/ ./agents/
 COPY config/ ./config/
-COPY prompts/ ./prompts/
+COPY config/Teams/ ./config/Teams/
 COPY langgraph.json .
 
 EXPOSE 8000

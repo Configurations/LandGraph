@@ -205,10 +205,16 @@ class BaseAgent:
         self._tools = None
 
     def _load_prompt(self):
-        for p in [
-            os.path.join(os.path.dirname(__file__), "..", "..", "prompts", "v1", self.prompt_filename),
-            os.path.join("/app", "prompts", "v1", self.prompt_filename),
-        ]:
+        team_id = getattr(self, 'team_id', 'default')
+        search_paths = [
+            # New structure: Teams/<team_id>/<prompt>.md
+            os.path.join(os.path.dirname(__file__), "..", "..", "Configs", "Teams", team_id, self.prompt_filename),
+            os.path.join("/app", "config", "Teams", team_id, self.prompt_filename),
+            # Legacy: Teams/Team1/v1/<prompt>.md
+            os.path.join(os.path.dirname(__file__), "..", "..", "Configs", "Teams", "Team1", "v1", self.prompt_filename),
+            os.path.join("/app", "config", "Teams", "Team1", "v1", self.prompt_filename),
+        ]
+        for p in search_paths:
             a = os.path.abspath(p)
             if os.path.exists(a):
                 logger.info(f"[{self.agent_id}] Prompt: {a}")

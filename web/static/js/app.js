@@ -50,7 +50,7 @@ function showSection(name) {
   document.querySelector(`.nav-item[data-section="${name}"]`).classList.add('active');
 
   // Load data on section switch
-  const loaders = { secrets: loadEnv, mcp: loadMCP, agents: loadAgents, llm: loadLLM, teams: loadTeams, chat: loadChat, scripts: loadScripts, git: loadGit };
+  const loaders = { secrets: loadEnv, mcp: loadMCP, agents: loadAgents, llm: loadLLM, teams: loadTeams, templates: loadTemplates, chat: loadChat, scripts: loadScripts, git: loadGit };
   if (loaders[name]) loaders[name]();
 }
 
@@ -531,7 +531,7 @@ async function loadAgents() {
     // Flat map for edit/save lookups
     agents = {};
     agentGroups.forEach(g => Object.entries(g.agents).forEach(([id, a]) => {
-      agents[id] = { ...a, _registry: g.registry, _prompts_dir: g.prompts_dir };
+      agents[id] = { ...a, _team_id: g.team_id };
     }));
     llmProviders = llmData;
     mcpAccess = accessData;
@@ -568,7 +568,7 @@ function renderAgents() {
       </div>`;
     }).join('');
     return `<div class="agent-group">
-      <h3 class="agent-group-title">${escHtml(g.team_name)}<span style="font-weight:400;font-size:0.75rem;color:var(--text-secondary);margin-left:0.5rem">${escHtml(g.registry)}</span></h3>
+      <h3 class="agent-group-title">${escHtml(g.team_name)}<span style="font-weight:400;font-size:0.75rem;color:var(--text-secondary);margin-left:0.5rem">${escHtml(g.team_id)}</span></h3>
       <div class="agents-grid">${agentCards || '<p style="color:var(--text-secondary);padding:0.5rem">Aucun agent dans cette equipe.</p>'}</div>
     </div>`;
   }).join('');
@@ -678,7 +678,7 @@ async function saveAgent(id) {
     await Promise.all([
       api(`/api/agents/${id}`, {
         method: 'PUT',
-        body: { id, name, model, temperature, max_tokens, prompt_content, prompt_file: '', type: agents[id].type || '', pipeline_steps: agents[id].pipeline_steps || [], registry: agents[id]._registry || 'agents_registry.json', prompts_dir: agents[id]._prompts_dir || 'v1' }
+        body: { id, name, model, temperature, max_tokens, prompt_content, prompt_file: '', type: agents[id].type || '', pipeline_steps: agents[id].pipeline_steps || [], team_id: agents[id]._team_id || 'default' }
       }),
       api('/api/mcp/access', { method: 'PUT', body: { agent_id: id, servers: mcpList } }),
     ]);
@@ -690,7 +690,7 @@ async function saveAgent(id) {
 
 function showAddAgentModal() {
   const providerNames = Object.keys(llmProviders.providers || {});
-  const teamOpts = agentGroups.map(g => `<option value="${escHtml(g.registry)}|${escHtml(g.prompts_dir)}">${escHtml(g.team_name)}</option>`).join('');
+  const teamOpts = agentGroups.map(g => `<option value="${escHtml(g.team_id)}">${escHtml(g.team_name)}</option>`).join('');
   showModal(`
     <div class="modal-header">
       <h3>Nouvel agent</h3>
@@ -740,12 +740,12 @@ async function addAgent() {
   const model = document.getElementById('agent-new-model').value;
   const temperature = parseFloat(document.getElementById('agent-new-temp').value);
   const prompt_content = document.getElementById('agent-new-prompt').value;
-  const [registry, prompts_dir] = (document.getElementById('agent-new-team')?.value || '').split('|');
+  const team_id = document.getElementById('agent-new-team')?.value || 'default';
   if (!id || !name) { toast('ID et nom requis', 'error'); return; }
   try {
     await api('/api/agents', {
       method: 'POST',
-      body: { id, name, model, temperature, max_tokens: 32768, prompt_content, prompt_file: '', type: '', pipeline_steps: [], registry: registry || 'agents_registry.json', prompts_dir: prompts_dir || 'v1' }
+      body: { id, name, model, temperature, max_tokens: 32768, prompt_content, prompt_file: '', type: '', pipeline_steps: [], team_id }
     });
     toast('Agent cree', 'success');
     closeModal();
@@ -755,9 +755,9 @@ async function addAgent() {
 
 async function deleteAgent(id) {
   if (!confirm(`Supprimer l'agent "${id}" ?`)) return;
-  const reg = agents[id]?._registry || 'agents_registry.json';
+  const tid = agents[id]?._team_id || 'default';
   try {
-    await api(`/api/agents/${id}?registry=${encodeURIComponent(reg)}`, { method: 'DELETE' });
+    await api(`/api/agents/${id}?team_id=${encodeURIComponent(tid)}`, { method: 'DELETE' });
     toast('Agent supprime', 'success');
     loadAgents();
   } catch (e) { toast(e.message, 'error'); }
@@ -1245,32 +1245,51 @@ async function runScript(name) {
 }
 
 // ═══════════════════════════════════════════════════
-// GIT
+// GIT (dual repo: configs + shared)
 // ═══════════════════════════════════════════════════
 async function loadGit() {
   try {
-    const [status, cfg] = await Promise.all([
-      api('/api/git/status'),
+    const [cfgStatus, sharedStatus, cfg] = await Promise.all([
+      api('/api/git/configs/status'),
+      api('/api/git/shared/status'),
       api('/api/git/config'),
     ]);
-    const inited = status.initialized;
-    document.getElementById('git-branch').textContent = inited ? (status.branch || 'inconnu') : 'Non initialise';
-    document.getElementById('git-status').textContent = inited ? (status.status || '(aucun changement)') : 'Git non initialise. Enregistrez la configuration pour initialiser.';
-    document.getElementById('git-log').textContent = inited ? (status.log || '(vide)') : '';
-    document.getElementById('btn-git-init').disabled = inited;
-    document.getElementById('btn-git-pull').disabled = !inited;
-    document.getElementById('btn-git-commit').disabled = !inited;
-    document.getElementById('git-cfg-path').value = cfg.path || '';
-    document.getElementById('git-cfg-login').value = cfg.login || '';
-    document.getElementById('git-cfg-password').value = cfg.password || '';
+    const repos = cfg.repos || {};
+
+    // Configs repo
+    _fillGitRepoUI('configs', cfgStatus, repos.configs || {});
+    // Shared repo
+    _fillGitRepoUI('shared', sharedStatus, repos.shared || {});
   } catch (e) { toast(e.message, 'error'); }
+}
+
+function _fillGitRepoUI(key, status, cfg) {
+  const inited = status.initialized;
+  document.getElementById(`git-${key}-branch`).textContent = inited ? (status.branch || 'inconnu') : 'Non initialise';
+  document.getElementById(`git-${key}-status`).textContent = inited ? (status.status || '(aucun changement)') : 'Git non initialise. Enregistrez la configuration puis cliquez Init.';
+  document.getElementById(`git-${key}-log`).textContent = inited ? (status.log || '(vide)') : '';
+  document.getElementById(`btn-git-${key}-init`).disabled = inited;
+  document.getElementById(`btn-git-${key}-pull`).disabled = !inited;
+  document.getElementById(`btn-git-${key}-commit`).disabled = !inited;
+  document.getElementById(`git-cfg-${key}-path`).value = cfg.path || '';
+  document.getElementById(`git-cfg-${key}-login`).value = cfg.login || '';
+  document.getElementById(`git-cfg-${key}-password`).value = cfg.password || '';
 }
 
 async function saveGitConfig() {
   const body = {
-    path: document.getElementById('git-cfg-path').value.trim(),
-    login: document.getElementById('git-cfg-login').value.trim(),
-    password: document.getElementById('git-cfg-password').value.trim(),
+    repos: {
+      configs: {
+        path: document.getElementById('git-cfg-configs-path').value.trim(),
+        login: document.getElementById('git-cfg-configs-login').value.trim(),
+        password: document.getElementById('git-cfg-configs-password').value.trim(),
+      },
+      shared: {
+        path: document.getElementById('git-cfg-shared-path').value.trim(),
+        login: document.getElementById('git-cfg-shared-login').value.trim(),
+        password: document.getElementById('git-cfg-shared-password').value.trim(),
+      },
+    },
   };
   try {
     await api('/api/git/config', { method: 'PUT', body });
@@ -1279,32 +1298,35 @@ async function saveGitConfig() {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-async function gitInit() {
+async function gitInit(repoKey) {
   try {
-    const data = await api('/api/git/init', { method: 'POST' });
-    toast(data.ok ? 'Repository initialise' : (data.message || 'Erreur'), data.ok ? 'success' : 'error');
+    const data = await api(`/api/git/${repoKey}/init`, { method: 'POST' });
+    toast(data.ok ? `Repository ${repoKey} initialise` : (data.message || 'Erreur'), data.ok ? 'success' : 'error');
     loadGit();
   } catch (e) { toast(e.message, 'error'); }
 }
 
-async function gitPull() {
+async function gitPull(repoKey) {
   try {
-    const data = await api('/api/git/pull', { method: 'POST' });
-    toast(data.code === 0 ? 'Pull reussi' : 'Pull erreur', data.code === 0 ? 'success' : 'error');
+    const data = await api(`/api/git/${repoKey}/pull`, { method: 'POST' });
+    toast(data.code === 0 ? `Pull ${repoKey} reussi` : `Pull ${repoKey} erreur`, data.code === 0 ? 'success' : 'error');
     loadGit();
   } catch (e) { toast(e.message, 'error'); }
 }
 
-function showGitCommitModal() {
+let _gitCommitRepoKey = '';
+function showGitCommitModal(repoKey) {
+  _gitCommitRepoKey = repoKey;
+  const label = repoKey === 'configs' ? 'Configs' : 'Shared (Templates)';
   showModal(`
     <div class="modal-header">
-      <h3>Commit des configurations</h3>
+      <h3>Commit — ${label}</h3>
       <button class="btn-icon" onclick="closeModal()">&times;</button>
     </div>
-    <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:1rem">Commit et push de tout le contenu du projet vers le depot distant.</p>
+    <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:1rem">Commit et push du depot ${label} vers le depot distant.</p>
     <div class="form-group">
       <label>Message de commit</label>
-      <input id="git-commit-msg" placeholder="Mise a jour configuration agents" />
+      <input id="git-commit-msg" placeholder="Mise a jour configuration" />
     </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
@@ -1317,7 +1339,7 @@ async function gitCommit() {
   const msg = document.getElementById('git-commit-msg').value.trim();
   if (!msg) { toast('Message requis', 'error'); return; }
   try {
-    const data = await api('/api/git/commit', { method: 'POST', body: { message: msg } });
+    const data = await api(`/api/git/${_gitCommitRepoKey}/commit`, { method: 'POST', body: { message: msg } });
     toast(data.code === 0 ? 'Commit & push effectue' : (data.stderr || 'Erreur commit/push'), data.code === 0 ? 'success' : 'error');
     closeModal();
     loadGit();
@@ -1328,6 +1350,7 @@ async function gitCommit() {
 // TEAMS
 // ═══════════════════════════════════════════════════
 let teamsData = {};
+let templatesData = [];
 
 async function loadTeams() {
   try {
@@ -1353,9 +1376,7 @@ function renderTeams() {
       </div>
       ${t.description ? `<p style="font-size:0.8rem;color:var(--text-secondary);margin:0.5rem 0">${escHtml(t.description)}</p>` : ''}
       <div class="agent-meta">
-        <span class="tag tag-blue">${escHtml(t.prompts_dir || 'v1')}</span>
-        <span class="tag tag-gray">${escHtml(t.agents_registry || '')}</span>
-        <span class="tag tag-yellow">${escHtml(t.llm_providers || '')}</span>
+        <span class="tag tag-blue">Configs/Teams/${escHtml(id)}/</span>
       </div>
       ${channels.length ? `<div class="agent-meta" style="margin-top:0.5rem">
         ${channels.map(c => `<span class="tag tag-green">#${escHtml(c)}</span>`).join('')}
@@ -1364,30 +1385,30 @@ function renderTeams() {
   }).join('') || '<p style="color:var(--text-secondary);padding:1rem">Aucune equipe configuree.</p>';
 }
 
-function _teamSlug(name) {
-  return name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '').toLowerCase();
-}
-
-function _teamComputedFields(id) {
-  const slug = _teamSlug(id);
-  return {
-    agents_registry: `agents_registry_${slug}.json`,
-    prompts_dir: slug,
-    mcp_access: `agent_mcp_access_${slug}.json`,
-  };
-}
-
 function _teamModalHtml(title, id, t, isNew) {
-  const ro = 'readonly style="opacity:0.6;cursor:not-allowed"';
+  let templateSelect = '';
+  if (isNew && templatesData.length > 0) {
+    const opts = templatesData.map(tpl =>
+      `<option value="${escHtml(tpl.id)}">${escHtml(tpl.id)} (${tpl.agents} agents, ${tpl.prompts} prompts)</option>`
+    ).join('');
+    templateSelect = `<div class="form-group">
+      <label>Creer a partir d'un template</label>
+      <select id="team-template">
+        <option value="">(vide — equipe vierge)</option>
+        ${opts}
+      </select>
+    </div>`;
+  }
   return `
     <div class="modal-header">
       <h3>${title}</h3>
       <button class="btn-icon" onclick="closeModal()">&times;</button>
     </div>
     ${isNew ? `<div class="form-group">
-      <label>Identifiant</label>
-      <input id="team-id" value="${escHtml(id)}" placeholder="ex: data_team" oninput="_onTeamIdChange()" />
+      <label>Identifiant (sera le nom du dossier dans Configs/Teams/)</label>
+      <input id="team-id" value="${escHtml(id)}" placeholder="ex: data_team" />
     </div>` : ''}
+    ${templateSelect}
     <div class="form-group">
       <label>Nom</label>
       <input id="team-name" value="${escHtml(t.name || '')}" placeholder="Equipe Produit" />
@@ -1395,26 +1416,6 @@ function _teamModalHtml(title, id, t, isNew) {
     <div class="form-group">
       <label>Description</label>
       <input id="team-desc" value="${escHtml(t.description || '')}" placeholder="Description de l'equipe" />
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Agents registry</label>
-        <input id="team-agents" value="${escHtml(t.agents_registry || 'agents_registry.json')}" ${ro} />
-      </div>
-      <div class="form-group">
-        <label>LLM providers</label>
-        <input id="team-llm" value="${escHtml(t.llm_providers || 'llm_providers.json')}" ${isNew ? '' : ro} />
-      </div>
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Dossier prompts</label>
-        <input id="team-prompts" value="${escHtml(t.prompts_dir || 'v1')}" ${ro} />
-      </div>
-      <div class="form-group">
-        <label>MCP access</label>
-        <input id="team-mcp" value="${escHtml(t.mcp_access || 'agent_mcp_access.json')}" ${ro} />
-      </div>
     </div>
     <div class="form-group">
       <label>Channels Discord (un par ligne)</label>
@@ -1426,28 +1427,20 @@ function _teamModalHtml(title, id, t, isNew) {
     </div>`;
 }
 
-function _onTeamIdChange() {
-  const id = document.getElementById('team-id').value.trim();
-  if (!id) return;
-  const computed = _teamComputedFields(id);
-  document.getElementById('team-agents').value = computed.agents_registry;
-  document.getElementById('team-prompts').value = computed.prompts_dir;
-  document.getElementById('team-mcp').value = computed.mcp_access;
-}
-
 function _readTeamForm() {
   return {
     name: document.getElementById('team-name').value.trim(),
     description: document.getElementById('team-desc').value.trim(),
-    agents_registry: document.getElementById('team-agents').value.trim(),
-    llm_providers: document.getElementById('team-llm').value.trim(),
-    prompts_dir: document.getElementById('team-prompts').value.trim(),
-    mcp_access: document.getElementById('team-mcp').value.trim(),
     discord_channels: document.getElementById('team-channels').value.split('\n').map(s => s.trim()).filter(Boolean),
   };
 }
 
-function showAddTeamModal() {
+async function showAddTeamModal() {
+  // Load templates to offer as options
+  try {
+    const data = await api('/api/templates');
+    templatesData = data.templates || [];
+  } catch (e) { templatesData = []; }
   showModal(_teamModalHtml('Nouvelle equipe', '', {}, true));
 }
 
@@ -1461,6 +1454,11 @@ async function addTeam() {
   if (!id) { toast('Identifiant requis', 'error'); return; }
   const body = _readTeamForm();
   if (!body.name) { toast('Nom requis', 'error'); return; }
+  // Add template if selected
+  const tplSelect = document.getElementById('team-template');
+  if (tplSelect && tplSelect.value) {
+    body.template = tplSelect.value;
+  }
   try {
     await api(`/api/teams/${encodeURIComponent(id)}`, { method: 'POST', body });
     toast('Equipe ajoutee', 'success');
@@ -1487,6 +1485,36 @@ async function deleteTeam(id) {
     toast('Equipe supprimee', 'success');
     loadTeams();
   } catch (e) { toast(e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════
+// TEMPLATES
+// ═══════════════════════════════════════════════════
+async function loadTemplates() {
+  try {
+    const data = await api('/api/templates');
+    templatesData = data.templates || [];
+    renderTemplates();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function renderTemplates() {
+  const grid = document.getElementById('templates-grid');
+  grid.innerHTML = templatesData.map(tpl => `
+    <div class="agent-card">
+      <div class="agent-card-header">
+        <div>
+          <h4>${escHtml(tpl.id)}</h4>
+          <code style="font-size:0.75rem;color:var(--text-secondary)">Shared/Teams/${escHtml(tpl.id)}/</code>
+        </div>
+      </div>
+      <div class="agent-meta" style="margin-top:0.5rem">
+        <span class="tag tag-blue">${tpl.agents} agents</span>
+        <span class="tag tag-yellow">${tpl.prompts} prompts</span>
+        ${tpl.has_mcp_access ? '<span class="tag tag-green">MCP</span>' : ''}
+      </div>
+    </div>
+  `).join('') || '<p style="color:var(--text-secondary);padding:1rem">Aucun template disponible. Ajoutez des dossiers dans Shared/Teams/ ou configurez le depot Git Shared et faites un Pull.</p>';
 }
 
 // ═══════════════════════════════════════════════════
