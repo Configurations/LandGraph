@@ -1434,10 +1434,19 @@ tr:hover { background: rgba(255,255,255,0.02); }
 .wf-inline-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 0.3rem;
   padding: 0.25rem 0.4rem;
   background: rgba(255,255,255,0.03);
   border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.wf-inline-block.collapsed .wf-inline-head {
+  border-bottom: none;
+}
+.wf-collapse-arrow {
+  font-size: 0.6rem;
+  color: var(--text-secondary);
+  flex-shrink: 0;
 }
 .wf-inline-id {
   font-size: 0.72rem;

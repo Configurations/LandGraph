@@ -3300,7 +3300,6 @@ async function openWorkflowEditor(dir, apiBase, label) {
           <div class="wf-toolbox" id="wf-toolbox">
             <h4>Boite a outils</h4>
             <button class="wf-toolbox-btn" onclick="wfAddPhase()">+ Ajouter une Phase</button>
-            <button class="wf-toolbox-btn" onclick="wfAddTransition()">+ Ajouter une Transition</button>
           </div>
           <div class="wf-props" id="wf-props"></div>
         </div>
@@ -3540,12 +3539,14 @@ function _wfRenderPhaseProps(el, phaseId) {
     const delegChecks = others.length ? others.map(o =>
       `<label class="wf-inline-check"><input type="checkbox" ${delegSet.has(o)?'checked':''} onchange="_wfToggleAgentList('${phaseId}','${escHtml(id)}','can_delegate_to','${escHtml(o)}',this.checked)" />${escHtml(o)}</label>`
     ).join('') : '<span style="font-size:0.65rem;color:var(--text-secondary)">--</span>';
-    return `<div class="wf-inline-block">
-      <div class="wf-inline-head">
-        <select class="wf-inline-agent-select" onchange="_wfChangeAgent('${phaseId}','${escHtml(id)}',this.value)" id="wf-agent-sel-${phaseId}-${escHtml(id)}"></select>
-        <button class="btn-icon danger" onclick="wfRemoveAgent('${phaseId}','${escHtml(id)}')">x</button>
+    const collapsed = _wf._collapsed && _wf._collapsed[`${phaseId}:${id}`];
+    return `<div class="wf-inline-block${collapsed ? ' collapsed' : ''}">
+      <div class="wf-inline-head" onclick="wfToggleCollapse('${phaseId}','${escHtml(id)}')">
+        <span class="wf-collapse-arrow">${collapsed ? '\u25b6' : '\u25bc'}</span>
+        <select class="wf-inline-agent-select" onclick="event.stopPropagation()" onchange="_wfChangeAgent('${phaseId}','${escHtml(id)}',this.value)" id="wf-agent-sel-${phaseId}-${escHtml(id)}"></select>
+        <button class="btn-icon danger" onclick="event.stopPropagation();wfRemoveAgent('${phaseId}','${escHtml(id)}')">x</button>
       </div>
-      <div class="wf-inline-fields">
+      <div class="wf-inline-fields"${collapsed ? ' style="display:none"' : ''}>
         <input placeholder="Role" value="${escHtml(a.role || '')}" onchange="_wfSetAgentField('${phaseId}','${escHtml(id)}','role',this.value)" />
         <div style="display:flex;gap:0.3rem">
           <select style="flex:1" onchange="_wfSetAgentField('${phaseId}','${escHtml(id)}','required',this.value==='true')">
@@ -3876,6 +3877,26 @@ function wfSetPhaseField(phaseId, field, val) {
   if (field === 'order' || field === 'name') wfRender();
 }
 
+// ── Collapse agent blocks ──
+function wfToggleCollapse(phaseId, agentId) {
+  if (!_wf._collapsed) _wf._collapsed = {};
+  const key = `${phaseId}:${agentId}`;
+  _wf._collapsed[key] = !_wf._collapsed[key];
+  const block = document.getElementById(`wf-agent-sel-${phaseId}-${agentId}`)?.closest('.wf-inline-block');
+  if (!block) return;
+  const fields = block.querySelector('.wf-inline-fields');
+  const arrow = block.querySelector('.wf-collapse-arrow');
+  if (_wf._collapsed[key]) {
+    block.classList.add('collapsed');
+    if (fields) fields.style.display = 'none';
+    if (arrow) arrow.textContent = '\u25b6';
+  } else {
+    block.classList.remove('collapsed');
+    if (fields) fields.style.display = '';
+    if (arrow) arrow.textContent = '\u25bc';
+  }
+}
+
 // ── Agent CRUD within a phase (inline, no modal) ──
 function wfAddAgent(phaseId, agentId) {
   if (!agentId) return;
@@ -4017,45 +4038,6 @@ function wfToggleCondition(phaseId, key, checked) {
 }
 
 // ── Transitions CRUD ──
-function wfAddTransition() {
-  const phaseIds = Object.keys(_wf.data.phases || {});
-  if (phaseIds.length < 2) { toast('Il faut au moins 2 phases', 'error'); return; }
-  const opts = phaseIds.map(id => `<option value="${escHtml(id)}">${escHtml(_wf.data.phases[id].name || id)}</option>`).join('');
-  showModal(`
-    <div class="modal-header">
-      <h3>Ajouter une transition</h3>
-      <button class="btn-icon" onclick="closeModal();wfRender()">&times;</button>
-    </div>
-    <div class="form-row">
-      <div class="form-group"><label>De</label><select id="wf-new-tr-from">${opts}</select></div>
-      <div class="form-group"><label>Vers</label><select id="wf-new-tr-to">${opts}</select></div>
-    </div>
-    <div class="form-group">
-      <label>Human Gate</label>
-      <select id="wf-new-tr-hg"><option value="true">Oui</option><option value="false">Non</option></select>
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal();wfRender()">Annuler</button>
-      <button class="btn btn-primary" onclick="_wfDoAddTransition()">Ajouter</button>
-    </div>
-  `, 'modal-confirm');
-}
-
-function _wfDoAddTransition() {
-  const from = document.getElementById('wf-new-tr-from').value;
-  const to = document.getElementById('wf-new-tr-to').value;
-  if (from === to) { toast('De et Vers doivent etre differents', 'error'); return; }
-  if (!_wf.data.transitions) _wf.data.transitions = [];
-  const exists = _wf.data.transitions.some(t => t.from === from && t.to === to);
-  if (exists) { toast('Cette transition existe deja', 'error'); return; }
-  _wf.data.transitions.push({
-    from, to,
-    human_gate: document.getElementById('wf-new-tr-hg').value === 'true'
-  });
-  closeModal();
-  wfRender();
-}
-
 function wfDeleteTransition(idx) {
   _wf.data.transitions.splice(idx, 1);
   wfRender();
@@ -4149,6 +4131,7 @@ function wfImportJSON() {
   _wf.positions = {};
   _wfCalcPositions();
   _wf.selected = null;
+  _wfSaveDesign();
   closeModal();
   // Re-open visual editor
   const inner = document.getElementById('wf-workspace-inner');
