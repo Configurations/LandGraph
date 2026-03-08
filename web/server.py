@@ -89,6 +89,22 @@ log.info("DOCKER_MODE=%s  ENV_FILE=%s  CONFIGS=%s  PROMPTS=%s", DOCKER_MODE, ENV
 app = FastAPI(title="LandGraph Admin")
 _AUTH_SECRET = secrets.token_hex(32)  # session signing key (regenerated on restart)
 
+# ── Restore MCP servers from Shared on startup ────
+def _restore_mcp_from_shared():
+    """If Configs mcp_servers.json is empty but Shared has data, restore it."""
+    try:
+        cfg = _read_json(MCP_SERVERS_FILE)
+        if cfg.get("servers"):
+            return  # already populated
+        shared = _read_json(SHARED_MCP_FILE)
+        if shared.get("servers"):
+            _write_json(MCP_SERVERS_FILE, shared)
+            logging.info("Restored mcp_servers.json from Shared (%d servers)", len(shared["servers"]))
+    except Exception as e:
+        logging.warning("restore mcp from shared failed: %s", e)
+
+_restore_mcp_from_shared()
+
 # ── Auth ───────────────────────────────────────────
 
 def _get_auth_credentials() -> tuple[str, str] | None:
@@ -476,6 +492,18 @@ async def delete_catalog_entry(entry_id: str):
     return {"ok": True}
 
 
+# ── Helper: sync MCP servers to Shared ────────────
+
+def _sync_mcp_to_shared():
+    """Mirror MCP_SERVERS_FILE → SHARED_MCP_FILE so installs survive git pulls on Configs."""
+    try:
+        data = _read_json(MCP_SERVERS_FILE)
+        SHARED_MCP_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _write_json(SHARED_MCP_FILE, data)
+    except Exception as e:
+        logging.warning("sync mcp→shared failed: %s", e)
+
+
 # ── API: MCP Install / Uninstall ──────────────────
 
 class MCPInstallRequest(BaseModel):
@@ -506,6 +534,7 @@ async def install_mcp(entry_id: str, req: MCPInstallRequest):
         "enabled": True,
     }
     _write_json(MCP_SERVERS_FILE, data)
+    _sync_mcp_to_shared()
 
     # Add env vars to .env if provided
     if req.env_values:
@@ -534,6 +563,7 @@ async def uninstall_mcp(entry_id: str):
     if entry_id in data.get("servers", {}):
         del data["servers"][entry_id]
         _write_json(MCP_SERVERS_FILE, data)
+        _sync_mcp_to_shared()
     access = _read_json(MCP_ACCESS_FILE)
     changed = False
     for aid in access:
@@ -558,6 +588,7 @@ async def toggle_mcp(entry_id: str, req: MCPToggle):
         raise HTTPException(404, f"Serveur '{entry_id}' non installe")
     data["servers"][entry_id]["enabled"] = req.enabled
     _write_json(MCP_SERVERS_FILE, data)
+    _sync_mcp_to_shared()
     return {"ok": True}
 
 
@@ -1561,6 +1592,85 @@ async def git_pull(repo_key: str):
         raise
     except Exception as e:
         log.exception("git pull exception")
+        raise HTTPException(500, str(e))
+
+
+# ── API: Git Commits history + checkout ───────────
+
+@app.get("/api/git/{repo_key}/commits")
+async def git_commits(repo_key: str):
+    """Return last 10 commits with date, hash, tags."""
+    target_dir = _get_repo_dir(repo_key)
+    if not (target_dir / ".git").exists():
+        return {"commits": []}
+    try:
+        # format: hash|date|tags|subject
+        result = subprocess.run(
+            ["git", "log", "--pretty=format:%H|%ai|%D|%s", "-10"],
+            cwd=str(target_dir), capture_output=True, text=True, timeout=10,
+        )
+        commits = []
+        for line in result.stdout.strip().splitlines():
+            if not line:
+                continue
+            parts = line.split("|", 3)
+            full_hash = parts[0]
+            date = parts[1] if len(parts) > 1 else ""
+            refs = parts[2] if len(parts) > 2 else ""
+            subject = parts[3] if len(parts) > 3 else ""
+            # Extract tags from refs (e.g. "HEAD -> main, tag: v1.0")
+            tags = [r.strip().replace("tag: ", "") for r in refs.split(",") if "tag:" in r]
+            commits.append({
+                "hash": full_hash,
+                "short": full_hash[:7],
+                "date": date.strip(),
+                "tags": tags,
+                "subject": subject.strip(),
+            })
+        return {"commits": commits}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/git/{repo_key}/checkout/{commit_hash}")
+async def git_checkout(repo_key: str, commit_hash: str):
+    """Checkout a specific commit. Refuses if there are uncommitted changes."""
+    import re
+    if not re.match(r'^[0-9a-f]{7,40}$', commit_hash):
+        raise HTTPException(400, "Hash de commit invalide")
+    target_dir = _get_repo_dir(repo_key)
+    if not (target_dir / ".git").exists():
+        raise HTTPException(400, "Repository non initialise")
+    try:
+        # Check for uncommitted changes
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(target_dir), capture_output=True, text=True, timeout=10,
+        )
+        if status.stdout.strip():
+            raise HTTPException(
+                409,
+                "Des modifications non commitees sont en attente. Commitez ou annulez-les avant de changer de version."
+            )
+        # Get current branch
+        branch_result = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=str(target_dir), capture_output=True, text=True, timeout=10,
+        )
+        branch = branch_result.stdout.strip()
+        # Reset branch to the target commit
+        result = subprocess.run(
+            ["git", "reset", "--hard", commit_hash],
+            cwd=str(target_dir), capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            raise HTTPException(500, f"git reset failed: {result.stderr}")
+        log.info("git checkout %s to %s in %s", repo_key, commit_hash, target_dir)
+        return {"ok": True, "message": f"Version restauree: {commit_hash[:7]}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("git checkout exception")
         raise HTTPException(500, str(e))
 
 

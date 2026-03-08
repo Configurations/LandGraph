@@ -303,6 +303,8 @@ tr:hover { background: rgba(255,255,255,0.02); }
   overflow-y: auto;
 }
 
+.modal.modal-confirm { max-width: 420px; }
+
 .modal-header {
   display: flex;
   justify-content: space-between;
@@ -918,4 +920,67 @@ tr:hover { background: rgba(255,255,255,0.02); }
 .chat-input-bar .btn {
   padding: 0.5rem 0.75rem;
   flex-shrink: 0;
+}
+
+/* Commits table */
+.commits-table-wrap {
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: #0a0a0a;
+}
+.commits-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+.commits-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  text-align: left;
+  padding: 0.4rem 0.5rem;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+.commits-table td {
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.commits-table tr:hover td { background: rgba(255,255,255,0.03); }
+.commits-table .commit-hash {
+  font-family: 'JetBrains Mono', monospace;
+  color: #60a5fa;
+  font-size: 0.75rem;
+}
+.commits-table .commit-tag {
+  display: inline-block;
+  background: #854d0e;
+  color: #fde68a;
+  padding: 0.05rem 0.4rem;
+  border-radius: 0.25rem;
+  font-size: 0.7rem;
+  margin-left: 0.25rem;
+}
+.commits-table .commit-date {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+}
+.commits-table .btn-revert {
+  padding: 0.15rem 0.4rem;
+  font-size: 0.7rem;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.commits-table .btn-revert:hover {
+  border-color: #ef4444;
+  color: #ef4444;
 }

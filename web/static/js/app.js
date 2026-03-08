@@ -76,6 +76,28 @@ function closeModal() {
   document.getElementById('modal-container').innerHTML = '';
 }
 
+let _confirmResolve = null;
+function confirmModal(message) {
+  return new Promise(resolve => {
+    _confirmResolve = resolve;
+    showModal(`
+      <div class="modal-header">
+        <h3>Confirmation</h3>
+        <button class="btn-icon" onclick="_confirmAnswer(false)">&times;</button>
+      </div>
+      <p style="margin:1rem 0;white-space:pre-line">${escHtml(message)}</p>
+      <div style="display:flex;gap:0.5rem;justify-content:flex-end">
+        <button class="btn btn-outline btn-sm" onclick="_confirmAnswer(false)">Annuler</button>
+        <button class="btn btn-primary btn-sm" onclick="_confirmAnswer(true)">Confirmer</button>
+      </div>
+    `, 'modal-confirm');
+  });
+}
+function _confirmAnswer(val) {
+  closeModal();
+  if (_confirmResolve) { _confirmResolve(val); _confirmResolve = null; }
+}
+
 // ═══════════════════════════════════════════════════
 // SECRETS (.env)
 // ═══════════════════════════════════════════════════
@@ -196,7 +218,7 @@ async function saveEnvEntry(key) {
 }
 
 async function deleteEnvEntry(key) {
-  if (!confirm(`Supprimer "${key}" ?`)) return;
+  if (!(await confirmModal(`Supprimer "${key}" ?`))) return;
   try {
     await api('/api/env/delete', { method: 'POST', body: { key } });
     toast('Secret supprime', 'success');
@@ -468,7 +490,7 @@ async function installSelectedService() {
 }
 
 async function uninstallMCP(id) {
-  if (!confirm(`Desinstaller le serveur MCP "${id}" ? Les acces agents seront aussi retires.`)) return;
+  if (!(await confirmModal(`Desinstaller le serveur MCP "${id}" ?\nLes acces agents seront aussi retires.`))) return;
   try {
     await api(`/api/mcp/uninstall/${id}`, { method: 'POST' });
     toast('Serveur MCP desinstalle', 'success');
@@ -819,7 +841,7 @@ async function addAgent() {
 }
 
 async function deleteAgent(id) {
-  if (!confirm(`Supprimer l'agent "${id}" ?`)) return;
+  if (!(await confirmModal(`Supprimer l'agent "${id}" ?`))) return;
   const tid = agents[id]?._team_id || 'default';
   try {
     await api(`/api/agents/${id}?team_id=${encodeURIComponent(tid)}`, { method: 'DELETE' });
@@ -1087,7 +1109,7 @@ async function saveProvider(originalId) {
 }
 
 async function deleteProvider(id) {
-  if (!confirm(`Supprimer le provider "${id}" ?`)) return;
+  if (!(await confirmModal(`Supprimer le provider "${id}" ?`))) return;
   try {
     await api(`/api/llm/providers/provider/${id}`, { method: 'DELETE' });
     toast('Provider supprime', 'success');
@@ -1164,7 +1186,7 @@ async function saveThrottling() {
 }
 
 async function deleteThrottling(key) {
-  if (!confirm(`Supprimer le throttling pour "${key}" ?`)) return;
+  if (!(await confirmModal(`Supprimer le throttling pour "${key}" ?`))) return;
   try {
     await api(`/api/llm/providers/throttling/${key}`, { method: 'DELETE' });
     toast('Throttling supprime', 'success');
@@ -1374,7 +1396,12 @@ async function gitInit(repoKey) {
 async function gitPull(repoKey) {
   try {
     const data = await api(`/api/git/${repoKey}/pull`, { method: 'POST' });
-    toast(data.code === 0 ? `Pull ${repoKey} reussi` : `Pull ${repoKey} erreur`, data.code === 0 ? 'success' : 'error');
+    if (data.code === 0) {
+      toast(`Pull ${repoKey} reussi`, 'success');
+    } else {
+      const detail = (data.stderr || data.stdout || 'erreur inconnue').substring(0, 200);
+      toast(`Pull ${repoKey} erreur: ${detail}`, 'error');
+    }
     loadGit();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -1679,7 +1706,7 @@ async function saveCfgAgent(dir, agentId) {
 }
 
 async function deleteCfgAgent(dir, agentId) {
-  if (!confirm(`Supprimer l'agent "${agentId}" ?`)) return;
+  if (!(await confirmModal(`Supprimer l'agent "${agentId}" ?`))) return;
   try {
     await api(`/api/agents/${encodeURIComponent(agentId)}?team_id=${encodeURIComponent(dir)}`, { method: 'DELETE' });
     toast('Agent supprime', 'success');
@@ -1846,7 +1873,7 @@ async function saveTeam(id) {
 }
 
 async function deleteTeam(id) {
-  if (!confirm(`Supprimer l'equipe "${id}" ?`)) return;
+  if (!(await confirmModal(`Supprimer l'equipe "${id}" ?`))) return;
   try {
     await api(`/api/teams/${encodeURIComponent(id)}`, { method: 'DELETE' });
     toast('Equipe supprimee', 'success');
@@ -1897,6 +1924,7 @@ async function loadTplGit() {
     document.getElementById('btn-tpl-git-init').disabled = inited;
     document.getElementById('btn-tpl-git-pull').disabled = !inited;
     document.getElementById('btn-tpl-git-commit').disabled = !inited;
+    if (inited) loadTplGitCommits();
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -1930,9 +1958,55 @@ async function tplGitInit() {
 async function tplGitPull() {
   try {
     const data = await api('/api/git/shared/pull', { method: 'POST' });
-    toast(data.code === 0 ? 'Pull Shared reussi' : 'Pull Shared erreur', data.code === 0 ? 'success' : 'error');
+    if (data.code === 0) {
+      toast('Pull Shared reussi', 'success');
+    } else {
+      const detail = (data.stderr || data.stdout || 'erreur inconnue').substring(0, 200);
+      toast(`Pull Shared erreur: ${detail}`, 'error');
+    }
     loadTplGit();
   } catch (e) { toast(e.message, 'error'); }
+}
+
+async function loadTplGitCommits() {
+  const wrap = document.getElementById('tpl-git-commits');
+  if (!wrap) return;
+  try {
+    const data = await api('/api/git/shared/commits');
+    const commits = data.commits || [];
+    if (!commits.length) {
+      wrap.innerHTML = '<p style="color:var(--text-secondary);font-size:0.8rem;padding:0.5rem">Aucun commit.</p>';
+      return;
+    }
+    const rows = commits.map(c => {
+      const tags = c.tags.map(t => `<span class="commit-tag">${escHtml(t)}</span>`).join('');
+      const dateStr = c.date ? c.date.substring(0, 16).replace('T', ' ') : '';
+      return `<tr>
+        <td class="commit-date">${escHtml(dateStr)}</td>
+        <td class="commit-hash">${escHtml(c.short)}</td>
+        <td>${tags}</td>
+        <td>${escHtml(c.subject)}</td>
+        <td><button class="btn-revert" onclick="tplGitCheckout('${c.hash}')" title="Revenir a cette version">&#8634;</button></td>
+      </tr>`;
+    }).join('');
+    wrap.innerHTML = `<table class="commits-table">
+      <thead><tr><th>Date</th><th>ID</th><th>Tag</th><th>Message</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  } catch (e) {
+    wrap.innerHTML = `<p style="color:#ef4444;font-size:0.8rem;padding:0.5rem">${escHtml(e.message)}</p>`;
+  }
+}
+
+async function tplGitCheckout(hash) {
+  if (!(await confirmModal('Revenir a cette version ?\nLes modifications non commitees seront verifiees avant.'))) return;
+  try {
+    const data = await api(`/api/git/shared/checkout/${hash}`, { method: 'POST' });
+    toast(data.message || 'Version restauree', 'success');
+    loadTplGit();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
 }
 
 // ── Template LLM ──────────────────────────────────
@@ -2130,7 +2204,7 @@ async function saveTplProvider(originalId) {
 }
 
 async function deleteTplProvider(id) {
-  if (!confirm(`Supprimer le provider "${id}" du template ?`)) return;
+  if (!(await confirmModal(`Supprimer le provider "${id}" du template ?`))) return;
   delete tplLlmData.providers[id];
   if (tplLlmData.default === id) tplLlmData.default = '';
   try {
@@ -2192,7 +2266,7 @@ async function saveTplThrottling() {
 }
 
 async function deleteTplThrottling(key) {
-  if (!confirm(`Supprimer le throttling pour "${key}" du template ?`)) return;
+  if (!(await confirmModal(`Supprimer le throttling pour "${key}" du template ?`))) return;
   delete tplLlmData.throttling[key];
   try {
     await api('/api/templates/llm', { method: 'PUT', body: tplLlmData });
@@ -2439,7 +2513,7 @@ function editTplMcp(id) {
 }
 
 async function deleteTplMcp(id) {
-  if (!confirm(`Supprimer le serveur MCP "${id}" du template ?`)) return;
+  if (!(await confirmModal(`Supprimer le serveur MCP "${id}" du template ?`))) return;
   delete tplMcpData.servers[id];
   try {
     await api('/api/templates/mcp', { method: 'PUT', body: tplMcpData });
@@ -2715,7 +2789,7 @@ async function saveTplAgent(dir, agentId) {
 }
 
 async function deleteTplAgent(dir, agentId) {
-  if (!confirm(`Supprimer l'agent "${agentId}" ?`)) return;
+  if (!(await confirmModal(`Supprimer l'agent "${agentId}" ?`))) return;
   try {
     await api(`/api/templates/agents/${encodeURIComponent(agentId)}?team_id=${encodeURIComponent(dir)}`, { method: 'DELETE' });
     toast('Agent supprime', 'success');
@@ -2872,7 +2946,7 @@ async function saveTplTeam(idx) {
 
 async function deleteTplTeam(idx) {
   const t = tplTeamsData.teams[idx];
-  if (!confirm(`Supprimer l'equipe "${t.name}" ?`)) return;
+  if (!(await confirmModal(`Supprimer l'equipe "${t.name}" ?`))) return;
   tplTeamsData.teams.splice(idx, 1);
   await _saveTplTeams();
   loadTplTeamsList();
