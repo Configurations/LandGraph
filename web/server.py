@@ -1279,10 +1279,18 @@ async def update_team(team_id: str, entry: TeamEntry):
 @app.delete("/api/teams/{team_id}")
 async def delete_team(team_id: str):
     teams = _read_teams_list()
+    deleted = [t for t in teams if t["id"] == team_id]
     new_teams = [t for t in teams if t["id"] != team_id]
-    if len(new_teams) == len(teams):
+    if not deleted:
         raise HTTPException(404, f"Equipe '{team_id}' introuvable")
     _write_teams_list(new_teams)
+    # Clean up the team directory
+    directory = deleted[0].get("directory", team_id)
+    team_dir = TEAMS_DIR / directory
+    if team_dir.exists() and team_dir.is_dir():
+        import shutil
+        shutil.rmtree(team_dir, ignore_errors=True)
+        log.info("Deleted team directory: %s", team_dir)
     return {"ok": True}
 
 
