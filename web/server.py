@@ -2086,7 +2086,15 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
             cwd=str(target_dir), capture_output=True, text=True, timeout=10
         )
 
-        # 5. Stash local changes, pull --rebase, then restore
+        # 5. Clean up stuck rebase, stash, pull --rebase, restore
+        rebase_merge = target_dir / ".git" / "rebase-merge"
+        rebase_apply = target_dir / ".git" / "rebase-apply"
+        if rebase_merge.exists() or rebase_apply.exists():
+            log.warning("Stuck rebase detected (%s), aborting", repo_key)
+            subprocess.run(
+                ["git", "rebase", "--abort"],
+                cwd=str(target_dir), capture_output=True, text=True, timeout=10
+            )
         subprocess.run(
             ["git", "stash", "--include-untracked"],
             cwd=str(target_dir), capture_output=True, text=True, timeout=10
