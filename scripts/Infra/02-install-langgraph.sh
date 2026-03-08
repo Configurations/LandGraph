@@ -28,7 +28,7 @@ fi
 
 # ── 1. Arborescence ──────────────────────────
 echo "[1/6] Arborescence..."
-mkdir -p "${PROJECT_DIR}"/{agents/shared,config/Teams,scripts,data/backups,prompts/v1,Shared/Teams}
+mkdir -p "${PROJECT_DIR}"/{agents/shared,config/Teams,scripts,data/backups,Shared/Teams}
 mkdir -p /opt/langgraph-data/{postgres,redis}
 cd "${PROJECT_DIR}"
 

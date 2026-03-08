@@ -34,10 +34,6 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
         Templates
       </div>
-      <div class="nav-item" data-section="agents" onclick="showSection('agents')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-        Agents
-      </div>
       <div class="nav-item" data-section="mcp" onclick="showSection('mcp')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
         Services MCP
@@ -119,18 +115,6 @@
         </div>
       </div>
 
-      <!-- AGENTS SECTION -->
-      <div class="section" id="section-agents">
-        <div class="page-header">
-          <h2>Agents</h2>
-          <div style="display:flex;gap:0.5rem">
-            <button class="btn btn-outline btn-sm" onclick="loadAgents()">Rafraichir</button>
-            <button class="btn btn-primary btn-sm" onclick="showAddAgentModal()">+ Ajouter</button>
-          </div>
-        </div>
-        <div id="agents-grid"></div>
-      </div>
-
       <!-- LLM PROVIDERS SECTION -->
       <div class="section" id="section-llm">
         <div class="page-header">
@@ -169,12 +153,127 @@
       <div class="section" id="section-teams">
         <div class="page-header">
           <h2>Equipes</h2>
-          <div style="display:flex;gap:0.5rem">
-            <button class="btn btn-outline btn-sm" onclick="loadTeams()">Rafraichir</button>
-            <button class="btn btn-primary btn-sm" onclick="showAddTeamModal()">+ Ajouter</button>
+          <button class="btn btn-outline btn-sm" onclick="loadTeams()">Rafraichir</button>
+        </div>
+        <p style="color:var(--text-secondary);margin-bottom:0.75rem;font-size:0.85rem">
+          Configuration active (<code>Configs/Teams/</code>) — modeles LLM, serveurs MCP et equipes operationnelles.
+        </p>
+
+        <!-- Sub-tabs -->
+        <div class="prompt-tabs" style="margin-bottom:1rem">
+          <div class="prompt-tab active" data-cfg-tab="cfg-llm" onclick="showConfigTab('cfg-llm')">Modeles LLM</div>
+          <div class="prompt-tab" data-cfg-tab="cfg-mcp" onclick="showConfigTab('cfg-mcp')">Services MCP</div>
+          <div class="prompt-tab" data-cfg-tab="cfg-teams" onclick="showConfigTab('cfg-teams')">Equipes</div>
+          <div class="prompt-tab" data-cfg-tab="cfg-git" onclick="showConfigTab('cfg-git')">Enregistrement</div>
+        </div>
+
+        <!-- Sub-tab: LLM -->
+        <div class="cfg-tab-content active" id="cfg-tab-cfg-llm">
+          <div class="card">
+            <div class="card-header">
+              <h3>Modele par defaut</h3>
+            </div>
+            <div class="form-row" style="align-items:flex-end">
+              <div class="form-group" style="margin-bottom:0">
+                <select id="cfg-llm-default-select" onchange="setCfgLLMDefault(this.value)"></select>
+              </div>
+            </div>
+          </div>
+          <div class="card" style="margin-top:1rem">
+            <div class="card-header">
+              <h3>Providers</h3>
+              <button class="btn btn-primary btn-sm" onclick="showAddCfgProviderModal()">+ Ajouter</button>
+            </div>
+            <div class="table-container" id="cfg-llm-providers-table"></div>
+          </div>
+          <div class="card" style="margin-top:1rem">
+            <div class="card-header">
+              <h3>Throttling</h3>
+              <button class="btn btn-primary btn-sm" onclick="showAddCfgThrottlingModal()">+ Ajouter</button>
+            </div>
+            <div class="table-container" id="cfg-llm-throttling-table"></div>
           </div>
         </div>
-        <div class="agents-grid" id="teams-grid"></div>
+
+        <!-- Sub-tab: MCP -->
+        <div class="cfg-tab-content" id="cfg-tab-cfg-mcp">
+          <div class="card">
+            <div class="card-header">
+              <h3>Serveurs installes</h3>
+              <button class="btn btn-primary btn-sm" onclick="showAddCfgCatalogModal()">+ Installer un service</button>
+            </div>
+            <div class="table-container" id="cfg-mcp-configured"></div>
+          </div>
+          <div class="card" style="margin-top:1rem">
+            <div class="card-header">
+              <h3>Catalogue disponible</h3>
+              <button id="btn-cfg-show-deprecated" class="btn btn-outline btn-sm" onclick="toggleCfgDeprecated()">Afficher deprecies</button>
+            </div>
+            <div class="mcp-grid" id="cfg-mcp-catalog"></div>
+          </div>
+        </div>
+
+        <!-- Sub-tab: Teams -->
+        <div class="cfg-tab-content" id="cfg-tab-cfg-teams">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+            <h3 style="margin:0">Equipes (Configs)</h3>
+            <button class="btn btn-primary btn-sm" onclick="showAddTeamModal()">+ Ajouter</button>
+          </div>
+          <div class="agents-grid" id="teams-grid"></div>
+        </div>
+
+        <!-- Sub-tab: Git (Enregistrement) -->
+        <div class="cfg-tab-content" id="cfg-tab-cfg-git">
+          <div class="card">
+            <div class="card-header">
+              <h3>Depot Configs</h3>
+              <span class="tag tag-yellow">Configs/</span>
+            </div>
+            <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem">
+              Contient la configuration active des equipes dans Configs/Teams/. C'est la configuration operationnelle utilisee par la plateforme.
+            </p>
+            <div class="form-group">
+              <label>URL du depot</label>
+              <input id="cfg-git-path" placeholder="github.com/org/my-configs.git" />
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Login</label>
+                <input id="cfg-git-login" placeholder="username" autocomplete="off" />
+              </div>
+              <div class="form-group">
+                <label>Password / Token</label>
+                <input id="cfg-git-password" type="password" placeholder="token ou mot de passe" autocomplete="off" />
+              </div>
+            </div>
+            <div class="form-row" style="margin-top:0.5rem">
+              <div>
+                <label>Branche</label>
+                <div id="cfg-git-branch" style="font-size:1.1rem;font-weight:600;margin-top:0.25rem">-</div>
+              </div>
+              <div style="display:flex;gap:0.5rem;align-items:flex-end">
+                <button class="btn btn-primary btn-sm" onclick="saveCfgGitConfig()">Enregistrer</button>
+                <button class="btn btn-outline btn-sm" id="btn-cfg-git-init" onclick="cfgGitInit()" disabled>Init</button>
+                <button class="btn btn-primary btn-sm" id="btn-cfg-git-pull" onclick="cfgGitPull()" disabled>Pull</button>
+                <button class="btn btn-success btn-sm" id="btn-cfg-git-commit" onclick="showGitCommitModal('configs')" disabled>Commit &amp; Push</button>
+              </div>
+            </div>
+            <div style="margin-top:0.75rem">
+              <label>Status</label>
+              <div class="terminal" id="cfg-git-status" style="max-height:120px">Chargement...</div>
+            </div>
+            <div style="margin-top:0.5rem">
+              <label>Historique</label>
+              <div class="terminal" id="cfg-git-log" style="max-height:120px">Chargement...</div>
+            </div>
+            <div style="margin-top:0.75rem">
+              <label>Versions</label>
+              <div id="cfg-git-commits" class="commits-table-wrap">
+                <p style="color:var(--text-secondary);font-size:0.8rem">Chargement...</p>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- TEMPLATES SECTION -->
@@ -227,10 +326,17 @@
         <div class="tpl-tab-content" id="tpl-tab-tpl-mcp">
           <div class="card">
             <div class="card-header">
-              <h3>Serveurs MCP du template</h3>
-              <button class="btn btn-primary btn-sm" onclick="showAddTplMcpModal()">+ Ajouter</button>
+              <h3>Serveurs installes</h3>
+              <button class="btn btn-primary btn-sm" onclick="showAddTplCatalogModal()">+ Installer un service</button>
             </div>
-            <div class="table-container" id="tpl-mcp-table"></div>
+            <div class="table-container" id="tpl-mcp-configured"></div>
+          </div>
+          <div class="card" style="margin-top:1rem">
+            <div class="card-header">
+              <h3>Catalogue disponible</h3>
+              <button id="btn-tpl-show-deprecated" class="btn btn-outline btn-sm" onclick="toggleTplDeprecated()">Afficher deprecies</button>
+            </div>
+            <div class="mcp-grid" id="tpl-mcp-catalog"></div>
           </div>
         </div>
 

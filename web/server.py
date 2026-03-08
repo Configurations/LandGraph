@@ -71,7 +71,9 @@ MCP_ACCESS_FILE = TEAMS_DIR / "agent_mcp_access.json"
 MCP_CATALOG_FILE = SCRIPTS / "Infra" / "mcp_catalog.csv" if not DOCKER_MODE else SHARED_DIR / "Teams" / "mcp_catalog.csv"
 LLM_PROVIDERS_FILE = TEAMS_DIR / "llm_providers.json"
 TEAMS_FILE = TEAMS_DIR / "teams.json"
-GIT_CONFIG_FILE = TEAMS_DIR / "git.json"
+GIT_CONFIG_FILE = TEAMS_DIR / "git.json"  # legacy dual-repo
+SHARED_GIT_FILE = SHARED_DIR / "git.json"
+CONFIGS_GIT_FILE = CONFIGS / "git.json"
 SHARED_TEAMS_DIR = SHARED_DIR / "Teams"
 SHARED_LLM_FILE = SHARED_TEAMS_DIR / "llm_providers.json"
 SHARED_MCP_FILE = SHARED_TEAMS_DIR / "mcp_servers.json"
@@ -1343,6 +1345,89 @@ async def save_template_mcp(request: Request):
     return {"ok": True}
 
 
+def _get_mcp_full_shared() -> list[dict]:
+    """Return catalog entries enriched with install status from Shared MCP."""
+    catalog = _parse_mcp_catalog()
+    servers = _read_json(SHARED_MCP_FILE).get("servers", {})
+    env_entries = {e["key"]: e["value"] for e in _parse_env(ENV_FILE) if e.get("key")}
+
+    for item in catalog:
+        srv = servers.get(item["id"])
+        item["installed"] = srv is not None
+        item["enabled"] = srv.get("enabled", True) if srv else False
+        item["agents"] = []
+        for ev in item.get("env_vars", []):
+            val = env_entries.get(ev["var"], "")
+            ev["configured"] = bool(val) and val != "A_CONFIGURER"
+    return catalog
+
+
+@app.get("/api/templates/mcp/catalog")
+async def get_template_mcp_catalog():
+    """Return catalog enriched with Shared install status."""
+    return {"servers": _get_mcp_full_shared()}
+
+
+@app.post("/api/templates/mcp/install/{entry_id}")
+async def install_template_mcp(entry_id: str, req: MCPInstallRequest):
+    """Install a catalog entry into Shared MCP."""
+    catalog = _parse_mcp_catalog()
+    item = next((c for c in catalog if c["id"] == entry_id), None)
+    if not item:
+        raise HTTPException(404, f"ID '{entry_id}' introuvable dans le catalogue")
+    data = _read_json(SHARED_MCP_FILE)
+    if "servers" not in data:
+        data["servers"] = {}
+    if req.env_mapping:
+        env_map = req.env_mapping
+    else:
+        env_map = {ev["var"]: ev["var"] for ev in item.get("env_vars", [])}
+    data["servers"][entry_id] = {
+        "command": item["command"],
+        "args": item["args"].split() if isinstance(item["args"], str) else item["args"],
+        "transport": item.get("transport", "stdio"),
+        "env": env_map,
+        "enabled": True,
+    }
+    _write_json(SHARED_MCP_FILE, data)
+    # Save env vars to .env if provided
+    if req.env_values:
+        entries = _parse_env(ENV_FILE)
+        existing_keys = {e["key"] for e in entries if e.get("key")}
+        new_vars = []
+        for k, v in req.env_values.items():
+            if k in existing_keys:
+                entries = [{**e, "value": v} if e.get("key") == k else e for e in entries]
+            else:
+                new_vars.append({"key": k, "value": v, "comment": ""})
+        if new_vars:
+            entries.append({"key": "", "value": "", "comment": f"# -- MCP {entry_id} --"})
+            entries.extend(new_vars)
+        _write_env(ENV_FILE, entries)
+    return {"ok": True}
+
+
+@app.post("/api/templates/mcp/uninstall/{entry_id}")
+async def uninstall_template_mcp(entry_id: str):
+    """Uninstall a server from Shared MCP."""
+    data = _read_json(SHARED_MCP_FILE)
+    if entry_id in data.get("servers", {}):
+        del data["servers"][entry_id]
+        _write_json(SHARED_MCP_FILE, data)
+    return {"ok": True}
+
+
+@app.put("/api/templates/mcp/toggle/{entry_id}")
+async def toggle_template_mcp(entry_id: str, req: MCPToggle):
+    """Toggle enabled/disabled for a Shared MCP server."""
+    data = _read_json(SHARED_MCP_FILE)
+    if entry_id not in data.get("servers", {}):
+        raise HTTPException(404, f"Serveur '{entry_id}' non installe dans Shared")
+    data["servers"][entry_id]["enabled"] = req.enabled
+    _write_json(SHARED_MCP_FILE, data)
+    return {"ok": True}
+
+
 @app.get("/api/templates/teams")
 async def get_template_teams():
     """Read shared teams list."""
@@ -1526,6 +1611,60 @@ async def update_git_config(cfg: GitConfigDual):
     return {"ok": True}
 
 
+# ── API: Git config per-repo (separate files) ────
+
+def _git_file_for(repo_key: str) -> Path:
+    """Return the git.json file path for a repo key."""
+    files = {"configs": CONFIGS_GIT_FILE, "shared": SHARED_GIT_FILE}
+    f = files.get(repo_key)
+    if not f:
+        raise HTTPException(400, f"Repo inconnu: {repo_key}. Utiliser 'configs' ou 'shared'.")
+    return f
+
+
+def _migrate_git_config():
+    """Migrate old dual-repo git.json to per-repo files if needed."""
+    old = _read_json(GIT_CONFIG_FILE)
+    repos = old.get("repos", {})
+    if not repos:
+        return
+    for key, cfg_file in [("shared", SHARED_GIT_FILE), ("configs", CONFIGS_GIT_FILE)]:
+        if not cfg_file.exists() and repos.get(key):
+            cfg_file.parent.mkdir(parents=True, exist_ok=True)
+            _write_json(cfg_file, repos[key])
+
+
+_migrate_git_config()
+
+
+@app.get("/api/git/repo-config/{repo_key}")
+async def get_repo_git_config(repo_key: str):
+    cfg_file = _git_file_for(repo_key)
+    data = _read_json(cfg_file) if cfg_file.exists() else {}
+    return {"path": data.get("path", ""), "login": data.get("login", ""), "password": data.get("password", "")}
+
+
+@app.put("/api/git/repo-config/{repo_key}")
+async def save_repo_git_config(repo_key: str, request: Request):
+    body = await request.json()
+    cfg_file = _git_file_for(repo_key)
+    cfg_file.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(cfg_file, {"path": body.get("path", ""), "login": body.get("login", ""), "password": body.get("password", "")})
+    # Configure git repo
+    target_dir = _get_repo_dir(repo_key)
+    repo_path = body.get("path", "").strip()
+    if repo_path:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        login = body.get("login", "").strip()
+        password = body.get("password", "").strip()
+        if not (target_dir / ".git").exists():
+            subprocess.run(["git", "config", "--global", "--add", "safe.directory", str(target_dir)], capture_output=True, text=True, timeout=5)
+            subprocess.run(["git", "init"], cwd=str(target_dir), capture_output=True, text=True, timeout=10)
+            _ensure_gitignore(target_dir)
+        _git_configure_remote(target_dir, repo_path, login, password)
+    return {"ok": True}
+
+
 # ── API: Git operations (per-repo) ───────────────
 
 def _get_repo_dir(repo_key: str) -> Path:
@@ -1539,6 +1678,10 @@ def _get_repo_dir(repo_key: str) -> Path:
 
 def _get_repo_cfg(repo_key: str) -> dict:
     """Return git config for a specific repo."""
+    cfg_file = _git_file_for(repo_key)
+    if cfg_file.exists():
+        return _read_json(cfg_file)
+    # Fallback to legacy dual-repo file
     data = _read_json(GIT_CONFIG_FILE)
     repos = data.get("repos", {})
     return repos.get(repo_key, {})

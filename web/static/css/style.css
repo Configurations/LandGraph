@@ -738,6 +738,8 @@ tr:hover { background: rgba(255,255,255,0.02); }
 
 .tpl-tab-content { display: none; }
 .tpl-tab-content.active { display: block; }
+.cfg-tab-content { display: none; }
+.cfg-tab-content.active { display: block; }
 
 .prompt-preview {
   background: var(--bg-input);
