@@ -742,6 +742,9 @@ function editAgent(id) {
   const promptRaw = a.prompt_content || '';
   const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
   const hasPipeline = a.type === 'pipeline' || (a.pipeline_steps && a.pipeline_steps.length > 0);
+  const isOrchestrator = a.type === 'orchestrator';
+  const curType = isOrchestrator ? 'orchestrator' : (hasPipeline ? 'pipeline' : 'single');
+  const hasOtherOrch = Object.entries(agents).some(([aid, ag]) => aid !== id && ag.type === 'orchestrator');
 
   showModal(`
     <div class="modal-header">
@@ -774,8 +777,9 @@ function editAgent(id) {
     <div class="form-group">
       <label>Type</label>
       <select id="agent-edit-type" onchange="document.getElementById('agent-edit-pipeline-wrap').style.display=this.value==='pipeline'?'':'none'">
-        <option value="single" ${!hasPipeline ? 'selected' : ''}>Single</option>
-        <option value="pipeline" ${hasPipeline ? 'selected' : ''}>Pipeline</option>
+        <option value="single" ${curType==='single'?'selected':''}>Single</option>
+        <option value="pipeline" ${curType==='pipeline'?'selected':''}>Pipeline</option>
+        <option value="orchestrator" ${curType==='orchestrator'?'selected':''} ${hasOtherOrch && curType!=='orchestrator'?'disabled':''}>Orchestrator</option>
       </select>
     </div>
     <div id="agent-edit-pipeline-wrap" class="form-group" style="${hasPipeline ? '' : 'display:none'}">
@@ -832,6 +836,9 @@ async function saveAgent(id) {
   const max_tokens = parseInt(document.getElementById('agent-edit-tokens').value);
   const prompt_content = document.getElementById('agent-edit-prompt').value;
   const agentType = document.getElementById('agent-edit-type').value;
+  if (agentType === 'orchestrator' && Object.entries(agents).some(([aid, ag]) => aid !== id && ag.type === 'orchestrator')) {
+    toast('Un orchestrator existe deja dans cette equipe', 'error'); return;
+  }
   const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('agent-edit-pipeline-steps') : [];
   const mcpCheckboxes = document.querySelectorAll('.agent-mcp-cb:checked');
   const mcpList = Array.from(mcpCheckboxes).map(cb => cb.value);
@@ -895,6 +902,7 @@ function showAddAgentModal() {
       <select id="agent-new-type" onchange="document.getElementById('agent-new-pipeline-wrap').style.display=this.value==='pipeline'?'':'none'">
         <option value="single" selected>Single</option>
         <option value="pipeline">Pipeline</option>
+        <option value="orchestrator" ${Object.values(agents).some(ag => ag.type === 'orchestrator') ? 'disabled' : ''}>Orchestrator</option>
       </select>
     </div>
     <div id="agent-new-pipeline-wrap" class="form-group" style="display:none">
@@ -926,6 +934,9 @@ async function addAgent() {
   const team_id = document.getElementById('agent-new-team')?.value || 'default';
   if (!id || !name) { toast('ID et nom requis', 'error'); return; }
   const agentType = document.getElementById('agent-new-type').value;
+  if (agentType === 'orchestrator' && Object.values(agents).some(ag => ag.type === 'orchestrator')) {
+    toast('Un orchestrator existe deja dans cette equipe', 'error'); return;
+  }
   const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('agent-new-pipeline-steps') : [];
   const mcpChecked = [...document.querySelectorAll('#modal-container .mcp-check-tag input:checked')].map(cb => cb.value);
   const teamDir = agentGroups.find(g => g.team_id === team_id)?.team_dir || team_id;
@@ -1632,7 +1643,7 @@ function renderTeams() {
 }
 
 async function showAddCfgAgentModal(dir) {
-  let llmNames = [], mcpCatalogList = [];
+  let llmNames = [], mcpCatalogList = [], hasOrch = false;
   try {
     const llmData = await api('/api/templates/llm');
     llmNames = Object.keys(llmData.providers || {});
@@ -1640,6 +1651,10 @@ async function showAddCfgAgentModal(dir) {
   try {
     const mcpData = await api('/api/mcp/catalog');
     mcpCatalogList = (mcpData.servers || []).filter(c => !c.deprecated);
+  } catch { /* ignore */ }
+  try {
+    const reg = await api(`/api/agents/registry/${encodeURIComponent(dir)}`);
+    hasOrch = Object.values(reg.agents || reg || {}).some(a => a.type === 'orchestrator');
   } catch { /* ignore */ }
   const llmOptions = `<option value="">-- Defaut --</option>` +
     llmNames.map(p => `<option value="${escHtml(p)}">${escHtml(p)}</option>`).join('');
@@ -1682,6 +1697,7 @@ async function showAddCfgAgentModal(dir) {
       <select id="cfg-agent-new-type" onchange="document.getElementById('cfg-new-pipeline-wrap').style.display=this.value==='pipeline'?'':'none'">
         <option value="single" selected>Single</option>
         <option value="pipeline">Pipeline</option>
+        <option value="orchestrator" ${hasOrch?'disabled':''}>Orchestrator</option>
       </select>
     </div>
     <div id="cfg-new-pipeline-wrap" class="form-group" style="display:none">
@@ -1712,6 +1728,14 @@ async function addCfgAgent(dir) {
   const temperature = parseFloat(document.getElementById('cfg-agent-new-temp').value) || 0.3;
   const max_tokens = parseInt(document.getElementById('cfg-agent-new-tokens').value) || 32768;
   const agentType = document.getElementById('cfg-agent-new-type').value;
+  if (agentType === 'orchestrator') {
+    try {
+      const reg = await api(`/api/agents/registry/${encodeURIComponent(dir)}`);
+      if (Object.values(reg.agents || reg || {}).some(a => a.type === 'orchestrator')) {
+        toast('Un orchestrator existe deja dans cette equipe', 'error'); return;
+      }
+    } catch { /* ignore */ }
+  }
   const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('cfg-new-pipeline-steps') : [];
   const prompt_content = document.getElementById('cfg-agent-new-prompt').value || `# ${name}\n\n`;
   const mcpChecked = [...document.querySelectorAll('#modal-container .mcp-check-tag input:checked')].map(cb => cb.value);
@@ -1764,6 +1788,9 @@ async function editCfgAgent(dir, agentId) {
   const promptRaw = a.prompt_content || '';
   const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
   const hasPipeline = a.type === 'pipeline' || (a.pipeline_steps && a.pipeline_steps.length > 0);
+  const isOrchestrator = a.type === 'orchestrator';
+  const curType = isOrchestrator ? 'orchestrator' : (hasPipeline ? 'pipeline' : 'single');
+  const hasOtherOrch = Object.entries(team.agents || {}).some(([aid, ag]) => aid !== agentId && ag.type === 'orchestrator');
 
   showModal(`
     <div class="modal-header">
@@ -1793,8 +1820,9 @@ async function editCfgAgent(dir, agentId) {
     <div class="form-group">
       <label>Type</label>
       <select id="cfg-agent-edit-type" onchange="document.getElementById('cfg-pipeline-wrap').style.display=this.value==='pipeline'?'':'none'">
-        <option value="single" ${!hasPipeline ? 'selected' : ''}>Single</option>
-        <option value="pipeline" ${hasPipeline ? 'selected' : ''}>Pipeline</option>
+        <option value="single" ${curType==='single'?'selected':''}>Single</option>
+        <option value="pipeline" ${curType==='pipeline'?'selected':''}>Pipeline</option>
+        <option value="orchestrator" ${curType==='orchestrator'?'selected':''} ${hasOtherOrch && curType!=='orchestrator'?'disabled':''}>Orchestrator</option>
       </select>
     </div>
     <div id="cfg-pipeline-wrap" class="form-group" style="${hasPipeline ? '' : 'display:none'}">
@@ -1852,8 +1880,11 @@ async function saveCfgAgent(dir, agentId) {
   const max_tokens = parseInt(document.getElementById('cfg-agent-edit-tokens').value);
   const prompt_content = document.getElementById('cfg-agent-edit-prompt').value;
   const agentType = document.getElementById('cfg-agent-edit-type').value;
-  const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('cfg-pipeline-steps') : [];
   const team = teamsData.find(t => (t.directory || t.id) === dir);
+  if (agentType === 'orchestrator' && Object.entries(team.agents || {}).some(([aid, ag]) => aid !== agentId && ag.type === 'orchestrator')) {
+    toast('Un orchestrator existe deja dans cette equipe', 'error'); return;
+  }
+  const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('cfg-pipeline-steps') : [];
   const a = team.agents[agentId];
   const mcpChecked = [...document.querySelectorAll('#cfg-agent-mcp-tags input[type=checkbox]:checked')].map(cb => cb.value);
   try {
@@ -2797,7 +2828,7 @@ function renderTplTeams() {
 }
 
 async function showAddTplAgentModal(dir) {
-  let llmNames = [], mcpCatalogList = [];
+  let llmNames = [], mcpCatalogList = [], hasOrch = false;
   try {
     const llmData = await api('/api/templates/llm');
     llmNames = Object.keys(llmData.providers || {});
@@ -2805,6 +2836,10 @@ async function showAddTplAgentModal(dir) {
   try {
     const mcpData = await api('/api/mcp/catalog');
     mcpCatalogList = (mcpData.servers || []).filter(c => !c.deprecated);
+  } catch { /* ignore */ }
+  try {
+    const reg = await api(`/api/templates/registry/${encodeURIComponent(dir)}`);
+    hasOrch = Object.values(reg.agents || reg || {}).some(a => a.type === 'orchestrator');
   } catch { /* ignore */ }
   const llmOptions = `<option value="">-- Defaut --</option>` +
     llmNames.map(p => `<option value="${escHtml(p)}">${escHtml(p)}</option>`).join('');
@@ -2847,6 +2882,7 @@ async function showAddTplAgentModal(dir) {
       <select id="tpl-agent-new-type" onchange="document.getElementById('tpl-new-pipeline-wrap').style.display=this.value==='pipeline'?'':'none'">
         <option value="single" selected>Single</option>
         <option value="pipeline">Pipeline</option>
+        <option value="orchestrator" ${hasOrch?'disabled':''}>Orchestrator</option>
       </select>
     </div>
     <div id="tpl-new-pipeline-wrap" class="form-group" style="display:none">
@@ -2877,6 +2913,14 @@ async function addTplAgent(dir) {
   const temperature = parseFloat(document.getElementById('tpl-agent-new-temp').value) || 0.3;
   const max_tokens = parseInt(document.getElementById('tpl-agent-new-tokens').value) || 32768;
   const agentType = document.getElementById('tpl-agent-new-type').value;
+  if (agentType === 'orchestrator') {
+    try {
+      const reg = await api(`/api/templates/registry/${encodeURIComponent(dir)}`);
+      if (Object.values(reg.agents || reg || {}).some(a => a.type === 'orchestrator')) {
+        toast('Un orchestrator existe deja dans cette equipe', 'error'); return;
+      }
+    } catch { /* ignore */ }
+  }
   const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('tpl-new-pipeline-steps') : [];
   const prompt_content = document.getElementById('tpl-agent-new-prompt').value || `# ${name}\n\n`;
   const mcpChecked = [...document.querySelectorAll('#modal-container .mcp-check-tag input:checked')].map(cb => cb.value);
@@ -2929,6 +2973,9 @@ async function editTplAgent(dir, agentId) {
   const promptRaw = a.prompt_content || '';
   const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
   const hasPipeline = a.type === 'pipeline' || (a.pipeline_steps && a.pipeline_steps.length > 0);
+  const isOrchestrator = a.type === 'orchestrator';
+  const curType = isOrchestrator ? 'orchestrator' : (hasPipeline ? 'pipeline' : 'single');
+  const hasOtherOrch = Object.entries(tpl.agents || {}).some(([aid, ag]) => aid !== agentId && ag.type === 'orchestrator');
 
   showModal(`
     <div class="modal-header">
@@ -2958,8 +3005,9 @@ async function editTplAgent(dir, agentId) {
     <div class="form-group">
       <label>Type</label>
       <select id="tpl-agent-edit-type" onchange="document.getElementById('tpl-pipeline-wrap').style.display=this.value==='pipeline'?'':'none'">
-        <option value="single" ${!hasPipeline ? 'selected' : ''}>Single</option>
-        <option value="pipeline" ${hasPipeline ? 'selected' : ''}>Pipeline</option>
+        <option value="single" ${curType==='single'?'selected':''}>Single</option>
+        <option value="pipeline" ${curType==='pipeline'?'selected':''}>Pipeline</option>
+        <option value="orchestrator" ${curType==='orchestrator'?'selected':''} ${hasOtherOrch && curType!=='orchestrator'?'disabled':''}>Orchestrator</option>
       </select>
     </div>
     <div id="tpl-pipeline-wrap" class="form-group" style="${hasPipeline ? '' : 'display:none'}">
@@ -3017,8 +3065,11 @@ async function saveTplAgent(dir, agentId) {
   const max_tokens = parseInt(document.getElementById('tpl-agent-edit-tokens').value);
   const prompt_content = document.getElementById('tpl-agent-edit-prompt').value;
   const agentType = document.getElementById('tpl-agent-edit-type').value;
-  const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('tpl-pipeline-steps') : [];
   const tpl = tplTemplatesData.find(tp => tp.id === dir);
+  if (agentType === 'orchestrator' && Object.entries(tpl.agents || {}).some(([aid, ag]) => aid !== agentId && ag.type === 'orchestrator')) {
+    toast('Un orchestrator existe deja dans cette equipe', 'error'); return;
+  }
+  const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('tpl-pipeline-steps') : [];
   const a = tpl.agents[agentId];
   const mcpChecked = [...document.querySelectorAll('#tpl-agent-mcp-tags input[type=checkbox]:checked')].map(cb => cb.value);
   try {

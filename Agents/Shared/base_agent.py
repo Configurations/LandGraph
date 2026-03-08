@@ -205,20 +205,16 @@ class BaseAgent:
         self._tools = None
 
     def _load_prompt(self):
+        from agents.shared.team_resolver import find_team_file
         team_id = getattr(self, 'team_id', 'default')
-        search_paths = [
-            # New structure: Teams/<team_id>/<prompt>.md
-            os.path.join(os.path.dirname(__file__), "..", "..", "Configs", "Teams", team_id, self.prompt_filename),
-            os.path.join("/app", "config", "Teams", team_id, self.prompt_filename),
-            # Legacy: Teams/Team1/v1/<prompt>.md
-            os.path.join(os.path.dirname(__file__), "..", "..", "Configs", "Teams", "Team1", "v1", self.prompt_filename),
-            os.path.join("/app", "config", "Teams", "Team1", "v1", self.prompt_filename),
-        ]
-        for p in search_paths:
-            a = os.path.abspath(p)
-            if os.path.exists(a):
-                logger.info(f"[{self.agent_id}] Prompt: {a}")
-                return open(a).read()
+
+        # Chercher dans le dossier de l'equipe
+        path = find_team_file(team_id, self.prompt_filename)
+        if path:
+            logger.info(f"[{self.agent_id}] Prompt: {path}")
+            return open(path).read()
+
+        # Fallback minimal
         return f"Tu es {self.agent_name}. JSON: {{agent_id, status, confidence, deliverables}}"
 
     def get_llm(self):
@@ -233,7 +229,8 @@ class BaseAgent:
         if self._tools is None and self.use_tools:
             try:
                 from agents.shared.mcp_client import get_tools_for_agent
-                self._tools = get_tools_for_agent(self.agent_id)
+                team_id = getattr(self, 'team_id', None)
+                self._tools = get_tools_for_agent(self.agent_id, team_id)
                 if self._tools:
                     logger.info(f"[{self.agent_id}] {len(self._tools)} MCP tools loaded")
             except Exception as e:

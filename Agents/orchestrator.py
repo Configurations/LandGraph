@@ -17,7 +17,6 @@ from typing import Any, Optional
 
 import psycopg
 from dotenv import load_dotenv
-from langchain_anthropic import ChatAnthropic
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.postgres import PostgresSaver
@@ -84,10 +83,26 @@ class RoutingDecision(BaseModel):
 # CONFIGURATION
 # ══════════════════════════════════════════════
 
+# ══════════════════════════════════════════════
+# CONFIGURATION — depuis agents_registry.json
+# ══════════════════════════════════════════════
+
+def _load_orchestrator_config(team_id: str = "team1") -> dict:
+    """Charge la config de l'orchestrateur depuis le registry de l'equipe."""
+    from agents.shared.team_resolver import load_team_json
+    registry = load_team_json(team_id, "agents_registry.json")
+    conf = registry.get("agents", {}).get("orchestrator", {})
+    if conf:
+        logger.info(f"Orchestrator config [{team_id}]: llm={conf.get('llm', 'default')}")
+    return conf
+
+_orch_config = _load_orchestrator_config()
+
 CONFIG = {
-    "model": os.getenv("ORCHESTRATOR_MODEL", "claude-sonnet-4-5-20250929"),
-    "temperature": float(os.getenv("ORCHESTRATOR_TEMPERATURE", "0.2")),
-    "max_tokens": int(os.getenv("ORCHESTRATOR_MAX_TOKENS", "4096")),
+    "llm": _orch_config.get("llm", ""),
+    "model": os.getenv("ORCHESTRATOR_MODEL", _orch_config.get("model", "claude-sonnet-4-5-20250929")),
+    "temperature": float(os.getenv("ORCHESTRATOR_TEMPERATURE", str(_orch_config.get("temperature", 0.2)))),
+    "max_tokens": int(os.getenv("ORCHESTRATOR_MAX_TOKENS", str(_orch_config.get("max_tokens", 4096)))),
     "confidence_threshold": float(os.getenv("ORCHESTRATOR_CONFIDENCE_THRESHOLD", "0.7")),
 }
 
@@ -126,16 +141,15 @@ AGENT_IDS = [
 # SYSTEM PROMPT
 # ══════════════════════════════════════════════
 
-def load_system_prompt() -> str:
-    """Charge le system prompt depuis le fichier versionne."""
-    prompt_paths = [
-        os.path.join(os.path.dirname(__file__), "..", "Configs", "Teams", "Team1", "v1", "orchestrator.md"),
-        os.path.join("/app", "config", "Teams", "Team1", "v1", "orchestrator.md"),
-    ]
-    for path in prompt_paths:
-        if os.path.exists(path):
-            with open(path, "r") as f:
-                return f.read()
+def load_system_prompt(team_id: str = "team1") -> str:
+    """Charge le system prompt depuis le dossier de l'equipe."""
+    from agents.shared.team_resolver import find_team_file
+    prompt_file = _orch_config.get("prompt", "orchestrator.md")
+    path = find_team_file(team_id, prompt_file)
+    if path:
+        logger.info(f"Orchestrator prompt [{team_id}]: {path}")
+        with open(path, "r") as f:
+            return f.read()
 
     # Fallback : prompt inline minimal
     return """Tu es l'Orchestrateur, cerveau central d'un systeme multi-agent LangGraph.
@@ -166,9 +180,10 @@ SYSTEM_PROMPT = load_system_prompt()
 # LLM
 # ══════════════════════════════════════════════
 
-def get_llm() -> ChatAnthropic:
-    return ChatAnthropic(
-        model=CONFIG["model"],
+def get_llm():
+    from agents.shared.llm_provider import create_llm
+    return create_llm(
+        provider_name=CONFIG["llm"] or None,
         temperature=CONFIG["temperature"],
         max_tokens=CONFIG["max_tokens"],
     )
@@ -270,6 +285,7 @@ def orchestrator_node(state: dict) -> dict:
     Recoit un evenement, raisonne, produit une decision de routing.
     """
     project_id = state.get("project_id", "default")
+    team_id = state.get("_team_id", "team1")
     messages = state.get("messages", [])
 
     if not messages:
@@ -306,30 +322,67 @@ def orchestrator_node(state: dict) -> dict:
                 else str(last_message)
             )
 
+            # ── Workflow engine — enrichir le contexte ──
+            from agents.shared.workflow_engine import (
+                get_agents_to_dispatch, can_transition, check_phase_complete, get_workflow_status
+            )
+            current_phase = state.get("project_phase", "discovery")
+            agent_outputs = state.get("agent_outputs", {})
+
+            phase_check = check_phase_complete(current_phase, agent_outputs, team_id)
+            transition_check = can_transition(current_phase, agent_outputs, state.get("legal_alerts", []), team_id)
+            suggested_agents = get_agents_to_dispatch(current_phase, agent_outputs, team_id)
+
             context = {
                 "last_event": last_content,
-                "current_phase": state.get("project_phase", "discovery"),
-                "agent_outputs_keys": list(state.get("agent_outputs", {}).keys()),
+                "current_phase": current_phase,
+                "agent_outputs_keys": list(agent_outputs.keys()),
+                "agent_outputs_status": {
+                    k: v.get("status", "unknown") for k, v in agent_outputs.items() if isinstance(v, dict)
+                },
                 "active_blockers": state.get("blockers", []),
                 "current_assignments": state.get("current_assignments", {}),
                 "recent_decisions": state.get("decision_history", [])[-5:],
                 "legal_alerts": state.get("legal_alerts", []),
                 "qa_verdict": state.get("qa_verdict", {}),
+                # Workflow engine recommendations
+                "workflow": {
+                    "phase_complete": phase_check["complete"],
+                    "missing_agents": phase_check.get("missing_agents", []),
+                    "missing_deliverables": phase_check.get("missing_deliverables", []),
+                    "can_transition": transition_check["allowed"],
+                    "next_phase": transition_check.get("next_phase", ""),
+                    "transition_reason": transition_check.get("reason", ""),
+                    "suggested_agents_to_dispatch": [
+                        {"agent_id": a["agent_id"], "role": a["role"]}
+                        for a in suggested_agents
+                    ],
+                },
             }
 
             # ── Appel LLM ──
+            from agents.shared.rate_limiter import throttled_invoke
+            system_prompt = load_system_prompt(team_id)
             llm = get_llm()
-            response = llm.invoke([
-                {"role": "system", "content": SYSTEM_PROMPT},
+            msgs = [
+                {"role": "system", "content": system_prompt},
                 {
                     "role": "user",
                     "content": (
                         f"Contexte du projet :\n"
                         f"```json\n{json.dumps(context, indent=2, default=str)}\n```\n\n"
+                        f"Le workflow engine te recommande de dispatcher : "
+                        f"{', '.join(a['agent_id'] for a in suggested_agents) or 'aucun (phase complete ou en attente)'}.\n"
+                        f"Phase complete : {'oui' if phase_check['complete'] else 'non'}. "
+                        f"Transition possible : {'oui → ' + transition_check.get('next_phase', '') if transition_check['allowed'] else 'non — ' + transition_check.get('reason', '')}.\n\n"
+                        f"IMPORTANT : Respecte les recommandations du workflow engine. "
+                        f"Si la phase est complete et la transition possible, propose un human_gate. "
+                        f"Sinon, dispatche les agents suggeres.\n\n"
                         f"Produis ta decision de routing en JSON valide."
                     ),
                 },
-            ])
+            ]
+            response = throttled_invoke(llm, msgs, provider_name=CONFIG["llm"])
 
             raw = (
                 response.content

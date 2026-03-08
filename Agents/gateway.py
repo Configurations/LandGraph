@@ -99,7 +99,7 @@ def get_orchestrator_graph():
     return GRAPH
 
 
-def new_state(msgs, project_id, channel_id):
+def new_state(msgs, project_id, channel_id, team_id="default"):
     return {
         "messages": msgs,
         "project_id": project_id,
@@ -113,10 +113,11 @@ def new_state(msgs, project_id, channel_id):
         "human_feedback_log": [],
         "notifications_log": [],
         "_discord_channel_id": channel_id,
+        "_team_id": team_id,
     }
 
 
-def load_or_create_state(thread_id, msgs, project_id, channel_id):
+def load_or_create_state(thread_id, msgs, project_id, channel_id, team_id="default"):
     """Charge le state existant ou en cree un nouveau."""
     graph = get_orchestrator_graph()
     config = {"configurable": {"thread_id": thread_id}}
@@ -129,6 +130,7 @@ def load_or_create_state(thread_id, msgs, project_id, channel_id):
             old_msgs.extend(msgs)
             state["messages"] = old_msgs
             state["_discord_channel_id"] = channel_id
+            state["_team_id"] = team_id
 
             outputs = list(state.get("agent_outputs", {}).keys())
             logger.info(f"State loaded for {thread_id} — {len(outputs)} outputs: {outputs}")
@@ -137,7 +139,7 @@ def load_or_create_state(thread_id, msgs, project_id, channel_id):
         logger.warning(f"Could not load state for {thread_id}: {e}")
 
     logger.info(f"New state for {thread_id}")
-    return new_state(msgs, project_id, channel_id)
+    return new_state(msgs, project_id, channel_id, team_id)
 
 
 # ── Background runners ───────────────────────
@@ -195,14 +197,29 @@ async def run_orchestrated(state, decisions, channel_id, thread_id="default", ca
         canonical_agents, _, _ = resolve_agents(channel_id)
     agents = []
     for d in decisions:
+        dtype = d.get("decision_type", "")
         for a in d.get("actions", []):
-            if isinstance(a, dict) and a.get("action") == "dispatch_agent":
-                t = a.get("target", "")
-                if t in canonical_agents:
-                    agents.append({"agent_id": t, "agent": canonical_agents[t]})
+            if isinstance(a, dict):
+                action = a.get("action", "")
+
+                # Dispatch agent
+                if action == "dispatch_agent":
+                    t = a.get("target", "")
+                    if t in canonical_agents:
+                        agents.append({"agent_id": t, "agent": canonical_agents[t]})
+
+                # Phase transition — mettre a jour le state
+                if action == "human_gate" and dtype == "phase_transition":
+                    from_phase = a.get("from_phase", state.get("project_phase", ""))
+                    to_phase = a.get("to_phase", "")
+                    if to_phase:
+                        await post_to_discord(channel_id,
+                            f"🚦 **HUMAN GATE** — {from_phase} → {to_phase}\n"
+                            f"Repondez `approve` pour continuer ou `revise` pour corriger.")
+
     if agents:
         await run_agents_parallel(agents, state, channel_id, thread_id)
-    else:
+    elif not any(d.get("decision_type") == "phase_transition" for d in decisions):
         await post_to_discord(channel_id, "Aucun agent dispatche.")
 
 
@@ -223,6 +240,27 @@ async def status():
     }
 
 
+@app.get("/workflow/status/{thread_id}")
+async def workflow_status(thread_id: str):
+    """Retourne l'etat du workflow pour un thread donne."""
+    from agents.shared.workflow_engine import get_workflow_status, can_transition
+    try:
+        graph = get_orchestrator_graph()
+        config = {"configurable": {"thread_id": thread_id}}
+        existing = graph.get_state(config)
+        if not existing or not existing.values:
+            return {"error": "Thread introuvable"}
+        state = existing.values
+        current_phase = state.get("project_phase", "discovery")
+        agent_outputs = state.get("agent_outputs", {})
+        wf_status = get_workflow_status(current_phase, agent_outputs)
+        transition = can_transition(current_phase, agent_outputs, state.get("legal_alerts", []))
+        wf_status["transition"] = transition
+        return wf_status
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 class ResetRequest(BaseModel):
     thread_id: str
 
@@ -233,7 +271,7 @@ async def reset(request: ResetRequest):
         graph = get_orchestrator_graph()
         config = {"configurable": {"thread_id": request.thread_id}}
         # Ecraser avec un state vierge
-        graph.update_state(config, new_state([], "default", ""))
+        graph.update_state(config, new_state([], "default", "", "default"))
         logger.info(f"State reset for {request.thread_id}")
         return {"status": "ok", "thread_id": request.thread_id}
     except Exception as e:
@@ -279,7 +317,7 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
                 if ca is agent_callable:
                     canonical_id = cid; break
 
-            state = load_or_create_state(request.thread_id, msgs, request.project_id, channel_id)
+            state = load_or_create_state(request.thread_id, msgs, request.project_id, channel_id, team_id)
 
             # Trouver le nom lisible
             agent_display = getattr(agent_callable, "agent_name", canonical_id)
@@ -297,7 +335,7 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
                 thread_id=request.thread_id, agents_dispatched=[canonical_id])
 
         # ── Mode orchestrateur ───────────────
-        state = load_or_create_state(request.thread_id, msgs, request.project_id, channel_id)
+        state = load_or_create_state(request.thread_id, msgs, request.project_id, channel_id, team_id)
 
         graph = get_orchestrator_graph()
         config = {"configurable": {"thread_id": request.thread_id}}
