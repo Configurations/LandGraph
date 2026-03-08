@@ -2086,7 +2086,11 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
             cwd=str(target_dir), capture_output=True, text=True, timeout=10
         )
 
-        # 5. Pull --rebase to sync with remote before committing
+        # 5. Stash local changes, pull --rebase, then restore
+        subprocess.run(
+            ["git", "stash", "--include-untracked"],
+            cwd=str(target_dir), capture_output=True, text=True, timeout=10
+        )
         pull_result = subprocess.run(
             ["git", "pull", "--rebase", "origin", branch],
             cwd=str(target_dir), capture_output=True, text=True, timeout=60,
@@ -2099,6 +2103,10 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
                         _sanitize(pull_result.stderr[:500]))
         else:
             log.info("git pull --rebase OK (%s): %s", repo_key, pull_result.stdout.strip()[:200])
+        subprocess.run(
+            ["git", "stash", "pop"],
+            cwd=str(target_dir), capture_output=True, text=True, timeout=10
+        )
 
         # 6. Stage all
         add_result = subprocess.run(

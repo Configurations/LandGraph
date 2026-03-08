@@ -1559,7 +1559,6 @@ async function gitCommit() {
     // Refresh the relevant git tab
     if (_gitCommitRepoKey === 'shared') loadTplGit();
     else if (_gitCommitRepoKey === 'configs') loadCfgGit();
-    loadGit();
   } catch (e) { toast(e.message, 'error'); }
 }
 
