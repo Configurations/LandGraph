@@ -1,0 +1,212 @@
+{
+  "phases": {
+    "discovery": {
+      "name": "Discovery",
+      "description": "Comprendre le besoin, definir le perimetre, identifier les risques",
+      "order": 1,
+      "agents": {
+        "requirements_analyst": {
+          "role": "Produire le PRD, les User Stories et la matrice MoSCoW",
+          "required": true,
+          "parallel_group": "A"
+        },
+        "legal_advisor": {
+          "role": "Audit reglementaire initial et alertes juridiques",
+          "required": true,
+          "parallel_group": "A"
+        }
+      },
+      "deliverables": {
+        "prd": {"agent": "requirements_analyst", "required": true, "description": "Product Requirements Document"},
+        "user_stories": {"agent": "requirements_analyst", "required": true, "description": "User Stories INVEST avec criteres d'acceptation"},
+        "moscow_matrix": {"agent": "requirements_analyst", "required": true, "description": "Priorisation MoSCoW"},
+        "regulatory_audit": {"agent": "legal_advisor", "required": true, "description": "Audit reglementaire (RGPD, etc.)"},
+        "alerts": {"agent": "legal_advisor", "required": true, "description": "Alertes juridiques (info/warning/critical)"}
+      },
+      "exit_conditions": {
+        "all_deliverables_complete": true,
+        "no_critical_alerts": true,
+        "human_gate": true
+      }
+    },
+
+    "design": {
+      "name": "Design",
+      "description": "Concevoir l'architecture, le design et planifier le developpement",
+      "order": 2,
+      "agents": {
+        "ux_designer": {
+          "role": "Wireframes, mockups, design tokens, audit accessibilite",
+          "required": true,
+          "parallel_group": "A"
+        },
+        "architect": {
+          "role": "ADRs, diagrammes C4, specs OpenAPI, choix techniques",
+          "required": true,
+          "parallel_group": "A"
+        },
+        "planner": {
+          "role": "Sprint backlog, roadmap, estimations, risk register",
+          "required": true,
+          "parallel_group": "B",
+          "depends_on": ["ux_designer", "architect"]
+        },
+        "legal_advisor": {
+          "role": "Audit legal phase Design (si alertes Discovery)",
+          "required": false,
+          "parallel_group": "A"
+        }
+      },
+      "deliverables": {
+        "wireframes": {"agent": "ux_designer", "required": true, "description": "Wireframes et mockups"},
+        "design_tokens": {"agent": "ux_designer", "required": false, "description": "Design system tokens"},
+        "wcag_audit": {"agent": "ux_designer", "required": false, "description": "Rapport accessibilite WCAG"},
+        "adrs": {"agent": "architect", "required": true, "description": "Architecture Decision Records"},
+        "c4_diagrams": {"agent": "architect", "required": true, "description": "Diagrammes C4 (context, container, component)"},
+        "openapi_specs": {"agent": "architect", "required": true, "description": "Specifications OpenAPI"},
+        "sprint_backlog": {"agent": "planner", "required": true, "description": "Sprint backlog avec estimations"},
+        "roadmap": {"agent": "planner", "required": true, "description": "Roadmap projet"},
+        "risk_register": {"agent": "planner", "required": false, "description": "Registre des risques"}
+      },
+      "exit_conditions": {
+        "all_deliverables_complete": true,
+        "human_gate": true
+      }
+    },
+
+    "build": {
+      "name": "Build",
+      "description": "Developper, tester et integrer le code",
+      "order": 3,
+      "agents": {
+        "lead_dev": {
+          "role": "Coordination technique, review, delegation aux devs",
+          "required": true,
+          "parallel_group": "A",
+          "can_delegate_to": ["dev_frontend_web", "dev_backend_api", "dev_mobile"]
+        },
+        "dev_frontend_web": {
+          "role": "Code frontend React/Next.js",
+          "required": false,
+          "parallel_group": "B",
+          "delegated_by": "lead_dev"
+        },
+        "dev_backend_api": {
+          "role": "Code backend Python/FastAPI",
+          "required": false,
+          "parallel_group": "B",
+          "delegated_by": "lead_dev"
+        },
+        "dev_mobile": {
+          "role": "Code mobile Flutter/React Native",
+          "required": false,
+          "parallel_group": "B",
+          "delegated_by": "lead_dev"
+        },
+        "qa_engineer": {
+          "role": "Tests E2E, unitaires, validation qualite",
+          "required": true,
+          "parallel_group": "C",
+          "depends_on": ["lead_dev"]
+        }
+      },
+      "deliverables": {
+        "code_review": {"agent": "lead_dev", "required": true, "description": "Review croisee du code"},
+        "frontend_code": {"agent": "dev_frontend_web", "required": false, "description": "Code frontend"},
+        "backend_code": {"agent": "dev_backend_api", "required": false, "description": "Code backend + API"},
+        "mobile_code": {"agent": "dev_mobile", "required": false, "description": "Code mobile"},
+        "test_report": {"agent": "qa_engineer", "required": true, "description": "Rapport de tests"},
+        "qa_verdict": {"agent": "qa_engineer", "required": true, "description": "Verdict Go/NoGo"}
+      },
+      "exit_conditions": {
+        "all_deliverables_complete": true,
+        "qa_verdict_go": true,
+        "no_critical_bugs": true,
+        "human_gate": true
+      }
+    },
+
+    "ship": {
+      "name": "Ship",
+      "description": "Deployer, documenter et mettre en production",
+      "order": 4,
+      "agents": {
+        "devops_engineer": {
+          "role": "CI/CD, Docker, deploiement staging puis prod",
+          "required": true,
+          "parallel_group": "A"
+        },
+        "docs_writer": {
+          "role": "Documentation technique, guides, README, publication",
+          "required": true,
+          "parallel_group": "A"
+        },
+        "legal_advisor": {
+          "role": "Documents legaux finaux (CGU, politique confidentialite)",
+          "required": false,
+          "parallel_group": "A"
+        }
+      },
+      "deliverables": {
+        "ci_cd": {"agent": "devops_engineer", "required": true, "description": "Pipeline CI/CD operationnel"},
+        "staging_ok": {"agent": "devops_engineer", "required": true, "description": "Staging deploye + health checks OK"},
+        "prod_deploy": {"agent": "devops_engineer", "required": true, "description": "Production deployee"},
+        "documentation": {"agent": "docs_writer", "required": true, "description": "Documentation publiee"},
+        "legal_docs": {"agent": "legal_advisor", "required": false, "description": "CGU, politique confidentialite"}
+      },
+      "exit_conditions": {
+        "all_deliverables_complete": true,
+        "staging_validated": true,
+        "human_gate": true
+      }
+    },
+
+    "iterate": {
+      "name": "Iterate",
+      "description": "Analyser les retours, planifier les evolutions",
+      "order": 5,
+      "agents": {
+        "requirements_analyst": {
+          "role": "Analyser les retours utilisateurs, mettre a jour le PRD",
+          "required": true,
+          "parallel_group": "A"
+        },
+        "planner": {
+          "role": "Planifier le prochain sprint/cycle",
+          "required": true,
+          "parallel_group": "A"
+        }
+      },
+      "deliverables": {
+        "feedback_analysis": {"agent": "requirements_analyst", "required": true, "description": "Analyse des retours"},
+        "next_sprint": {"agent": "planner", "required": true, "description": "Backlog du prochain sprint"}
+      },
+      "exit_conditions": {
+        "all_deliverables_complete": true,
+        "human_gate": true
+      },
+      "next_phase": "design"
+    }
+  },
+
+  "transitions": [
+    {"from": "discovery", "to": "design", "human_gate": true},
+    {"from": "design", "to": "build", "human_gate": true},
+    {"from": "build", "to": "ship", "human_gate": true},
+    {"from": "ship", "to": "iterate", "human_gate": true},
+    {"from": "iterate", "to": "design", "human_gate": true}
+  ],
+
+  "parallel_groups": {
+    "description": "Les agents du meme groupe peuvent tourner en parallele. Le groupe B attend que le groupe A soit termine. Le groupe C attend B.",
+    "order": ["A", "B", "C"]
+  },
+
+  "rules": {
+    "critical_alert_blocks_transition": true,
+    "human_gate_required_for_all_transitions": true,
+    "lead_dev_only_dispatcher_for_devs": true,
+    "qa_must_run_after_dev": true,
+    "max_agents_parallel": 3
+  }
+}

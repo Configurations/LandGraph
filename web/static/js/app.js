@@ -1566,7 +1566,7 @@ function renderTeams() {
     grid.innerHTML = '<p style="color:var(--text-secondary);padding:1rem">Aucune equipe configuree.</p>';
     return;
   }
-  grid.innerHTML = teamsData.map((t) => {
+  grid.innerHTML = teamsData.map((t, tIdx) => {
     const agentEntries = Object.entries(t.agents || {});
     const mcpAccess = t.mcp_access || {};
     const dir = t.directory || t.id;
@@ -1609,6 +1609,9 @@ function renderTeams() {
           <span class="tag tag-blue" style="margin-left:0.5rem">${agentEntries.length} agent${agentEntries.length > 1 ? 's' : ''}</span>
         </div>
         <div style="display:flex;gap:0.5rem">
+          <button class="btn-icon" onclick="event.stopPropagation();editTeam(${tIdx})" title="Modifier l'equipe" style="opacity:0.5">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+          </button>
           <button class="btn btn-primary btn-sm" onclick="showAddCfgAgentModal('${escHtml(dir)}')">+ Agent</button>
           <button class="btn btn-outline btn-sm" onclick="showCfgRawRegistry('${escHtml(dir)}')">Raw</button>
           <button class="btn btn-outline btn-sm" style="color:var(--error)" onclick="deleteTeam('${escHtml(t.id)}')">Suppr</button>
@@ -1628,17 +1631,20 @@ function renderTeams() {
 }
 
 async function showAddCfgAgentModal(dir) {
-  let llmNames = [], mcpServerIds = [];
+  let llmNames = [], mcpCatalogList = [];
   try {
-    const [llmData, mcpData] = await Promise.all([api('/api/templates/llm'), api('/api/mcp/servers')]);
+    const llmData = await api('/api/templates/llm');
     llmNames = Object.keys(llmData.providers || {});
-    mcpServerIds = Object.keys(mcpData.servers || {});
+  } catch { /* ignore */ }
+  try {
+    const mcpData = await api('/api/mcp/catalog');
+    mcpCatalogList = (mcpData.servers || []).filter(c => !c.deprecated);
   } catch { /* ignore */ }
   const llmOptions = `<option value="">-- Defaut --</option>` +
     llmNames.map(p => `<option value="${escHtml(p)}">${escHtml(p)}</option>`).join('');
-  const mcpTags = mcpServerIds.length
-    ? mcpServerIds.map(sid => `<label class="mcp-check-tag"><input type="checkbox" value="${escHtml(sid)}" onchange="this.parentElement.classList.toggle('active',this.checked)" />${escHtml(sid)}</label>`).join('')
-    : '<span style="color:var(--text-secondary);font-size:0.8rem">Aucun serveur MCP installe</span>';
+  const mcpTags = mcpCatalogList.length
+    ? mcpCatalogList.map(c => `<label class="mcp-check-tag"><input type="checkbox" value="${escHtml(c.id)}" onchange="this.parentElement.classList.toggle('active',this.checked)" />${escHtml(c.label || c.id)}</label>`).join('')
+    : '<span style="color:var(--text-secondary);font-size:0.8rem">Aucun serveur MCP dans le catalogue</span>';
   showModal(`
     <div class="modal-header">
       <h3>Nouvel agent</h3>
@@ -1730,28 +1736,29 @@ async function editCfgAgent(dir, agentId) {
   const team = teamsData.find(t => (t.directory || t.id) === dir);
   if (!team || !team.agents[agentId]) { toast('Agent introuvable', 'error'); return; }
   const a = team.agents[agentId];
-  // Load LLM providers + MCP servers in parallel
-  let llmNames = [];
-  let mcpServerIds = [];
+  // Load LLM providers + MCP catalog in parallel
+  let llmNames = [], mcpCatalogList = [];
   try {
-    const [llmData, mcpData] = await Promise.all([
-      api('/api/templates/llm'),
-      api('/api/mcp/servers'),
-    ]);
+    const llmData = await api('/api/templates/llm');
     llmNames = Object.keys(llmData.providers || {});
-    mcpServerIds = Object.keys(mcpData.servers || {});
+  } catch { /* ignore */ }
+  try {
+    const mcpData = await api('/api/mcp/catalog');
+    mcpCatalogList = (mcpData.servers || []).filter(c => !c.deprecated);
   } catch { /* ignore */ }
   const currentLlm = a.llm || a.model || '';
   const llmOptions = `<option value="">-- Defaut --</option>` +
     llmNames.map(p => `<option value="${escHtml(p)}" ${p === currentLlm ? 'selected' : ''}>${escHtml(p)}</option>`).join('');
 
   const agentMcp = (team.mcp_access || {})[agentId] || [];
-  const mcpTags = mcpServerIds.map(sid => {
-    const checked = agentMcp.includes(sid) ? 'checked' : '';
-    return `<label class="mcp-check-tag ${checked ? 'active' : ''}">
-      <input type="checkbox" value="${escHtml(sid)}" ${checked} onchange="this.parentElement.classList.toggle('active',this.checked)" />${escHtml(sid)}
-    </label>`;
-  }).join('');
+  const mcpTags = mcpCatalogList.length
+    ? mcpCatalogList.map(c => {
+        const checked = agentMcp.includes(c.id) ? 'checked' : '';
+        return `<label class="mcp-check-tag ${checked ? 'active' : ''}">
+          <input type="checkbox" value="${escHtml(c.id)}" ${checked} onchange="this.parentElement.classList.toggle('active',this.checked)" />${escHtml(c.label || c.id)}
+        </label>`;
+      }).join('')
+    : '<span style="color:var(--text-secondary);font-size:0.85rem">Aucun serveur MCP dans le catalogue</span>';
 
   const promptRaw = a.prompt_content || '';
   const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
@@ -2781,17 +2788,20 @@ function renderTplTeams() {
 }
 
 async function showAddTplAgentModal(dir) {
-  let llmNames = [], mcpServerIds = [];
+  let llmNames = [], mcpCatalogList = [];
   try {
-    const [llmData, mcpData] = await Promise.all([api('/api/templates/llm'), api('/api/templates/mcp')]);
+    const llmData = await api('/api/templates/llm');
     llmNames = Object.keys(llmData.providers || {});
-    mcpServerIds = Object.keys(mcpData.servers || {});
+  } catch { /* ignore */ }
+  try {
+    const mcpData = await api('/api/mcp/catalog');
+    mcpCatalogList = (mcpData.servers || []).filter(c => !c.deprecated);
   } catch { /* ignore */ }
   const llmOptions = `<option value="">-- Defaut --</option>` +
     llmNames.map(p => `<option value="${escHtml(p)}">${escHtml(p)}</option>`).join('');
-  const mcpTags = mcpServerIds.length
-    ? mcpServerIds.map(sid => `<label class="mcp-check-tag"><input type="checkbox" value="${escHtml(sid)}" onchange="this.parentElement.classList.toggle('active',this.checked)" />${escHtml(sid)}</label>`).join('')
-    : '<span style="color:var(--text-secondary);font-size:0.8rem">Aucun serveur MCP dans le template</span>';
+  const mcpTags = mcpCatalogList.length
+    ? mcpCatalogList.map(c => `<label class="mcp-check-tag"><input type="checkbox" value="${escHtml(c.id)}" onchange="this.parentElement.classList.toggle('active',this.checked)" />${escHtml(c.label || c.id)}</label>`).join('')
+    : '<span style="color:var(--text-secondary);font-size:0.8rem">Aucun serveur MCP dans le catalogue</span>';
   showModal(`
     <div class="modal-header">
       <h3>Nouvel agent (template)</h3>
@@ -2883,28 +2893,29 @@ async function editTplAgent(dir, agentId) {
   const tpl = tplTemplatesData.find(tp => tp.id === dir);
   if (!tpl || !tpl.agents[agentId]) { toast('Agent introuvable', 'error'); return; }
   const a = tpl.agents[agentId];
-  // Load LLM providers + MCP servers in parallel
-  let llmNames = [];
-  let mcpServerIds = [];
+  // Load LLM providers + MCP catalog
+  let llmNames = [], mcpCatalogList = [];
   try {
-    const [llmData, mcpData] = await Promise.all([
-      api('/api/templates/llm'),
-      api('/api/templates/mcp'),
-    ]);
+    const llmData = await api('/api/templates/llm');
     llmNames = Object.keys(llmData.providers || {});
-    mcpServerIds = Object.keys(mcpData.servers || {});
+  } catch { /* ignore */ }
+  try {
+    const mcpData = await api('/api/mcp/catalog');
+    mcpCatalogList = (mcpData.servers || []).filter(c => !c.deprecated);
   } catch { /* ignore */ }
   const currentLlm = a.llm || a.model || '';
   const llmOptions = `<option value="">-- Defaut --</option>` +
     llmNames.map(p => `<option value="${escHtml(p)}" ${p === currentLlm ? 'selected' : ''}>${escHtml(p)}</option>`).join('');
 
   const agentMcp = (tpl.mcp_access || {})[agentId] || [];
-  const mcpTags = mcpServerIds.map(sid => {
-    const checked = agentMcp.includes(sid) ? 'checked' : '';
-    return `<label class="mcp-check-tag ${checked ? 'active' : ''}">
-      <input type="checkbox" value="${escHtml(sid)}" ${checked} onchange="this.parentElement.classList.toggle('active',this.checked)" />${escHtml(sid)}
-    </label>`;
-  }).join('');
+  const mcpTags = mcpCatalogList.length
+    ? mcpCatalogList.map(c => {
+        const checked = agentMcp.includes(c.id) ? 'checked' : '';
+        return `<label class="mcp-check-tag ${checked ? 'active' : ''}">
+          <input type="checkbox" value="${escHtml(c.id)}" ${checked} onchange="this.parentElement.classList.toggle('active',this.checked)" />${escHtml(c.label || c.id)}
+        </label>`;
+      }).join('')
+    : '<span style="color:var(--text-secondary);font-size:0.85rem">Aucun serveur MCP dans le catalogue</span>';
 
   const promptRaw = a.prompt_content || '';
   const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
