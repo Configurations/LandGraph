@@ -50,8 +50,8 @@ wget -qO Shared/Teams/teams.json "${REPO_RAW}/Shared/Teams/teams.json" 2>/dev/nu
 wget -qO Shared/Teams/mcp_catalog.csv "${REPO_RAW}/Shared/Teams/mcp_catalog.csv" 2>/dev/null || true
 wget -qO Shared/Teams/.gitignore "${REPO_RAW}/gitignore"  2>/dev/null || { echo "ERREUR: gitignore"; exit 1; }
 
-wget -qO config/Teams/.gitignore "${REPO_RAW}/gitignore"  2>/dev/null || { echo "ERREUR: gitignore"; exit 1; }
-wget -qO config/langgraph.json "${REPO_RAW}/config/langgraph.json"  2>/dev/null || { echo "ERREUR: langgraph.json"; exit 1; }
+wget -qO config/Teams/.gitignore "${REPO_RAW}/gitignore" 2>/dev/null || { echo "ERREUR: gitignore"; exit 1; }
+wget -qO config/langgraph.json "${REPO_RAW}/config/langgraph.json" 2>/dev/null || { echo "ERREUR: langgraph.json"; exit 1; }
 
 echo "  -> Fichiers telecharges"
 
