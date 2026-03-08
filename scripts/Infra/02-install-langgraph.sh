@@ -28,7 +28,7 @@ fi
 
 # ── 1. Arborescence ──────────────────────────
 echo "[1/6] Arborescence..."
-mkdir -p "${PROJECT_DIR}"/{agents/shared,config,data/backups,prompts/v1}
+mkdir -p "${PROJECT_DIR}"/{agents/shared,config,scripts,data/backups,prompts/v1}
 mkdir -p /opt/langgraph-data/{postgres,redis}
 cd "${PROJECT_DIR}"
 
@@ -36,6 +36,7 @@ cd "${PROJECT_DIR}"
 echo "[2/6] Telechargement des fichiers de config..."
 
 wget -qO docker-compose.yml "${REPO_RAW}/docker-compose.yml" 2>/dev/null || { echo "ERREUR: docker-compose.yml"; exit 1; }
+wget -qO env.example "${REPO_RAW}/env.example" 2>/dev/null || { echo "ERREUR: env.example"; exit 1; }
 wget -qO Dockerfile "${REPO_RAW}/Dockerfile" 2>/dev/null || { echo "ERREUR: Dockerfile"; exit 1; }
 wget -qO Dockerfile.admin "${REPO_RAW}/Dockerfile.admin" 2>/dev/null || true
 wget -qO requirements.txt "${REPO_RAW}/requirements.txt" 2>/dev/null || { echo "ERREUR: requirements.txt"; exit 1; }
@@ -55,10 +56,7 @@ echo "  -> Scripts : start.sh, stop.sh, restart.sh, build.sh"
 # ── 3. Fichier .env ──────────────────────────
 echo "[3/6] Fichier .env..."
 if [ ! -f .env ]; then
-    wget -qO .env "${REPO_RAW}/env.example" 2>/dev/null || {
-        echo "ERREUR: env.example non trouve"
-        exit 1
-    }
+    cp env.example .env
     chmod 600 .env
     echo "  -> .env cree depuis le template. PENSEZ A MODIFIER LES VALEURS !"
 else

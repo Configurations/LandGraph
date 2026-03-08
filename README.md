@@ -106,7 +106,7 @@ Ce script :
 **Ou** : sur la VM/LXC Ubuntu, apres reconnexion.
 
 ```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/03-install-langgraph.sh)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/02-install-langgraph.sh)"
 ```
 
 Ce script cree le projet dans `~/langgraph-project/` avec :
