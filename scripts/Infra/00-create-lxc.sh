@@ -8,6 +8,8 @@
 #   - Si le container N'EXISTE PAS  -> creation + configuration Docker
 #   - Si le container EXISTE DEJA   -> reconfiguration Docker (avec backup)
 #
+# A la fin, lance automatiquement 01-install-docker.sh dans le container.
+#
 # Resout :
 #   - AppArmor "permission denied"
 #   - Network unreachable (pas de DHCP)
@@ -18,6 +20,7 @@
 # Inclut :
 #   - Generation de clefs SSH (sauvegardees sur l'hote)
 #   - Configuration openssh-server dans le container
+#   - Installation Docker via 01-install-docker.sh
 #
 # Usage : ./00-create-lxc.sh [CTID]
 # Exemple : ./00-create-lxc.sh 200
@@ -38,6 +41,7 @@ DISK_SIZE=30
 STORAGE="local-lvm"
 BRIDGE="vmbr0"
 SSH_KEY_DIR="/root/.ssh/lxc-keys"
+DOCKER_SCRIPT_URL="https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/01-install-docker.sh"
 
 if [ -z "${CTID}" ]; then
     echo "Usage: $0 <CTID>"
@@ -98,7 +102,7 @@ if [ "${MODE}" = "create" ]; then
     echo ""
 
     # ── Creer le container (directement privileged) ──────────────────────────
-    echo "[1/5] Creation du container LXC..."
+    echo "[1/6] Creation du container LXC..."
     pct create "${CTID}" "${TEMPLATE}" \
       --hostname "${CT_NAME}" \
       --cores "${CORES}" \
@@ -116,7 +120,7 @@ if [ "${MODE}" = "create" ]; then
     echo "  -> Container cree"
 
     # ── Ajouter la config Docker ─────────────────────────────────────────────
-    echo "[2/5] Ajout de la configuration Docker-ready..."
+    echo "[2/6] Ajout de la configuration Docker-ready..."
     cat >> "${CONF}" << 'EOF'
 
 # Docker dans LXC — permissions necessaires
@@ -131,7 +135,8 @@ EOF
     STEP_BOOT=3
     STEP_NET=4
     STEP_SSH=5
-    STEP_TOTAL=5
+    STEP_DOCKER=6
+    STEP_TOTAL=6
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MODE RECONFIGURATION
@@ -148,18 +153,18 @@ else
     fi
 
     # ── Arreter le container ─────────────────────────────────────────────────
-    echo "[1/7] Arret du container ${CTID}..."
+    echo "[1/8] Arret du container ${CTID}..."
     pct stop "${CTID}" 2>/dev/null || true
     sleep 3
     echo "  -> Arrete"
 
     # ── Backup ───────────────────────────────────────────────────────────────
-    echo "[2/7] Backup de la configuration..."
+    echo "[2/8] Backup de la configuration..."
     cp "${CONF}" "${CONF}.backup.$(date +%Y%m%d%H%M%S)"
     echo "  -> Backup : ${CONF}.backup.*"
 
     # ── Lire les parametres existants ────────────────────────────────────────
-    echo "[3/7] Lecture des parametres existants..."
+    echo "[3/8] Lecture des parametres existants..."
     ARCH=$(grep "^arch:" "${CONF}" | head -1 || echo "arch: amd64")
     CORES_CONF=$(grep "^cores:" "${CONF}" | head -1 || echo "cores: 4")
     HOSTNAME_CONF=$(grep "^hostname:" "${CONF}" | head -1 || echo "hostname: docker-lxc")
@@ -175,7 +180,7 @@ else
 
     # ── Remapping UIDs si necessaire ─────────────────────────────────────────
     if [ "${WAS_UNPRIVILEGED}" -eq 1 ]; then
-        echo "[4/7] Correction des UIDs/GIDs (unprivileged -> privileged)..."
+        echo "[4/8] Correction des UIDs/GIDs (unprivileged -> privileged)..."
 
         pct mount "${CTID}" 2>&1 || true
         MOUNTPOINT="/var/lib/lxc/${CTID}/rootfs"
@@ -219,11 +224,11 @@ else
         pct unmount "${CTID}"
         echo "  -> Rootfs demonte"
     else
-        echo "[4/7] Deja privileged, skip remapping UIDs."
+        echo "[4/8] Deja privileged, skip remapping UIDs."
     fi
 
     # ── Ecrire la configuration Docker-ready ─────────────────────────────────
-    echo "[5/7] Ecriture de la configuration Docker-ready..."
+    echo "[5/8] Ecriture de la configuration Docker-ready..."
     cat > "${CONF}" << EOF
 ${ARCH}
 ${CORES_CONF}
@@ -250,13 +255,15 @@ EOF
     STEP_BOOT=6
     STEP_NET=7
     STEP_SSH=7
-    STEP_TOTAL=7
+    STEP_DOCKER=8
+    STEP_TOTAL=8
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# COMMUN : Demarrage + configuration reseau + SSH
+# COMMUN : Demarrage + Reseau + SSH + Docker
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ── Demarrage ────────────────────────────────────────────────────────────────
 echo "[${STEP_BOOT}/${STEP_TOTAL}] Demarrage du container..."
 pct start "${CTID}"
 sleep 5
@@ -308,27 +315,22 @@ fi
 
 # ── Configuration SSH ────────────────────────────────────────────────────────
 echo ""
-echo "[${STEP_SSH}/${STEP_TOTAL}] Configuration SSH..."
+echo "  Configuration SSH..."
 
-# Creer le dossier de sauvegarde des clefs sur l'hote
 mkdir -p "${SSH_KEY_DIR}"
 
-# Generer une clef ed25519 sur l'hote pour ce container (si pas deja existante)
 KEY_FILE="${SSH_KEY_DIR}/id_ed25519_lxc${CTID}"
 if [ -f "${KEY_FILE}" ]; then
-    echo "  -> Clef SSH existante trouvee : ${KEY_FILE}"
-    echo "     Reutilisation de la clef existante."
+    echo "  -> Clef SSH existante : ${KEY_FILE}"
 else
-    echo "  -> Generation d'une nouvelle clef SSH..."
+    echo "  -> Generation clef SSH..."
     ssh-keygen -t ed25519 -f "${KEY_FILE}" -N "" -C "proxmox-host->lxc-${CTID}" -q
     echo "  -> Clef generee : ${KEY_FILE}"
 fi
 
 PUB_KEY=$(cat "${KEY_FILE}.pub")
 
-# Installer openssh-server et injecter la clef dans le container
 pct exec "${CTID}" -- bash -c "
-# Installer openssh-server si absent
 if ! command -v sshd &>/dev/null; then
     echo '  -> Installation openssh-server...'
     apt-get update -qq >/dev/null 2>&1
@@ -338,83 +340,74 @@ else
     echo '  -> openssh-server deja present'
 fi
 
-# Configurer sshd pour autoriser root par clef
 sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
 sed -i 's/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
 
-# Creer le dossier .ssh et injecter la clef publique
 mkdir -p /root/.ssh
 chmod 700 /root/.ssh
 
-# Ajouter la clef si pas deja presente
 if ! grep -qF '${PUB_KEY}' /root/.ssh/authorized_keys 2>/dev/null; then
     echo '${PUB_KEY}' >> /root/.ssh/authorized_keys
-    echo '  -> Clef publique injectee dans le container'
+    echo '  -> Clef publique injectee'
 else
-    echo '  -> Clef publique deja presente dans le container'
+    echo '  -> Clef publique deja presente'
 fi
 chmod 600 /root/.ssh/authorized_keys
 
-# Redemarrer sshd
 systemctl enable ssh >/dev/null 2>&1 || systemctl enable sshd >/dev/null 2>&1
 systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null
 echo '  -> sshd demarre'
 "
 
-# Recuperer l'IP du container
+# ── Installation Docker dans le container ────────────────────────────────────
+echo ""
+echo "[${STEP_DOCKER}/${STEP_TOTAL}] Installation de Docker dans le container..."
+echo "  -> Telechargement et execution de 01-install-docker.sh..."
+echo ""
+
+pct exec "${CTID}" -- bash -c "$(wget -qLO - "${DOCKER_SCRIPT_URL}" 2>/dev/null || echo 'echo ERREUR : impossible de telecharger 01-install-docker.sh')"
+
+# ── Recuperer l'IP finale ────────────────────────────────────────────────────
 CT_IP=$(pct exec "${CTID}" -- bash -c "ip -4 addr show eth0 2>/dev/null | grep inet | awk '{print \$2}' | cut -d/ -f1 | head -1")
 
-echo ""
-echo "  ┌─────────────────────────────────────────────┐"
-echo "  │  CLEFS SSH SAUVEGARDEES SUR L'HOTE          │"
-echo "  │                                             │"
-echo "  │  Clef privee : ${KEY_FILE}"
-echo "  │  Clef publique : ${KEY_FILE}.pub"
-echo "  │                                             │"
-if [ -n "${CT_IP}" ]; then
-echo "  │  Connexion :                                │"
-echo "  │  ssh -i ${KEY_FILE} root@${CT_IP}"
-fi
-echo "  └─────────────────────────────────────────────┘"
-
-# ── Verification Docker ─────────────────────────────────────────────────────
-echo ""
-echo "  Verification Docker..."
-if pct exec "${CTID}" -- docker info &>/dev/null 2>&1; then
-    echo "  -> Docker : OK"
-    pct exec "${CTID}" -- docker run --rm hello-world &>/dev/null 2>&1 && \
-        echo "  -> Docker run : OK" || \
-        echo "  -> Docker run : premier lancement peut etre lent"
-else
-    echo "  -> Docker pas encore installe"
-    echo "     Executer le script 02-install-docker.sh dans le container"
-fi
-
-# ── Resume ───────────────────────────────────────────────────────────────────
+# ── Resume final ─────────────────────────────────────────────────────────────
 echo ""
 echo "==========================================="
-echo "  Container ${CTID} pret pour Docker."
+echo "  Container ${CTID} PRET"
+echo "==========================================="
 echo ""
 echo "  Mode        : ${MODE}"
-echo "  Resume :"
+echo ""
+echo "  Infrastructure :"
 echo "  - unprivileged: 0 (privileged)"
 echo "  - nesting + keyctl actives"
 echo "  - AppArmor: unconfined"
 echo "  - cgroup2: all devices allowed"
-echo "  - /sys/kernel/security monte"
 echo "  - Reseau: DHCP sur eth0"
-echo "  - SSH: clef ed25519 (root login par clef uniquement)"
-echo "  - Clefs: ${SSH_KEY_DIR}/"
 echo ""
-echo "  Pour entrer dans le container :"
+echo "  SSH :"
+echo "  - Clef privee : ${KEY_FILE}"
+echo "  - Clef publique : ${KEY_FILE}.pub"
+echo "  - Root login par clef uniquement"
+echo ""
+echo "  Acces :"
 echo "    pct enter ${CTID}"
 if [ -n "${CT_IP}" ]; then
 echo "    ssh -i ${KEY_FILE} root@${CT_IP}"
+echo ""
+echo "  IP : ${CT_IP}"
 fi
+echo ""
+echo "  Docker :"
+docker_version=$(pct exec "${CTID}" -- docker --version 2>/dev/null || echo "non installe")
+compose_version=$(pct exec "${CTID}" -- docker compose version 2>/dev/null || echo "non installe")
+echo "    ${docker_version}"
+echo "    ${compose_version}"
+echo ""
 echo ""
 echo "  Prochaine etape :"
 echo "  Executer 01-install-docker.sh dans le container"
 echo ""
-echo "bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/02-install-docker.sh)" _ ${CTID}"
+echo "bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/01-install-docker.sh)" _ ${CTID}"
 echo ""
 echo "==========================================="

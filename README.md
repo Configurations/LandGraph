@@ -87,7 +87,7 @@ Ce script configure un container LXC existant pour supporter Docker :
 **Ou** : sur la VM/LXC Ubuntu fraichement installee.
 
 ```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/02-install-docker.sh)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/02-install-docker.sh)" _ <ID>
 ```
 
 Ce script :
