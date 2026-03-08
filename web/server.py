@@ -1398,6 +1398,7 @@ async def install_template_mcp(entry_id: str, req: MCPInstallRequest):
         "enabled": True,
     }
     _write_json(SHARED_MCP_FILE, data)
+    log.info("Installed MCP '%s' into %s (%d servers total)", entry_id, SHARED_MCP_FILE, len(data["servers"]))
     # Save env vars to .env if provided
     if req.env_values:
         entries = _parse_env(ENV_FILE)
