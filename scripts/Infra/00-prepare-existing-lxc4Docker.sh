@@ -1,6 +1,6 @@
 #!/bin/bash
 ###############################################################################
-# Script 00 : Configuration LXC Proxmox pour Docker
+# Script 00 : Configuration an existing LXC Proxmox pour Docker
 #
 # A executer sur l'HOTE PROXMOX (pas dans le container).
 # Configure un container LXC pour supporter Docker sans problemes.

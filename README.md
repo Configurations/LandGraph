@@ -37,7 +37,7 @@ L'installation se deroule en plusieurs etapes sequentielles. Chaque script est t
 
 ---
 
-### Etape 0 — Creer la VM sur Proxmox
+### Etape 0 — Creer un container sur Proxmox
 
 **Ou** : sur le shell de l'hote Proxmox.
 
@@ -62,7 +62,7 @@ Le VMID est optionnel (defaut : `200`).
 ---
 
 
-### Etape 1 — Configurer un LXC pour Docker
+### Etape 1 — Configurer un LXC existant pour Docker
 
 **Ou** : sur le shell de l'hote Proxmox (uniquement si vous utilisez un container LXC au lieu d'une VM).
 
