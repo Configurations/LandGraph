@@ -3637,9 +3637,11 @@ function _wfRenderPhaseProps(el, phaseId) {
     <div class="wf-props-section">
       <div class="wf-props-section-title">
         Agents (${Object.keys(agents).length})
-        <button class="btn-icon" style="font-size:0.75rem" onclick="wfAddAgent('${phaseId}')">+</button>
       </div>
       ${agentsHtml || '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucun agent</div>'}
+      <select class="wf-add-select" id="wf-add-agent-${phaseId}" onchange="wfAddAgent('${phaseId}',this.value);this.value=''">
+        <option value="">+ Ajouter un agent...</option>
+      </select>
     </div>
 
     <div class="wf-props-section">
@@ -3655,6 +3657,7 @@ function _wfRenderPhaseProps(el, phaseId) {
       ${condsHtml}
     </div>
   `;
+  setTimeout(() => _wfLoadAgentSelect(phaseId), 0);
 }
 
 // ── Workspace interactions ──
@@ -3876,24 +3879,38 @@ function wfSetPhaseField(phaseId, field, val) {
 }
 
 // ── Agent CRUD within a phase (inline, no modal) ──
-async function wfAddAgent(phaseId) {
-  const assigned = new Set(Object.keys(_wf.data.phases[phaseId].agents || {}));
-  let allAgents = [];
-  const registryBase = _wf.apiBase.includes('templates') ? '/api/templates/registry' : '/api/agents/registry';
-  try {
-    const reg = await api(`${registryBase}/${encodeURIComponent(_wf.dir)}`);
-    allAgents = Object.keys(reg.agents || reg || {});
-  } catch {}
-  const available = allAgents.filter(a => !assigned.has(a));
-  if (available.length === 0) { toast('Tous les agents sont deja assignes', 'info'); return; }
-  const agentId = available[0];
+function wfAddAgent(phaseId, agentId) {
+  if (!agentId) return;
   if (!_wf.data.phases[phaseId].agents) _wf.data.phases[phaseId].agents = {};
+  if (_wf.data.phases[phaseId].agents[agentId]) { toast('Agent deja dans cette phase', 'error'); return; }
   _wf.data.phases[phaseId].agents[agentId] = {
     role: '',
     required: true,
     parallel_group: (_wf.data.parallel_groups && _wf.data.parallel_groups.order && _wf.data.parallel_groups.order[0]) || 'A'
   };
   wfRender();
+}
+
+async function _wfLoadAgentSelect(phaseId) {
+  const sel = document.getElementById(`wf-add-agent-${phaseId}`);
+  if (!sel || sel.options.length > 1) return;
+  const assigned = new Set(Object.keys(_wf.data.phases[phaseId].agents || {}));
+  const registryBase = _wf.apiBase.includes('templates') ? '/api/templates/registry' : '/api/agents/registry';
+  try {
+    const reg = await api(`${registryBase}/${encodeURIComponent(_wf.dir)}`);
+    const allAgents = Object.keys(reg.agents || reg || {});
+    const available = allAgents.filter(a => !assigned.has(a));
+    available.forEach(a => {
+      const opt = document.createElement('option');
+      opt.value = a;
+      opt.textContent = a;
+      sel.appendChild(opt);
+    });
+    if (available.length === 0) {
+      sel.options[0].textContent = '(tous assignes)';
+      sel.disabled = true;
+    }
+  } catch {}
 }
 
 // Inline field setters for agents

@@ -1490,6 +1490,22 @@ tr:hover { background: rgba(255,255,255,0.02); }
   accent-color: var(--accent);
   cursor: pointer;
 }
+.wf-add-select {
+  width: 100%;
+  margin-top: 0.3rem;
+  font-size: 0.72rem;
+  padding: 0.25rem 0.35rem;
+  background: var(--bg-input);
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.wf-add-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
 
 /* Responsive sidebar collapse */
 @media (max-width: 900px) {
