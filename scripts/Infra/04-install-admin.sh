@@ -41,23 +41,38 @@ echo "[2/4] Mise a jour docker-compose.yml..."
 wget -qO docker-compose.yml "${REPO_RAW}/docker-compose.yml" 2>/dev/null || { echo "ERREUR: docker-compose.yml"; exit 1; }
 echo "  -> docker-compose.yml mis a jour"
 
-# ── 3. Configs MCP (si absentes) ─────────────
-echo "[3/4] Verification configs MCP..."
-if [ ! -f config/mcp_servers.json ]; then
-    echo '{"servers": {}}' > config/mcp_servers.json
-    echo "  -> mcp_servers.json cree"
-fi
-if [ ! -f config/agent_mcp_access.json ]; then
-    echo '{}' > config/agent_mcp_access.json
-    echo "  -> agent_mcp_access.json cree"
-fi
-# Telecharger les fichiers Shared/Teams depuis GitHub
+# ── 3. Configs et repertoires (avant Docker) ──
+echo "[3/4] Preparation configs et repertoires..."
+
+# Creer les repertoires AVANT le demarrage Docker
+# (sinon le bind mount .:/project ne voit pas les sous-repertoires)
+mkdir -p config/Teams
 mkdir -p Shared/Teams
+
+# config/Teams — fichiers par defaut si absents
+if [ ! -f config/Teams/mcp_servers.json ]; then
+    echo '{"servers": {}}' > config/Teams/mcp_servers.json
+    echo "  -> config/Teams/mcp_servers.json cree"
+fi
+if [ ! -f config/Teams/agent_mcp_access.json ]; then
+    echo '{}' > config/Teams/agent_mcp_access.json
+    echo "  -> config/Teams/agent_mcp_access.json cree"
+fi
+if [ ! -f config/Teams/llm_providers.json ]; then
+    echo '{"providers": {}, "default": ""}' > config/Teams/llm_providers.json
+    echo "  -> config/Teams/llm_providers.json cree"
+fi
+if [ ! -f config/Teams/teams.json ]; then
+    echo '{"teams": {}, "channel_mapping": {}}' > config/Teams/teams.json
+    echo "  -> config/Teams/teams.json cree"
+fi
+
+# Shared/Teams — telecharger depuis GitHub
 wget -qO Shared/Teams/mcp_catalog.csv "${REPO_RAW}/Shared/Teams/mcp_catalog.csv" 2>/dev/null || true
 wget -qO Shared/Teams/llm_providers.json "${REPO_RAW}/Shared/Teams/llm_providers.json" 2>/dev/null || true
 wget -qO Shared/Teams/mcp_servers.json "${REPO_RAW}/Shared/Teams/mcp_servers.json" 2>/dev/null || true
 wget -qO Shared/Teams/teams.json "${REPO_RAW}/Shared/Teams/teams.json" 2>/dev/null || true
-echo "  -> Shared/Teams/ mis a jour"
+echo "  -> config/Teams/ et Shared/Teams/ prets"
 
 # ── 4. Build et demarrage ────────────────────
 echo "[4/4] Build et demarrage du conteneur admin..."
