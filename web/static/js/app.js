@@ -1404,6 +1404,7 @@ function renderTeams() {
         </h3>
         <div style="display:flex;gap:0.5rem">
           <button class="btn btn-primary btn-sm" onclick="showAddCfgAgentModal('${escHtml(dir)}')">+ Agent</button>
+          <button class="btn btn-outline btn-sm" onclick="showCfgRawRegistry('${escHtml(dir)}')">Raw</button>
           <button class="btn btn-outline btn-sm" style="color:var(--error)" onclick="deleteTeam('${escHtml(t.id)}')">Suppr</button>
         </div>
       </div>
@@ -1574,6 +1575,38 @@ async function deleteCfgAgent(dir, agentId) {
   try {
     await api(`/api/agents/${encodeURIComponent(agentId)}?team_id=${encodeURIComponent(dir)}`, { method: 'DELETE' });
     toast('Agent supprime', 'success');
+    loadTeams();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function showCfgRawRegistry(dir) {
+  try {
+    const data = await api(`/api/agents/registry/${encodeURIComponent(dir)}`);
+    const json = JSON.stringify(data, null, 2);
+    showModal(`
+      <div class="modal-header">
+        <h3>Registry JSON — Configs/Teams/${escHtml(dir)}/</h3>
+        <button class="btn-icon" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="form-group">
+        <textarea id="cfg-raw-json" style="min-height:400px;font-family:monospace;font-size:0.8rem;white-space:pre;tab-size:2">${escHtml(json)}</textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+        <button class="btn btn-primary" onclick="saveCfgRawRegistry('${escHtml(dir)}')">Sauvegarder</button>
+      </div>
+    `, 'modal-wide');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function saveCfgRawRegistry(dir) {
+  const raw = document.getElementById('cfg-raw-json').value;
+  let data;
+  try { data = JSON.parse(raw); } catch { toast('JSON invalide', 'error'); return; }
+  try {
+    await api(`/api/agents/registry/${encodeURIComponent(dir)}`, { method: 'PUT', body: data });
+    toast('Registry sauvegarde', 'success');
+    closeModal();
     loadTeams();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -2288,6 +2321,7 @@ function renderTplTeams() {
         </h3>
         <div style="display:flex;gap:0.5rem">
           <button class="btn btn-primary btn-sm" onclick="showAddTplAgentModal('${escHtml(dir)}')">+ Agent</button>
+          <button class="btn btn-outline btn-sm" onclick="showTplRawRegistry('${escHtml(dir)}')">Raw</button>
           <button class="btn btn-outline btn-sm" style="color:var(--error)" onclick="deleteTplTeam(${i})">Suppr</button>
         </div>
       </div>
@@ -2458,6 +2492,38 @@ async function deleteTplAgent(dir, agentId) {
   try {
     await api(`/api/templates/agents/${encodeURIComponent(agentId)}?team_id=${encodeURIComponent(dir)}`, { method: 'DELETE' });
     toast('Agent supprime', 'success');
+    loadTplTeamsList();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function showTplRawRegistry(dir) {
+  try {
+    const data = await api(`/api/templates/registry/${encodeURIComponent(dir)}`);
+    const json = JSON.stringify(data, null, 2);
+    showModal(`
+      <div class="modal-header">
+        <h3>Registry JSON — Shared/Teams/${escHtml(dir)}/</h3>
+        <button class="btn-icon" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="form-group">
+        <textarea id="tpl-raw-json" style="min-height:400px;font-family:monospace;font-size:0.8rem;white-space:pre;tab-size:2">${escHtml(json)}</textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+        <button class="btn btn-primary" onclick="saveTplRawRegistry('${escHtml(dir)}')">Sauvegarder</button>
+      </div>
+    `, 'modal-wide');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function saveTplRawRegistry(dir) {
+  const raw = document.getElementById('tpl-raw-json').value;
+  let data;
+  try { data = JSON.parse(raw); } catch { toast('JSON invalide', 'error'); return; }
+  try {
+    await api(`/api/templates/registry/${encodeURIComponent(dir)}`, { method: 'PUT', body: data });
+    toast('Registry sauvegarde', 'success');
+    closeModal();
     loadTplTeamsList();
   } catch (e) { toast(e.message, 'error'); }
 }

@@ -61,7 +61,10 @@ echo "  -> Shared/Teams/ mis a jour"
 
 # ── 4. Build et demarrage ────────────────────
 echo "[4/4] Build et demarrage du conteneur admin..."
-docker compose up -d --build langgraph-admin
+docker compose stop langgraph-admin 2>/dev/null || true
+docker compose rm -f langgraph-admin 2>/dev/null || true
+docker compose build --no-cache langgraph-admin
+docker compose up -d langgraph-admin
 
 echo ""
 sleep 5

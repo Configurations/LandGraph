@@ -718,6 +718,41 @@ async def delete_agent(agent_id: str, team_id: str = "default"):
     return {"ok": True}
 
 
+@app.get("/api/agents/registry/{directory}")
+async def get_agents_registry(directory: str):
+    """Return raw agents_registry.json for a Configs team directory."""
+    tdir = _team_dir(directory)
+    registry_path = tdir / "agents_registry.json"
+    return _read_json(registry_path)
+
+
+@app.put("/api/agents/registry/{directory}")
+async def put_agents_registry(directory: str, request: Request):
+    """Overwrite agents_registry.json for a Configs team directory."""
+    data = await request.json()
+    tdir = _team_dir(directory)
+    tdir.mkdir(parents=True, exist_ok=True)
+    _write_json(tdir / "agents_registry.json", data)
+    return {"ok": True}
+
+
+@app.get("/api/templates/registry/{directory}")
+async def get_templates_registry(directory: str):
+    """Return raw agents_registry.json for a Shared template directory."""
+    tdir = SHARED_TEAMS_DIR / directory
+    return _read_json(tdir / "agents_registry.json")
+
+
+@app.put("/api/templates/registry/{directory}")
+async def put_templates_registry(directory: str, request: Request):
+    """Overwrite agents_registry.json for a Shared template directory."""
+    data = await request.json()
+    tdir = SHARED_TEAMS_DIR / directory
+    tdir.mkdir(parents=True, exist_ok=True)
+    _write_json(tdir / "agents_registry.json", data)
+    return {"ok": True}
+
+
 # ── API: LLM Providers ────────────────────────────
 
 @app.get("/api/llm/providers")
