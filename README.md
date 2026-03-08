@@ -62,7 +62,7 @@ L'installation se deroule en plusieurs etapes sequentielles. Chaque script est t
 **Ou** : sur le shell de l'hote Proxmox.
 
 ```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/01-proxmox-create-vm.sh)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/00-configure-lxc.sh)"
 ```
 
 Ce script cree une VM avec la configuration suivante :
@@ -87,7 +87,7 @@ Le VMID est optionnel (defaut : `200`).
 **Ou** : sur le shell de l'hote Proxmox (uniquement si vous utilisez un container LXC au lieu d'une VM).
 
 ```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/00-configure-lxc.sh)" _ <ID:111>
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/00-configure-lxc.sh)" _ <ID>
 ```
 
 Ce script configure un container LXC existant pour supporter Docker :
