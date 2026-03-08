@@ -2159,23 +2159,27 @@ function renderTplTeams() {
     const tpl = tplTemplatesData.find(tp => tp.id === t.directory) || null;
     const agentEntries = tpl ? Object.entries(tpl.agents) : [];
     const mcpAccess = tpl ? (tpl.mcp_access || {}) : {};
+    const dir = t.directory || '';
 
     const agentCards = agentEntries.map(([aid, a]) => {
       const mcpList = mcpAccess[aid] || [];
-      return `<div class="agent-card" onclick="showTplAgentDetail('${escHtml(t.directory)}','${escHtml(aid)}')" style="cursor:pointer">
+      return `<div class="agent-card" style="cursor:pointer">
         <div class="agent-card-header">
-          <div>
+          <div onclick="editTplAgent('${escHtml(dir)}','${escHtml(aid)}')" style="flex:1;cursor:pointer">
             <h4>${escHtml(a.name)}</h4>
             <code style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(aid)}</code>
           </div>
+          <button class="btn-icon danger" onclick="event.stopPropagation();deleteTplAgent('${escHtml(dir)}','${escHtml(aid)}')" title="Supprimer">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </button>
         </div>
-        <div class="agent-meta">
+        <div class="agent-meta" onclick="editTplAgent('${escHtml(dir)}','${escHtml(aid)}')">
           <span class="tag tag-blue">temp: ${a.temperature}</span>
           <span class="tag tag-blue">tokens: ${a.max_tokens}</span>
           ${a.llm ? `<span class="tag tag-yellow">${escHtml(a.llm)}</span>` : ''}
           ${a.type ? `<span class="tag tag-gray">${escHtml(a.type)}</span>` : ''}
         </div>
-        ${mcpList.length ? `<div class="agent-meta" style="margin-top:0.5rem">
+        ${mcpList.length ? `<div class="agent-meta">
           ${mcpList.map(m => `<span class="tag tag-green">${escHtml(m)}</span>`).join('')}
         </div>` : ''}
       </div>`;
@@ -2186,10 +2190,10 @@ function renderTplTeams() {
         <h3>
           ${escHtml(t.name)}
           <span style="font-weight:400;font-size:0.75rem;color:var(--text-secondary)">${escHtml(t.id)}</span>
-          <code style="font-weight:400;font-size:0.7rem;color:var(--text-secondary)">Shared/Teams/${escHtml(t.directory || '')}/</code>
+          <code style="font-weight:400;font-size:0.7rem;color:var(--text-secondary)">Shared/Teams/${escHtml(dir)}/</code>
         </h3>
         <div style="display:flex;gap:0.5rem">
-          <button class="btn btn-outline btn-sm" onclick="editTplTeam(${i})">Modifier</button>
+          <button class="btn btn-primary btn-sm" onclick="showAddTplAgentModal('${escHtml(dir)}')">+ Agent</button>
           <button class="btn btn-outline btn-sm" style="color:var(--error)" onclick="deleteTplTeam(${i})">Suppr</button>
         </div>
       </div>
@@ -2199,21 +2203,73 @@ function renderTplTeams() {
         ${(t.discord_channels || []).map(c => `<span class="tag tag-green">#${escHtml(c)}</span>`).join('')}
       </div>
       <div class="agents-grid">
-        ${agentCards || '<p style="color:var(--text-secondary);padding:0.5rem">Aucun agent dans ce template. Verifiez le repertoire.</p>'}
+        ${agentCards || '<p style="color:var(--text-secondary);padding:0.5rem">Aucun agent dans ce template.</p>'}
       </div>
     </div>`;
   }).join('');
 }
 
-function showTplAgentDetail(dirName, agentId) {
-  const tpl = tplTemplatesData.find(tp => tp.id === dirName);
+function showAddTplAgentModal(dir) {
+  showModal(`
+    <div class="modal-header">
+      <h3>Nouvel agent (template)</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>ID (identifiant unique)</label>
+        <input id="tpl-agent-new-id" placeholder="mon_agent" />
+      </div>
+      <div class="form-group">
+        <label>Nom affiche</label>
+        <input id="tpl-agent-new-name" placeholder="Mon Agent" />
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Temperature</label>
+        <input id="tpl-agent-new-temp" type="number" step="0.1" min="0" max="2" value="0.3" />
+      </div>
+      <div class="form-group">
+        <label>Max tokens</label>
+        <input id="tpl-agent-new-tokens" type="number" value="32768" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Prompt initial</label>
+      <textarea id="tpl-agent-new-prompt" style="min-height:120px" placeholder="# Mon Agent\n\nDescription du role..."></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="addTplAgent('${escHtml(dir)}')">Ajouter</button>
+    </div>
+  `);
+}
+
+async function addTplAgent(dir) {
+  const id = (document.getElementById('tpl-agent-new-id').value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
+  const name = document.getElementById('tpl-agent-new-name').value.trim();
+  if (!id || !name) { toast('ID et nom requis', 'error'); return; }
+  const temperature = parseFloat(document.getElementById('tpl-agent-new-temp').value) || 0.3;
+  const max_tokens = parseInt(document.getElementById('tpl-agent-new-tokens').value) || 32768;
+  const prompt_content = document.getElementById('tpl-agent-new-prompt').value || `# ${name}\n\n`;
+  try {
+    await api('/api/templates/agents', { method: 'POST', body: {
+      id, name, temperature, max_tokens,
+      prompt_content,
+      prompt_file: `${id}.md`,
+      team_id: dir,
+    }});
+    toast('Agent ajoute', 'success');
+    closeModal();
+    loadTplTeamsList();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function editTplAgent(dir, agentId) {
+  const tpl = tplTemplatesData.find(tp => tp.id === dir);
   if (!tpl || !tpl.agents[agentId]) { toast('Agent introuvable', 'error'); return; }
   const a = tpl.agents[agentId];
-  const mcpList = (tpl.mcp_access || {})[agentId] || [];
-
-  const mcpChips = mcpList.length
-    ? mcpList.map(m => `<span class="tag tag-green">${escHtml(m)}</span>`).join(' ')
-    : '<span style="color:var(--text-secondary);font-size:0.8rem">Aucun MCP</span>';
 
   const promptRaw = a.prompt_content || '';
   const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
@@ -2226,37 +2282,90 @@ function showTplAgentDetail(dirName, agentId) {
     <div class="form-row">
       <div class="form-group">
         <label>Nom</label>
-        <input value="${escHtml(a.name)}" disabled />
+        <input id="tpl-agent-edit-name" value="${escHtml(a.name)}" />
       </div>
       <div class="form-group">
         <label>Modele LLM</label>
-        <input value="${escHtml(a.llm || a.model || '')}" disabled />
+        <input id="tpl-agent-edit-model" value="${escHtml(a.llm || a.model || '')}" placeholder="claude-sonnet, gpt-4o..." />
       </div>
     </div>
     <div class="form-row">
       <div class="form-group">
         <label>Temperature</label>
-        <input value="${a.temperature}" disabled />
+        <input id="tpl-agent-edit-temp" type="number" step="0.1" min="0" max="2" value="${a.temperature}" />
       </div>
       <div class="form-group">
         <label>Max tokens</label>
-        <input value="${a.max_tokens}" disabled />
+        <input id="tpl-agent-edit-tokens" type="number" value="${a.max_tokens}" />
       </div>
     </div>
-    ${a.type ? `<div class="form-group"><label>Type</label><input value="${escHtml(a.type)}" disabled /></div>` : ''}
-    ${a.pipeline_steps && a.pipeline_steps.length ? `<div class="form-group"><label>Pipeline steps</label><input value="${escHtml(a.pipeline_steps.join(', '))}" disabled /></div>` : ''}
     <div class="form-group">
       <label>Prompt (${escHtml(a.prompt || agentId + '.md')})</label>
-      <div class="prompt-preview" style="max-height:400px;overflow-y:auto">${promptHtml}</div>
-    </div>
-    <div class="form-group">
-      <label>Services MCP autorises</label>
-      <div class="mcp-chips">${mcpChips}</div>
+      <div class="prompt-tabs">
+        <div class="prompt-tab active" id="tpl-prompt-tab-preview" onclick="switchTplPromptTab('preview')">Apercu</div>
+        <div class="prompt-tab" id="tpl-prompt-tab-edit" onclick="switchTplPromptTab('edit')">Editer</div>
+      </div>
+      <div class="prompt-preview" id="tpl-agent-prompt-preview" style="max-height:400px;overflow-y:auto">${promptHtml}</div>
+      <textarea id="tpl-agent-edit-prompt" style="min-height:300px;display:none;border-radius:0 0.5rem 0.5rem 0.5rem">${escHtml(promptRaw)}</textarea>
     </div>
     <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal()">Fermer</button>
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="saveTplAgent('${escHtml(dir)}','${escHtml(agentId)}')">Sauvegarder</button>
     </div>
   `, 'modal-wide');
+}
+
+function switchTplPromptTab(tab) {
+  const preview = document.getElementById('tpl-agent-prompt-preview');
+  const editor = document.getElementById('tpl-agent-edit-prompt');
+  const tabPreview = document.getElementById('tpl-prompt-tab-preview');
+  const tabEdit = document.getElementById('tpl-prompt-tab-edit');
+  if (tab === 'edit') {
+    preview.style.display = 'none';
+    editor.style.display = '';
+    tabPreview.classList.remove('active');
+    tabEdit.classList.add('active');
+  } else {
+    const raw = editor.value;
+    preview.innerHTML = typeof marked !== 'undefined' ? marked.parse(raw) : escHtml(raw);
+    preview.style.display = '';
+    editor.style.display = 'none';
+    tabPreview.classList.add('active');
+    tabEdit.classList.remove('active');
+  }
+}
+
+async function saveTplAgent(dir, agentId) {
+  const name = document.getElementById('tpl-agent-edit-name').value.trim();
+  if (!name) { toast('Nom requis', 'error'); return; }
+  const model = document.getElementById('tpl-agent-edit-model').value.trim();
+  const temperature = parseFloat(document.getElementById('tpl-agent-edit-temp').value);
+  const max_tokens = parseInt(document.getElementById('tpl-agent-edit-tokens').value);
+  const prompt_content = document.getElementById('tpl-agent-edit-prompt').value;
+  const tpl = tplTemplatesData.find(tp => tp.id === dir);
+  const a = tpl.agents[agentId];
+  try {
+    await api(`/api/templates/agents/${encodeURIComponent(agentId)}`, { method: 'PUT', body: {
+      id: agentId, name, model, temperature, max_tokens,
+      prompt_content,
+      prompt_file: a.prompt || `${agentId}.md`,
+      type: a.type || '',
+      pipeline_steps: a.pipeline_steps || [],
+      team_id: dir,
+    }});
+    toast('Agent sauvegarde', 'success');
+    closeModal();
+    loadTplTeamsList();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteTplAgent(dir, agentId) {
+  if (!confirm(`Supprimer l'agent "${agentId}" ?`)) return;
+  try {
+    await api(`/api/templates/agents/${encodeURIComponent(agentId)}?team_id=${encodeURIComponent(dir)}`, { method: 'DELETE' });
+    toast('Agent supprime', 'success');
+    loadTplTeamsList();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function _saveTplTeams() {

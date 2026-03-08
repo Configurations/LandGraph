@@ -1172,6 +1172,80 @@ async def save_template_teams(request: Request):
     return {"ok": True}
 
 
+def _shared_team_dir(directory: str) -> Path:
+    return SHARED_TEAMS_DIR / directory
+
+
+@app.post("/api/templates/agents")
+async def add_template_agent(cfg: AgentConfig):
+    """Add an agent to a Shared template directory."""
+    tdir = _shared_team_dir(cfg.team_id)
+    tdir.mkdir(parents=True, exist_ok=True)
+    registry_path = tdir / "agents_registry.json"
+    data = _read_json(registry_path)
+    if "agents" not in data:
+        data["agents"] = {}
+    if cfg.id in data["agents"]:
+        raise HTTPException(409, f"Agent {cfg.id} already exists")
+    prompt_file = cfg.prompt_file or f"{cfg.id}.md"
+    agent_data = {"name": cfg.name, "temperature": cfg.temperature, "max_tokens": cfg.max_tokens, "prompt": prompt_file}
+    if cfg.model:
+        agent_data["model"] = cfg.model
+    if cfg.type:
+        agent_data["type"] = cfg.type
+    if cfg.pipeline_steps:
+        agent_data["pipeline_steps"] = cfg.pipeline_steps
+    data["agents"][cfg.id] = agent_data
+    _write_json(registry_path, data)
+    prompt_path = tdir / prompt_file
+    if not prompt_path.exists():
+        prompt_path.write_text(cfg.prompt_content or f"# {cfg.name}\n\n", encoding="utf-8")
+    return {"ok": True}
+
+
+@app.put("/api/templates/agents/{agent_id}")
+async def update_template_agent(agent_id: str, cfg: AgentConfig):
+    """Update an agent in a Shared template directory."""
+    tdir = _shared_team_dir(cfg.team_id)
+    registry_path = tdir / "agents_registry.json"
+    data = _read_json(registry_path)
+    if agent_id not in data.get("agents", {}):
+        raise HTTPException(404, f"Agent {agent_id} not found")
+    existing = data["agents"][agent_id]
+    existing["name"] = cfg.name
+    existing["temperature"] = cfg.temperature
+    existing["max_tokens"] = cfg.max_tokens
+    if cfg.model:
+        existing["model"] = cfg.model
+    elif "model" in existing:
+        del existing["model"]
+    if cfg.type:
+        existing["type"] = cfg.type
+    if cfg.pipeline_steps:
+        existing["pipeline_steps"] = cfg.pipeline_steps
+    elif "pipeline_steps" in existing:
+        del existing["pipeline_steps"]
+    data["agents"][agent_id] = existing
+    _write_json(registry_path, data)
+    if cfg.prompt_content is not None:
+        prompt_path = tdir / existing.get("prompt", f"{agent_id}.md")
+        prompt_path.write_text(cfg.prompt_content, encoding="utf-8")
+    return {"ok": True}
+
+
+@app.delete("/api/templates/agents/{agent_id}")
+async def delete_template_agent(agent_id: str, team_id: str = ""):
+    """Delete an agent from a Shared template directory."""
+    tdir = _shared_team_dir(team_id)
+    registry_path = tdir / "agents_registry.json"
+    data = _read_json(registry_path)
+    if agent_id not in data.get("agents", {}):
+        raise HTTPException(404, f"Agent {agent_id} not found")
+    del data["agents"][agent_id]
+    _write_json(registry_path, data)
+    return {"ok": True}
+
+
 def _ensure_gitignore(target_dir: Path):
     """Create .gitignore with default patterns if it doesn't exist."""
     gitignore = target_dir / ".gitignore"
