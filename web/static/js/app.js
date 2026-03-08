@@ -1366,45 +1366,52 @@ function renderTeams() {
     grid.innerHTML = '<p style="color:var(--text-secondary);padding:1rem">Aucune equipe configuree.</p>';
     return;
   }
-  grid.innerHTML = teamsData.map((t, i) => {
+  grid.innerHTML = teamsData.map((t) => {
     const agentEntries = Object.entries(t.agents || {});
     const mcpAccess = t.mcp_access || {};
+    const dir = t.directory || t.id;
 
     const agentCards = agentEntries.map(([aid, a]) => {
       const mcpList = mcpAccess[aid] || [];
-      return `<div class="agent-card" onclick="showCfgAgentDetail('${escHtml(t.directory || t.id)}','${escHtml(aid)}')" style="cursor:pointer">
+      return `<div class="agent-card" style="cursor:pointer">
         <div class="agent-card-header">
-          <div>
+          <div onclick="editCfgAgent('${escHtml(dir)}','${escHtml(aid)}')" style="flex:1;cursor:pointer">
             <h4>${escHtml(a.name)}</h4>
             <code style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(aid)}</code>
           </div>
+          <button class="btn-icon danger" onclick="event.stopPropagation();deleteCfgAgent('${escHtml(dir)}','${escHtml(aid)}')" title="Supprimer">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </button>
         </div>
-        <div class="agent-meta">
+        <div class="agent-meta" onclick="editCfgAgent('${escHtml(dir)}','${escHtml(aid)}')">
           <span class="tag tag-blue">temp: ${a.temperature}</span>
           <span class="tag tag-blue">tokens: ${a.max_tokens}</span>
           ${a.llm || a.model ? `<span class="tag tag-yellow">${escHtml(a.llm || a.model)}</span>` : ''}
           ${a.type ? `<span class="tag tag-gray">${escHtml(a.type)}</span>` : ''}
         </div>
-        ${mcpList.length ? `<div class="agent-meta" style="margin-top:0.5rem">
+        ${mcpList.length ? `<div class="agent-meta">
           ${mcpList.map(m => `<span class="tag tag-green">${escHtml(m)}</span>`).join('')}
         </div>` : ''}
       </div>`;
     }).join('');
 
-    return `<div class="agent-group" style="margin-bottom:1.5rem">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
-        <h3 class="agent-group-title" style="margin:0">
+    return `<div class="team-block">
+      <div class="team-block-header">
+        <h3>
           ${escHtml(t.name || t.id)}
-          <span style="font-weight:400;font-size:0.75rem;color:var(--text-secondary);margin-left:0.5rem">${escHtml(t.id)}</span>
-          <code style="font-weight:400;font-size:0.7rem;color:var(--text-secondary);margin-left:0.5rem">Configs/Teams/${escHtml(t.directory || t.id)}/</code>
+          <span style="font-weight:400;font-size:0.75rem;color:var(--text-secondary)">${escHtml(t.id)}</span>
+          <code style="font-weight:400;font-size:0.7rem;color:var(--text-secondary)">Configs/Teams/${escHtml(dir)}/</code>
         </h3>
         <div style="display:flex;gap:0.5rem">
-          <button class="btn btn-outline btn-sm" onclick="editTeam(${i})">Modifier</button>
+          <button class="btn btn-primary btn-sm" onclick="showAddCfgAgentModal('${escHtml(dir)}')">+ Agent</button>
           <button class="btn btn-outline btn-sm" style="color:var(--error)" onclick="deleteTeam('${escHtml(t.id)}')">Suppr</button>
         </div>
       </div>
-      ${t.description ? `<p style="color:var(--text-secondary);margin:0 0 0.75rem 0;font-size:0.85rem">${escHtml(t.description)}</p>` : ''}
-      ${(t.discord_channels || []).length ? `<div style="margin-bottom:0.75rem">${t.discord_channels.map(c => `<span class="tag tag-blue">#${escHtml(c)}</span>`).join(' ')}</div>` : ''}
+      ${t.description ? `<p style="color:var(--text-secondary);margin:0 0 0.5rem 0;font-size:0.85rem">${escHtml(t.description)}</p>` : ''}
+      <div class="team-block-meta">
+        <span class="tag tag-blue">${agentEntries.length} agent${agentEntries.length > 1 ? 's' : ''}</span>
+        ${(t.discord_channels || []).map(c => `<span class="tag tag-green">#${escHtml(c)}</span>`).join('')}
+      </div>
       <div class="agents-grid">
         ${agentCards || '<p style="color:var(--text-secondary);padding:0.5rem">Aucun agent dans cette equipe.</p>'}
       </div>
@@ -1412,15 +1419,67 @@ function renderTeams() {
   }).join('');
 }
 
-function showCfgAgentDetail(dirName, agentId) {
-  const team = teamsData.find(t => (t.directory || t.id) === dirName);
+function showAddCfgAgentModal(dir) {
+  showModal(`
+    <div class="modal-header">
+      <h3>Nouvel agent</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>ID (identifiant unique)</label>
+        <input id="cfg-agent-new-id" placeholder="mon_agent" />
+      </div>
+      <div class="form-group">
+        <label>Nom affiche</label>
+        <input id="cfg-agent-new-name" placeholder="Mon Agent" />
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Temperature</label>
+        <input id="cfg-agent-new-temp" type="number" step="0.1" min="0" max="2" value="0.3" />
+      </div>
+      <div class="form-group">
+        <label>Max tokens</label>
+        <input id="cfg-agent-new-tokens" type="number" value="32768" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Prompt initial</label>
+      <textarea id="cfg-agent-new-prompt" style="min-height:120px" placeholder="# Mon Agent\n\nDescription du role..."></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="addCfgAgent('${escHtml(dir)}')">Ajouter</button>
+    </div>
+  `);
+}
+
+async function addCfgAgent(dir) {
+  const id = (document.getElementById('cfg-agent-new-id').value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
+  const name = document.getElementById('cfg-agent-new-name').value.trim();
+  if (!id || !name) { toast('ID et nom requis', 'error'); return; }
+  const temperature = parseFloat(document.getElementById('cfg-agent-new-temp').value) || 0.3;
+  const max_tokens = parseInt(document.getElementById('cfg-agent-new-tokens').value) || 32768;
+  const prompt_content = document.getElementById('cfg-agent-new-prompt').value || `# ${name}\n\n`;
+  try {
+    await api('/api/agents', { method: 'POST', body: {
+      id, name, temperature, max_tokens,
+      prompt_content,
+      prompt_file: `${id}.md`,
+      team_id: dir,
+    }});
+    toast('Agent ajoute', 'success');
+    closeModal();
+    loadTeams();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function editCfgAgent(dir, agentId) {
+  const team = teamsData.find(t => (t.directory || t.id) === dir);
   if (!team || !team.agents[agentId]) { toast('Agent introuvable', 'error'); return; }
   const a = team.agents[agentId];
-  const mcpList = (team.mcp_access || {})[agentId] || [];
-
-  const mcpChips = mcpList.length
-    ? mcpList.map(m => `<span class="tag tag-green">${escHtml(m)}</span>`).join(' ')
-    : '<span style="color:var(--text-secondary);font-size:0.8rem">Aucun MCP</span>';
 
   const promptRaw = a.prompt_content || '';
   const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
@@ -1433,37 +1492,90 @@ function showCfgAgentDetail(dirName, agentId) {
     <div class="form-row">
       <div class="form-group">
         <label>Nom</label>
-        <input value="${escHtml(a.name)}" disabled />
+        <input id="cfg-agent-edit-name" value="${escHtml(a.name)}" />
       </div>
       <div class="form-group">
         <label>Modele LLM</label>
-        <input value="${escHtml(a.llm || a.model || '')}" disabled />
+        <input id="cfg-agent-edit-model" value="${escHtml(a.llm || a.model || '')}" placeholder="claude-sonnet, gpt-4o..." />
       </div>
     </div>
     <div class="form-row">
       <div class="form-group">
         <label>Temperature</label>
-        <input value="${a.temperature}" disabled />
+        <input id="cfg-agent-edit-temp" type="number" step="0.1" min="0" max="2" value="${a.temperature}" />
       </div>
       <div class="form-group">
         <label>Max tokens</label>
-        <input value="${a.max_tokens}" disabled />
+        <input id="cfg-agent-edit-tokens" type="number" value="${a.max_tokens}" />
       </div>
     </div>
-    ${a.type ? `<div class="form-group"><label>Type</label><input value="${escHtml(a.type)}" disabled /></div>` : ''}
-    ${a.pipeline_steps && a.pipeline_steps.length ? `<div class="form-group"><label>Pipeline steps</label><input value="${escHtml(a.pipeline_steps.join(', '))}" disabled /></div>` : ''}
     <div class="form-group">
       <label>Prompt (${escHtml(a.prompt || agentId + '.md')})</label>
-      <div class="prompt-preview" style="max-height:400px;overflow-y:auto">${promptHtml}</div>
-    </div>
-    <div class="form-group">
-      <label>Services MCP autorises</label>
-      <div class="mcp-chips">${mcpChips}</div>
+      <div class="prompt-tabs">
+        <div class="prompt-tab active" id="cfg-prompt-tab-preview" onclick="switchCfgPromptTab('preview')">Apercu</div>
+        <div class="prompt-tab" id="cfg-prompt-tab-edit" onclick="switchCfgPromptTab('edit')">Editer</div>
+      </div>
+      <div class="prompt-preview" id="cfg-agent-prompt-preview" style="max-height:400px;overflow-y:auto">${promptHtml}</div>
+      <textarea id="cfg-agent-edit-prompt" style="min-height:300px;display:none;border-radius:0 0.5rem 0.5rem 0.5rem">${escHtml(promptRaw)}</textarea>
     </div>
     <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal()">Fermer</button>
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="saveCfgAgent('${escHtml(dir)}','${escHtml(agentId)}')">Sauvegarder</button>
     </div>
   `, 'modal-wide');
+}
+
+function switchCfgPromptTab(tab) {
+  const preview = document.getElementById('cfg-agent-prompt-preview');
+  const editor = document.getElementById('cfg-agent-edit-prompt');
+  const tabPreview = document.getElementById('cfg-prompt-tab-preview');
+  const tabEdit = document.getElementById('cfg-prompt-tab-edit');
+  if (tab === 'edit') {
+    preview.style.display = 'none';
+    editor.style.display = '';
+    tabPreview.classList.remove('active');
+    tabEdit.classList.add('active');
+  } else {
+    const raw = editor.value;
+    preview.innerHTML = typeof marked !== 'undefined' ? marked.parse(raw) : escHtml(raw);
+    preview.style.display = '';
+    editor.style.display = 'none';
+    tabPreview.classList.add('active');
+    tabEdit.classList.remove('active');
+  }
+}
+
+async function saveCfgAgent(dir, agentId) {
+  const name = document.getElementById('cfg-agent-edit-name').value.trim();
+  if (!name) { toast('Nom requis', 'error'); return; }
+  const model = document.getElementById('cfg-agent-edit-model').value.trim();
+  const temperature = parseFloat(document.getElementById('cfg-agent-edit-temp').value);
+  const max_tokens = parseInt(document.getElementById('cfg-agent-edit-tokens').value);
+  const prompt_content = document.getElementById('cfg-agent-edit-prompt').value;
+  const team = teamsData.find(t => (t.directory || t.id) === dir);
+  const a = team.agents[agentId];
+  try {
+    await api(`/api/agents/${encodeURIComponent(agentId)}`, { method: 'PUT', body: {
+      id: agentId, name, model, temperature, max_tokens,
+      prompt_content,
+      prompt_file: a.prompt || `${agentId}.md`,
+      type: a.type || '',
+      pipeline_steps: a.pipeline_steps || [],
+      team_id: dir,
+    }});
+    toast('Agent sauvegarde', 'success');
+    closeModal();
+    loadTeams();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteCfgAgent(dir, agentId) {
+  if (!confirm(`Supprimer l'agent "${agentId}" ?`)) return;
+  try {
+    await api(`/api/agents/${encodeURIComponent(agentId)}?team_id=${encodeURIComponent(dir)}`, { method: 'DELETE' });
+    toast('Agent supprime', 'success');
+    loadTeams();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function showAddTeamModal() {
@@ -2069,20 +2181,23 @@ function renderTplTeams() {
       </div>`;
     }).join('');
 
-    return `<div class="agent-group" style="margin-bottom:1.5rem">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
-        <h3 class="agent-group-title" style="margin:0">
+    return `<div class="team-block">
+      <div class="team-block-header">
+        <h3>
           ${escHtml(t.name)}
-          <span style="font-weight:400;font-size:0.75rem;color:var(--text-secondary);margin-left:0.5rem">${escHtml(t.id)}</span>
-          <code style="font-weight:400;font-size:0.7rem;color:var(--text-secondary);margin-left:0.5rem">Shared/Teams/${escHtml(t.directory || '')}/</code>
+          <span style="font-weight:400;font-size:0.75rem;color:var(--text-secondary)">${escHtml(t.id)}</span>
+          <code style="font-weight:400;font-size:0.7rem;color:var(--text-secondary)">Shared/Teams/${escHtml(t.directory || '')}/</code>
         </h3>
         <div style="display:flex;gap:0.5rem">
           <button class="btn btn-outline btn-sm" onclick="editTplTeam(${i})">Modifier</button>
           <button class="btn btn-outline btn-sm" style="color:var(--error)" onclick="deleteTplTeam(${i})">Suppr</button>
         </div>
       </div>
-      ${t.description ? `<p style="color:var(--text-secondary);margin:0 0 0.75rem 0;font-size:0.85rem">${escHtml(t.description)}</p>` : ''}
-      ${(t.discord_channels || []).length ? `<div style="margin-bottom:0.75rem">${t.discord_channels.map(c => `<span class="tag tag-blue">${escHtml(c)}</span>`).join(' ')}</div>` : ''}
+      ${t.description ? `<p style="color:var(--text-secondary);margin:0 0 0.5rem 0;font-size:0.85rem">${escHtml(t.description)}</p>` : ''}
+      <div class="team-block-meta">
+        <span class="tag tag-blue">${agentEntries.length} agent${agentEntries.length > 1 ? 's' : ''}</span>
+        ${(t.discord_channels || []).map(c => `<span class="tag tag-green">#${escHtml(c)}</span>`).join('')}
+      </div>
       <div class="agents-grid">
         ${agentCards || '<p style="color:var(--text-secondary);padding:0.5rem">Aucun agent dans ce template. Verifiez le repertoire.</p>'}
       </div>

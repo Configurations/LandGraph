@@ -46,7 +46,7 @@ if DOCKER_MODE:
 
 if DOCKER_MODE:
     PROJECT_DIR = Path("/project")
-    CONFIGS = PROJECT_DIR / "config"
+    CONFIGS = PROJECT_DIR / "Configs"
     TEAMS_DIR = CONFIGS / "Teams"
     SHARED_DIR = PROJECT_DIR / "Shared"
     PROMPTS = TEAMS_DIR / "default"
