@@ -87,7 +87,7 @@ Ce script configure un container LXC existant pour supporter Docker :
 **Ou** : sur la VM/LXC Ubuntu fraichement installee.
 
 ```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/02-install-docker.sh)" _ <ID>
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/01-install-docker.sh)" _ <ID>
 ```
 
 Ce script :
@@ -143,7 +143,7 @@ Ce script cree le projet dans `~/langgraph-project/` avec :
 **Ou** : sur la VM/LXC Ubuntu, apres l'etape 3 (stack Docker en fonctionnement).
 
 ```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/05-install-rag.sh)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/03-install-rag.sh)"
 ```
 
 **Prerequis** : PostgreSQL + pgvector doit etre running/healthy (`docker compose up -d`).
@@ -168,54 +168,6 @@ Ce script :
    ```bash
    docker compose up -d --build langgraph-api
    ```
-
----
-
-### Etape 6 — Mettre a jour les agents
-
-**Ou** : sur la VM/LXC Ubuntu, apres l'etape 3 (stack Docker en fonctionnement).
-
-```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/06-install-agents.sh)"
-```
-
-Ce script met a jour les agents LangGraph depuis le depot distant. Il permet de deployer les dernieres versions des agents sans reinstaller toute la stack.
-
-**Apres execution** : relancer les services pour prendre en compte les modifications :
-
-```bash
-cd ~/langgraph-project
-docker compose up -d --build langgraph-api
-```
-
----
-
-### Etape 13 — Fix thread persistence
-
-```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/13-fix-thread-persistence.sh)"
-```
-
-Corrige le probleme ou chaque message Discord creait un nouveau `thread_id`, faisant perdre le contexte a l'Orchestrateur entre les messages. Apres ce fix, le `thread_id` est base sur le channel Discord (un projet = un channel ou un thread Discord).
-
----
-
-### Etape 14 — Installer MCP (Model Context Protocol)
-
-```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/14-install-mcp.sh)"
-```
-
-Installation interactive de serveurs MCP pour les agents :
-1. Choisir un agent dans la liste
-2. Chercher un serveur MCP dans le registry
-3. Configurer les variables d'environnement (reutiliser ou creer un nouveau parametrage)
-4. Sauvegarder le mapping agent <-> MCP <-> parametrage
-
-Fichiers generes :
-- `config/mcp_servers.json` — serveurs MCP installes (avec parametrages)
-- `config/agent_mcp_access.json` — mapping agent -> [mcp_ids]
-- `agents/shared/mcp_client.py` — client Python qui lit les configs
 
 ---
 
@@ -312,7 +264,7 @@ REDIS_URI=redis://:ton-mot-de-passe-redis@langgraph-redis:6379/0
 ### Etape 15 — Installer le panneau d'administration web
 
 ```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/15-install-admin.sh)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/04-install-admin.sh)"
 ```
 
 Ce script installe une interface web d'administration accessible sur le port **8080** :

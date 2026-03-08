@@ -1950,9 +1950,26 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
                 cwd=str(target_dir), capture_output=True, text=True, timeout=60,
                 env=git_env,
             )
-        return {"stdout": commit_result.stdout + "\n" + push_result.stdout,
-                "stderr": push_result.stderr, "code": push_result.returncode}
+
+        # Sanitize push output to remove credentials from URLs
+        def _sanitize(text: str) -> str:
+            if login and password:
+                text = text.replace(f"{login}:{password}@", "***:***@")
+                text = text.replace(password, "***")
+            return text
+
+        push_stdout = _sanitize(push_result.stdout)
+        push_stderr = _sanitize(push_result.stderr)
+
+        if push_result.returncode != 0:
+            log.error("git push failed (%s, code %d): %s", repo_key, push_result.returncode, push_stderr[:500])
+        else:
+            log.info("git push success for %s", repo_key)
+
+        return {"stdout": commit_result.stdout + "\n" + push_stdout,
+                "stderr": push_stderr, "code": push_result.returncode}
     except Exception as e:
+        log.exception("git commit/push exception for %s", repo_key)
         raise HTTPException(500, str(e))
 
 

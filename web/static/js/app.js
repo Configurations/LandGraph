@@ -1549,8 +1549,16 @@ async function gitCommit() {
   if (!msg) { toast('Message requis', 'error'); return; }
   try {
     const data = await api(`/api/git/${_gitCommitRepoKey}/commit`, { method: 'POST', body: { message: msg } });
-    toast(data.code === 0 ? 'Commit & push effectue' : (data.stderr || 'Erreur commit/push'), data.code === 0 ? 'success' : 'error');
+    if (data.code === 0) {
+      toast('Commit & push effectue', 'success');
+    } else {
+      const errMsg = (data.stderr || 'Erreur commit/push').substring(0, 300);
+      toast(errMsg, 'error');
+    }
     closeModal();
+    // Refresh the relevant git tab
+    if (_gitCommitRepoKey === 'shared') loadTplGit();
+    else if (_gitCommitRepoKey === 'configs') loadCfgGit();
     loadGit();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -2294,6 +2302,46 @@ async function deleteCfgProvider(id) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+async function copyCfgLLMFromTemplate() {
+  try {
+    const tplData = await api('/api/templates/llm');
+    const tplProviders = tplData.providers || {};
+    const tplThrottling = tplData.throttling || {};
+    const cfgProviders = cfgLlmData.providers || {};
+    const cfgThrottling = cfgLlmData.throttling || {};
+
+    let addedP = 0, addedT = 0;
+
+    // Copy missing providers
+    for (const [id, prov] of Object.entries(tplProviders)) {
+      if (!cfgProviders[id]) {
+        await api('/api/llm/providers/provider', { method: 'POST', body: { id, ...prov } });
+        addedP++;
+      }
+    }
+
+    // Copy missing throttling rules
+    for (const [key, t] of Object.entries(tplThrottling)) {
+      if (!cfgThrottling[key]) {
+        await api('/api/llm/providers/throttling', { method: 'PUT', body: { env_key: key, rpm: t.rpm, tpm: t.tpm } });
+        addedT++;
+      }
+    }
+
+    // Copy default if not set
+    if (!cfgLlmData.default && tplData.default && (cfgProviders[tplData.default] || tplProviders[tplData.default])) {
+      await api('/api/llm/providers/default', { method: 'PUT', body: { provider_id: tplData.default } });
+    }
+
+    if (addedP === 0 && addedT === 0) {
+      toast('Aucun provider manquant a copier', 'info');
+    } else {
+      toast(`${addedP} provider(s) et ${addedT} throttling(s) copies depuis le template`, 'success');
+    }
+    loadCfgLLM();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
 function showAddCfgThrottlingModal() {
   showModal(`
     <div class="modal-header">
@@ -2368,17 +2416,17 @@ async function loadCfgMCP() {
 }
 
 function renderCfgMCP() {
-  const installed = cfgMcpCatalog.filter(c => c.installed);
-  const catalog = cfgMcpCatalog.filter(c => cfgMcpShowDeprecated || !c.deprecated);
+  const withParams = cfgMcpCatalog.filter(c => c.env_vars.length > 0);
+  const noParams = cfgMcpCatalog.filter(c => c.env_vars.length === 0 && (cfgMcpShowDeprecated || !c.deprecated));
 
-  // ── Top: Installed servers ──
+  // ── Top: Services with parameters ──
   const configuredEl = document.getElementById('cfg-mcp-configured');
-  if (installed.length === 0) {
-    configuredEl.innerHTML = '<p style="color:var(--text-secondary);text-align:center;padding:1rem">Aucun serveur MCP installe. Choisissez-en dans le catalogue ci-dessous.</p>';
+  if (withParams.length === 0) {
+    configuredEl.innerHTML = '<p style="color:var(--text-secondary);text-align:center;padding:1rem">Aucun service avec parametres.</p>';
   } else {
     configuredEl.innerHTML = `<table>
       <thead><tr><th>Service</th><th>Commande</th><th>Env</th><th>Agents</th><th>Actif</th><th>Actions</th></tr></thead>
-      <tbody>${installed.map(c => {
+      <tbody>${withParams.map(c => {
         const envStatus = c.env_vars.length === 0
           ? '<span class="tag tag-gray">aucune</span>'
           : c.env_vars.map(v =>
@@ -2396,15 +2444,19 @@ function renderCfgMCP() {
           <td>${envStatus}</td>
           <td>${agentTags}</td>
           <td>
-            <div class="toggle ${c.enabled ? 'active' : ''}" onclick="toggleCfgMcp('${escHtml(c.id)}', ${!c.enabled})"></div>
+            ${c.installed
+              ? `<div class="toggle ${c.enabled ? 'active' : ''}" onclick="toggleCfgMcp('${escHtml(c.id)}', ${!c.enabled})"></div>`
+              : '<span class="tag tag-gray">non installe</span>'}
           </td>
           <td>
-            <button class="btn-icon" onclick="showCfgMCPEnvModal('${escHtml(c.id)}')" title="Configurer env">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-            </button>
-            <button class="btn-icon danger" onclick="uninstallCfgMcp('${escHtml(c.id)}')" title="Desinstaller">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-            </button>
+            ${c.installed
+              ? `<button class="btn-icon" onclick="showCfgMCPEnvModal('${escHtml(c.id)}')" title="Configurer env">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                </button>
+                <button class="btn-icon danger" onclick="uninstallCfgMcp('${escHtml(c.id)}')" title="Desinstaller">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                </button>`
+              : `<button class="btn btn-sm btn-primary" onclick="showAddCfgCatalogModal('${escHtml(c.id)}')">Installer</button>`}
           </td>
         </tr>`;
       }).join('')}</tbody>
@@ -2413,7 +2465,7 @@ function renderCfgMCP() {
 
   // ── Bottom: Catalogue with Install / Activé buttons ──
   const catalogEl = document.getElementById('cfg-mcp-catalog');
-  catalogEl.innerHTML = catalog.map(c => {
+  catalogEl.innerHTML = noParams.map(c => {
     let statusBtn;
     if (c.installed && c.enabled) {
       statusBtn = '<span class="tag tag-green" style="padding:0.4rem 0.75rem;font-size:0.8rem">Active</span>';
@@ -2553,6 +2605,37 @@ function toggleCfgDeprecated() {
   const btn = document.getElementById('btn-cfg-show-deprecated');
   btn.textContent = cfgMcpShowDeprecated ? 'Masquer deprecies' : 'Afficher deprecies';
   renderCfgMCP();
+}
+
+async function copyCfgMCPFromTemplate() {
+  try {
+    const tplData = await api('/api/templates/mcp');
+    const tplServers = tplData.servers || {};
+    const cfgData = await api('/api/mcp/servers');
+    const cfgServers = cfgData.servers || {};
+
+    const missing = Object.entries(tplServers).filter(([id]) => !cfgServers[id]);
+    if (missing.length === 0) {
+      toast('Aucun service MCP manquant a copier', 'info');
+      return;
+    }
+
+    let added = 0;
+    for (const [id, srv] of missing) {
+      const envMapping = {};
+      for (const [k, v] of Object.entries(srv.env || {})) {
+        envMapping[k] = v;
+      }
+      await api(`/api/mcp/install/${encodeURIComponent(id)}`, {
+        method: 'POST',
+        body: { env_mapping: envMapping },
+      });
+      added++;
+    }
+
+    toast(`${added} service(s) MCP copie(s) depuis le template`, 'success');
+    loadCfgMCP();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 // ── Config Teams (sub-tab) ────────────────────────
@@ -3064,22 +3147,23 @@ async function loadTplMCP() {
 }
 
 function renderTplMCP() {
-  const installed = tplMcpCatalog.filter(c => c.installed);
-  const catalog = tplMcpCatalog.filter(c => tplMcpShowDeprecated || !c.deprecated);
+  // Top: only services WITH env_vars (parameterized)
+  const withParams = tplMcpCatalog.filter(c => c.env_vars.length > 0);
+  // Bottom: only services WITHOUT env_vars
+  const noParams = tplMcpCatalog.filter(c => c.env_vars.length === 0 && (tplMcpShowDeprecated || !c.deprecated));
 
-  // ── Top: Installed servers ──
+  // ── Top: Services with parameters ──
   const configuredEl = document.getElementById('tpl-mcp-configured');
-  if (installed.length === 0) {
-    configuredEl.innerHTML = '<p style="color:var(--text-secondary);text-align:center;padding:1rem">Aucun serveur MCP dans le template. Choisissez-en dans le catalogue ci-dessous.</p>';
+  if (withParams.length === 0) {
+    configuredEl.innerHTML = '<p style="color:var(--text-secondary);text-align:center;padding:1rem">Aucun service avec parametres dans le catalogue.</p>';
   } else {
     configuredEl.innerHTML = `<table>
       <thead><tr><th>Service</th><th>Commande</th><th>Env</th><th>Actif</th><th>Actions</th></tr></thead>
-      <tbody>${installed.map(c => {
-        const envStatus = c.env_vars.length === 0
-          ? '<span class="tag tag-gray">aucune</span>'
-          : c.env_vars.map(v =>
+      <tbody>${withParams.map(c => {
+        const envStatus = c.env_vars.map(v =>
               `<span class="tag ${v.configured ? 'tag-green' : 'tag-red'}" title="${escHtml(v.desc)}">${escHtml(v.var)}</span>`
             ).join(' ');
+        const installed = c.installed;
         return `<tr>
           <td>
             <strong>${escHtml(c.label)}</strong>
@@ -3088,24 +3172,26 @@ function renderTplMCP() {
           <td><code style="font-size:0.75rem">${escHtml(c.command)} ${escHtml(c.args)}</code></td>
           <td>${envStatus}</td>
           <td>
-            <div class="toggle ${c.enabled ? 'active' : ''}" onclick="toggleTplMCP('${escHtml(c.id)}', ${!c.enabled})"></div>
+            ${installed
+              ? `<div class="toggle ${c.enabled ? 'active' : ''}" onclick="toggleTplMCP('${escHtml(c.id)}', ${!c.enabled})"></div>`
+              : `<button class="btn btn-sm btn-primary" onclick="showAddTplCatalogModal('${escHtml(c.id)}')">Installer</button>`}
           </td>
           <td>
-            <button class="btn-icon" onclick="showTplMCPEnvModal('${escHtml(c.id)}')" title="Configurer env">
+            ${installed ? `<button class="btn-icon" onclick="showTplMCPEnvModal('${escHtml(c.id)}')" title="Configurer env">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
             </button>
             <button class="btn-icon danger" onclick="uninstallTplMCP('${escHtml(c.id)}')" title="Desinstaller">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-            </button>
+            </button>` : ''}
           </td>
         </tr>`;
       }).join('')}</tbody>
     </table>`;
   }
 
-  // ── Bottom: Catalogue with Install / Activé buttons ──
+  // ── Bottom: Services without parameters ──
   const catalogEl = document.getElementById('tpl-mcp-catalog');
-  catalogEl.innerHTML = catalog.map(c => {
+  catalogEl.innerHTML = noParams.map(c => {
     let statusBtn;
     if (c.installed && c.enabled) {
       statusBtn = '<span class="tag tag-green" style="padding:0.4rem 0.75rem;font-size:0.8rem">Active</span>';
@@ -3124,9 +3210,6 @@ function renderTplMCP() {
       </div>
       <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.5rem">${escHtml(c.description)}</p>
       <code style="font-size:0.7rem;color:var(--text-secondary)">${escHtml(c.command)} ${escHtml(c.args)}</code>
-      ${c.env_vars.length ? `<div style="margin-top:0.5rem">${c.env_vars.map(v =>
-        `<span class="tag ${v.configured ? 'tag-green' : 'tag-yellow'}" style="margin:0.1rem" title="${escHtml(v.desc)}">${escHtml(v.var)}</span>`
-      ).join('')}</div>` : ''}
     </div>`;
   }).join('');
 }

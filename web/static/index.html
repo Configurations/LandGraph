@@ -182,7 +182,10 @@
           <div class="card" style="margin-top:1rem">
             <div class="card-header">
               <h3>Providers</h3>
-              <button class="btn btn-primary btn-sm" onclick="showAddCfgProviderModal()">+ Ajouter</button>
+              <div style="display:flex;gap:0.5rem">
+                <button class="btn btn-outline btn-sm" onclick="copyCfgLLMFromTemplate()">Copier depuis Template</button>
+                <button class="btn btn-primary btn-sm" onclick="showAddCfgProviderModal()">+ Ajouter</button>
+              </div>
             </div>
             <div class="table-container" id="cfg-llm-providers-table"></div>
           </div>
@@ -199,14 +202,17 @@
         <div class="cfg-tab-content" id="cfg-tab-cfg-mcp">
           <div class="card">
             <div class="card-header">
-              <h3>Serveurs installes</h3>
-              <button class="btn btn-primary btn-sm" onclick="showAddCfgCatalogModal()">+ Installer un service</button>
+              <h3>Services avec parametres</h3>
+              <div style="display:flex;gap:0.5rem">
+                <button class="btn btn-outline btn-sm" onclick="copyCfgMCPFromTemplate()">Copier depuis Template</button>
+                <button class="btn btn-primary btn-sm" onclick="showAddCfgCatalogModal()">+ Installer un service</button>
+              </div>
             </div>
             <div class="table-container" id="cfg-mcp-configured"></div>
           </div>
           <div class="card" style="margin-top:1rem">
             <div class="card-header">
-              <h3>Catalogue disponible</h3>
+              <h3>Services sans parametres</h3>
               <button id="btn-cfg-show-deprecated" class="btn btn-outline btn-sm" onclick="toggleCfgDeprecated()">Afficher deprecies</button>
             </div>
             <div class="mcp-grid" id="cfg-mcp-catalog"></div>
@@ -326,14 +332,14 @@
         <div class="tpl-tab-content" id="tpl-tab-tpl-mcp">
           <div class="card">
             <div class="card-header">
-              <h3>Serveurs installes</h3>
+              <h3>Services avec parametres</h3>
               <button class="btn btn-primary btn-sm" onclick="showAddTplCatalogModal()">+ Installer un service</button>
             </div>
             <div class="table-container" id="tpl-mcp-configured"></div>
           </div>
           <div class="card" style="margin-top:1rem">
             <div class="card-header">
-              <h3>Catalogue disponible</h3>
+              <h3>Services sans parametres</h3>
               <button id="btn-tpl-show-deprecated" class="btn btn-outline btn-sm" onclick="toggleTplDeprecated()">Afficher deprecies</button>
             </div>
             <div class="mcp-grid" id="tpl-mcp-catalog"></div>
