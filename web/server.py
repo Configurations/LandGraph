@@ -2018,11 +2018,15 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
             ["git", "commit", "-m", req.message],
             cwd=str(target_dir), capture_output=True, text=True, timeout=30
         )
-        log.info("git commit (%s): code=%d stdout=%s stderr=%s",
-                 repo_key, commit_result.returncode,
+        nothing_to_commit = "nothing to commit" in commit_result.stdout
+        log.info("git commit (%s): code=%d nothing_to_commit=%s stdout=%s stderr=%s",
+                 repo_key, commit_result.returncode, nothing_to_commit,
                  commit_result.stdout[:200], commit_result.stderr[:200])
-        if commit_result.returncode != 0:
+        # If commit failed for a real error (not just "nothing to commit"), check
+        # if there are local commits ahead of remote before giving up
+        if commit_result.returncode != 0 and not nothing_to_commit:
             return {"stdout": commit_result.stdout, "stderr": commit_result.stderr, "code": commit_result.returncode}
+        # Always attempt push — there may be previous local commits not yet pushed
 
         # 9. Push (retry with --force-with-lease if non-fast-forward)
         push_cmd = ["git", "push", "origin", branch] if repo_path else ["git", "push"]
