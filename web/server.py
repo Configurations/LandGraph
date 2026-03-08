@@ -652,6 +652,7 @@ async def get_agents():
             "team_description": tcfg.get("description", ""),
             "team_dir": directory,
             "discord_channels": tcfg.get("discord_channels", []),
+            "orchestrator": tcfg.get("orchestrator", ""),
             "agents": result,
             "mcp_access": mcp_access,
         })
@@ -1135,6 +1136,7 @@ class TeamEntry(BaseModel):
     directory: str = ""
     discord_channels: list[str] = []
     template: str = ""
+    orchestrator: str = ""
 
 
 def _ensure_team_folder(team_id: str, directory: str = "", template: str = ""):
@@ -1166,13 +1168,16 @@ async def add_team(team_id: str, entry: TeamEntry):
     if any(t["id"] == team_id for t in teams):
         raise HTTPException(409, f"L'equipe '{team_id}' existe deja")
     directory = entry.directory or team_id
-    teams.append({
+    team_data = {
         "id": team_id,
         "name": entry.name,
         "description": entry.description,
         "directory": directory,
         "discord_channels": entry.discord_channels,
-    })
+    }
+    if entry.orchestrator:
+        team_data["orchestrator"] = entry.orchestrator
+    teams.append(team_data)
     _ensure_team_folder(team_id, directory, entry.template)
     _write_teams_list(teams)
     return {"ok": True}
@@ -1184,13 +1189,16 @@ async def update_team(team_id: str, entry: TeamEntry):
     found = False
     for i, t in enumerate(teams):
         if t["id"] == team_id:
-            teams[i] = {
+            updated = {
                 "id": team_id,
                 "name": entry.name,
                 "description": entry.description,
                 "directory": entry.directory or t.get("directory", team_id),
                 "discord_channels": entry.discord_channels,
             }
+            if entry.orchestrator:
+                updated["orchestrator"] = entry.orchestrator
+            teams[i] = updated
             found = True
             break
     if not found:

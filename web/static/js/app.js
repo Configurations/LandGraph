@@ -631,12 +631,14 @@ function renderAgents() {
   const grid = document.getElementById('agents-grid');
 
   grid.innerHTML = agentGroups.map(g => {
+    const orchId = g.orchestrator || '';
     const agentCards = Object.entries(g.agents).map(([id, a]) => {
       const mcpList = (mcpAccess[id] || []);
-      return `<div class="agent-card" onclick="editAgent('${escHtml(id)}')">
+      const isOrch = id === orchId;
+      return `<div class="agent-card${isOrch ? ' agent-orchestrator' : ''}" onclick="editAgent('${escHtml(id)}')">
         <div class="agent-card-header">
           <div>
-            <h4>${escHtml(a.name)}</h4>
+            <h4>${isOrch ? '<span class="orch-badge" title="Orchestrateur">&#9733;</span> ' : ''}${escHtml(a.name)}</h4>
             <code style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(id)}</code>
           </div>
           <button class="btn-icon danger" onclick="event.stopPropagation();deleteAgent('${escHtml(id)}')" title="Supprimer">
@@ -670,6 +672,9 @@ function renderAgents() {
 function editTeam(teamId) {
   const g = agentGroups.find(t => t.team_id === teamId);
   if (!g) return;
+  const agentIds = Object.keys(g.agents || {});
+  const orchOpts = `<option value="">-- Aucun --</option>` +
+    agentIds.map(aid => `<option value="${escHtml(aid)}" ${(g.orchestrator || '') === aid ? 'selected' : ''}>${escHtml(g.agents[aid].name)} (${escHtml(aid)})</option>`).join('');
   showModal(`
     <div class="modal-header">
       <h3>Equipe: ${escHtml(g.team_name)}</h3>
@@ -682,6 +687,10 @@ function editTeam(teamId) {
     <div class="form-group">
       <label>Description</label>
       <input id="team-edit-desc" value="${escHtml(g.team_description || '')}" />
+    </div>
+    <div class="form-group">
+      <label>Orchestrateur</label>
+      <select id="team-edit-orchestrator">${orchOpts}</select>
     </div>
     <div class="form-group">
       <label>Channels Discord <span style="font-size:0.75rem;color:var(--text-secondary)">(IDs separes par des virgules)</span></label>
@@ -697,6 +706,7 @@ function editTeam(teamId) {
 async function saveTeam(teamId) {
   const name = document.getElementById('team-edit-name').value.trim();
   const description = document.getElementById('team-edit-desc').value.trim();
+  const orchestrator = document.getElementById('team-edit-orchestrator').value;
   const channelsRaw = document.getElementById('team-edit-channels').value.trim();
   const discord_channels = channelsRaw ? channelsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
   if (!name) { toast('Le nom est requis', 'error'); return; }
@@ -704,7 +714,7 @@ async function saveTeam(teamId) {
     const g = agentGroups.find(t => t.team_id === teamId);
     await api(`/api/teams/${encodeURIComponent(teamId)}`, {
       method: 'PUT',
-      body: { name, description, directory: g?.team_dir || teamId, discord_channels }
+      body: { name, description, directory: g?.team_dir || teamId, discord_channels, orchestrator }
     });
     toast('Equipe sauvegardee', 'success');
     closeModal();
@@ -1561,12 +1571,14 @@ function renderTeams() {
     const mcpAccess = t.mcp_access || {};
     const dir = t.directory || t.id;
 
+    const orchId = t.orchestrator || '';
     const agentCards = agentEntries.map(([aid, a]) => {
       const mcpList = mcpAccess[aid] || [];
-      return `<div class="agent-card" style="cursor:pointer">
+      const isOrch = aid === orchId;
+      return `<div class="agent-card${isOrch ? ' agent-orchestrator' : ''}" style="cursor:pointer">
         <div class="agent-card-header">
           <div onclick="editCfgAgent('${escHtml(dir)}','${escHtml(aid)}')" style="flex:1;cursor:pointer">
-            <h4>${escHtml(a.name)}</h4>
+            <h4>${isOrch ? '<span class="orch-badge" title="Orchestrateur">&#9733;</span> ' : ''}${escHtml(a.name)}</h4>
             <code style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(aid)}</code>
           </div>
           <button class="btn-icon danger" onclick="event.stopPropagation();deleteCfgAgent('${escHtml(dir)}','${escHtml(aid)}')" title="Supprimer">
@@ -1947,6 +1959,9 @@ async function showAddTeamModal() {
 
 function editTeam(idx) {
   const t = teamsData[idx];
+  const agentIds = Object.keys(t.agents || {});
+  const orchOpts = `<option value="">-- Aucun --</option>` +
+    agentIds.map(aid => `<option value="${escHtml(aid)}" ${(t.orchestrator || '') === aid ? 'selected' : ''}>${escHtml((t.agents[aid] || {}).name || aid)} (${escHtml(aid)})</option>`).join('');
   showModal(`
     <div class="modal-header">
       <h3>Modifier: ${escHtml(t.name || t.id)}</h3>
@@ -1967,6 +1982,10 @@ function editTeam(idx) {
     <div class="form-group">
       <label>Repertoire</label>
       <input id="team-dir" value="${escHtml(t.directory || t.id)}" />
+    </div>
+    <div class="form-group">
+      <label>Orchestrateur</label>
+      <select id="team-orchestrator">${orchOpts}</select>
     </div>
     <div class="form-group">
       <label>Channels Discord (un par ligne)</label>
@@ -2007,13 +2026,17 @@ async function saveTeam(id) {
   const name = document.getElementById('team-name').value.trim();
   if (!name) { toast('Nom requis', 'error'); return; }
   const directory = document.getElementById('team-dir').value.trim();
-  const channels = document.getElementById('team-channels').value.split('\n').map(s => s.trim()).filter(Boolean);
+  const orchestrator = (document.getElementById('team-orchestrator') || document.getElementById('team-edit-orchestrator'))?.value || '';
+  const channels = document.getElementById('team-channels')
+    ? document.getElementById('team-channels').value.split('\n').map(s => s.trim()).filter(Boolean)
+    : (document.getElementById('team-edit-channels')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
   try {
     await api(`/api/teams/${encodeURIComponent(id)}`, { method: 'PUT', body: {
       name,
-      description: document.getElementById('team-desc').value.trim(),
+      description: (document.getElementById('team-desc') || document.getElementById('team-edit-desc'))?.value.trim() || '',
       directory,
       discord_channels: channels,
+      orchestrator,
     }});
     toast('Equipe mise a jour', 'success');
     closeModal();
@@ -2701,12 +2724,14 @@ function renderTplTeams() {
     const mcpAccess = tpl ? (tpl.mcp_access || {}) : {};
     const dir = t.directory || '';
 
+    const orchId = t.orchestrator || '';
     const agentCards = agentEntries.map(([aid, a]) => {
       const mcpList = mcpAccess[aid] || [];
-      return `<div class="agent-card" style="cursor:pointer">
+      const isOrch = aid === orchId;
+      return `<div class="agent-card${isOrch ? ' agent-orchestrator' : ''}" style="cursor:pointer">
         <div class="agent-card-header">
           <div onclick="editTplAgent('${escHtml(dir)}','${escHtml(aid)}')" style="flex:1;cursor:pointer">
-            <h4>${escHtml(a.name)}</h4>
+            <h4>${isOrch ? '<span class="orch-badge" title="Orchestrateur">&#9733;</span> ' : ''}${escHtml(a.name)}</h4>
             <code style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(aid)}</code>
           </div>
           <button class="btn-icon danger" onclick="event.stopPropagation();deleteTplAgent('${escHtml(dir)}','${escHtml(aid)}')" title="Supprimer">
@@ -3117,6 +3142,10 @@ async function addTplTeam() {
 
 function editTplTeam(idx) {
   const t = tplTeamsData.teams[idx];
+  const tpl = tplTemplatesData.find(tp => tp.id === t.directory) || null;
+  const agentIds = tpl ? Object.keys(tpl.agents || {}) : [];
+  const orchOpts = `<option value="">-- Aucun --</option>` +
+    agentIds.map(aid => `<option value="${escHtml(aid)}" ${(t.orchestrator || '') === aid ? 'selected' : ''}>${escHtml((tpl.agents[aid] || {}).name || aid)} (${escHtml(aid)})</option>`).join('');
   showModal(`
     <div class="modal-header">
       <h3>Modifier equipe (template)</h3>
@@ -3129,6 +3158,7 @@ function editTplTeam(idx) {
       <label>Repertoire (Shared/Teams/...)</label>
       <input id="m-tpl-team-dir" class="form-control" value="${escHtml(t.directory || '')}" readonly style="opacity:0.6" />
     </div>
+    <div class="form-group"><label>Orchestrateur</label><select id="m-tpl-team-orchestrator" class="form-control">${orchOpts}</select></div>
     <div class="form-group"><label>Channels Discord (virgule)</label><input id="m-tpl-team-channels" class="form-control" value="${(t.discord_channels || []).join(', ')}"></div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
@@ -3139,12 +3169,16 @@ function editTplTeam(idx) {
 
 async function saveTplTeam(idx) {
   const channels = document.getElementById('m-tpl-team-channels').value.trim();
-  tplTeamsData.teams[idx] = {
+  const orchestrator = (document.getElementById('m-tpl-team-orchestrator') || {}).value || '';
+  const updated = {
     ...tplTeamsData.teams[idx],
     name: document.getElementById('m-tpl-team-name').value.trim(),
     description: document.getElementById('m-tpl-team-desc').value.trim(),
     discord_channels: channels ? channels.split(',').map(s => s.trim()) : []
   };
+  if (orchestrator) updated.orchestrator = orchestrator;
+  else delete updated.orchestrator;
+  tplTeamsData.teams[idx] = updated;
   await _saveTplTeams();
   closeModal();
   loadTplTeamsList();

@@ -449,6 +449,16 @@ tr:hover { background: rgba(255,255,255,0.02); }
 
 .agent-card:hover { border-color: var(--accent); }
 
+.agent-card.agent-orchestrator {
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 1px rgba(245,158,11,0.2);
+}
+.orch-badge {
+  color: #f59e0b;
+  font-size: 0.85rem;
+  vertical-align: baseline;
+}
+
 .agent-card-header {
   display: flex;
   justify-content: space-between;
