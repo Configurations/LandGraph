@@ -1833,6 +1833,109 @@ async def git_pull(repo_key: str):
         raise HTTPException(500, str(e))
 
 
+# ── API: Git Push only + Reset to remote ──────────
+
+@app.post("/api/git/{repo_key}/push")
+async def git_push_only(repo_key: str):
+    """Push local commits to remote without committing."""
+    target_dir = _get_repo_dir(repo_key)
+    log.info("Button pressed: Push only (%s)", repo_key)
+    try:
+        git_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        cfg = _get_repo_cfg(repo_key)
+        repo_path = cfg.get("path", "").strip()
+        login = cfg.get("login", "").strip()
+        password = cfg.get("password", "").strip()
+
+        if repo_path:
+            _git_configure_remote(target_dir, repo_path, login, password)
+
+        branch_result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(target_dir), capture_output=True, text=True, timeout=10
+        )
+        branch = branch_result.stdout.strip()
+        if not branch or branch == "HEAD":
+            branch = "master"
+
+        push_result = subprocess.run(
+            ["git", "push", "origin", branch],
+            cwd=str(target_dir), capture_output=True, text=True, timeout=60,
+            env=git_env,
+        )
+        # Retry with --force-with-lease if rejected
+        if push_result.returncode != 0 and ("non-fast-forward" in push_result.stderr or "secret" in push_result.stderr.lower()):
+            log.warning("git push rejected (%s), retrying with --force-with-lease", repo_key)
+            push_result = subprocess.run(
+                ["git", "push", "--force-with-lease", "origin", branch],
+                cwd=str(target_dir), capture_output=True, text=True, timeout=60,
+                env=git_env,
+            )
+
+        def _sanitize(text: str) -> str:
+            if login and password:
+                text = text.replace(f"{login}:{password}@", "***:***@")
+                text = text.replace(password, "***")
+            return text
+
+        stdout = _sanitize(push_result.stdout)
+        stderr = _sanitize(push_result.stderr)
+        if push_result.returncode != 0:
+            log.error("git push failed (%s, code %d): %s", repo_key, push_result.returncode, stderr[:500])
+        else:
+            log.info("git push success (%s): %s", repo_key, stdout[:200])
+        return {"stdout": stdout, "stderr": stderr, "code": push_result.returncode}
+    except Exception as e:
+        log.exception("git push exception for %s", repo_key)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/git/{repo_key}/reset-to-remote")
+async def git_reset_to_remote(repo_key: str):
+    """Reset local branch to match remote, discarding all local commits."""
+    target_dir = _get_repo_dir(repo_key)
+    log.info("Button pressed: Reset to remote (%s)", repo_key)
+    try:
+        git_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        cfg = _get_repo_cfg(repo_key)
+        repo_path = cfg.get("path", "").strip()
+        login = cfg.get("login", "").strip()
+        password = cfg.get("password", "").strip()
+
+        if repo_path:
+            _git_configure_remote(target_dir, repo_path, login, password)
+
+        # Fetch latest from remote
+        subprocess.run(
+            ["git", "fetch", "origin"],
+            cwd=str(target_dir), capture_output=True, text=True, timeout=60,
+            env=git_env,
+        )
+
+        branch_result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(target_dir), capture_output=True, text=True, timeout=10
+        )
+        branch = branch_result.stdout.strip()
+        if not branch or branch == "HEAD":
+            branch = "master"
+
+        # Hard reset to remote branch
+        result = subprocess.run(
+            ["git", "reset", "--hard", f"origin/{branch}"],
+            cwd=str(target_dir), capture_output=True, text=True, timeout=30,
+        )
+        log.info("git reset --hard origin/%s (%s): code=%d stdout=%s",
+                 branch, repo_key, result.returncode, result.stdout[:200])
+        if result.returncode == 0:
+            return {"ok": True, "message": f"Reset effectue sur origin/{branch}"}
+        else:
+            return {"ok": False, "message": result.stderr[:300]}
+    except Exception as e:
+        log.exception("git reset exception for %s", repo_key)
+        raise HTTPException(500, str(e))
+
+
 # ── API: Git Commits history + checkout ───────────
 
 @app.get("/api/git/{repo_key}/commits")
@@ -2028,19 +2131,46 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
             return {"stdout": commit_result.stdout, "stderr": commit_result.stderr, "code": commit_result.returncode}
         # Always attempt push — there may be previous local commits not yet pushed
 
-        # 9. Purge git.json from entire history (GitHub Push Protection blocks secrets)
+        # 9. Purge sensitive files from entire history (GitHub Push Protection)
+        # Diagnostic: list all files ever committed that might contain secrets
+        diag_result = subprocess.run(
+            ["git", "log", "--all", "--diff-filter=A", "--name-only", "--pretty=format:"],
+            cwd=str(target_dir), capture_output=True, text=True, timeout=30
+        )
+        all_files = set(f.strip() for f in diag_result.stdout.splitlines() if f.strip())
+        sensitive_in_history = [f for f in all_files if any(p in f.lower() for p in ['git.json', '.env', '.key', '.pem', 'secret', 'token', 'credential'])]
+        if sensitive_in_history:
+            log.warning("Sensitive files found in history (%s): %s", repo_key, sensitive_in_history)
+        sensitive_files = "git rm -r --cached --ignore-unmatch git.json .env *.key *.pem"
         purge_result = subprocess.run(
             ["git", "filter-branch", "--force", "--index-filter",
-             "git rm -r --cached --ignore-unmatch git.json */git.json",
+             sensitive_files,
              "--prune-empty", "--", "--all"],
             cwd=str(target_dir), capture_output=True, text=True, timeout=120,
-            env=git_env,
+            env={**git_env, "FILTER_BRANCH_SQUELCH_WARNING": "1"},
         )
+        log.info("git filter-branch (%s): code=%d stdout=%s stderr=%s",
+                 repo_key, purge_result.returncode,
+                 purge_result.stdout[:300], purge_result.stderr[:300])
+        # Clean up filter-branch refs
         if purge_result.returncode == 0:
-            log.info("git filter-branch purged git.json from history (%s)", repo_key)
-        else:
-            log.warning("git filter-branch (%s): code=%d stderr=%s",
-                        repo_key, purge_result.returncode, purge_result.stderr[:300])
+            subprocess.run(
+                ["git", "for-each-ref", "--format=%(refname)", "refs/original/"],
+                cwd=str(target_dir), capture_output=True, text=True, timeout=10
+            )
+            subprocess.run(
+                ["git", "update-ref", "-d", "refs/original/refs/heads/" + branch],
+                cwd=str(target_dir), capture_output=True, text=True, timeout=10
+            )
+            subprocess.run(
+                ["git", "reflog", "expire", "--expire=now", "--all"],
+                cwd=str(target_dir), capture_output=True, text=True, timeout=10
+            )
+            subprocess.run(
+                ["git", "gc", "--prune=now"],
+                cwd=str(target_dir), capture_output=True, text=True, timeout=30
+            )
+            log.info("git filter-branch cleanup done (%s)", repo_key)
 
         # 10. Push (use --force-with-lease since filter-branch rewrites history)
         history_rewritten = purge_result.returncode == 0

@@ -2658,6 +2658,8 @@ async function loadCfgGit() {
     document.getElementById('btn-cfg-git-init').disabled = inited;
     document.getElementById('btn-cfg-git-pull').disabled = !inited;
     document.getElementById('btn-cfg-git-commit').disabled = !inited;
+    document.getElementById('btn-cfg-git-push').disabled = !inited;
+    document.getElementById('btn-cfg-git-reset').disabled = !inited;
     if (inited) loadCfgGitCommits();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -2739,6 +2741,27 @@ async function cfgGitCheckout(hash) {
   }
 }
 
+async function cfgGitPushOnly() {
+  try {
+    const data = await api('/api/git/configs/push', { method: 'POST' });
+    if (data.code === 0) {
+      toast('Push effectue', 'success');
+    } else {
+      toast((data.stderr || 'Erreur push').substring(0, 300), 'error');
+    }
+    loadCfgGit();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function cfgGitResetLocal() {
+  if (!(await confirmModal('Supprimer tous les commits locaux non pushes ?\nLe depot local sera resynchronise avec le remote.'))) return;
+  try {
+    const data = await api('/api/git/configs/reset-to-remote', { method: 'POST' });
+    toast(data.message || 'Reset effectue', data.ok ? 'success' : 'error');
+    loadCfgGit();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
 // ═══════════════════════════════════════════════════
 // TEMPLATES (sub-tabs: LLM, MCP, Teams)
 // ═══════════════════════════════════════════════════
@@ -2781,6 +2804,8 @@ async function loadTplGit() {
     document.getElementById('btn-tpl-git-init').disabled = inited;
     document.getElementById('btn-tpl-git-pull').disabled = !inited;
     document.getElementById('btn-tpl-git-commit').disabled = !inited;
+    document.getElementById('btn-tpl-git-push').disabled = !inited;
+    document.getElementById('btn-tpl-git-reset').disabled = !inited;
     if (inited) loadTplGitCommits();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -2860,6 +2885,27 @@ async function tplGitCheckout(hash) {
   } catch (e) {
     toast(e.message, 'error');
   }
+}
+
+async function tplGitPushOnly() {
+  try {
+    const data = await api('/api/git/shared/push', { method: 'POST' });
+    if (data.code === 0) {
+      toast('Push effectue', 'success');
+    } else {
+      toast((data.stderr || 'Erreur push').substring(0, 300), 'error');
+    }
+    loadTplGit();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function tplGitResetLocal() {
+  if (!(await confirmModal('Supprimer tous les commits locaux non pushes ?\nLe depot local sera resynchronise avec le remote.'))) return;
+  try {
+    const data = await api('/api/git/shared/reset-to-remote', { method: 'POST' });
+    toast(data.message || 'Reset effectue', data.ok ? 'success' : 'error');
+    loadTplGit();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 // ── Template LLM ──────────────────────────────────
