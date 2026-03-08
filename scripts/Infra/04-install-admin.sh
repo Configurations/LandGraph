@@ -51,16 +51,13 @@ if [ ! -f config/agent_mcp_access.json ]; then
     echo '{}' > config/agent_mcp_access.json
     echo "  -> agent_mcp_access.json cree"
 fi
-# Copier le catalogue MCP si absent
-if [ ! -f config/mcp_catalog.csv ]; then
-    wget -qO config/mcp_catalog.csv "${REPO_RAW}/scripts/Infra/mcp_catalog.csv" 2>/dev/null || true
-    echo "  -> mcp_catalog.csv copie"
-fi
-# Copier llm_providers.json si absent
-if [ ! -f config/llm_providers.json ]; then
-    wget -qO config/llm_providers.json "${REPO_RAW}/Configs/Teams/llm_providers.json" 2>/dev/null || true
-    echo "  -> llm_providers.json copie"
-fi
+# Telecharger les fichiers Shared/Teams depuis GitHub
+mkdir -p Shared/Teams
+wget -qO Shared/Teams/mcp_catalog.csv "${REPO_RAW}/Shared/Teams/mcp_catalog.csv" 2>/dev/null || true
+wget -qO Shared/Teams/llm_providers.json "${REPO_RAW}/Shared/Teams/llm_providers.json" 2>/dev/null || true
+wget -qO Shared/Teams/mcp_servers.json "${REPO_RAW}/Shared/Teams/mcp_servers.json" 2>/dev/null || true
+wget -qO Shared/Teams/teams.json "${REPO_RAW}/Shared/Teams/teams.json" 2>/dev/null || true
+echo "  -> Shared/Teams/ mis a jour"
 
 # ── 4. Build et demarrage ────────────────────
 echo "[4/4] Build et demarrage du conteneur admin..."

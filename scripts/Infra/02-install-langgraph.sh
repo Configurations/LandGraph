@@ -28,7 +28,7 @@ fi
 
 # ── 1. Arborescence ──────────────────────────
 echo "[1/6] Arborescence..."
-mkdir -p "${PROJECT_DIR}"/{agents/shared,config,scripts,data/backups,prompts/v1}
+mkdir -p "${PROJECT_DIR}"/{agents/shared,config/Teams,scripts,data/backups,prompts/v1,Shared/Teams}
 mkdir -p /opt/langgraph-data/{postgres,redis}
 cd "${PROJECT_DIR}"
 
@@ -41,8 +41,12 @@ wget -qO Dockerfile "${REPO_RAW}/Dockerfile" 2>/dev/null || { echo "ERREUR: Dock
 wget -qO Dockerfile.admin "${REPO_RAW}/Dockerfile.admin" 2>/dev/null || true
 wget -qO requirements.txt "${REPO_RAW}/requirements.txt" 2>/dev/null || { echo "ERREUR: requirements.txt"; exit 1; }
 wget -qO scripts/init.sql "${REPO_RAW}/scripts/init.sql" 2>/dev/null || { echo "ERREUR: init.sql"; exit 1; }
-wget -qO /Configs/.gitignore "${REPO_RAW}/gitignore" 2>/dev/null || true
-wget -qO /Shared/.gitignore "${REPO_RAW}/gitignore" 2>/dev/null || true
+wget -qO Shared/Teams/llm_providers.json "${REPO_RAW}/Shared/Teams/llm_providers.json" 2>/dev/null || true
+wget -qO Shared/Teams/mcp_servers.json "${REPO_RAW}/Shared/Teams/mcp_servers.json" 2>/dev/null || true
+wget -qO Shared/Teams/teams.json "${REPO_RAW}/Shared/Teams/teams.json" 2>/dev/null || true
+wget -qO Shared/Teams/mcp_catalog.csv "${REPO_RAW}/Shared/Teams/mcp_catalog.csv" 2>/dev/null || true
+wget -qO config/.gitignore "${REPO_RAW}/gitignore" 2>/dev/null || true
+wget -qO Shared/.gitignore "${REPO_RAW}/gitignore" 2>/dev/null || true
 
 echo "  -> Fichiers telecharges"
 

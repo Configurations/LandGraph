@@ -235,7 +235,11 @@
 
         <!-- Sub-tab: Teams -->
         <div class="tpl-tab-content" id="tpl-tab-tpl-teams">
-          <div class="agents-grid" id="templates-grid"></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+            <h3 style="margin:0">Equipes (Shared)</h3>
+            <button class="btn btn-primary btn-sm" onclick="showAddTplTeamModal()">+ Ajouter</button>
+          </div>
+          <div class="table-container" id="tpl-teams-table"></div>
         </div>
       </div>
 

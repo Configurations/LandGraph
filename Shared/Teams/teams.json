@@ -1,0 +1,12 @@
+{
+  "teams": [
+    {
+      "id": "default",
+      "name": "Equipe Produit",
+      "description": "Equipe de developpement produit complete",
+      "directory": "DevProject",
+      "discord_channels": []
+    }
+  ],
+  "channel_mapping": {}
+}

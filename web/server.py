@@ -68,13 +68,14 @@ load_dotenv(ENV_FILE, override=False)
 
 MCP_SERVERS_FILE = TEAMS_DIR / "mcp_servers.json"
 MCP_ACCESS_FILE = TEAMS_DIR / "agent_mcp_access.json"
-MCP_CATALOG_FILE = SCRIPTS / "Infra" / "mcp_catalog.csv" if not DOCKER_MODE else CONFIGS / "mcp_catalog.csv"
+MCP_CATALOG_FILE = SCRIPTS / "Infra" / "mcp_catalog.csv" if not DOCKER_MODE else SHARED_DIR / "Teams" / "mcp_catalog.csv"
 LLM_PROVIDERS_FILE = TEAMS_DIR / "llm_providers.json"
 TEAMS_FILE = TEAMS_DIR / "teams.json"
 GIT_CONFIG_FILE = TEAMS_DIR / "git.json"
 SHARED_TEAMS_DIR = SHARED_DIR / "Teams"
 SHARED_LLM_FILE = SHARED_TEAMS_DIR / "llm_providers.json"
 SHARED_MCP_FILE = SHARED_TEAMS_DIR / "mcp_servers.json"
+SHARED_TEAMS_FILE = SHARED_TEAMS_DIR / "teams.json"
 
 logging.basicConfig(
     level=logging.DEBUG if os.environ.get("DEBUG") else logging.INFO,
@@ -595,13 +596,14 @@ def _team_dir(team_id: str) -> Path:
 
 @app.get("/api/agents")
 async def get_agents():
-    teams_data = _read_json(TEAMS_FILE)
-    teams = teams_data.get("teams", {})
+    teams = _read_teams_list()
     if not teams:
-        teams = {"default": {"name": "Equipe par defaut"}}
+        teams = [{"id": "default", "name": "Equipe par defaut", "directory": "default"}]
     groups = []
-    for tid, tcfg in teams.items():
-        tdir = _team_dir(tid)
+    for tcfg in teams:
+        tid = tcfg.get("id", "default")
+        directory = tcfg.get("directory", tid)
+        tdir = _team_dir(directory)
         registry_file = tdir / "agents_registry.json"
         data = _read_json(registry_file)
         agents = data.get("agents", {})
@@ -964,41 +966,84 @@ async def chat(req: ChatRequest):
         raise HTTPException(500, f"Erreur: {str(e)}")
 
 
-# ── API: Teams ────────────────────────────────────
+# ── API: Teams (Configs) ──────────────────────────
+
+
+def _read_teams_list() -> list:
+    """Read teams as a list (array format)."""
+    data = _read_json(TEAMS_FILE)
+    teams = data.get("teams", [])
+    if isinstance(teams, list):
+        return teams
+    # Legacy dict format: convert to list
+    return [{"id": tid, **tcfg} for tid, tcfg in teams.items()]
+
+
+def _write_teams_list(teams: list):
+    """Write teams list and rebuild channel_mapping."""
+    mapping = {}
+    for t in teams:
+        for ch in t.get("discord_channels", []):
+            if ch:
+                mapping[ch] = t["id"]
+    _write_json(TEAMS_FILE, {"teams": teams, "channel_mapping": mapping})
+
 
 @app.get("/api/teams")
 async def get_teams():
-    data = _read_json(TEAMS_FILE)
-    return {
-        "teams": data.get("teams", {}),
-        "channel_mapping": data.get("channel_mapping", {}),
-    }
+    teams = _read_teams_list()
+    # Enrich each team with its agents and mcp_access
+    enriched = []
+    for t in teams:
+        tid = t.get("id", "")
+        directory = t.get("directory", tid)
+        tdir = TEAMS_DIR / directory
+        # Read agents
+        reg = _read_json(tdir / "agents_registry.json") if (tdir / "agents_registry.json").exists() else {}
+        agents_raw = reg.get("agents", {})
+        agents_detail = {}
+        for aid, acfg in agents_raw.items():
+            prompt_file = tdir / acfg.get("prompt", f"{aid}.md")
+            prompt_content = ""
+            if prompt_file.exists():
+                prompt_content = prompt_file.read_text(encoding="utf-8")
+            agents_detail[aid] = {**acfg, "prompt_content": prompt_content}
+        # Read MCP access
+        mcp_access = _read_json(tdir / "agent_mcp_access.json") if (tdir / "agent_mcp_access.json").exists() else {}
+        enriched.append({
+            **t,
+            "agents": agents_detail,
+            "agent_count": len(agents_raw),
+            "mcp_access": mcp_access,
+        })
+    return {"teams": enriched}
 
 
 class TeamEntry(BaseModel):
     name: str
     description: str = ""
+    directory: str = ""
     discord_channels: list[str] = []
-    template: str = ""  # template ID to copy from (only used on creation)
+    template: str = ""
 
 
-def _ensure_team_folder(team_id: str, template: str = ""):
-    """Create or populate a team folder under Configs/Teams/<team_id>/.
+def _ensure_team_folder(team_id: str, directory: str = "", template: str = ""):
+    """Create or populate a team folder under Configs/Teams/<directory>/.
     If template is given, copy from Shared/Teams/<template>/.
     Otherwise create skeleton files."""
     import shutil
-    team_dir = TEAMS_DIR / team_id
+    folder = directory or team_id
+    team_dir = TEAMS_DIR / folder
     if team_dir.exists():
-        return  # already exists, don't overwrite
+        return
     if template:
         src = SHARED_TEAMS_DIR / template
         if src.is_dir():
             shutil.copytree(str(src), str(team_dir))
-            log.info("Copied template '%s' to team '%s'", template, team_id)
+            log.info("Copied template '%s' to team '%s'", template, folder)
             return
         else:
             log.warning("Template '%s' not found, creating skeleton", template)
-    # Create skeleton
     team_dir.mkdir(parents=True, exist_ok=True)
     _write_json(team_dir / "agents_registry.json", {"agents": {}})
     _write_json(team_dir / "agent_mcp_access.json", {})
@@ -1007,61 +1052,51 @@ def _ensure_team_folder(team_id: str, template: str = ""):
 
 @app.post("/api/teams/{team_id}")
 async def add_team(team_id: str, entry: TeamEntry):
-    data = _read_json(TEAMS_FILE)
-    teams = data.setdefault("teams", {})
-    if team_id in teams:
+    teams = _read_teams_list()
+    if any(t["id"] == team_id for t in teams):
         raise HTTPException(409, f"L'equipe '{team_id}' existe deja")
-    team_data = {
+    directory = entry.directory or team_id
+    teams.append({
+        "id": team_id,
         "name": entry.name,
         "description": entry.description,
+        "directory": directory,
         "discord_channels": entry.discord_channels,
-    }
-    teams[team_id] = team_data
-    _rebuild_channel_mapping(data)
-    _ensure_team_folder(team_id, entry.template)
-    _write_json(TEAMS_FILE, data)
+    })
+    _ensure_team_folder(team_id, directory, entry.template)
+    _write_teams_list(teams)
     return {"ok": True}
 
 
 @app.put("/api/teams/{team_id}")
 async def update_team(team_id: str, entry: TeamEntry):
-    data = _read_json(TEAMS_FILE)
-    teams = data.setdefault("teams", {})
-    if team_id not in teams:
+    teams = _read_teams_list()
+    found = False
+    for i, t in enumerate(teams):
+        if t["id"] == team_id:
+            teams[i] = {
+                "id": team_id,
+                "name": entry.name,
+                "description": entry.description,
+                "directory": entry.directory or t.get("directory", team_id),
+                "discord_channels": entry.discord_channels,
+            }
+            found = True
+            break
+    if not found:
         raise HTTPException(404, f"Equipe '{team_id}' introuvable")
-    team_data = {
-        "name": entry.name,
-        "description": entry.description,
-        "discord_channels": entry.discord_channels,
-    }
-    teams[team_id] = team_data
-    _rebuild_channel_mapping(data)
-    _write_json(TEAMS_FILE, data)
+    _write_teams_list(teams)
     return {"ok": True}
 
 
 @app.delete("/api/teams/{team_id}")
 async def delete_team(team_id: str):
-    data = _read_json(TEAMS_FILE)
-    teams = data.setdefault("teams", {})
-    if team_id not in teams:
+    teams = _read_teams_list()
+    new_teams = [t for t in teams if t["id"] != team_id]
+    if len(new_teams) == len(teams):
         raise HTTPException(404, f"Equipe '{team_id}' introuvable")
-    if team_id == "default":
-        raise HTTPException(400, "Impossible de supprimer l'equipe par defaut")
-    del teams[team_id]
-    _rebuild_channel_mapping(data)
-    _write_json(TEAMS_FILE, data)
+    _write_teams_list(new_teams)
     return {"ok": True}
-
-
-def _rebuild_channel_mapping(data: dict):
-    """Rebuild channel_mapping from discord_channels in each team."""
-    mapping = {}
-    for tid, t in data.get("teams", {}).items():
-        for ch in t.get("discord_channels", []):
-            if ch:
-                mapping[ch] = tid
-    data["channel_mapping"] = mapping
 
 
 # ── API: Templates ────────────────────────────────
@@ -1073,16 +1108,24 @@ async def list_templates():
     if SHARED_TEAMS_DIR.exists():
         for d in sorted(SHARED_TEAMS_DIR.iterdir()):
             if d.is_dir():
-                # Read agents_registry to count agents
                 reg = _read_json(d / "agents_registry.json")
-                agent_count = len(reg.get("agents", {}))
-                # Count prompt files
+                agents_raw = reg.get("agents", {})
+                agents_detail = {}
+                for aid, acfg in agents_raw.items():
+                    prompt_file = d / acfg.get("prompt", f"{aid}.md")
+                    prompt_content = ""
+                    if prompt_file.exists():
+                        prompt_content = prompt_file.read_text(encoding="utf-8")
+                    agents_detail[aid] = {**acfg, "prompt_content": prompt_content}
+                mcp_access = _read_json(d / "agent_mcp_access.json") if (d / "agent_mcp_access.json").exists() else {}
                 prompt_count = len([f for f in d.iterdir() if f.suffix == ".md"])
                 templates.append({
                     "id": d.name,
-                    "agents": agent_count,
+                    "agents": agents_detail,
+                    "agent_count": len(agents_raw),
                     "prompts": prompt_count,
-                    "has_mcp_access": (d / "agent_mcp_access.json").exists(),
+                    "has_mcp_access": bool(mcp_access),
+                    "mcp_access": mcp_access,
                 })
     return {"templates": templates}
 
@@ -1112,6 +1155,20 @@ async def save_template_mcp(request: Request):
     """Write shared MCP servers template."""
     data = await request.json()
     _write_json(SHARED_MCP_FILE, data)
+    return {"ok": True}
+
+
+@app.get("/api/templates/teams")
+async def get_template_teams():
+    """Read shared teams list."""
+    return _read_json(SHARED_TEAMS_FILE)
+
+
+@app.put("/api/templates/teams")
+async def save_template_teams(request: Request):
+    """Write shared teams list."""
+    data = await request.json()
+    _write_json(SHARED_TEAMS_FILE, data)
     return {"ok": True}
 
 

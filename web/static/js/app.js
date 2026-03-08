@@ -1355,84 +1355,115 @@ let templatesData = [];
 async function loadTeams() {
   try {
     const data = await api('/api/teams');
-    teamsData = data.teams || {};
+    teamsData = data.teams || [];
     renderTeams();
   } catch (e) { toast(e.message, 'error'); }
 }
 
 function renderTeams() {
   const grid = document.getElementById('teams-grid');
-  grid.innerHTML = Object.entries(teamsData).map(([id, t]) => {
-    const channels = (t.discord_channels || []).filter(c => c);
-    return `<div class="agent-card" onclick="editTeam('${escHtml(id)}')">
-      <div class="agent-card-header">
-        <div>
-          <h4>${escHtml(t.name || id)}</h4>
-          <code style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(id)}</code>
+  if (!teamsData.length) {
+    grid.innerHTML = '<p style="color:var(--text-secondary);padding:1rem">Aucune equipe configuree.</p>';
+    return;
+  }
+  grid.innerHTML = teamsData.map((t, i) => {
+    const agentEntries = Object.entries(t.agents || {});
+    const mcpAccess = t.mcp_access || {};
+
+    const agentCards = agentEntries.map(([aid, a]) => {
+      const mcpList = mcpAccess[aid] || [];
+      return `<div class="agent-card" onclick="showCfgAgentDetail('${escHtml(t.directory || t.id)}','${escHtml(aid)}')" style="cursor:pointer">
+        <div class="agent-card-header">
+          <div>
+            <h4>${escHtml(a.name)}</h4>
+            <code style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(aid)}</code>
+          </div>
         </div>
-        ${id !== 'default' ? `<button class="btn-icon danger" onclick="event.stopPropagation();deleteTeam('${escHtml(id)}')" title="Supprimer">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-        </button>` : ''}
+        <div class="agent-meta">
+          <span class="tag tag-blue">temp: ${a.temperature}</span>
+          <span class="tag tag-blue">tokens: ${a.max_tokens}</span>
+          ${a.llm || a.model ? `<span class="tag tag-yellow">${escHtml(a.llm || a.model)}</span>` : ''}
+          ${a.type ? `<span class="tag tag-gray">${escHtml(a.type)}</span>` : ''}
+        </div>
+        ${mcpList.length ? `<div class="agent-meta" style="margin-top:0.5rem">
+          ${mcpList.map(m => `<span class="tag tag-green">${escHtml(m)}</span>`).join('')}
+        </div>` : ''}
+      </div>`;
+    }).join('');
+
+    return `<div class="agent-group" style="margin-bottom:1.5rem">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
+        <h3 class="agent-group-title" style="margin:0">
+          ${escHtml(t.name || t.id)}
+          <span style="font-weight:400;font-size:0.75rem;color:var(--text-secondary);margin-left:0.5rem">${escHtml(t.id)}</span>
+          <code style="font-weight:400;font-size:0.7rem;color:var(--text-secondary);margin-left:0.5rem">Configs/Teams/${escHtml(t.directory || t.id)}/</code>
+        </h3>
+        <div style="display:flex;gap:0.5rem">
+          <button class="btn btn-outline btn-sm" onclick="editTeam(${i})">Modifier</button>
+          <button class="btn btn-outline btn-sm" style="color:var(--error)" onclick="deleteTeam('${escHtml(t.id)}')">Suppr</button>
+        </div>
       </div>
-      ${t.description ? `<p style="font-size:0.8rem;color:var(--text-secondary);margin:0.5rem 0">${escHtml(t.description)}</p>` : ''}
-      <div class="agent-meta">
-        <span class="tag tag-blue">Configs/Teams/${escHtml(id)}/</span>
+      ${t.description ? `<p style="color:var(--text-secondary);margin:0 0 0.75rem 0;font-size:0.85rem">${escHtml(t.description)}</p>` : ''}
+      ${(t.discord_channels || []).length ? `<div style="margin-bottom:0.75rem">${t.discord_channels.map(c => `<span class="tag tag-blue">#${escHtml(c)}</span>`).join(' ')}</div>` : ''}
+      <div class="agents-grid">
+        ${agentCards || '<p style="color:var(--text-secondary);padding:0.5rem">Aucun agent dans cette equipe.</p>'}
       </div>
-      ${channels.length ? `<div class="agent-meta" style="margin-top:0.5rem">
-        ${channels.map(c => `<span class="tag tag-green">#${escHtml(c)}</span>`).join('')}
-      </div>` : ''}
     </div>`;
-  }).join('') || '<p style="color:var(--text-secondary);padding:1rem">Aucune equipe configuree.</p>';
+  }).join('');
 }
 
-function _teamModalHtml(title, id, t, isNew) {
-  let templateSelect = '';
-  if (isNew && templatesData.length > 0) {
-    const opts = templatesData.map(tpl =>
-      `<option value="${escHtml(tpl.id)}">${escHtml(tpl.id)} (${tpl.agents} agents, ${tpl.prompts} prompts)</option>`
-    ).join('');
-    templateSelect = `<div class="form-group">
-      <label>Creer a partir d'un template</label>
-      <select id="team-template">
-        <option value="">(vide — equipe vierge)</option>
-        ${opts}
-      </select>
-    </div>`;
-  }
-  return `
+function showCfgAgentDetail(dirName, agentId) {
+  const team = teamsData.find(t => (t.directory || t.id) === dirName);
+  if (!team || !team.agents[agentId]) { toast('Agent introuvable', 'error'); return; }
+  const a = team.agents[agentId];
+  const mcpList = (team.mcp_access || {})[agentId] || [];
+
+  const mcpChips = mcpList.length
+    ? mcpList.map(m => `<span class="tag tag-green">${escHtml(m)}</span>`).join(' ')
+    : '<span style="color:var(--text-secondary);font-size:0.8rem">Aucun MCP</span>';
+
+  const promptRaw = a.prompt_content || '';
+  const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
+
+  showModal(`
     <div class="modal-header">
-      <h3>${title}</h3>
+      <h3>Agent: ${escHtml(a.name)} (${escHtml(agentId)})</h3>
       <button class="btn-icon" onclick="closeModal()">&times;</button>
     </div>
-    ${isNew ? `<div class="form-group">
-      <label>Identifiant (sera le nom du dossier dans Configs/Teams/)</label>
-      <input id="team-id" value="${escHtml(id)}" placeholder="ex: data_team" />
-    </div>` : ''}
-    ${templateSelect}
+    <div class="form-row">
+      <div class="form-group">
+        <label>Nom</label>
+        <input value="${escHtml(a.name)}" disabled />
+      </div>
+      <div class="form-group">
+        <label>Modele LLM</label>
+        <input value="${escHtml(a.llm || a.model || '')}" disabled />
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Temperature</label>
+        <input value="${a.temperature}" disabled />
+      </div>
+      <div class="form-group">
+        <label>Max tokens</label>
+        <input value="${a.max_tokens}" disabled />
+      </div>
+    </div>
+    ${a.type ? `<div class="form-group"><label>Type</label><input value="${escHtml(a.type)}" disabled /></div>` : ''}
+    ${a.pipeline_steps && a.pipeline_steps.length ? `<div class="form-group"><label>Pipeline steps</label><input value="${escHtml(a.pipeline_steps.join(', '))}" disabled /></div>` : ''}
     <div class="form-group">
-      <label>Nom</label>
-      <input id="team-name" value="${escHtml(t.name || '')}" placeholder="Equipe Produit" />
+      <label>Prompt (${escHtml(a.prompt || agentId + '.md')})</label>
+      <div class="prompt-preview" style="max-height:400px;overflow-y:auto">${promptHtml}</div>
     </div>
     <div class="form-group">
-      <label>Description</label>
-      <input id="team-desc" value="${escHtml(t.description || '')}" placeholder="Description de l'equipe" />
-    </div>
-    <div class="form-group">
-      <label>Channels Discord (un par ligne)</label>
-      <textarea id="team-channels" rows="3" placeholder="1234567890">${(t.discord_channels || []).join('\n')}</textarea>
+      <label>Services MCP autorises</label>
+      <div class="mcp-chips">${mcpChips}</div>
     </div>
     <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
-      <button class="btn btn-primary" onclick="${isNew ? 'addTeam()' : `saveTeam('${escHtml(id)}')`}">Enregistrer</button>
-    </div>`;
-}
-
-function _readTeamForm() {
-  return {
-    name: document.getElementById('team-name').value.trim(),
-    description: document.getElementById('team-desc').value.trim(),
-    discord_channels: document.getElementById('team-channels').value.split('\n').map(s => s.trim()).filter(Boolean),
-  };
+      <button class="btn btn-outline" onclick="closeModal()">Fermer</button>
+    </div>
+  `, 'modal-wide');
 }
 
 async function showAddTeamModal() {
@@ -1441,26 +1472,102 @@ async function showAddTeamModal() {
     const data = await api('/api/templates');
     templatesData = data.templates || [];
   } catch (e) { templatesData = []; }
-  showModal(_teamModalHtml('Nouvelle equipe', '', {}, true));
+  const dirOpts = templatesData.map(tp => `<option value="${escHtml(tp.id)}">${escHtml(tp.id)} (${tp.agent_count} agents)</option>`).join('');
+  showModal(`
+    <div class="modal-header">
+      <h3>Nouvelle equipe</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-group">
+      <label>Identifiant</label>
+      <input id="team-id" placeholder="ex: data_team" />
+    </div>
+    <div class="form-group">
+      <label>Nom</label>
+      <input id="team-name" placeholder="Equipe Produit" />
+    </div>
+    <div class="form-group">
+      <label>Description</label>
+      <input id="team-desc" placeholder="Description de l'equipe" />
+    </div>
+    <div class="form-group">
+      <label>Repertoire (Configs/Teams/...)</label>
+      <select id="team-dir" class="form-control">
+        <option value="">-- Saisie libre --</option>
+        ${dirOpts}
+      </select>
+      <input id="team-dir-custom" class="form-control" placeholder="Ou saisir un nom de repertoire" style="margin-top:0.25rem">
+    </div>
+    <div class="form-group">
+      <label>Creer a partir d'un template (Shared)</label>
+      <select id="team-template">
+        <option value="">(vide — equipe vierge)</option>
+        ${dirOpts}
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Channels Discord (un par ligne)</label>
+      <textarea id="team-channels" rows="3" placeholder="1234567890"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="addTeam()">Enregistrer</button>
+    </div>
+  `);
 }
 
-function editTeam(id) {
-  const t = teamsData[id];
-  showModal(_teamModalHtml('Modifier: ' + (t.name || id), id, t, false));
+function editTeam(idx) {
+  const t = teamsData[idx];
+  showModal(`
+    <div class="modal-header">
+      <h3>Modifier: ${escHtml(t.name || t.id)}</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-group">
+      <label>Identifiant</label>
+      <input value="${escHtml(t.id)}" disabled />
+    </div>
+    <div class="form-group">
+      <label>Nom</label>
+      <input id="team-name" value="${escHtml(t.name || '')}" placeholder="Equipe Produit" />
+    </div>
+    <div class="form-group">
+      <label>Description</label>
+      <input id="team-desc" value="${escHtml(t.description || '')}" />
+    </div>
+    <div class="form-group">
+      <label>Repertoire</label>
+      <input id="team-dir" value="${escHtml(t.directory || t.id)}" />
+    </div>
+    <div class="form-group">
+      <label>Channels Discord (un par ligne)</label>
+      <textarea id="team-channels" rows="3">${(t.discord_channels || []).join('\n')}</textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="saveTeam('${escHtml(t.id)}')">Enregistrer</button>
+    </div>
+  `);
 }
 
 async function addTeam() {
   const id = (document.getElementById('team-id')?.value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
   if (!id) { toast('Identifiant requis', 'error'); return; }
-  const body = _readTeamForm();
-  if (!body.name) { toast('Nom requis', 'error'); return; }
-  // Add template if selected
-  const tplSelect = document.getElementById('team-template');
-  if (tplSelect && tplSelect.value) {
-    body.template = tplSelect.value;
-  }
+  const name = document.getElementById('team-name').value.trim();
+  if (!name) { toast('Nom requis', 'error'); return; }
+  const dirSelect = document.getElementById('team-dir').value;
+  const dirCustom = document.getElementById('team-dir-custom').value.trim();
+  const directory = dirCustom || dirSelect || id;
+  const channels = document.getElementById('team-channels').value.split('\n').map(s => s.trim()).filter(Boolean);
+  const template = document.getElementById('team-template')?.value || '';
   try {
-    await api(`/api/teams/${encodeURIComponent(id)}`, { method: 'POST', body });
+    await api(`/api/teams/${encodeURIComponent(id)}`, { method: 'POST', body: {
+      name,
+      description: document.getElementById('team-desc').value.trim(),
+      directory,
+      discord_channels: channels,
+      template,
+    }});
     toast('Equipe ajoutee', 'success');
     closeModal();
     loadTeams();
@@ -1468,10 +1575,17 @@ async function addTeam() {
 }
 
 async function saveTeam(id) {
-  const body = _readTeamForm();
-  if (!body.name) { toast('Nom requis', 'error'); return; }
+  const name = document.getElementById('team-name').value.trim();
+  if (!name) { toast('Nom requis', 'error'); return; }
+  const directory = document.getElementById('team-dir').value.trim();
+  const channels = document.getElementById('team-channels').value.split('\n').map(s => s.trim()).filter(Boolean);
   try {
-    await api(`/api/teams/${encodeURIComponent(id)}`, { method: 'PUT', body });
+    await api(`/api/teams/${encodeURIComponent(id)}`, { method: 'PUT', body: {
+      name,
+      description: document.getElementById('team-desc').value.trim(),
+      directory,
+      discord_channels: channels,
+    }});
     toast('Equipe mise a jour', 'success');
     closeModal();
     loadTeams();
@@ -1492,6 +1606,7 @@ async function deleteTeam(id) {
 // ═══════════════════════════════════════════════════
 let tplLlmData = {};
 let tplMcpData = {};
+let tplTeamsData = { teams: [], channel_mapping: {} };
 
 function showTemplateTab(tabId) {
   document.querySelectorAll('.tpl-tab-content').forEach(c => c.classList.remove('active'));
@@ -1787,16 +1902,24 @@ async function loadTplMCP() {
 function renderTplMCP() {
   const servers = tplMcpData.servers || {};
   const tbl = document.getElementById('tpl-mcp-table');
-  if (Object.keys(servers).length === 0) {
+  const entries = Object.entries(servers);
+  if (entries.length === 0) {
     tbl.innerHTML = '<p style="color:var(--text-secondary);text-align:center;padding:1rem">Aucun serveur MCP dans le template. Ajoutez-en pour les inclure automatiquement dans les nouvelles equipes.</p>';
-  } else {
-    tbl.innerHTML = `<table>
-      <thead><tr><th>ID</th><th>Commande</th><th>Arguments</th><th>Env</th><th style="width:100px">Actions</th></tr></thead>
-      <tbody>${Object.entries(servers).map(([id, s]) => `<tr>
-        <td><strong>${escHtml(id)}</strong></td>
-        <td><code style="font-size:0.8rem">${escHtml(s.command || '')}</code></td>
-        <td style="font-size:0.8rem;max-width:300px;overflow:hidden;text-overflow:ellipsis">${escHtml((s.args || []).join(' '))}</td>
-        <td>${s.env ? Object.keys(s.env).map(k => `<code style="font-size:0.7rem">${escHtml(k)}</code>`).join(' ') : '<span style="color:var(--text-secondary)">—</span>'}</td>
+    return;
+  }
+  tbl.innerHTML = `<table>
+    <thead><tr><th>Service</th><th>Commande</th><th>Variables d'env</th><th style="width:100px">Actions</th></tr></thead>
+    <tbody>${entries.map(([id, s]) => {
+      const envKeys = s.env ? Object.keys(s.env) : [];
+      const envTags = envKeys.length
+        ? envKeys.map(k => `<span class="tag tag-green" title="${escHtml(s.env[k])}">${escHtml(k)}</span>`).join(' ')
+        : '<span class="tag tag-gray">aucune</span>';
+      return `<tr>
+        <td>
+          <strong>${escHtml(id)}</strong>
+        </td>
+        <td><code style="font-size:0.75rem">${escHtml(s.command || '')} ${escHtml((s.args || []).join(' '))}</code></td>
+        <td>${envTags}</td>
         <td>
           <button class="btn-icon" onclick="editTplMcp('${escHtml(id)}')" title="Modifier">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
@@ -1805,9 +1928,9 @@ function renderTplMCP() {
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
           </button>
         </td>
-      </tr>`).join('')}</tbody>
-    </table>`;
-  }
+      </tr>`;
+    }).join('')}</tbody>
+  </table>`;
 }
 
 function showAddTplMcpModal() {
@@ -1896,32 +2019,215 @@ async function deleteTplMcp(id) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-// ── Template Teams list ───────────────────────────
+// ── Template Teams ────────────────────────────────
+let tplTemplatesData = []; // from /api/templates (directories)
+
 async function loadTplTeamsList() {
   try {
-    const data = await api('/api/templates');
-    templatesData = data.templates || [];
+    // Load both: teams.json (metadata) and template directories (agents)
+    const [teamsRes, tplRes] = await Promise.all([
+      api('/api/templates/teams'),
+      api('/api/templates'),
+    ]);
+    tplTeamsData = teamsRes;
+    if (!Array.isArray(tplTeamsData.teams)) tplTeamsData.teams = [];
+    tplTemplatesData = tplRes.templates || [];
     renderTplTeams();
   } catch (e) { toast(e.message, 'error'); }
 }
 
 function renderTplTeams() {
-  const grid = document.getElementById('templates-grid');
-  grid.innerHTML = templatesData.map(tpl => `
-    <div class="agent-card">
-      <div class="agent-card-header">
-        <div>
-          <h4>${escHtml(tpl.id)}</h4>
-          <code style="font-size:0.75rem;color:var(--text-secondary)">Shared/Teams/${escHtml(tpl.id)}/</code>
+  const container = document.getElementById('tpl-teams-table');
+  if (!tplTeamsData.teams.length) {
+    container.innerHTML = '<p style="color:var(--text-secondary);padding:1rem">Aucune equipe configuree.</p>';
+    return;
+  }
+  container.innerHTML = tplTeamsData.teams.map((t, i) => {
+    // Find matching template directory
+    const tpl = tplTemplatesData.find(tp => tp.id === t.directory) || null;
+    const agentEntries = tpl ? Object.entries(tpl.agents) : [];
+    const mcpAccess = tpl ? (tpl.mcp_access || {}) : {};
+
+    const agentCards = agentEntries.map(([aid, a]) => {
+      const mcpList = mcpAccess[aid] || [];
+      return `<div class="agent-card" onclick="showTplAgentDetail('${escHtml(t.directory)}','${escHtml(aid)}')" style="cursor:pointer">
+        <div class="agent-card-header">
+          <div>
+            <h4>${escHtml(a.name)}</h4>
+            <code style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(aid)}</code>
+          </div>
+        </div>
+        <div class="agent-meta">
+          <span class="tag tag-blue">temp: ${a.temperature}</span>
+          <span class="tag tag-blue">tokens: ${a.max_tokens}</span>
+          ${a.llm ? `<span class="tag tag-yellow">${escHtml(a.llm)}</span>` : ''}
+          ${a.type ? `<span class="tag tag-gray">${escHtml(a.type)}</span>` : ''}
+        </div>
+        ${mcpList.length ? `<div class="agent-meta" style="margin-top:0.5rem">
+          ${mcpList.map(m => `<span class="tag tag-green">${escHtml(m)}</span>`).join('')}
+        </div>` : ''}
+      </div>`;
+    }).join('');
+
+    return `<div class="agent-group" style="margin-bottom:1.5rem">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
+        <h3 class="agent-group-title" style="margin:0">
+          ${escHtml(t.name)}
+          <span style="font-weight:400;font-size:0.75rem;color:var(--text-secondary);margin-left:0.5rem">${escHtml(t.id)}</span>
+          <code style="font-weight:400;font-size:0.7rem;color:var(--text-secondary);margin-left:0.5rem">Shared/Teams/${escHtml(t.directory || '')}/</code>
+        </h3>
+        <div style="display:flex;gap:0.5rem">
+          <button class="btn btn-outline btn-sm" onclick="editTplTeam(${i})">Modifier</button>
+          <button class="btn btn-outline btn-sm" style="color:var(--error)" onclick="deleteTplTeam(${i})">Suppr</button>
         </div>
       </div>
-      <div class="agent-meta" style="margin-top:0.5rem">
-        <span class="tag tag-blue">${tpl.agents} agents</span>
-        <span class="tag tag-yellow">${tpl.prompts} prompts</span>
-        ${tpl.has_mcp_access ? '<span class="tag tag-green">MCP</span>' : ''}
+      ${t.description ? `<p style="color:var(--text-secondary);margin:0 0 0.75rem 0;font-size:0.85rem">${escHtml(t.description)}</p>` : ''}
+      ${(t.discord_channels || []).length ? `<div style="margin-bottom:0.75rem">${t.discord_channels.map(c => `<span class="tag tag-blue">${escHtml(c)}</span>`).join(' ')}</div>` : ''}
+      <div class="agents-grid">
+        ${agentCards || '<p style="color:var(--text-secondary);padding:0.5rem">Aucun agent dans ce template. Verifiez le repertoire.</p>'}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function showTplAgentDetail(dirName, agentId) {
+  const tpl = tplTemplatesData.find(tp => tp.id === dirName);
+  if (!tpl || !tpl.agents[agentId]) { toast('Agent introuvable', 'error'); return; }
+  const a = tpl.agents[agentId];
+  const mcpList = (tpl.mcp_access || {})[agentId] || [];
+
+  const mcpChips = mcpList.length
+    ? mcpList.map(m => `<span class="tag tag-green">${escHtml(m)}</span>`).join(' ')
+    : '<span style="color:var(--text-secondary);font-size:0.8rem">Aucun MCP</span>';
+
+  const promptRaw = a.prompt_content || '';
+  const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
+
+  showModal(`
+    <div class="modal-header">
+      <h3>Agent: ${escHtml(a.name)} (${escHtml(agentId)})</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Nom</label>
+        <input value="${escHtml(a.name)}" disabled />
+      </div>
+      <div class="form-group">
+        <label>Modele LLM</label>
+        <input value="${escHtml(a.llm || a.model || '')}" disabled />
       </div>
     </div>
-  `).join('') || '<p style="color:var(--text-secondary);padding:1rem">Aucun template disponible. Ajoutez des dossiers dans Shared/Teams/ ou configurez le depot Git Shared et faites un Pull.</p>';
+    <div class="form-row">
+      <div class="form-group">
+        <label>Temperature</label>
+        <input value="${a.temperature}" disabled />
+      </div>
+      <div class="form-group">
+        <label>Max tokens</label>
+        <input value="${a.max_tokens}" disabled />
+      </div>
+    </div>
+    ${a.type ? `<div class="form-group"><label>Type</label><input value="${escHtml(a.type)}" disabled /></div>` : ''}
+    ${a.pipeline_steps && a.pipeline_steps.length ? `<div class="form-group"><label>Pipeline steps</label><input value="${escHtml(a.pipeline_steps.join(', '))}" disabled /></div>` : ''}
+    <div class="form-group">
+      <label>Prompt (${escHtml(a.prompt || agentId + '.md')})</label>
+      <div class="prompt-preview" style="max-height:400px;overflow-y:auto">${promptHtml}</div>
+    </div>
+    <div class="form-group">
+      <label>Services MCP autorises</label>
+      <div class="mcp-chips">${mcpChips}</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Fermer</button>
+    </div>
+  `, 'modal-wide');
+}
+
+async function _saveTplTeams() {
+  await api('/api/templates/teams', 'PUT', tplTeamsData);
+  toast('Equipes sauvegardees');
+}
+
+function showAddTplTeamModal() {
+  // List available template directories
+  const dirOpts = tplTemplatesData.map(tp => `<option value="${escHtml(tp.id)}">${escHtml(tp.id)} (${tp.agent_count} agents)</option>`).join('');
+  openModal('Ajouter une equipe', `
+    <div class="form-group"><label>ID</label><input id="m-tpl-team-id" class="form-control" placeholder="mon-equipe"></div>
+    <div class="form-group"><label>Nom</label><input id="m-tpl-team-name" class="form-control" placeholder="Mon Equipe"></div>
+    <div class="form-group"><label>Description</label><input id="m-tpl-team-desc" class="form-control"></div>
+    <div class="form-group"><label>Repertoire template (Shared/Teams/...)</label>
+      <select id="m-tpl-team-dir" class="form-control">
+        <option value="">-- Saisie libre --</option>
+        ${dirOpts}
+      </select>
+      <input id="m-tpl-team-dir-custom" class="form-control" placeholder="Ou saisir un nom de repertoire" style="margin-top:0.25rem">
+    </div>
+    <div class="form-group"><label>Channels Discord (virgule)</label><input id="m-tpl-team-channels" class="form-control"></div>
+  `, 'Ajouter', () => addTplTeam());
+}
+
+async function addTplTeam() {
+  const id = document.getElementById('m-tpl-team-id').value.trim();
+  if (!id) { toast('ID requis', 'error'); return; }
+  if (tplTeamsData.teams.find(t => t.id === id)) { toast('ID deja utilise', 'error'); return; }
+  const dirSelect = document.getElementById('m-tpl-team-dir').value;
+  const dirCustom = document.getElementById('m-tpl-team-dir-custom').value.trim();
+  const directory = dirCustom || dirSelect;
+  const channels = document.getElementById('m-tpl-team-channels').value.trim();
+  tplTeamsData.teams.push({
+    id,
+    name: document.getElementById('m-tpl-team-name').value.trim(),
+    description: document.getElementById('m-tpl-team-desc').value.trim(),
+    directory,
+    discord_channels: channels ? channels.split(',').map(s => s.trim()) : []
+  });
+  await _saveTplTeams();
+  closeModal();
+  loadTplTeamsList();
+}
+
+function editTplTeam(idx) {
+  const t = tplTeamsData.teams[idx];
+  const dirOpts = tplTemplatesData.map(tp => `<option value="${escHtml(tp.id)}" ${t.directory === tp.id ? 'selected' : ''}>${escHtml(tp.id)} (${tp.agent_count} agents)</option>`).join('');
+  openModal('Modifier equipe', `
+    <div class="form-group"><label>ID</label><input id="m-tpl-team-id" class="form-control" value="${escHtml(t.id)}" disabled></div>
+    <div class="form-group"><label>Nom</label><input id="m-tpl-team-name" class="form-control" value="${escHtml(t.name)}"></div>
+    <div class="form-group"><label>Description</label><input id="m-tpl-team-desc" class="form-control" value="${escHtml(t.description || '')}"></div>
+    <div class="form-group"><label>Repertoire template</label>
+      <select id="m-tpl-team-dir" class="form-control">
+        <option value="">-- Saisie libre --</option>
+        ${dirOpts}
+      </select>
+      <input id="m-tpl-team-dir-custom" class="form-control" value="${escHtml(t.directory || '')}" style="margin-top:0.25rem">
+    </div>
+    <div class="form-group"><label>Channels Discord (virgule)</label><input id="m-tpl-team-channels" class="form-control" value="${(t.discord_channels || []).join(', ')}"></div>
+  `, 'Sauvegarder', () => saveTplTeam(idx));
+}
+
+async function saveTplTeam(idx) {
+  const dirSelect = document.getElementById('m-tpl-team-dir').value;
+  const dirCustom = document.getElementById('m-tpl-team-dir-custom').value.trim();
+  const directory = dirCustom || dirSelect;
+  const channels = document.getElementById('m-tpl-team-channels').value.trim();
+  tplTeamsData.teams[idx] = {
+    id: tplTeamsData.teams[idx].id,
+    name: document.getElementById('m-tpl-team-name').value.trim(),
+    description: document.getElementById('m-tpl-team-desc').value.trim(),
+    directory,
+    discord_channels: channels ? channels.split(',').map(s => s.trim()) : []
+  };
+  await _saveTplTeams();
+  closeModal();
+  loadTplTeamsList();
+}
+
+async function deleteTplTeam(idx) {
+  const t = tplTeamsData.teams[idx];
+  if (!confirm(`Supprimer l'equipe "${t.name}" ?`)) return;
+  tplTeamsData.teams.splice(idx, 1);
+  await _saveTplTeams();
+  loadTplTeamsList();
 }
 
 // ═══════════════════════════════════════════════════
