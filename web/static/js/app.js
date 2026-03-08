@@ -1607,8 +1607,8 @@ function renderTeams() {
           </button>
         </div>
         <div class="agent-meta" onclick="editCfgAgent('${escHtml(dir)}','${escHtml(aid)}')">
-          <span class="tag tag-blue">temp: ${a.temperature}</span>
-          <span class="tag tag-blue">tokens: ${a.max_tokens}</span>
+          ${a.temperature != null ? `<span class="tag tag-blue">temp: ${a.temperature}</span>` : ''}
+          ${a.max_tokens != null ? `<span class="tag tag-blue">tokens: ${a.max_tokens}</span>` : ''}
           ${a.llm || a.model ? `<span class="tag tag-yellow">${escHtml(a.llm || a.model)}</span>` : ''}
           ${a.type ? `<span class="tag tag-gray">${escHtml(a.type)}</span>` : ''}
         </div>
@@ -1645,7 +1645,7 @@ function renderTeams() {
           ${(t.discord_channels || []).map(c => `<span class="tag tag-green">#${escHtml(c)}</span>`).join('')}
         </div>
         <div class="agents-grid">
-          ${agentCards || '<p style="color:var(--text-secondary);padding:0.5rem">Aucun agent dans cette equipe.</p>'}
+          ${agentEntries.length ? agentCards : '<p style="color:var(--text-secondary);padding:0.5rem">Aucun agent dans cette equipe. Cliquez sur "+ Agent" pour en ajouter.</p>'}
         </div>
       </div>
     </div>`;
