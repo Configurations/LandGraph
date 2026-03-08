@@ -3599,7 +3599,7 @@ function _wfRenderPhaseProps(el, phaseId) {
     <div class="wf-props-section">
       <div class="form-group">
         <label>ID</label>
-        <input value="${escHtml(phaseId)}" disabled style="opacity:0.6" />
+        <input value="${escHtml(phaseId)}" onchange="wfRenamePhase('${phaseId}',this.value)" />
       </div>
       <div class="form-group">
         <label>Nom</label>
@@ -3735,9 +3735,10 @@ function wfCloseContextMenu() {
   if (m) m.remove();
 }
 
-async function wfCtxDeletePhase(id) {
+function wfCtxDeletePhase(id) {
   wfCloseContextMenu();
-  if (!(await confirmModal(`Supprimer la phase "${_wf.data.phases[id]?.name || id}" et toutes ses transitions ?`))) return;
+  const name = _wf.data.phases[id]?.name || id;
+  if (!confirm(`Supprimer la phase "${name}" et toutes ses transitions ?`)) return;
   delete _wf.data.phases[id];
   delete _wf.positions[id];
   _wf.data.transitions = (_wf.data.transitions || []).filter(t => t.from !== id && t.to !== id);
@@ -3862,12 +3863,39 @@ function wfAddPhase() {
   wfRender();
 }
 
-async function wfDeletePhase(id) {
-  if (!(await confirmModal(`Supprimer la phase "${_wf.data.phases[id]?.name || id}" ?`))) return;
+function wfDeletePhase(id) {
+  const name = _wf.data.phases[id]?.name || id;
+  if (!confirm(`Supprimer la phase "${name}" et toutes ses transitions ?`)) return;
   delete _wf.data.phases[id];
   delete _wf.positions[id];
   _wf.data.transitions = (_wf.data.transitions || []).filter(t => t.from !== id && t.to !== id);
   _wf.selected = null;
+  wfRender();
+}
+
+function wfRenamePhase(oldId, newId) {
+  newId = newId.trim().replace(/[^a-z0-9_-]/gi, '_').toLowerCase();
+  if (!newId || newId === oldId) return;
+  if (_wf.data.phases[newId]) { toast('Cet ID existe deja', 'error'); wfRender(); return; }
+  // Move phase data
+  _wf.data.phases[newId] = _wf.data.phases[oldId];
+  delete _wf.data.phases[oldId];
+  // Move position
+  if (_wf.positions[oldId]) {
+    _wf.positions[newId] = _wf.positions[oldId];
+    delete _wf.positions[oldId];
+  }
+  // Update transitions
+  for (const t of (_wf.data.transitions || [])) {
+    if (t.from === oldId) t.from = newId;
+    if (t.to === oldId) t.to = newId;
+  }
+  // Update next_phase references
+  for (const p of Object.values(_wf.data.phases)) {
+    if (p.next_phase === oldId) p.next_phase = newId;
+  }
+  // Update selection
+  if (_wf.selected === oldId) _wf.selected = newId;
   wfRender();
 }
 
