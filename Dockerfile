@@ -17,8 +17,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY agents/ ./agents/
 COPY config/ ./config/
 COPY config/Teams/ ./config/Teams/
-COPY langgraph.json .
+COPY config/langgraph.json .
 
 EXPOSE 8000
 
 CMD ["python", "-m", "uvicorn", "agents.gateway:app", "--host", "0.0.0.0", "--port", "8000"]
+    
