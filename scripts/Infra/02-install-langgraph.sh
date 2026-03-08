@@ -41,13 +41,17 @@ wget -qO Dockerfile "${REPO_RAW}/Dockerfile" 2>/dev/null || { echo "ERREUR: Dock
 wget -qO Dockerfile.admin "${REPO_RAW}/Dockerfile.admin" 2>/dev/null || true
 wget -qO Dockerfile.discord "${REPO_RAW}/Dockerfile.discord" 2>/dev/null || true
 wget -qO requirements.txt "${REPO_RAW}/requirements.txt" 2>/dev/null || { echo "ERREUR: requirements.txt"; exit 1; }
+
 wget -qO scripts/init.sql "${REPO_RAW}/scripts/init.sql" 2>/dev/null || { echo "ERREUR: init.sql"; exit 1; }
+
 wget -qO Shared/Teams/llm_providers.json "${REPO_RAW}/Shared/Teams/llm_providers.json" 2>/dev/null || true
 wget -qO Shared/Teams/mcp_servers.json "${REPO_RAW}/Shared/Teams/mcp_servers.json" 2>/dev/null || true
 wget -qO Shared/Teams/teams.json "${REPO_RAW}/Shared/Teams/teams.json" 2>/dev/null || true
 wget -qO Shared/Teams/mcp_catalog.csv "${REPO_RAW}/Shared/Teams/mcp_catalog.csv" 2>/dev/null || true
-wget -qO config/Teams/.gitignore "${REPO_RAW}/gitignore"  2>/dev/null || { echo "ERREUR: gitignore"; exit 1; }
 wget -qO Shared/Teams/.gitignore "${REPO_RAW}/gitignore"  2>/dev/null || { echo "ERREUR: gitignore"; exit 1; }
+
+wget -qO config/Teams/.gitignore "${REPO_RAW}/gitignore"  2>/dev/null || { echo "ERREUR: gitignore"; exit 1; }
+wget -qO config/langgraph.json "${REPO_RAW}/config/langgraph.json"  2>/dev/null || { echo "ERREUR: langgraph.json"; exit 1; }
 
 echo "  -> Fichiers telecharges"
 
