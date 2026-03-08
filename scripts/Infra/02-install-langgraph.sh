@@ -46,8 +46,8 @@ wget -qO Shared/Teams/llm_providers.json "${REPO_RAW}/Shared/Teams/llm_providers
 wget -qO Shared/Teams/mcp_servers.json "${REPO_RAW}/Shared/Teams/mcp_servers.json" 2>/dev/null || true
 wget -qO Shared/Teams/teams.json "${REPO_RAW}/Shared/Teams/teams.json" 2>/dev/null || true
 wget -qO Shared/Teams/mcp_catalog.csv "${REPO_RAW}/Shared/Teams/mcp_catalog.csv" 2>/dev/null || true
-wget -qO config/.gitignore "${REPO_RAW}/gitignore" 2>/dev/null || true
-wget -qO Shared/.gitignore "${REPO_RAW}/gitignore" 2>/dev/null || true
+wget -qO config/Teams/.gitignore "${REPO_RAW}/gitignore" 2>/dev/null || true
+wget -qO Shared/Teams/.gitignore "${REPO_RAW}/gitignore" 2>/dev/null || true
 
 echo "  -> Fichiers telecharges"
 
