@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-WORKDIR /app
+WORKDIR /apphttps://mail.google.com/mail/u/0/#inbox
 
 # System deps + Node.js (pour MCP servers npx)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -22,4 +22,3 @@ COPY config/langgraph.json .
 EXPOSE 8000
 
 CMD ["python", "-m", "uvicorn", "agents.gateway:app", "--host", "0.0.0.0", "--port", "8000"]
-    

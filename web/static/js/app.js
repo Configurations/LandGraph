@@ -177,7 +177,7 @@ function renderEnv() {
         </button>
       </td>
       <td>
-        <button class="btn-icon" onclick="editEnvEntry(${i})" title="Modifier">
+        <button class="btn-icon" onclick="editEnvEntry('${escHtml(e.key)}')" title="Modifier">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
         </button>
         <button class="btn-icon danger" onclick="deleteEnvEntry('${escHtml(e.key)}')" title="Supprimer">
@@ -239,8 +239,8 @@ async function addEnvEntry() {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-function editEnvEntry(idx) {
-  const entry = envEntries.filter(e => e.key)[idx];
+function editEnvEntry(key) {
+  const entry = envEntries.find(e => e.key === key);
   showModal(`
     <div class="modal-header">
       <h3>Modifier: ${escHtml(entry.key)}</h3>
