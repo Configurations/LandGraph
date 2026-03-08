@@ -7,10 +7,12 @@
 0|everything|Everything|Serveur test avec prompts resources et tools|npx|-y @modelcontextprotocol/server-everything|stdio|
 0|fetch|Fetch|Recuperer et convertir le contenu web pour LLM|uvx|mcp-server-fetch|stdio|
 0|filesystem|Filesystem|Operations fichiers securisees lecture ecriture creation|npx|-y @modelcontextprotocol/server-filesystem /app /tmp/workspace|stdio|
+0|s3|AWS S3|Buckets objets upload download|npx|-y @anthropic/mcp-server-s3|stdio|AWS_ACCESS_KEY_ID:Cle AWS,AWS_SECRET_ACCESS_KEY:Secret AWS,AWS_REGION:Region
 0|git|Git|Lire chercher manipuler des repos Git locaux|uvx|mcp-server-git|stdio|
 0|memory|Memory|Memoire persistante knowledge graph entre sessions|npx|-y @modelcontextprotocol/server-memory|stdio|
 0|sequential-thinking|Sequential Thinking|Raisonnement par etapes reflexion structuree|npx|-y @modelcontextprotocol/server-sequential-thinking|stdio|
 0|time|Time|Fuseaux horaires conversions date heure|npx|-y @modelcontextprotocol/server-time|stdio|
+0|desktop-commander|Desktop Commander|Fichiers terminal apps controle local|npx|-y @anthropic/mcp-server-desktop-commander|stdio|
 #
 # == Code et Repositories ==
 0|github|GitHub|Repos PRs issues branches commits code search|npx|-y @modelcontextprotocol/server-github|stdio|GITHUB_PERSONAL_ACCESS_TOKEN:GitHub PAT (scopes repo read:org)
@@ -20,16 +22,24 @@
 #
 # == Communication et Productivite ==
 1|slack-legacy|Slack (legacy)|Messages channels recherche reactions|uvx|mcp-server-slack|stdio|SLACK_BOT_TOKEN:Token bot Slack (xoxb-...),SLACK_TEAM_ID:ID equipe Slack
+0|slack|Slack|Messages channels users recherche conversations|npx|-y @anthropic/mcp-server-slack|stdio|BOT_TOKEN:Token bot Slack (xoxb-...),TEAM_ID:ID equipe Slack
 0|notion|Notion|Pages bases de donnees blocs recherche CRUD|npx|-y @notionhq/notion-mcp-server|stdio|NOTION_API_KEY:Cle API Notion (secret_...)
 0|linear|Linear|Issues projets cycles equipes labels|uvx|mcp-server-linear|stdio|LINEAR_API_KEY:Cle API Linear
+0|jira|Jira/Confluence|Issues projets sprints pages Confluence|npx|-y @anthropic/mcp-server-atlassian|stdio|ATLASSIAN_API_TOKEN:Token API,ATLASSIAN_EMAIL:Email,DOMAIN:Domaine (xxx.atlassian.net)
+0|asana|Asana|Taches projets equipes workspaces|npx|-y @anthropic/mcp-server-asana|stdio|PERSONAL_ACCESS_TOKEN:Token API Asana
 #
 # == Bases de donnees ==
 1|postgres-legacy|PostgreSQL (legacy)|Acces lecture seule schemas queries SQL|npx|-y @modelcontextprotocol/server-postgres|stdio|
+0|postgres|PostgreSQL|Queries SQL schemas tables PostgreSQL|npx|-y @anthropic/mcp-server-postgres|stdio|DATABASE_URL:URI PostgreSQL
+0|mongodb|MongoDB|Collections documents queries aggregation|npx|-y @anthropic/mcp-server-mongodb|stdio|MONGODB_URI:URI MongoDB
+0|supabase|Supabase|Database auth storage edge functions|npx|-y @supabase/mcp-server-supabase|stdio|ACCESS_TOKEN:Token Supabase,PROJECT_REF:Ref projet
 0|sqlite|SQLite|Queries SQL sur fichiers SQLite locaux|uvx|mcp-server-sqlite|stdio|
 1|redis-legacy|Redis (legacy)|GET SET DEL KEYS operations Redis|uvx|mcp-server-redis|stdio|REDIS_URL:URI Redis (redis://host:6379)
 #
 # == Cloud et Infrastructure ==
 0|cloudflare|Cloudflare|Workers KV R2 D1 DNS Pages|npx|-y @cloudflare/mcp-server-cloudflare|stdio|CLOUDFLARE_API_TOKEN:Token API Cloudflare
+0|docker|Docker|Containers images volumes networks|npx|-y @anthropic/mcp-server-docker|stdio|
+0|kubernetes|Kubernetes|Pods services deployments namespaces|npx|-y @anthropic/mcp-server-kubernetes|stdio|KUBECONFIG:Chemin kubeconfig
 #
 # == Monitoring ==
 1|sentry-legacy|Sentry (legacy)|Issues erreurs performance releases|uvx|mcp-server-sentry|stdio|SENTRY_AUTH_TOKEN:Token authentification Sentry
@@ -38,9 +48,11 @@
 # == Test et Qualite ==
 0|playwright|Playwright|Tests E2E screenshots navigation web automatisee|npx|-y @playwright/mcp|stdio|
 1|puppeteer-legacy|Puppeteer (legacy)|Automatisation navigateur web scraping|npx|-y @modelcontextprotocol/server-puppeteer|stdio|
+0|browser|Browser|Controle navigateur web navigation screenshots|npx|-y @anthropic/mcp-server-browser|stdio|
 #
 # == Design ==
 0|figma|Figma|Fichiers design composants styles variables|npx|-y figma-developer-mcp --stdio|stdio|FIGMA_API_KEY:Cle API Figma
+0|excalidraw|Excalidraw|Diagrammes schemas style hand-drawn|npx|-y @anthropic/mcp-server-excalidraw|stdio|
 #
 # == Recherche ==
 1|brave-search-legacy|Brave Search (legacy)|Recherche web et locale via Brave|uvx|mcp-server-brave-search|stdio|BRAVE_API_KEY:Cle API Brave Search
@@ -49,7 +61,11 @@
 #
 # == Google ==
 1|google-drive-legacy|Google Drive (legacy)|Fichiers recherche partage dossiers|uvx|mcp-server-google-drive|stdio|GOOGLE_CLIENT_ID:Client ID Google OAuth,GOOGLE_CLIENT_SECRET:Client Secret Google OAuth
+0|google-drive|Google Drive|Fichiers dossiers recherche partage|npx|-y @anthropic/mcp-server-google-drive|stdio|GOOGLE_CLIENT_ID:Client ID OAuth,GOOGLE_CLIENT_SECRET:Secret OAuth
 1|google-maps-legacy|Google Maps (legacy)|Geocoding directions places details|npx|-y @modelcontextprotocol/server-google-maps|stdio|GOOGLE_MAPS_API_KEY:Cle API Google Maps
+0|gmail|Gmail|Lire envoyer chercher emails labels|npx|-y @anthropic/mcp-server-gmail|stdio|GOOGLE_CLIENT_ID:Client ID OAuth,GOOGLE_CLIENT_SECRET:Secret OAuth
 #
 # == Divers ==
 1|everart-legacy|EverArt (legacy)|Generation images IA avec divers modeles|uvx|mcp-server-everart|stdio|EVERART_API_KEY:Cle API EverArt
+0|firecrawl|Firecrawl|Web scraping extraction donnees structurees|npx|-y @anthropic/mcp-server-firecrawl|stdio|API_KEY:Cle API Firecrawl
+0|tavily|Tavily|Recherche web optimisee pour IA|npx|-y @anthropic/mcp-server-tavily|stdio|API_KEY:Cle API Tavily

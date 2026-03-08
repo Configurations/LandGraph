@@ -582,6 +582,41 @@ tr:hover { background: rgba(255,255,255,0.02); }
   line-height: 1.4;
 }
 
+.mcp-check-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.mcp-check-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 1rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.mcp-check-tag input[type=checkbox] {
+  display: none;
+}
+
+.mcp-check-tag:hover {
+  border-color: var(--accent);
+}
+
+.mcp-check-tag.active {
+  background: rgba(99, 179, 237, 0.15);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .env-var-row {
   display: flex;
   align-items: center;
@@ -661,6 +696,7 @@ tr:hover { background: rgba(255,255,255,0.02); }
 }
 
 .mcp-chip.disabled { opacity: 0.5; }
+.mcp-chip.not-installed { opacity: 0.6; border-style: dashed; }
 
 .mcp-chip input[type="checkbox"] { display: none; }
 

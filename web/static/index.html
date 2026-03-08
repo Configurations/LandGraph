@@ -192,6 +192,7 @@
           <div class="prompt-tab active" data-tpl-tab="tpl-llm" onclick="showTemplateTab('tpl-llm')">Modeles LLM</div>
           <div class="prompt-tab" data-tpl-tab="tpl-mcp" onclick="showTemplateTab('tpl-mcp')">Services MCP</div>
           <div class="prompt-tab" data-tpl-tab="tpl-teams" onclick="showTemplateTab('tpl-teams')">Equipes</div>
+          <div class="prompt-tab" data-tpl-tab="tpl-git" onclick="showTemplateTab('tpl-git')">Enregistrement</div>
         </div>
 
         <!-- Sub-tab: LLM -->
@@ -240,6 +241,53 @@
             <button class="btn btn-primary btn-sm" onclick="showAddTplTeamModal()">+ Ajouter</button>
           </div>
           <div class="table-container" id="tpl-teams-table"></div>
+        </div>
+
+        <!-- Sub-tab: Git (Enregistrement) -->
+        <div class="tpl-tab-content" id="tpl-tab-tpl-git">
+          <div class="card">
+            <div class="card-header">
+              <h3>Depot Shared (Templates)</h3>
+              <span class="tag tag-yellow">Shared/</span>
+            </div>
+            <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem">
+              Contient les templates d'equipe dans Shared/Teams/. Sert de base pour creer de nouvelles equipes.
+            </p>
+            <div class="form-group">
+              <label>URL du depot</label>
+              <input id="tpl-git-path" placeholder="github.com/org/my-shared-templates.git" />
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Login</label>
+                <input id="tpl-git-login" placeholder="username" autocomplete="off" />
+              </div>
+              <div class="form-group">
+                <label>Password / Token</label>
+                <input id="tpl-git-password" type="password" placeholder="token ou mot de passe" autocomplete="off" />
+              </div>
+            </div>
+            <div class="form-row" style="margin-top:0.5rem">
+              <div>
+                <label>Branche</label>
+                <div id="tpl-git-branch" style="font-size:1.1rem;font-weight:600;margin-top:0.25rem">-</div>
+              </div>
+              <div style="display:flex;gap:0.5rem;align-items:flex-end">
+                <button class="btn btn-primary btn-sm" onclick="saveTplGitConfig()">Enregistrer</button>
+                <button class="btn btn-outline btn-sm" id="btn-tpl-git-init" onclick="tplGitInit()" disabled>Init</button>
+                <button class="btn btn-primary btn-sm" id="btn-tpl-git-pull" onclick="tplGitPull()" disabled>Pull</button>
+                <button class="btn btn-success btn-sm" id="btn-tpl-git-commit" onclick="showGitCommitModal('shared')" disabled>Commit &amp; Push</button>
+              </div>
+            </div>
+            <div style="margin-top:0.75rem">
+              <label>Status</label>
+              <div class="terminal" id="tpl-git-status" style="max-height:120px">Chargement...</div>
+            </div>
+            <div style="margin-top:0.5rem">
+              <label>Historique</label>
+              <div class="terminal" id="tpl-git-log" style="max-height:120px">Chargement...</div>
+            </div>
+          </div>
         </div>
       </div>
 

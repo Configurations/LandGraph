@@ -9,6 +9,16 @@ let agents = {};
 let agentGroups = [];
 let llmProviders = {};
 
+const MCP_CMD_HELP = {
+  npx: "Execute un package Node.js depuis le registre npm sans l'installer globalement. C'est le plus courant pour les MCP parce que la majorite des serveurs MCP sont ecrits en TypeScript/JavaScript.",
+  uvx: "L'equivalent de npx mais pour Python, via le gestionnaire uv. Il telecharge et execute un package Python en une commande.",
+  python: "Execution directe d'un script Python local. Utile pour des serveurs MCP custom que tu developpes toi-meme.",
+  node: "Execution directe d'un script Node.js local. Utile pour des serveurs MCP custom que tu developpes toi-meme.",
+  docker: "Lance le serveur MCP dans un container isole. Plus lourd mais plus securise — le MCP n'a pas acces au systeme hote. Utile pour des serveurs qui ont besoin de dependances complexes ou pour isoler un MCP non fiable.",
+  bunx: "Comme npx mais utilise Bun au lieu de Node.js. Plus rapide au demarrage (~3x plus rapide que Node pour le cold start). Peu utilise pour l'instant dans l'ecosysteme MCP.",
+  deno: "Comme node mais avec Deno, qui a un modele de securite par permissions (acces reseau, fichiers, etc. doivent etre explicitement autorises). Marginal pour les MCP.",
+};
+
 // ── Utils ──────────────────────────────────────────
 async function api(url, opts = {}) {
   const res = await fetch(url, {
@@ -364,6 +374,7 @@ function _renderInstallDetails(item) {
         <input value="${escHtml(item.args)}" readonly style="opacity:0.6" />
       </div>
     </div>
+    <p class="mcp-cmd-help">${escHtml(MCP_CMD_HELP[item.command] || '')}</p>
     ${envVarsHtml}
   `;
 }
@@ -521,20 +532,23 @@ function toggleDeprecated() {
 // ═══════════════════════════════════════════════════
 async function loadAgents() {
   try {
-    const [agentsData, llmData, accessData, mcpData] = await Promise.all([
+    const [agentsData, llmData, mcpData] = await Promise.all([
       api('/api/agents'),
       api('/api/llm/providers'),
-      api('/api/mcp/access'),
       api('/api/mcp/catalog'),
     ]);
     agentGroups = agentsData.groups || [];
-    // Flat map for edit/save lookups
+    // Flat map for edit/save lookups + build mcpAccess from per-team data
     agents = {};
-    agentGroups.forEach(g => Object.entries(g.agents).forEach(([id, a]) => {
-      agents[id] = { ...a, _team_id: g.team_id };
-    }));
+    mcpAccess = {};
+    agentGroups.forEach(g => {
+      const teamAccess = g.mcp_access || {};
+      Object.entries(g.agents).forEach(([id, a]) => {
+        agents[id] = { ...a, _team_id: g.team_id, _team_dir: g.team_dir || g.team_id };
+        if (teamAccess[id]) mcpAccess[id] = teamAccess[id];
+      });
+    });
     llmProviders = llmData;
-    mcpAccess = accessData;
     mcpCatalog = mcpData.servers;
     renderAgents();
   } catch (e) { toast(e.message, 'error'); }
@@ -568,29 +582,79 @@ function renderAgents() {
       </div>`;
     }).join('');
     return `<div class="agent-group">
-      <h3 class="agent-group-title">${escHtml(g.team_name)}<span style="font-weight:400;font-size:0.75rem;color:var(--text-secondary);margin-left:0.5rem">${escHtml(g.team_id)}</span></h3>
+      <h3 class="agent-group-title">
+        ${escHtml(g.team_name)}<span style="font-weight:400;font-size:0.75rem;color:var(--text-secondary);margin-left:0.5rem">${escHtml(g.team_id)}</span>
+        <button class="btn-icon" onclick="event.stopPropagation();editTeam('${escHtml(g.team_id)}')" title="Modifier l'equipe" style="margin-left:0.5rem;opacity:0.5">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+        </button>
+      </h3>
+      ${g.team_description ? `<p style="font-size:0.8rem;color:var(--text-secondary);margin:-0.5rem 0 0.5rem 0">${escHtml(g.team_description)}</p>` : ''}
       <div class="agents-grid">${agentCards || '<p style="color:var(--text-secondary);padding:0.5rem">Aucun agent dans cette equipe.</p>'}</div>
     </div>`;
   }).join('');
+}
+
+function editTeam(teamId) {
+  const g = agentGroups.find(t => t.team_id === teamId);
+  if (!g) return;
+  showModal(`
+    <div class="modal-header">
+      <h3>Equipe: ${escHtml(g.team_name)}</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-group">
+      <label>Nom</label>
+      <input id="team-edit-name" value="${escHtml(g.team_name)}" />
+    </div>
+    <div class="form-group">
+      <label>Description</label>
+      <input id="team-edit-desc" value="${escHtml(g.team_description || '')}" />
+    </div>
+    <div class="form-group">
+      <label>Channels Discord <span style="font-size:0.75rem;color:var(--text-secondary)">(IDs separes par des virgules)</span></label>
+      <input id="team-edit-channels" value="${escHtml((g.discord_channels || []).join(', '))}" />
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="saveTeam('${escHtml(teamId)}')">Sauvegarder</button>
+    </div>
+  `);
+}
+
+async function saveTeam(teamId) {
+  const name = document.getElementById('team-edit-name').value.trim();
+  const description = document.getElementById('team-edit-desc').value.trim();
+  const channelsRaw = document.getElementById('team-edit-channels').value.trim();
+  const discord_channels = channelsRaw ? channelsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+  if (!name) { toast('Le nom est requis', 'error'); return; }
+  try {
+    const g = agentGroups.find(t => t.team_id === teamId);
+    await api(`/api/teams/${encodeURIComponent(teamId)}`, {
+      method: 'PUT',
+      body: { name, description, directory: g?.team_dir || teamId, discord_channels }
+    });
+    toast('Equipe sauvegardee', 'success');
+    closeModal();
+    loadAgents();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 function editAgent(id) {
   const a = agents[id];
   const providerNames = Object.keys(llmProviders.providers || {});
   const mcpList = mcpAccess[id] || [];
-  const installedMCP = mcpCatalog.filter(c => c.installed);
+  const availableMCP = mcpCatalog.filter(c => !c.deprecated);
 
-  const mcpChips = installedMCP.length > 0
-    ? installedMCP.map(c => {
+  const mcpChips = availableMCP.length > 0
+    ? availableMCP.map(c => {
         const checked = mcpList.includes(c.id);
-        const disabledClass = !c.enabled ? ' disabled' : '';
-        return `<label class="mcp-chip${checked ? ' active' : ''}${disabledClass}">
+        const installedClass = c.installed ? '' : ' not-installed';
+        return `<label class="mcp-chip${checked ? ' active' : ''}${installedClass}" title="${escHtml(c.description || '')}">
           <input type="checkbox" class="agent-mcp-cb" value="${escHtml(c.id)}" ${checked ? 'checked' : ''} onchange="this.parentElement.classList.toggle('active',this.checked)" />
           ${escHtml(c.label)}
-          ${!c.enabled ? ' (off)' : ''}
         </label>`;
       }).join('')
-    : '<p style="color:var(--text-secondary);font-size:0.8rem">Aucun serveur MCP installe.</p>';
+    : '<p style="color:var(--text-secondary);font-size:0.8rem">Aucun serveur MCP dans le catalogue.</p>';
 
   const promptRaw = a.prompt_content || '';
   const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
@@ -674,13 +738,14 @@ async function saveAgent(id) {
   const mcpCheckboxes = document.querySelectorAll('.agent-mcp-cb:checked');
   const mcpList = Array.from(mcpCheckboxes).map(cb => cb.value);
 
+  const teamDir = agents[id]._team_dir || agents[id]._team_id || 'default';
   try {
     await Promise.all([
       api(`/api/agents/${id}`, {
         method: 'PUT',
         body: { id, name, model, temperature, max_tokens, prompt_content, prompt_file: '', type: agents[id].type || '', pipeline_steps: agents[id].pipeline_steps || [], team_id: agents[id]._team_id || 'default' }
       }),
-      api('/api/mcp/access', { method: 'PUT', body: { agent_id: id, servers: mcpList } }),
+      api(`/api/agents/mcp-access/${encodeURIComponent(teamDir)}/${encodeURIComponent(id)}`, { method: 'PUT', body: { servers: mcpList } }),
     ]);
     toast('Agent sauvegarde', 'success');
     closeModal();
@@ -1491,15 +1556,28 @@ async function editCfgAgent(dir, agentId) {
   const team = teamsData.find(t => (t.directory || t.id) === dir);
   if (!team || !team.agents[agentId]) { toast('Agent introuvable', 'error'); return; }
   const a = team.agents[agentId];
-  // Load LLM providers for the select
+  // Load LLM providers + MCP servers in parallel
   let llmNames = [];
+  let mcpServerIds = [];
   try {
-    const llmData = await api('/api/templates/llm');
+    const [llmData, mcpData] = await Promise.all([
+      api('/api/templates/llm'),
+      api('/api/mcp/servers'),
+    ]);
     llmNames = Object.keys(llmData.providers || {});
+    mcpServerIds = Object.keys(mcpData.servers || {});
   } catch { /* ignore */ }
   const currentLlm = a.llm || a.model || '';
   const llmOptions = `<option value="">-- Defaut --</option>` +
     llmNames.map(p => `<option value="${escHtml(p)}" ${p === currentLlm ? 'selected' : ''}>${escHtml(p)}</option>`).join('');
+
+  const agentMcp = (team.mcp_access || {})[agentId] || [];
+  const mcpTags = mcpServerIds.map(sid => {
+    const checked = agentMcp.includes(sid) ? 'checked' : '';
+    return `<label class="mcp-check-tag ${checked ? 'active' : ''}">
+      <input type="checkbox" value="${escHtml(sid)}" ${checked} onchange="this.parentElement.classList.toggle('active',this.checked)" />${escHtml(sid)}
+    </label>`;
+  }).join('');
 
   const promptRaw = a.prompt_content || '';
   const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
@@ -1538,6 +1616,12 @@ async function editCfgAgent(dir, agentId) {
       <div class="prompt-preview" id="cfg-agent-prompt-preview" style="max-height:400px;overflow-y:auto">${promptHtml}</div>
       <textarea id="cfg-agent-edit-prompt" style="min-height:300px;display:none;border-radius:0 0.5rem 0.5rem 0.5rem">${escHtml(promptRaw)}</textarea>
     </div>
+    <div class="form-group">
+      <label>Serveurs MCP autorises</label>
+      <div class="mcp-check-tags" id="cfg-agent-mcp-tags">
+        ${mcpTags || '<span style="color:var(--text-secondary);font-size:0.85rem">Aucun serveur MCP configure</span>'}
+      </div>
+    </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
       <button class="btn btn-primary" onclick="saveCfgAgent('${escHtml(dir)}','${escHtml(agentId)}')">Sauvegarder</button>
@@ -1574,15 +1658,20 @@ async function saveCfgAgent(dir, agentId) {
   const prompt_content = document.getElementById('cfg-agent-edit-prompt').value;
   const team = teamsData.find(t => (t.directory || t.id) === dir);
   const a = team.agents[agentId];
+  // Collect checked MCP servers
+  const mcpChecked = [...document.querySelectorAll('#cfg-agent-mcp-tags input[type=checkbox]:checked')].map(cb => cb.value);
   try {
-    await api(`/api/agents/${encodeURIComponent(agentId)}`, { method: 'PUT', body: {
-      id: agentId, name, llm, temperature, max_tokens,
-      prompt_content,
-      prompt_file: a.prompt || `${agentId}.md`,
-      type: a.type || '',
-      pipeline_steps: a.pipeline_steps || [],
-      team_id: dir,
-    }});
+    await Promise.all([
+      api(`/api/agents/${encodeURIComponent(agentId)}`, { method: 'PUT', body: {
+        id: agentId, name, llm, temperature, max_tokens,
+        prompt_content,
+        prompt_file: a.prompt || `${agentId}.md`,
+        type: a.type || '',
+        pipeline_steps: a.pipeline_steps || [],
+        team_id: dir,
+      }}),
+      api(`/api/agents/mcp-access/${encodeURIComponent(dir)}/${encodeURIComponent(agentId)}`, { method: 'PUT', body: { servers: mcpChecked }}),
+    ]);
     toast('Agent sauvegarde', 'success');
     closeModal();
     loadTeams();
@@ -1780,6 +1869,7 @@ function showTemplateTab(tabId) {
   if (tabId === 'tpl-llm') loadTplLLM();
   else if (tabId === 'tpl-mcp') loadTplMCP();
   else if (tabId === 'tpl-teams') loadTplTeamsList();
+  else if (tabId === 'tpl-git') loadTplGit();
 }
 
 async function loadTemplates() {
@@ -1787,6 +1877,62 @@ async function loadTemplates() {
   const active = document.querySelector('[data-tpl-tab].active');
   const tab = active ? active.getAttribute('data-tpl-tab') : 'tpl-llm';
   showTemplateTab(tab);
+}
+
+// ── Template Git (Enregistrement) ─────────────────
+async function loadTplGit() {
+  try {
+    const [status, cfg] = await Promise.all([
+      api('/api/git/shared/status'),
+      api('/api/git/config'),
+    ]);
+    const shared = cfg.repos?.shared || {};
+    document.getElementById('tpl-git-path').value = shared.path || '';
+    document.getElementById('tpl-git-login').value = shared.login || '';
+    document.getElementById('tpl-git-password').value = shared.password || '';
+    const inited = status.initialized;
+    document.getElementById('tpl-git-branch').textContent = inited ? (status.branch || 'inconnu') : 'Non initialise';
+    document.getElementById('tpl-git-status').textContent = inited ? (status.status || '(aucun changement)') : 'Git non initialise. Enregistrez la configuration puis cliquez Init.';
+    document.getElementById('tpl-git-log').textContent = inited ? (status.log || '(vide)') : '';
+    document.getElementById('btn-tpl-git-init').disabled = inited;
+    document.getElementById('btn-tpl-git-pull').disabled = !inited;
+    document.getElementById('btn-tpl-git-commit').disabled = !inited;
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function saveTplGitConfig() {
+  try {
+    const current = await api('/api/git/config');
+    const body = {
+      repos: {
+        configs: current.repos?.configs || { path: '', login: '', password: '' },
+        shared: {
+          path: document.getElementById('tpl-git-path').value.trim(),
+          login: document.getElementById('tpl-git-login').value.trim(),
+          password: document.getElementById('tpl-git-password').value.trim(),
+        },
+      },
+    };
+    await api('/api/git/config', { method: 'PUT', body });
+    toast('Configuration Git Shared enregistree', 'success');
+    loadTplGit();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function tplGitInit() {
+  try {
+    const data = await api('/api/git/shared/init', { method: 'POST' });
+    toast(data.ok ? 'Repository Shared initialise' : (data.message || 'Erreur'), data.ok ? 'success' : 'error');
+    loadTplGit();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function tplGitPull() {
+  try {
+    const data = await api('/api/git/shared/pull', { method: 'POST' });
+    toast(data.code === 0 ? 'Pull Shared reussi' : 'Pull Shared erreur', data.code === 0 ? 'success' : 'error');
+    loadTplGit();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 // ── Template LLM ──────────────────────────────────
@@ -2145,15 +2291,6 @@ function onTplMcpSelected() {
   document.getElementById('mcp-tpl-details').innerHTML = _renderTplMcpDetails(item);
 }
 
-const MCP_CMD_HELP = {
-  npx: "Execute un package Node.js depuis le registre npm sans l'installer globalement. C'est le plus courant pour les MCP parce que la majorite des serveurs MCP sont ecrits en TypeScript/JavaScript.",
-  uvx: "L'equivalent de npx mais pour Python, via le gestionnaire uv. Il telecharge et execute un package Python en une commande.",
-  python: "Execution directe d'un script Python local. Utile pour des serveurs MCP custom que tu developpes toi-meme.",
-  node: "Execution directe d'un script Node.js local. Utile pour des serveurs MCP custom que tu developpes toi-meme.",
-  docker: "Lance le serveur MCP dans un container isole. Plus lourd mais plus securise — le MCP n'a pas acces au systeme hote. Utile pour des serveurs qui ont besoin de dependances complexes ou pour isoler un MCP non fiable.",
-  bunx: "Comme npx mais utilise Bun au lieu de Node.js. Plus rapide au demarrage (~3x plus rapide que Node pour le cold start). Peu utilise pour l'instant dans l'ecosysteme MCP.",
-  deno: "Comme node mais avec Deno, qui a un modele de securite par permissions (acces reseau, fichiers, etc. doivent etre explicitement autorises). Marginal pour les MCP.",
-};
 
 function _renderTplMcpDetails(item) {
   const hasEnv = item.env_vars && item.env_vars.length > 0;
@@ -2456,15 +2593,28 @@ async function editTplAgent(dir, agentId) {
   const tpl = tplTemplatesData.find(tp => tp.id === dir);
   if (!tpl || !tpl.agents[agentId]) { toast('Agent introuvable', 'error'); return; }
   const a = tpl.agents[agentId];
-  // Load LLM providers for the select
+  // Load LLM providers + MCP servers in parallel
   let llmNames = [];
+  let mcpServerIds = [];
   try {
-    const llmData = await api('/api/templates/llm');
+    const [llmData, mcpData] = await Promise.all([
+      api('/api/templates/llm'),
+      api('/api/templates/mcp'),
+    ]);
     llmNames = Object.keys(llmData.providers || {});
+    mcpServerIds = Object.keys(mcpData.servers || {});
   } catch { /* ignore */ }
   const currentLlm = a.llm || a.model || '';
   const llmOptions = `<option value="">-- Defaut --</option>` +
     llmNames.map(p => `<option value="${escHtml(p)}" ${p === currentLlm ? 'selected' : ''}>${escHtml(p)}</option>`).join('');
+
+  const agentMcp = (tpl.mcp_access || {})[agentId] || [];
+  const mcpTags = mcpServerIds.map(sid => {
+    const checked = agentMcp.includes(sid) ? 'checked' : '';
+    return `<label class="mcp-check-tag ${checked ? 'active' : ''}">
+      <input type="checkbox" value="${escHtml(sid)}" ${checked} onchange="this.parentElement.classList.toggle('active',this.checked)" />${escHtml(sid)}
+    </label>`;
+  }).join('');
 
   const promptRaw = a.prompt_content || '';
   const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
@@ -2503,6 +2653,12 @@ async function editTplAgent(dir, agentId) {
       <div class="prompt-preview" id="tpl-agent-prompt-preview" style="max-height:400px;overflow-y:auto">${promptHtml}</div>
       <textarea id="tpl-agent-edit-prompt" style="min-height:300px;display:none;border-radius:0 0.5rem 0.5rem 0.5rem">${escHtml(promptRaw)}</textarea>
     </div>
+    <div class="form-group">
+      <label>Serveurs MCP autorises</label>
+      <div class="mcp-check-tags" id="tpl-agent-mcp-tags">
+        ${mcpTags || '<span style="color:var(--text-secondary);font-size:0.85rem">Aucun serveur MCP configure</span>'}
+      </div>
+    </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
       <button class="btn btn-primary" onclick="saveTplAgent('${escHtml(dir)}','${escHtml(agentId)}')">Sauvegarder</button>
@@ -2539,15 +2695,19 @@ async function saveTplAgent(dir, agentId) {
   const prompt_content = document.getElementById('tpl-agent-edit-prompt').value;
   const tpl = tplTemplatesData.find(tp => tp.id === dir);
   const a = tpl.agents[agentId];
+  const mcpChecked = [...document.querySelectorAll('#tpl-agent-mcp-tags input[type=checkbox]:checked')].map(cb => cb.value);
   try {
-    await api(`/api/templates/agents/${encodeURIComponent(agentId)}`, { method: 'PUT', body: {
-      id: agentId, name, llm, temperature, max_tokens,
-      prompt_content,
-      prompt_file: a.prompt || `${agentId}.md`,
-      type: a.type || '',
-      pipeline_steps: a.pipeline_steps || [],
-      team_id: dir,
-    }});
+    await Promise.all([
+      api(`/api/templates/agents/${encodeURIComponent(agentId)}`, { method: 'PUT', body: {
+        id: agentId, name, llm, temperature, max_tokens,
+        prompt_content,
+        prompt_file: a.prompt || `${agentId}.md`,
+        type: a.type || '',
+        pipeline_steps: a.pipeline_steps || [],
+        team_id: dir,
+      }}),
+      api(`/api/templates/mcp-access/${encodeURIComponent(dir)}/${encodeURIComponent(agentId)}`, { method: 'PUT', body: { servers: mcpChecked }}),
+    ]);
     toast('Agent sauvegarde', 'success');
     closeModal();
     loadTplTeamsList();
@@ -2596,27 +2756,26 @@ async function saveTplRawRegistry(dir) {
 }
 
 async function _saveTplTeams() {
-  await api('/api/templates/teams', 'PUT', tplTeamsData);
+  await api('/api/templates/teams', { method: 'PUT', body: tplTeamsData });
   toast('Equipes sauvegardees');
 }
 
 function showAddTplTeamModal() {
-  // List available template directories
-  const dirOpts = tplTemplatesData.map(tp => `<option value="${escHtml(tp.id)}">${escHtml(tp.id)} (${tp.agent_count} agents)</option>`).join('');
   showModal(`
     <div class="modal-header">
       <h3>Ajouter une equipe (template)</h3>
       <button class="btn-icon" onclick="closeModal()">&times;</button>
     </div>
-    <div class="form-group"><label>ID</label><input id="m-tpl-team-id" class="form-control" placeholder="mon-equipe"></div>
+    <div class="form-group">
+      <label>ID</label>
+      <input id="m-tpl-team-id" class="form-control" placeholder="mon_equipe" oninput="_onTplTeamIdInput()" />
+      <span id="m-tpl-team-id-error" style="color:var(--danger);font-size:0.8rem;display:none"></span>
+    </div>
     <div class="form-group"><label>Nom</label><input id="m-tpl-team-name" class="form-control" placeholder="Mon Equipe"></div>
     <div class="form-group"><label>Description</label><input id="m-tpl-team-desc" class="form-control"></div>
-    <div class="form-group"><label>Repertoire template (Shared/Teams/...)</label>
-      <select id="m-tpl-team-dir" class="form-control">
-        <option value="">-- Saisie libre --</option>
-        ${dirOpts}
-      </select>
-      <input id="m-tpl-team-dir-custom" class="form-control" placeholder="Ou saisir un nom de repertoire" style="margin-top:0.25rem">
+    <div class="form-group">
+      <label>Repertoire (Shared/Teams/...)</label>
+      <input id="m-tpl-team-dir" class="form-control" readonly style="opacity:0.6" />
     </div>
     <div class="form-group"><label>Channels Discord (virgule)</label><input id="m-tpl-team-channels" class="form-control"></div>
     <div class="modal-actions">
@@ -2626,29 +2785,58 @@ function showAddTplTeamModal() {
   `);
 }
 
+function _onTplTeamIdInput() {
+  const el = document.getElementById('m-tpl-team-id');
+  const errEl = document.getElementById('m-tpl-team-id-error');
+  const dirEl = document.getElementById('m-tpl-team-dir');
+  const raw = el.value.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
+  // Capitalize first letter of each segment for directory name
+  const dir = raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : '';
+  dirEl.value = dir;
+  // Check uniqueness against teams list and existing directories
+  const existingIds = tplTeamsData.teams.map(t => t.id);
+  const existingDirs = tplTemplatesData.map(t => t.id);
+  if (raw && existingIds.includes(raw)) {
+    el.style.border = '2px solid var(--danger)';
+    errEl.textContent = `L'ID "${raw}" existe deja dans les equipes`;
+    errEl.style.display = 'block';
+  } else if (dir && existingDirs.includes(dir)) {
+    el.style.border = '2px solid var(--danger)';
+    errEl.textContent = `Le repertoire "${dir}" existe deja`;
+    errEl.style.display = 'block';
+  } else {
+    el.style.border = '';
+    errEl.style.display = 'none';
+  }
+}
+
 async function addTplTeam() {
-  const id = document.getElementById('m-tpl-team-id').value.trim();
-  if (!id) { toast('ID requis', 'error'); return; }
-  if (tplTeamsData.teams.find(t => t.id === id)) { toast('ID deja utilise', 'error'); return; }
-  const dirSelect = document.getElementById('m-tpl-team-dir').value;
-  const dirCustom = document.getElementById('m-tpl-team-dir-custom').value.trim();
-  const directory = dirCustom || dirSelect;
+  const raw = document.getElementById('m-tpl-team-id').value.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase().trim();
+  if (!raw) { toast('ID requis', 'error'); return; }
+  const errEl = document.getElementById('m-tpl-team-id-error');
+  if (errEl && errEl.style.display !== 'none') { toast('ID invalide', 'error'); return; }
+  const directory = document.getElementById('m-tpl-team-dir').value;
+  if (!directory) { toast('Repertoire invalide', 'error'); return; }
   const channels = document.getElementById('m-tpl-team-channels').value.trim();
   tplTeamsData.teams.push({
-    id,
-    name: document.getElementById('m-tpl-team-name').value.trim(),
+    id: raw,
+    name: document.getElementById('m-tpl-team-name').value.trim() || raw,
     description: document.getElementById('m-tpl-team-desc').value.trim(),
     directory,
     discord_channels: channels ? channels.split(',').map(s => s.trim()) : []
   });
-  await _saveTplTeams();
-  closeModal();
-  loadTplTeamsList();
+  try {
+    await _saveTplTeams();
+    closeModal();
+    loadTplTeamsList();
+  } catch (e) {
+    tplTeamsData.teams.pop();
+    toast(e.message, 'error');
+  }
 }
 
 function editTplTeam(idx) {
   const t = tplTeamsData.teams[idx];
-  const dirOpts = tplTemplatesData.map(tp => `<option value="${escHtml(tp.id)}" ${t.directory === tp.id ? 'selected' : ''}>${escHtml(tp.id)} (${tp.agent_count} agents)</option>`).join('');
   showModal(`
     <div class="modal-header">
       <h3>Modifier equipe (template)</h3>
@@ -2657,12 +2845,9 @@ function editTplTeam(idx) {
     <div class="form-group"><label>ID</label><input id="m-tpl-team-id" class="form-control" value="${escHtml(t.id)}" disabled></div>
     <div class="form-group"><label>Nom</label><input id="m-tpl-team-name" class="form-control" value="${escHtml(t.name)}"></div>
     <div class="form-group"><label>Description</label><input id="m-tpl-team-desc" class="form-control" value="${escHtml(t.description || '')}"></div>
-    <div class="form-group"><label>Repertoire template</label>
-      <select id="m-tpl-team-dir" class="form-control">
-        <option value="">-- Saisie libre --</option>
-        ${dirOpts}
-      </select>
-      <input id="m-tpl-team-dir-custom" class="form-control" value="${escHtml(t.directory || '')}" style="margin-top:0.25rem">
+    <div class="form-group">
+      <label>Repertoire (Shared/Teams/...)</label>
+      <input id="m-tpl-team-dir" class="form-control" value="${escHtml(t.directory || '')}" readonly style="opacity:0.6" />
     </div>
     <div class="form-group"><label>Channels Discord (virgule)</label><input id="m-tpl-team-channels" class="form-control" value="${(t.discord_channels || []).join(', ')}"></div>
     <div class="modal-actions">
@@ -2673,15 +2858,11 @@ function editTplTeam(idx) {
 }
 
 async function saveTplTeam(idx) {
-  const dirSelect = document.getElementById('m-tpl-team-dir').value;
-  const dirCustom = document.getElementById('m-tpl-team-dir-custom').value.trim();
-  const directory = dirCustom || dirSelect;
   const channels = document.getElementById('m-tpl-team-channels').value.trim();
   tplTeamsData.teams[idx] = {
-    id: tplTeamsData.teams[idx].id,
+    ...tplTeamsData.teams[idx],
     name: document.getElementById('m-tpl-team-name').value.trim(),
     description: document.getElementById('m-tpl-team-desc').value.trim(),
-    directory,
     discord_channels: channels ? channels.split(',').map(s => s.trim()) : []
   };
   await _saveTplTeams();

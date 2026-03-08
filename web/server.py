@@ -614,11 +614,15 @@ async def get_agents():
             if prompt_file.exists():
                 prompt_content = prompt_file.read_text(encoding="utf-8")
             result[aid] = {**acfg, "prompt_content": prompt_content}
+        mcp_access = _read_json(tdir / "agent_mcp_access.json") if (tdir / "agent_mcp_access.json").exists() else {}
         groups.append({
             "team_id": tid,
             "team_name": tcfg.get("name", tid),
-            "team_dir": str(tdir),
+            "team_description": tcfg.get("description", ""),
+            "team_dir": directory,
+            "discord_channels": tcfg.get("discord_channels", []),
             "agents": result,
+            "mcp_access": mcp_access,
         })
     return {"groups": groups}
 
@@ -726,6 +730,22 @@ async def delete_agent(agent_id: str, team_id: str = "default"):
     return {"ok": True}
 
 
+@app.put("/api/agents/mcp-access/{directory}/{agent_id}")
+async def update_agent_mcp_access(directory: str, agent_id: str, request: Request):
+    """Update MCP access list for an agent in a Configs team directory."""
+    body = await request.json()
+    servers = body.get("servers", [])
+    tdir = _team_dir(directory)
+    access_path = tdir / "agent_mcp_access.json"
+    access = _read_json(access_path)
+    if servers:
+        access[agent_id] = servers
+    else:
+        access.pop(agent_id, None)
+    _write_json(access_path, access)
+    return {"ok": True}
+
+
 @app.get("/api/agents/registry/{directory}")
 async def get_agents_registry(directory: str):
     """Return raw agents_registry.json for a Configs team directory."""
@@ -741,6 +761,22 @@ async def put_agents_registry(directory: str, request: Request):
     tdir = _team_dir(directory)
     tdir.mkdir(parents=True, exist_ok=True)
     _write_json(tdir / "agents_registry.json", data)
+    return {"ok": True}
+
+
+@app.put("/api/templates/mcp-access/{directory}/{agent_id}")
+async def update_template_agent_mcp_access(directory: str, agent_id: str, request: Request):
+    """Update MCP access list for an agent in a Shared template directory."""
+    body = await request.json()
+    servers = body.get("servers", [])
+    tdir = SHARED_TEAMS_DIR / directory
+    access_path = tdir / "agent_mcp_access.json"
+    access = _read_json(access_path)
+    if servers:
+        access[agent_id] = servers
+    else:
+        access.pop(agent_id, None)
+    _write_json(access_path, access)
     return {"ok": True}
 
 
@@ -1209,9 +1245,19 @@ async def get_template_teams():
 
 @app.put("/api/templates/teams")
 async def save_template_teams(request: Request):
-    """Write shared teams list."""
+    """Write shared teams list and ensure directories exist."""
     data = await request.json()
     _write_json(SHARED_TEAMS_FILE, data)
+    # Create directories for new teams
+    for team in data.get("teams", []):
+        directory = team.get("directory", "")
+        if directory:
+            team_dir = SHARED_TEAMS_DIR / directory
+            if not team_dir.exists():
+                team_dir.mkdir(parents=True, exist_ok=True)
+                _write_json(team_dir / "agents_registry.json", {"agents": {}})
+                _write_json(team_dir / "agent_mcp_access.json", {})
+                log.info("Created shared team folder: %s", team_dir)
     return {"ok": True}
 
 
