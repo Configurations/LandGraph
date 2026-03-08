@@ -3354,11 +3354,10 @@ function wfRender() {
           <div class="wf-mini-label">Livrables (${delIds.length})</div>
           <div class="wf-mini-list">${delIds.map(d => `<span class="wf-mini-chip${(p.deliverables[d]||{}).required?' required':''}">${escHtml(d)}</span>`).join('')}</div>
         </div>
-        <div class="wf-connect-handle wf-handle-in wf-handle-left" title="Entree"></div>
-        <div class="wf-connect-handle wf-handle-in wf-handle-top" title="Entree"></div>
-        <div class="wf-connect-handle wf-handle-in wf-handle-bottom" title="Entree"></div>
-        <div class="wf-connect-handle wf-handle-out" title="Tirer pour creer une transition"
-             onmousedown="wfLinkStart(event,'${id}')"></div>
+        <div class="wf-anchor wf-anchor-left" data-side="left" onmousedown="wfLinkStart(event,'${id}','left')"></div>
+        <div class="wf-anchor wf-anchor-top" data-side="top" onmousedown="wfLinkStart(event,'${id}','top')"></div>
+        <div class="wf-anchor wf-anchor-right" data-side="right" onmousedown="wfLinkStart(event,'${id}','right')"></div>
+        <div class="wf-anchor wf-anchor-bottom" data-side="bottom" onmousedown="wfLinkStart(event,'${id}','bottom')"></div>
       </div>`;
   }
   inner.innerHTML = html;
@@ -3369,45 +3368,28 @@ function wfRender() {
   wfRenderProps();
 }
 
+function _wfBezier(sx, sy, ex, ey, fromSide, toSide) {
+  const dist = Math.max(60, Math.hypot(ex - sx, ey - sy) * 0.4);
+  // Control point offsets based on side direction
+  const dirs = { left: [-1, 0], right: [1, 0], top: [0, -1], bottom: [0, 1] };
+  const [fdx, fdy] = dirs[fromSide] || dirs.right;
+  const [tdx, tdy] = dirs[toSide] || dirs.left;
+  const cx1 = sx + fdx * dist, cy1 = sy + fdy * dist;
+  const cx2 = ex + tdx * dist, cy2 = ey + tdy * dist;
+  return `M${sx},${sy} C${cx1},${cy1} ${cx2},${cy2} ${ex},${ey}`;
+}
+
 function wfRenderArrows() {
   const svg = document.getElementById('wf-arrows');
   if (!svg) return;
   const transitions = _wf.data.transitions || [];
   let paths = '';
   for (const t of transitions) {
-    const fromPos = _wf.positions[t.from];
-    const toPos = _wf.positions[t.to];
-    if (!fromPos || !toPos) continue;
-    // Always: output from right edge, input to left edge
-    const fromEl = document.getElementById(`wf-p-${t.from}`);
-    const toEl = document.getElementById(`wf-p-${t.to}`);
-    const fw = fromEl ? fromEl.offsetWidth : 200;
-    const fh = fromEl ? fromEl.offsetHeight : 80;
-    const tw = toEl ? toEl.offsetWidth : 200;
-    const th = toEl ? toEl.offsetHeight : 80;
-
-    // Exit always from right
-    const sx = fromPos.x + fw, sy = fromPos.y + fh / 2;
-    // Entry: pick best side (left, top, or right) based on relative position
-    const fromCx = fromPos.x + fw / 2, fromCy = fromPos.y + fh / 2;
-    const toCx = toPos.x + tw / 2, toCy = toPos.y + th / 2;
-    let ex, ey, d;
-    if (toCx < fromCx - fw * 0.3) {
-      // Target is to the left → enter from bottom
-      ex = toPos.x + tw / 2; ey = toPos.y + th;
-      const cpx = Math.max(sx, ex) + 80;
-      d = `M${sx},${sy} C${cpx},${sy} ${cpx},${ey + 60} ${ex},${ey}`;
-    } else if (toCy < fromCy - fh * 0.5) {
-      // Target is above → enter from bottom
-      ex = toPos.x + tw / 2; ey = toPos.y + th;
-      const midX = (sx + ex) / 2;
-      d = `M${sx},${sy} C${midX},${sy} ${midX},${ey + 40} ${ex},${ey}`;
-    } else {
-      // Default: enter from left
-      ex = toPos.x; ey = toPos.y + th / 2;
-      const midX = (sx + ex) / 2;
-      d = `M${sx},${sy} C${midX},${sy} ${midX},${ey} ${ex},${ey}`;
-    }
+    if (!_wf.positions[t.from] || !_wf.positions[t.to]) continue;
+    const s = _wfAnchorPos(t.from, t.from_side || 'right');
+    const e = _wfAnchorPos(t.to, t.to_side || 'left');
+    const sx = s.x, sy = s.y, ex = e.x, ey = e.y;
+    const d = _wfBezier(sx, sy, ex, ey, t.from_side || 'right', t.to_side || 'left');
     const gate = t.human_gate ? '(HG)' : '';
     // Invisible wide hit area for right-click
     const idx = transitions.indexOf(t);
@@ -3420,14 +3402,8 @@ function wfRenderArrows() {
   }
   // Draw temporary linking line
   if (_wf.linking && _wf.linkMouse) {
-    const fromPos = _wf.positions[_wf.linking];
-    if (fromPos) {
-      const fromEl = document.getElementById(`wf-p-${_wf.linking}`);
-      const fw = fromEl ? fromEl.offsetWidth : 200;
-      const fh = fromEl ? fromEl.offsetHeight : 80;
-      const sx = fromPos.x + fw, sy = fromPos.y + fh / 2;
-      paths += `<line x1="${sx}" y1="${sy}" x2="${_wf.linkMouse.x}" y2="${_wf.linkMouse.y}" stroke-dasharray="6,4" />`;
-    }
+    const s = _wfAnchorPos(_wf.linking.id, _wf.linking.side);
+    paths += `<line x1="${s.x}" y1="${s.y}" x2="${_wf.linkMouse.x}" y2="${_wf.linkMouse.y}" stroke-dasharray="6,4" />`;
   }
   svg.innerHTML = `<defs><marker id="wf-arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="var(--text-secondary)" /></marker></defs>` + paths;
 }
@@ -3824,11 +3800,22 @@ function _wfSaveDesign() {
 }
 
 // ── Link / draw arrows ──
-function wfLinkStart(e, fromId) {
+function _wfAnchorPos(phaseId, side) {
+  const el = document.getElementById(`wf-p-${phaseId}`);
+  const pos = _wf.positions[phaseId] || { x: 0, y: 0 };
+  const w = el ? el.offsetWidth : 200;
+  const h = el ? el.offsetHeight : 80;
+  if (side === 'left')   return { x: pos.x,         y: pos.y + h / 2 };
+  if (side === 'top')    return { x: pos.x + w / 2,  y: pos.y };
+  if (side === 'bottom') return { x: pos.x + w / 2,  y: pos.y + h };
+  /* right */             return { x: pos.x + w,      y: pos.y + h / 2 };
+}
+
+function wfLinkStart(e, fromId, fromSide) {
   e.stopPropagation();
   e.preventDefault();
-  _wf.linking = fromId;
-  _wf.dragging = null; // cancel any drag
+  _wf.linking = { id: fromId, side: fromSide };
+  _wf.dragging = null;
   const ws = document.getElementById('wf-workspace');
   const rect = ws.getBoundingClientRect();
   _wf.linkMouse = { x: e.clientX - rect.left + ws.scrollLeft, y: e.clientY - rect.top + ws.scrollTop };
@@ -3848,21 +3835,26 @@ function _wfLinkEnd(e) {
   document.removeEventListener('mousemove', _wfLinkMove);
   document.removeEventListener('mouseup', _wfLinkEnd);
   if (!_wf || !_wf.linking) return;
-  const fromId = _wf.linking;
+  const fromId = _wf.linking.id;
+  const fromSide = _wf.linking.side;
   _wf.linking = null;
   _wf.linkMouse = null;
-  // Find which phase the mouse landed on
+  // Find target anchor or phase
   const target = document.elementFromPoint(e.clientX, e.clientY);
+  const anchor = target ? target.closest('.wf-anchor') : null;
   const phaseEl = target ? target.closest('.wf-phase') : null;
-  if (phaseEl) {
-    const toId = phaseEl.dataset.id;
-    if (toId && toId !== fromId) {
-      // Check if transition already exists
-      const exists = (_wf.data.transitions || []).some(t => t.from === fromId && t.to === toId);
-      if (!exists) {
-        if (!_wf.data.transitions) _wf.data.transitions = [];
-        _wf.data.transitions.push({ from: fromId, to: toId, human_gate: true });
-      }
+  let toId = null, toSide = 'left';
+  if (anchor && anchor.closest('.wf-phase')) {
+    toId = anchor.closest('.wf-phase').dataset.id;
+    toSide = anchor.dataset.side || 'left';
+  } else if (phaseEl) {
+    toId = phaseEl.dataset.id;
+  }
+  if (toId && toId !== fromId) {
+    const exists = (_wf.data.transitions || []).some(t => t.from === fromId && t.to === toId);
+    if (!exists) {
+      if (!_wf.data.transitions) _wf.data.transitions = [];
+      _wf.data.transitions.push({ from: fromId, to: toId, from_side: fromSide, to_side: toSide, human_gate: true });
     }
   }
   wfRender();
