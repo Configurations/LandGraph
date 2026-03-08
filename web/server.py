@@ -1928,12 +1928,49 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
         login = cfg.get("login", "").strip()
         password = cfg.get("password", "").strip()
 
+        # Sanitize helper (defined early for use in all log outputs)
+        def _sanitize(text: str) -> str:
+            if login and password:
+                text = text.replace(f"{login}:{password}@", "***:***@")
+                text = text.replace(password, "***")
+            return text
+
+        # 1. Ensure .gitignore
         _ensure_gitignore(target_dir)
-        subprocess.run(
+
+        # 2. Configure remote origin with credentials
+        if repo_path and login and password:
+            _git_configure_remote(target_dir, repo_path, login, password)
+
+        # 3. Get current branch name
+        branch_result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(target_dir), capture_output=True, text=True, timeout=10
+        )
+        branch = branch_result.stdout.strip() or "master"
+        log.info("git commit flow (%s): branch=%s", repo_key, branch)
+
+        # 4. Pull --rebase to sync with remote before committing
+        if repo_path:
+            pull_result = subprocess.run(
+                ["git", "pull", "--rebase", "origin", branch],
+                cwd=str(target_dir), capture_output=True, text=True, timeout=60,
+                env=git_env,
+            )
+            if pull_result.returncode != 0:
+                log.warning("git pull --rebase failed (%s, code %d): %s",
+                            repo_key, pull_result.returncode, _sanitize(pull_result.stderr[:500]))
+            else:
+                log.info("git pull --rebase OK (%s)", repo_key)
+
+        # 5. Stage all
+        add_result = subprocess.run(
             ["git", "add", "-A"],
             cwd=str(target_dir), capture_output=True, text=True, timeout=10
         )
-        # Remove git.json from staging (root + subdirs) after add -A
+        log.info("git add -A (%s): code=%d", repo_key, add_result.returncode)
+
+        # 6. Remove git.json from staging (root + subdirs)
         subprocess.run(
             ["git", "rm", "-r", "--cached", "--ignore-unmatch", "git.json"],
             cwd=str(target_dir), capture_output=True, text=True, timeout=10
@@ -1948,17 +1985,22 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
                     ["git", "rm", "--cached", "--ignore-unmatch", tracked_file],
                     cwd=str(target_dir), capture_output=True, text=True, timeout=10
                 )
+
+        # 7. Commit
         commit_result = subprocess.run(
             ["git", "commit", "-m", req.message],
             cwd=str(target_dir), capture_output=True, text=True, timeout=30
         )
+        log.info("git commit (%s): code=%d stdout=%s stderr=%s",
+                 repo_key, commit_result.returncode,
+                 commit_result.stdout[:200], commit_result.stderr[:200])
         if commit_result.returncode != 0:
             return {"stdout": commit_result.stdout, "stderr": commit_result.stderr, "code": commit_result.returncode}
 
-        if repo_path and login and password:
-            push_url = _build_remote_url(repo_path, login, password)
+        # 8. Push
+        if repo_path:
             push_result = subprocess.run(
-                ["git", "push", push_url],
+                ["git", "push", "origin", branch],
                 cwd=str(target_dir), capture_output=True, text=True, timeout=60,
                 env=git_env,
             )
@@ -1968,13 +2010,6 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
                 cwd=str(target_dir), capture_output=True, text=True, timeout=60,
                 env=git_env,
             )
-
-        # Sanitize push output to remove credentials from URLs
-        def _sanitize(text: str) -> str:
-            if login and password:
-                text = text.replace(f"{login}:{password}@", "***:***@")
-                text = text.replace(password, "***")
-            return text
 
         push_stdout = _sanitize(push_result.stdout)
         push_stderr = _sanitize(push_result.stderr)

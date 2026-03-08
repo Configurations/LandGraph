@@ -2486,7 +2486,7 @@ function renderCfgMCP() {
 }
 
 function showAddCfgCatalogModal(preselectedId) {
-  const available = cfgMcpCatalog.filter(c => !c.installed);
+  const available = cfgMcpCatalog.filter(c => !c.installed && c.env_vars.length > 0);
   if (available.length === 0) {
     toast('Tous les services du catalogue sont deja installes', 'info');
     return;
@@ -3209,7 +3209,7 @@ function renderTplMCP() {
 }
 
 function showAddTplCatalogModal(preselectedId) {
-  const available = tplMcpCatalog.filter(c => !c.installed);
+  const available = tplMcpCatalog.filter(c => !c.installed && c.env_vars.length > 0);
   if (available.length === 0) {
     toast('Tous les services du catalogue sont deja installes', 'info');
     return;
