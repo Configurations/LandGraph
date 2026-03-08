@@ -2028,15 +2028,34 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
             return {"stdout": commit_result.stdout, "stderr": commit_result.stderr, "code": commit_result.returncode}
         # Always attempt push — there may be previous local commits not yet pushed
 
-        # 9. Push (retry with --force-with-lease if non-fast-forward)
-        push_cmd = ["git", "push", "origin", branch] if repo_path else ["git", "push"]
+        # 9. Purge git.json from entire history (GitHub Push Protection blocks secrets)
+        purge_result = subprocess.run(
+            ["git", "filter-branch", "--force", "--index-filter",
+             "git rm -r --cached --ignore-unmatch git.json */git.json",
+             "--prune-empty", "--", "--all"],
+            cwd=str(target_dir), capture_output=True, text=True, timeout=120,
+            env=git_env,
+        )
+        if purge_result.returncode == 0:
+            log.info("git filter-branch purged git.json from history (%s)", repo_key)
+        else:
+            log.warning("git filter-branch (%s): code=%d stderr=%s",
+                        repo_key, purge_result.returncode, purge_result.stderr[:300])
+
+        # 10. Push (use --force-with-lease since filter-branch rewrites history)
+        history_rewritten = purge_result.returncode == 0
+        if history_rewritten:
+            log.info("History was rewritten, using --force-with-lease for push (%s)", repo_key)
+        push_cmd = ["git", "push", "--force-with-lease", "origin", branch] if (repo_path and history_rewritten) else (
+            ["git", "push", "origin", branch] if repo_path else ["git", "push"]
+        )
         push_result = subprocess.run(
             push_cmd,
             cwd=str(target_dir), capture_output=True, text=True, timeout=60,
             env=git_env,
         )
-        if push_result.returncode != 0 and "non-fast-forward" in push_result.stderr:
-            log.warning("git push rejected non-fast-forward (%s), retrying with --force-with-lease", repo_key)
+        if push_result.returncode != 0 and ("non-fast-forward" in push_result.stderr or "secret" in push_result.stderr.lower()):
+            log.warning("git push rejected (%s), retrying with --force-with-lease", repo_key)
             push_cmd_force = ["git", "push", "--force-with-lease", "origin", branch] if repo_path else ["git", "push", "--force-with-lease"]
             push_result = subprocess.run(
                 push_cmd_force,
