@@ -3387,8 +3387,9 @@ function wfRenderArrows() {
     const d = `M${sx},${sy} C${midX},${sy} ${midX},${ey} ${ex},${ey}`;
     // Invisible wide hit area for right-click
     const idx = transitions.indexOf(t);
-    paths += `<path d="${d}" stroke="transparent" stroke-width="14" fill="none" style="pointer-events:stroke;cursor:pointer" oncontextmenu="wfArrowContextMenu(event,${idx})" />`;
-    paths += `<path d="${d}" />`;
+    paths += `<path d="${d}" stroke="transparent" stroke-width="14" fill="none" style="pointer-events:stroke;cursor:pointer" onclick="wfSelectTransition(event,${idx})" oncontextmenu="wfArrowContextMenu(event,${idx})" />`;
+    const isSel = _wf.selected && typeof _wf.selected === 'object' && _wf.selected.type === 'transition' && _wf.selected.idx === idx;
+    paths += `<path d="${d}" ${isSel ? 'stroke="var(--accent)" stroke-width="3"' : ''} />`;
     // Label
     const lx = (sx + ex) / 2, ly = (sy + ey) / 2 - 8;
     if (gate) paths += `<text x="${lx}" y="${ly}" fill="var(--warning)" font-size="10" text-anchor="middle">${gate}</text>`;
@@ -3410,7 +3411,9 @@ function wfRenderArrows() {
 function wfRenderProps() {
   const el = document.getElementById('wf-props');
   if (!el) return;
-  if (_wf.selected && _wf.data.phases[_wf.selected]) {
+  if (_wf.selected && typeof _wf.selected === 'object' && _wf.selected.type === 'transition') {
+    _wfRenderTransitionProps(el, _wf.selected.idx);
+  } else if (_wf.selected && _wf.data.phases[_wf.selected]) {
     _wfRenderPhaseProps(el, _wf.selected);
   } else {
     _wfRenderWorkspaceProps(el);
@@ -3454,10 +3457,11 @@ function _wfRenderWorkspaceProps(el) {
   const pgUsed = _wfGetUsedGroups();
   let pgHtml = pgOrder.map(g => {
     const used = pgUsed.has(g);
+    const isA = g === 'A';
     return `<div class="wf-prop-item">
       <span class="wf-item-label" style="font-weight:600">${escHtml(g)}</span>
       ${used ? '<span style="font-size:0.65rem;color:var(--text-secondary)">utilise</span>' : ''}
-      <button class="btn-icon danger" onclick="wfRemovePG('${escHtml(g)}')" ${used ? 'disabled title="Groupe utilise par un agent"' : ''}>x</button>
+      <button class="btn-icon danger" onclick="wfRemovePG('${escHtml(g)}')" ${isA ? 'disabled title="Le groupe A ne peut pas etre supprime"' : ''}>x</button>
     </div>`;
   }).join('');
 
@@ -3490,39 +3494,118 @@ function _wfRenderWorkspaceProps(el) {
   `;
 }
 
+function _wfRenderTransitionProps(el, idx) {
+  const t = (_wf.data.transitions || [])[idx];
+  if (!t) { _wf.selected = null; _wfRenderWorkspaceProps(el); return; }
+  const phaseIds = Object.keys(_wf.data.phases || {});
+  const fromOpts = phaseIds.map(id => `<option value="${escHtml(id)}" ${id===t.from?'selected':''}>${escHtml(_wf.data.phases[id].name || id)}</option>`).join('');
+  const toOpts = phaseIds.map(id => `<option value="${escHtml(id)}" ${id===t.to?'selected':''}>${escHtml(_wf.data.phases[id].name || id)}</option>`).join('');
+  el.innerHTML = `
+    <h4>
+      Transition
+      <button class="btn-icon danger" onclick="wfCtxDeleteTransition(${idx})" title="Supprimer">&#128465;</button>
+    </h4>
+    <div class="wf-props-section">
+      <div class="form-group">
+        <label>De</label>
+        <select onchange="wfSetTransitionField(${idx},'from',this.value)">${fromOpts}</select>
+      </div>
+      <div class="form-group">
+        <label>Vers</label>
+        <select onchange="wfSetTransitionField(${idx},'to',this.value)">${toOpts}</select>
+      </div>
+      <div class="form-group">
+        <label>Human Gate</label>
+        <select onchange="wfSetTransitionField(${idx},'human_gate',this.value==='true')">
+          <option value="true" ${t.human_gate ? 'selected' : ''}>Oui</option>
+          <option value="false" ${!t.human_gate ? 'selected' : ''}>Non</option>
+        </select>
+      </div>
+    </div>
+  `;
+}
+
+function wfSetTransitionField(idx, field, val) {
+  const t = (_wf.data.transitions || [])[idx];
+  if (!t) return;
+  t[field] = val;
+  wfRender();
+}
+
+function wfSelectTransition(e, idx) {
+  e.stopPropagation();
+  _wf.selected = { type: 'transition', idx };
+  wfRender();
+}
+
 function _wfRenderPhaseProps(el, phaseId) {
   const p = _wf.data.phases[phaseId];
   const agents = p.agents || {};
   const deliverables = p.deliverables || {};
   const exitConds = p.exit_conditions || {};
+  const pgOrder = (_wf.data.parallel_groups && _wf.data.parallel_groups.order) || ['A'];
 
-  let agentsHtml = Object.entries(agents).map(([id, a]) => `
-    <div class="wf-prop-item">
-      <span class="wf-item-label" title="${escHtml(a.role || '')}">${escHtml(id)}</span>
-      <span class="wf-item-req">${a.required ? 'req' : 'opt'}</span>
-      <span style="font-size:0.65rem;color:var(--text-secondary)">${escHtml(a.parallel_group || '')}</span>
-      <button class="btn-icon" onclick="wfEditAgent('${phaseId}','${escHtml(id)}')">&#9998;</button>
-      <button class="btn-icon danger" onclick="wfRemoveAgent('${phaseId}','${escHtml(id)}')">x</button>
-    </div>
-  `).join('');
+  // Agents — inline editable blocks
+  const allAgentIds = Object.keys(agents);
+  let agentsHtml = Object.entries(agents).map(([id, a]) => {
+    const pgOpts = pgOrder.map(g => `<option value="${escHtml(g)}" ${g===a.parallel_group?'selected':''}>${g}</option>`).join('');
+    const others = allAgentIds.filter(o => o !== id);
+    const depsSet = new Set(a.depends_on || []);
+    const delegSet = new Set(a.can_delegate_to || []);
+    const depsChecks = others.length ? others.map(o =>
+      `<label class="wf-inline-check"><input type="checkbox" ${depsSet.has(o)?'checked':''} onchange="_wfToggleAgentList('${phaseId}','${escHtml(id)}','depends_on','${escHtml(o)}',this.checked)" />${escHtml(o)}</label>`
+    ).join('') : '<span style="font-size:0.65rem;color:var(--text-secondary)">--</span>';
+    const delegChecks = others.length ? others.map(o =>
+      `<label class="wf-inline-check"><input type="checkbox" ${delegSet.has(o)?'checked':''} onchange="_wfToggleAgentList('${phaseId}','${escHtml(id)}','can_delegate_to','${escHtml(o)}',this.checked)" />${escHtml(o)}</label>`
+    ).join('') : '<span style="font-size:0.65rem;color:var(--text-secondary)">--</span>';
+    return `<div class="wf-inline-block">
+      <div class="wf-inline-head">
+        <span class="wf-inline-id">${escHtml(id)}</span>
+        <button class="btn-icon danger" onclick="wfRemoveAgent('${phaseId}','${escHtml(id)}')">x</button>
+      </div>
+      <div class="wf-inline-fields">
+        <input placeholder="Role" value="${escHtml(a.role || '')}" onchange="_wfSetAgentField('${phaseId}','${escHtml(id)}','role',this.value)" />
+        <div style="display:flex;gap:0.3rem">
+          <select style="flex:1" onchange="_wfSetAgentField('${phaseId}','${escHtml(id)}','required',this.value==='true')">
+            <option value="true" ${a.required?'selected':''}>Requis</option><option value="false" ${!a.required?'selected':''}>Optionnel</option>
+          </select>
+          <select style="width:50px" onchange="_wfSetAgentField('${phaseId}','${escHtml(id)}','parallel_group',this.value)">${pgOpts}</select>
+        </div>
+        <div class="wf-inline-label">Depends on</div>
+        <div class="wf-inline-checks">${depsChecks}</div>
+        <div class="wf-inline-label">Can delegate to</div>
+        <div class="wf-inline-checks">${delegChecks}</div>
+      </div>
+    </div>`;
+  }).join('');
 
-  let delsHtml = Object.entries(deliverables).map(([id, d]) => `
-    <div class="wf-prop-item">
-      <span class="wf-item-label" title="${escHtml(d.description || '')}">${escHtml(id)}</span>
-      <span style="font-size:0.65rem;color:var(--text-secondary)">${escHtml(d.agent || '')}</span>
-      <span class="wf-item-req">${d.required ? 'req' : 'opt'}</span>
-      <button class="btn-icon" onclick="wfEditDeliverable('${phaseId}','${escHtml(id)}')">&#9998;</button>
-      <button class="btn-icon danger" onclick="wfRemoveDeliverable('${phaseId}','${escHtml(id)}')">x</button>
-    </div>
-  `).join('');
+  // Deliverables — inline editable blocks
+  const agentIds = Object.keys(agents);
+  let delsHtml = Object.entries(deliverables).map(([id, d]) => {
+    const agOpts = agentIds.map(a => `<option value="${escHtml(a)}" ${a===d.agent?'selected':''}>${a}</option>`).join('');
+    return `<div class="wf-inline-block">
+      <div class="wf-inline-head">
+        <span class="wf-inline-id">${escHtml(id)}</span>
+        <button class="btn-icon danger" onclick="wfRemoveDeliverable('${phaseId}','${escHtml(id)}')">x</button>
+      </div>
+      <div class="wf-inline-fields">
+        <input placeholder="Description" value="${escHtml(d.description || '')}" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','description',this.value)" />
+        <div style="display:flex;gap:0.3rem">
+          <select style="flex:1" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','agent',this.value)">${agOpts}</select>
+          <select style="width:80px" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','required',this.value==='true')">
+            <option value="true" ${d.required?'selected':''}>Requis</option><option value="false" ${!d.required?'selected':''}>Opt</option>
+          </select>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
 
-  let condsHtml = Object.entries(exitConds).map(([k, v]) => `
-    <div class="wf-prop-item">
-      <span class="wf-item-label">${escHtml(k)}</span>
-      <span style="font-size:0.7rem">${typeof v === 'boolean' ? (v ? 'true' : 'false') : escHtml(String(v))}</span>
-      <button class="btn-icon danger" onclick="wfRemoveCondition('${phaseId}','${escHtml(k)}')">x</button>
-    </div>
-  `).join('');
+  // Exit conditions — inline
+  const WF_COND_KEYS = ['all_deliverables_complete','no_critical_alerts','human_gate','qa_verdict_go','no_critical_bugs','staging_validated'];
+  let condsHtml = WF_COND_KEYS.map(k => {
+    const checked = !!exitConds[k];
+    return `<label class="wf-rule-check"><input type="checkbox" ${checked ? 'checked' : ''} onchange="wfToggleCondition('${phaseId}','${k}',this.checked)" /><span>${escHtml(k)}</span></label>`;
+  }).join('');
 
   el.innerHTML = `
     <h4>
@@ -3567,11 +3650,8 @@ function _wfRenderPhaseProps(el, phaseId) {
     </div>
 
     <div class="wf-props-section">
-      <div class="wf-props-section-title">
-        Conditions de sortie (${Object.keys(exitConds).length})
-        <button class="btn-icon" style="font-size:0.75rem" onclick="wfAddCondition('${phaseId}')">+</button>
-      </div>
-      ${condsHtml || '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucune condition</div>'}
+      <div class="wf-props-section-title">Conditions de sortie</div>
+      ${condsHtml}
     </div>
   `;
 }
@@ -3637,6 +3717,9 @@ function wfArrowContextMenu(e, idx) {
 function wfCtxDeleteTransition(idx) {
   wfCloseContextMenu();
   _wf.data.transitions.splice(idx, 1);
+  if (_wf.selected && typeof _wf.selected === 'object' && _wf.selected.type === 'transition') {
+    _wf.selected = null;
+  }
   wfRender();
 }
 
@@ -3791,86 +3874,44 @@ function wfSetPhaseField(phaseId, field, val) {
   if (field === 'order' || field === 'name') wfRender();
 }
 
-// ── Agent CRUD within a phase ──
-function wfAddAgent(phaseId) {
-  showModal(`
-    <div class="modal-header">
-      <h3>Ajouter un agent</h3>
-      <button class="btn-icon" onclick="closeModal();wfRender()">&times;</button>
-    </div>
-    <div class="form-group"><label>ID de l'agent</label><input id="wf-new-agent-id" placeholder="ex: requirements_analyst" /></div>
-    <div class="form-group"><label>Role</label><input id="wf-new-agent-role" placeholder="Description du role" /></div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Obligatoire</label>
-        <select id="wf-new-agent-req"><option value="true">Oui</option><option value="false">Non</option></select>
-      </div>
-      <div class="form-group">
-        <label>Groupe parallele</label>
-        <input id="wf-new-agent-pg" value="A" />
-      </div>
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal();wfRender()">Annuler</button>
-      <button class="btn btn-primary" onclick="_wfDoAddAgent('${phaseId}')">Ajouter</button>
-    </div>
-  `, 'modal-confirm');
-}
-
-function _wfDoAddAgent(phaseId) {
-  const id = document.getElementById('wf-new-agent-id').value.trim();
-  if (!id) { toast('ID requis', 'error'); return; }
+// ── Agent CRUD within a phase (inline, no modal) ──
+async function wfAddAgent(phaseId) {
+  const assigned = new Set(Object.keys(_wf.data.phases[phaseId].agents || {}));
+  let allAgents = [];
+  const registryBase = _wf.apiBase.includes('templates') ? '/api/templates/registry' : '/api/agents/registry';
+  try {
+    const reg = await api(`${registryBase}/${encodeURIComponent(_wf.dir)}`);
+    allAgents = Object.keys(reg.agents || reg || {});
+  } catch {}
+  const available = allAgents.filter(a => !assigned.has(a));
+  if (available.length === 0) { toast('Tous les agents sont deja assignes', 'info'); return; }
+  const agentId = available[0];
   if (!_wf.data.phases[phaseId].agents) _wf.data.phases[phaseId].agents = {};
-  _wf.data.phases[phaseId].agents[id] = {
-    role: document.getElementById('wf-new-agent-role').value.trim(),
-    required: document.getElementById('wf-new-agent-req').value === 'true',
-    parallel_group: document.getElementById('wf-new-agent-pg').value.trim() || 'A'
+  _wf.data.phases[phaseId].agents[agentId] = {
+    role: '',
+    required: true,
+    parallel_group: (_wf.data.parallel_groups && _wf.data.parallel_groups.order && _wf.data.parallel_groups.order[0]) || 'A'
   };
-  closeModal();
   wfRender();
 }
 
-function wfEditAgent(phaseId, agentId) {
-  const a = _wf.data.phases[phaseId]?.agents?.[agentId];
-  if (!a) return;
-  showModal(`
-    <div class="modal-header">
-      <h3>Modifier l'agent : ${escHtml(agentId)}</h3>
-      <button class="btn-icon" onclick="closeModal();wfRender()">&times;</button>
-    </div>
-    <div class="form-group"><label>Role</label><input id="wf-edit-agent-role" value="${escHtml(a.role || '')}" /></div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Obligatoire</label>
-        <select id="wf-edit-agent-req"><option value="true" ${a.required?'selected':''}>Oui</option><option value="false" ${!a.required?'selected':''}>Non</option></select>
-      </div>
-      <div class="form-group">
-        <label>Groupe parallele</label>
-        <input id="wf-edit-agent-pg" value="${escHtml(a.parallel_group || '')}" />
-      </div>
-    </div>
-    <div class="form-group"><label>Depends on (IDs separes par des virgules)</label><input id="wf-edit-agent-deps" value="${escHtml((a.depends_on||[]).join(', '))}" /></div>
-    <div class="form-group"><label>Can delegate to (IDs separes par des virgules)</label><input id="wf-edit-agent-del" value="${escHtml((a.can_delegate_to||[]).join(', '))}" /></div>
-    <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal();wfRender()">Annuler</button>
-      <button class="btn btn-primary" onclick="_wfDoEditAgent('${phaseId}','${escHtml(agentId)}')">Sauvegarder</button>
-    </div>
-  `, 'modal-confirm');
+// Inline field setters for agents
+function _wfSetAgentField(phaseId, agentId, field, val) {
+  const ag = _wf.data.phases[phaseId]?.agents?.[agentId];
+  if (!ag) return;
+  ag[field] = val;
 }
 
-function _wfDoEditAgent(phaseId, agentId) {
-  const ag = _wf.data.phases[phaseId].agents[agentId];
-  ag.role = document.getElementById('wf-edit-agent-role').value.trim();
-  ag.required = document.getElementById('wf-edit-agent-req').value === 'true';
-  ag.parallel_group = document.getElementById('wf-edit-agent-pg').value.trim() || 'A';
-  const deps = document.getElementById('wf-edit-agent-deps').value.trim();
-  if (deps) ag.depends_on = deps.split(',').map(s => s.trim()).filter(Boolean);
-  else delete ag.depends_on;
-  const del = document.getElementById('wf-edit-agent-del').value.trim();
-  if (del) ag.can_delegate_to = del.split(',').map(s => s.trim()).filter(Boolean);
-  else delete ag.can_delegate_to;
-  closeModal();
-  wfRender();
+function _wfToggleAgentList(phaseId, agentId, field, targetId, checked) {
+  const ag = _wf.data.phases[phaseId]?.agents?.[agentId];
+  if (!ag) return;
+  if (!ag[field]) ag[field] = [];
+  if (checked) {
+    if (!ag[field].includes(targetId)) ag[field].push(targetId);
+  } else {
+    ag[field] = ag[field].filter(x => x !== targetId);
+  }
+  if (ag[field].length === 0) delete ag[field];
 }
 
 function wfRemoveAgent(phaseId, agentId) {
@@ -3878,82 +3919,28 @@ function wfRemoveAgent(phaseId, agentId) {
   wfRender();
 }
 
-// ── Deliverable CRUD ──
+// ── Deliverable CRUD (inline, no modal) ──
 function wfAddDeliverable(phaseId) {
   const agentIds = Object.keys(_wf.data.phases[phaseId].agents || {});
-  const agentOpts = agentIds.map(a => `<option value="${escHtml(a)}">${escHtml(a)}</option>`).join('');
-  showModal(`
-    <div class="modal-header">
-      <h3>Ajouter un livrable</h3>
-      <button class="btn-icon" onclick="closeModal();wfRender()">&times;</button>
-    </div>
-    <div class="form-group"><label>ID</label><input id="wf-new-del-id" placeholder="ex: prd" /></div>
-    <div class="form-group"><label>Description</label><input id="wf-new-del-desc" /></div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Agent responsable</label>
-        <select id="wf-new-del-agent"><option value="">--</option>${agentOpts}</select>
-      </div>
-      <div class="form-group">
-        <label>Obligatoire</label>
-        <select id="wf-new-del-req"><option value="true">Oui</option><option value="false">Non</option></select>
-      </div>
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal();wfRender()">Annuler</button>
-      <button class="btn btn-primary" onclick="_wfDoAddDel('${phaseId}')">Ajouter</button>
-    </div>
-  `, 'modal-confirm');
-}
-
-function _wfDoAddDel(phaseId) {
-  const id = document.getElementById('wf-new-del-id').value.trim();
-  if (!id) { toast('ID requis', 'error'); return; }
+  if (agentIds.length === 0) { toast('Ajoutez d\'abord un agent a cette phase', 'error'); return; }
   if (!_wf.data.phases[phaseId].deliverables) _wf.data.phases[phaseId].deliverables = {};
+  const existing = Object.keys(_wf.data.phases[phaseId].deliverables);
+  let num = existing.length + 1;
+  let id = `deliverable_${num}`;
+  while (existing.includes(id)) { num++; id = `deliverable_${num}`; }
   _wf.data.phases[phaseId].deliverables[id] = {
-    agent: document.getElementById('wf-new-del-agent').value,
-    required: document.getElementById('wf-new-del-req').value === 'true',
-    description: document.getElementById('wf-new-del-desc').value.trim()
+    description: '',
+    agent: agentIds[0],
+    required: true
   };
-  closeModal();
   wfRender();
 }
 
-function wfEditDeliverable(phaseId, delId) {
+// Inline field setter for deliverables
+function _wfSetDelField(phaseId, delId, field, val) {
   const d = _wf.data.phases[phaseId]?.deliverables?.[delId];
   if (!d) return;
-  const agentIds = Object.keys(_wf.data.phases[phaseId].agents || {});
-  const agentOpts = agentIds.map(a => `<option value="${escHtml(a)}" ${a===d.agent?'selected':''}>${escHtml(a)}</option>`).join('');
-  showModal(`
-    <div class="modal-header">
-      <h3>Modifier : ${escHtml(delId)}</h3>
-      <button class="btn-icon" onclick="closeModal();wfRender()">&times;</button>
-    </div>
-    <div class="form-group"><label>Description</label><input id="wf-edit-del-desc" value="${escHtml(d.description || '')}" /></div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Agent</label>
-        <select id="wf-edit-del-agent"><option value="">--</option>${agentOpts}</select>
-      </div>
-      <div class="form-group">
-        <label>Obligatoire</label>
-        <select id="wf-edit-del-req"><option value="true" ${d.required?'selected':''}>Oui</option><option value="false" ${!d.required?'selected':''}>Non</option></select>
-      </div>
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal();wfRender()">Annuler</button>
-      <button class="btn btn-primary" onclick="_wfDoEditDel('${phaseId}','${escHtml(delId)}')">Sauvegarder</button>
-    </div>
-  `, 'modal-confirm');
-}
-
-function _wfDoEditDel(phaseId, delId) {
-  const d = _wf.data.phases[phaseId].deliverables[delId];
-  d.description = document.getElementById('wf-edit-del-desc').value.trim();
-  d.agent = document.getElementById('wf-edit-del-agent').value;
-  d.required = document.getElementById('wf-edit-del-req').value === 'true';
-  closeModal();
-  wfRender();
+  d[field] = val;
 }
 
 function wfRemoveDeliverable(phaseId, delId) {
@@ -3961,37 +3948,14 @@ function wfRemoveDeliverable(phaseId, delId) {
   wfRender();
 }
 
-// ── Exit conditions CRUD ──
-function wfAddCondition(phaseId) {
-  showModal(`
-    <div class="modal-header">
-      <h3>Ajouter une condition de sortie</h3>
-      <button class="btn-icon" onclick="closeModal();wfRender()">&times;</button>
-    </div>
-    <div class="form-group"><label>Cle</label><input id="wf-new-cond-key" placeholder="ex: human_gate" /></div>
-    <div class="form-group">
-      <label>Valeur</label>
-      <select id="wf-new-cond-val"><option value="true">true</option><option value="false">false</option></select>
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal();wfRender()">Annuler</button>
-      <button class="btn btn-primary" onclick="_wfDoAddCond('${phaseId}')">Ajouter</button>
-    </div>
-  `, 'modal-confirm');
-}
-
-function _wfDoAddCond(phaseId) {
-  const k = document.getElementById('wf-new-cond-key').value.trim();
-  if (!k) { toast('Cle requise', 'error'); return; }
+// ── Exit conditions (inline checkboxes) ──
+function wfToggleCondition(phaseId, key, checked) {
   if (!_wf.data.phases[phaseId].exit_conditions) _wf.data.phases[phaseId].exit_conditions = {};
-  _wf.data.phases[phaseId].exit_conditions[k] = document.getElementById('wf-new-cond-val').value === 'true';
-  closeModal();
-  wfRender();
-}
-
-function wfRemoveCondition(phaseId, key) {
-  delete _wf.data.phases[phaseId].exit_conditions[key];
-  wfRender();
+  if (checked) {
+    _wf.data.phases[phaseId].exit_conditions[key] = true;
+  } else {
+    delete _wf.data.phases[phaseId].exit_conditions[key];
+  }
 }
 
 // ── Transitions CRUD ──
@@ -4074,34 +4038,28 @@ function _wfGetUsedGroups() {
 }
 
 function wfAddPG() {
-  showModal(`
-    <div class="modal-header">
-      <h3>Ajouter un groupe parallele</h3>
-      <button class="btn-icon" onclick="closeModal();wfRender()">&times;</button>
-    </div>
-    <div class="form-group"><label>Nom du groupe (ex: D)</label><input id="wf-new-pg-name" placeholder="D" /></div>
-    <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal();wfRender()">Annuler</button>
-      <button class="btn btn-primary" onclick="_wfDoAddPG()">Ajouter</button>
-    </div>
-  `, 'modal-confirm');
-}
-
-function _wfDoAddPG() {
-  const name = document.getElementById('wf-new-pg-name').value.trim();
-  if (!name) { toast('Nom requis', 'error'); return; }
   if (!_wf.data.parallel_groups) _wf.data.parallel_groups = { description: '', order: [] };
   if (!_wf.data.parallel_groups.order) _wf.data.parallel_groups.order = [];
-  if (_wf.data.parallel_groups.order.includes(name)) { toast('Ce groupe existe deja', 'error'); return; }
-  _wf.data.parallel_groups.order.push(name);
-  closeModal();
+  const existing = _wf.data.parallel_groups.order;
+  // Find next available letter
+  let letter = 'A';
+  for (let c = 65; c <= 90; c++) {
+    const l = String.fromCharCode(c);
+    if (!existing.includes(l)) { letter = l; break; }
+  }
+  existing.push(letter);
   wfRender();
 }
 
 function wfRemovePG(name) {
-  const used = _wfGetUsedGroups();
-  if (used.has(name)) { toast('Ce groupe est utilise par un agent, impossible de le supprimer', 'error'); return; }
+  if (name === 'A') { toast('Le groupe A ne peut pas etre supprime', 'error'); return; }
   if (!_wf.data.parallel_groups || !_wf.data.parallel_groups.order) return;
+  // Reassign agents using this group to group A
+  for (const phase of Object.values(_wf.data.phases || {})) {
+    for (const agent of Object.values(phase.agents || {})) {
+      if (agent.parallel_group === name) agent.parallel_group = 'A';
+    }
+  }
   _wf.data.parallel_groups.order = _wf.data.parallel_groups.order.filter(g => g !== name);
   wfRender();
 }

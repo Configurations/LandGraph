@@ -1,5 +1,6 @@
 {
   "phases": {
+    
     "discovery": {
       "name": "Discovery",
       "description": "Comprendre le besoin, definir le perimetre, identifier les risques",

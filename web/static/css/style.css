@@ -1416,6 +1416,74 @@ tr:hover { background: rgba(255,255,255,0.02); }
   cursor: pointer;
 }
 
+/* Inline editable blocks (agents, deliverables in property grid) */
+.wf-inline-block {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 0.4rem;
+  overflow: hidden;
+}
+.wf-inline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.25rem 0.4rem;
+  background: rgba(255,255,255,0.03);
+  border-bottom: 1px solid var(--border);
+}
+.wf-inline-id {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+.wf-inline-fields {
+  padding: 0.3rem 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.wf-inline-fields input,
+.wf-inline-fields select {
+  font-size: 0.72rem;
+  padding: 0.2rem 0.35rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+}
+.wf-inline-fields input:focus,
+.wf-inline-fields select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.wf-inline-head .btn-icon.danger {
+  font-size: 0.65rem;
+  padding: 0 0.25rem;
+}
+.wf-inline-label {
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+  margin-top: 0.15rem;
+}
+.wf-inline-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.4rem;
+}
+.wf-inline-check {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+.wf-inline-check input[type=checkbox] {
+  width: auto;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 /* Responsive sidebar collapse */
 @media (max-width: 900px) {
   .wf-sidebar { width: 260px; }
