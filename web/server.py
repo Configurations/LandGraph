@@ -1535,7 +1535,7 @@ async def delete_template_agent(agent_id: str, team_id: str = ""):
 def _ensure_gitignore(target_dir: Path):
     """Create or update .gitignore with required patterns."""
     gitignore = target_dir / ".gitignore"
-    required = ["*.sh", "git.json"]
+    required = ["*.sh", "git.json", "**/git.json"]
     if gitignore.exists():
         content = gitignore.read_text(encoding="utf-8")
         lines = [l.strip() for l in content.splitlines()]
@@ -1921,11 +1921,22 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
         password = cfg.get("password", "").strip()
 
         _ensure_gitignore(target_dir)
-        # Remove git.json from tracking if it was previously committed
+        # Remove all git.json from tracking (root + subdirs) if previously committed
         subprocess.run(
-            ["git", "rm", "--cached", "--ignore-unmatch", "git.json"],
+            ["git", "rm", "-r", "--cached", "--ignore-unmatch", "git.json"],
             cwd=str(target_dir), capture_output=True, text=True, timeout=10
         )
+        # Also catch git.json in subdirectories via glob
+        find_result = subprocess.run(
+            ["git", "ls-files", "--cached", "*/git.json"],
+            cwd=str(target_dir), capture_output=True, text=True, timeout=10
+        )
+        for tracked_file in find_result.stdout.strip().splitlines():
+            if tracked_file:
+                subprocess.run(
+                    ["git", "rm", "--cached", "--ignore-unmatch", tracked_file],
+                    cwd=str(target_dir), capture_output=True, text=True, timeout=10
+                )
         subprocess.run(
             ["git", "add", "-A"],
             cwd=str(target_dir), capture_output=True, text=True, timeout=10

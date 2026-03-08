@@ -291,17 +291,17 @@ async function loadMCP() {
 }
 
 function renderMCP() {
-  const installed = mcpCatalog.filter(c => c.installed);
-  const catalog = mcpCatalog.filter(c => mcpShowDeprecated || !c.deprecated);
+  const withParams = mcpCatalog.filter(c => c.env_vars.length > 0 && c.installed);
+  const noParams = mcpCatalog.filter(c => c.env_vars.length === 0 && (mcpShowDeprecated || !c.deprecated));
 
-  // ── Top: Installed servers ──
+  // ── Top: Services with parameters (installed only) ──
   const configuredEl = document.getElementById('mcp-configured');
-  if (installed.length === 0) {
-    configuredEl.innerHTML = '<p style="color:var(--text-secondary);text-align:center;padding:1rem">Aucun serveur MCP installe. Choisissez-en dans le catalogue ci-dessous.</p>';
+  if (withParams.length === 0) {
+    configuredEl.innerHTML = '<p style="color:var(--text-secondary);text-align:center;padding:1rem">Aucun service avec parametres installe.</p>';
   } else {
     configuredEl.innerHTML = `<table>
       <thead><tr><th>Service</th><th>Commande</th><th>Env</th><th>Agents</th><th>Actif</th><th>Actions</th></tr></thead>
-      <tbody>${installed.map(c => {
+      <tbody>${withParams.map(c => {
         const envStatus = c.env_vars.length === 0
           ? '<span class="tag tag-gray">aucune</span>'
           : c.env_vars.map(v =>
@@ -336,7 +336,7 @@ function renderMCP() {
 
   // ── Bottom: Catalogue with Install / Activé buttons ──
   const catalogEl = document.getElementById('mcp-catalog');
-  catalogEl.innerHTML = catalog.map(c => {
+  catalogEl.innerHTML = noParams.map(c => {
     let statusBtn;
     if (c.installed && c.enabled) {
       statusBtn = '<span class="tag tag-green" style="padding:0.4rem 0.75rem;font-size:0.8rem">Active</span>';
@@ -1974,7 +1974,7 @@ async function showAddTeamModal() {
     </div>
     <div class="form-group">
       <label>Identifiant</label>
-      <input id="team-id" placeholder="ex: data_team" />
+      <input id="team-id" placeholder="ex: data_team" oninput="document.getElementById('team-dir').value = this.value ? 'Configs/Teams/' + this.value : ''" />
     </div>
     <div class="form-group">
       <label>Nom</label>
@@ -1985,12 +1985,8 @@ async function showAddTeamModal() {
       <input id="team-desc" placeholder="Description de l'equipe" />
     </div>
     <div class="form-group">
-      <label>Repertoire (Configs/Teams/...)</label>
-      <select id="team-dir" class="form-control">
-        <option value="">-- Saisie libre --</option>
-        ${dirOpts}
-      </select>
-      <input id="team-dir-custom" class="form-control" placeholder="Ou saisir un nom de repertoire" style="margin-top:0.25rem">
+      <label>Repertoire</label>
+      <input id="team-dir" readonly style="background:var(--bg-tertiary);color:var(--text-secondary)" />
     </div>
     <div class="form-group">
       <label>Creer a partir d'un template (Shared)</label>
@@ -2034,7 +2030,7 @@ function editTeam(idx) {
     </div>
     <div class="form-group">
       <label>Repertoire</label>
-      <input id="team-dir" value="${escHtml(t.directory || t.id)}" />
+      <input id="team-dir" value="Configs/Teams/${escHtml(t.id)}" readonly style="background:var(--bg-tertiary);color:var(--text-secondary)" />
     </div>
     <div class="form-group">
       <label>Orchestrateur</label>
@@ -2056,9 +2052,7 @@ async function addTeam() {
   if (!id) { toast('Identifiant requis', 'error'); return; }
   const name = document.getElementById('team-name').value.trim();
   if (!name) { toast('Nom requis', 'error'); return; }
-  const dirSelect = document.getElementById('team-dir').value;
-  const dirCustom = document.getElementById('team-dir-custom').value.trim();
-  const directory = dirCustom || dirSelect || id;
+  const directory = id;
   const channels = document.getElementById('team-channels').value.split('\n').map(s => s.trim()).filter(Boolean);
   const template = document.getElementById('team-template')?.value || '';
   try {
@@ -2416,7 +2410,7 @@ async function loadCfgMCP() {
 }
 
 function renderCfgMCP() {
-  const withParams = cfgMcpCatalog.filter(c => c.env_vars.length > 0);
+  const withParams = cfgMcpCatalog.filter(c => c.env_vars.length > 0 && c.installed);
   const noParams = cfgMcpCatalog.filter(c => c.env_vars.length === 0 && (cfgMcpShowDeprecated || !c.deprecated));
 
   // ── Top: Services with parameters ──
