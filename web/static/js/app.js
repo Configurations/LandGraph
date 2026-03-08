@@ -778,6 +778,10 @@ async function saveAgent(id) {
 function showAddAgentModal() {
   const providerNames = Object.keys(llmProviders.providers || {});
   const teamOpts = agentGroups.map(g => `<option value="${escHtml(g.team_id)}">${escHtml(g.team_name)}</option>`).join('');
+  const mcpInstalled = mcpCatalog.filter(c => c.installed);
+  const mcpTags = mcpInstalled.length
+    ? mcpInstalled.map(c => `<label class="mcp-check-tag"><input type="checkbox" value="${escHtml(c.id)}" onchange="this.parentElement.classList.toggle('active',this.checked)" />${escHtml(c.label)}</label>`).join('')
+    : '<span style="color:var(--text-secondary);font-size:0.8rem">Aucun serveur MCP installe</span>';
   showModal(`
     <div class="modal-header">
       <h3>Nouvel agent</h3>
@@ -811,6 +815,10 @@ function showAddAgentModal() {
       <input id="agent-new-temp" type="number" step="0.1" min="0" max="2" value="0.2" />
     </div>
     <div class="form-group">
+      <label>Services MCP</label>
+      <div class="mcp-check-tags">${mcpTags}</div>
+    </div>
+    <div class="form-group">
       <label>Prompt initial</label>
       <textarea id="agent-new-prompt" style="min-height:150px" placeholder="# Mon Agent\n\nDescription du role..."></textarea>
     </div>
@@ -829,11 +837,16 @@ async function addAgent() {
   const prompt_content = document.getElementById('agent-new-prompt').value;
   const team_id = document.getElementById('agent-new-team')?.value || 'default';
   if (!id || !name) { toast('ID et nom requis', 'error'); return; }
+  const mcpChecked = [...document.querySelectorAll('#modal-container .mcp-check-tag input:checked')].map(cb => cb.value);
+  const teamDir = agentGroups.find(g => g.team_id === team_id)?.team_dir || team_id;
   try {
     await api('/api/agents', {
       method: 'POST',
       body: { id, name, model, temperature, max_tokens: 32768, prompt_content, prompt_file: '', type: '', pipeline_steps: [], team_id }
     });
+    if (mcpChecked.length) {
+      await api(`/api/agents/mcp-access/${encodeURIComponent(teamDir)}/${encodeURIComponent(id)}`, { method: 'PUT', body: { servers: mcpChecked } });
+    }
     toast('Agent cree', 'success');
     closeModal();
     loadAgents();
@@ -1522,7 +1535,18 @@ function renderTeams() {
   }).join('');
 }
 
-function showAddCfgAgentModal(dir) {
+async function showAddCfgAgentModal(dir) {
+  let llmNames = [], mcpServerIds = [];
+  try {
+    const [llmData, mcpData] = await Promise.all([api('/api/templates/llm'), api('/api/mcp/servers')]);
+    llmNames = Object.keys(llmData.providers || {});
+    mcpServerIds = Object.keys(mcpData.servers || {});
+  } catch { /* ignore */ }
+  const llmOptions = `<option value="">-- Defaut --</option>` +
+    llmNames.map(p => `<option value="${escHtml(p)}">${escHtml(p)}</option>`).join('');
+  const mcpTags = mcpServerIds.length
+    ? mcpServerIds.map(sid => `<label class="mcp-check-tag"><input type="checkbox" value="${escHtml(sid)}" onchange="this.parentElement.classList.toggle('active',this.checked)" />${escHtml(sid)}</label>`).join('')
+    : '<span style="color:var(--text-secondary);font-size:0.8rem">Aucun serveur MCP installe</span>';
   showModal(`
     <div class="modal-header">
       <h3>Nouvel agent</h3>
@@ -1540,6 +1564,12 @@ function showAddCfgAgentModal(dir) {
     </div>
     <div class="form-row">
       <div class="form-group">
+        <label>Modele LLM</label>
+        <select id="cfg-agent-new-llm">${llmOptions}</select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
         <label>Temperature</label>
         <input id="cfg-agent-new-temp" type="number" step="0.1" min="0" max="2" value="0.3" />
       </div>
@@ -1547,6 +1577,10 @@ function showAddCfgAgentModal(dir) {
         <label>Max tokens</label>
         <input id="cfg-agent-new-tokens" type="number" value="32768" />
       </div>
+    </div>
+    <div class="form-group">
+      <label>Services MCP</label>
+      <div class="mcp-check-tags">${mcpTags}</div>
     </div>
     <div class="form-group">
       <label>Prompt initial</label>
@@ -1563,16 +1597,21 @@ async function addCfgAgent(dir) {
   const id = (document.getElementById('cfg-agent-new-id').value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
   const name = document.getElementById('cfg-agent-new-name').value.trim();
   if (!id || !name) { toast('ID et nom requis', 'error'); return; }
+  const llm = document.getElementById('cfg-agent-new-llm').value;
   const temperature = parseFloat(document.getElementById('cfg-agent-new-temp').value) || 0.3;
   const max_tokens = parseInt(document.getElementById('cfg-agent-new-tokens').value) || 32768;
   const prompt_content = document.getElementById('cfg-agent-new-prompt').value || `# ${name}\n\n`;
+  const mcpChecked = [...document.querySelectorAll('#modal-container .mcp-check-tag input:checked')].map(cb => cb.value);
   try {
     await api('/api/agents', { method: 'POST', body: {
-      id, name, temperature, max_tokens,
+      id, name, llm, temperature, max_tokens,
       prompt_content,
       prompt_file: `${id}.md`,
       team_id: dir,
     }});
+    if (mcpChecked.length) {
+      await api(`/api/agents/mcp-access/${encodeURIComponent(dir)}/${encodeURIComponent(id)}`, { method: 'PUT', body: { servers: mcpChecked } });
+    }
     toast('Agent ajoute', 'success');
     closeModal();
     loadTeams();
@@ -2606,7 +2645,18 @@ function renderTplTeams() {
   }).join('');
 }
 
-function showAddTplAgentModal(dir) {
+async function showAddTplAgentModal(dir) {
+  let llmNames = [], mcpServerIds = [];
+  try {
+    const [llmData, mcpData] = await Promise.all([api('/api/templates/llm'), api('/api/templates/mcp')]);
+    llmNames = Object.keys(llmData.providers || {});
+    mcpServerIds = Object.keys(mcpData.servers || {});
+  } catch { /* ignore */ }
+  const llmOptions = `<option value="">-- Defaut --</option>` +
+    llmNames.map(p => `<option value="${escHtml(p)}">${escHtml(p)}</option>`).join('');
+  const mcpTags = mcpServerIds.length
+    ? mcpServerIds.map(sid => `<label class="mcp-check-tag"><input type="checkbox" value="${escHtml(sid)}" onchange="this.parentElement.classList.toggle('active',this.checked)" />${escHtml(sid)}</label>`).join('')
+    : '<span style="color:var(--text-secondary);font-size:0.8rem">Aucun serveur MCP dans le template</span>';
   showModal(`
     <div class="modal-header">
       <h3>Nouvel agent (template)</h3>
@@ -2624,6 +2674,12 @@ function showAddTplAgentModal(dir) {
     </div>
     <div class="form-row">
       <div class="form-group">
+        <label>Modele LLM</label>
+        <select id="tpl-agent-new-llm">${llmOptions}</select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
         <label>Temperature</label>
         <input id="tpl-agent-new-temp" type="number" step="0.1" min="0" max="2" value="0.3" />
       </div>
@@ -2631,6 +2687,10 @@ function showAddTplAgentModal(dir) {
         <label>Max tokens</label>
         <input id="tpl-agent-new-tokens" type="number" value="32768" />
       </div>
+    </div>
+    <div class="form-group">
+      <label>Services MCP</label>
+      <div class="mcp-check-tags">${mcpTags}</div>
     </div>
     <div class="form-group">
       <label>Prompt initial</label>
@@ -2647,16 +2707,21 @@ async function addTplAgent(dir) {
   const id = (document.getElementById('tpl-agent-new-id').value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
   const name = document.getElementById('tpl-agent-new-name').value.trim();
   if (!id || !name) { toast('ID et nom requis', 'error'); return; }
+  const llm = document.getElementById('tpl-agent-new-llm').value;
   const temperature = parseFloat(document.getElementById('tpl-agent-new-temp').value) || 0.3;
   const max_tokens = parseInt(document.getElementById('tpl-agent-new-tokens').value) || 32768;
   const prompt_content = document.getElementById('tpl-agent-new-prompt').value || `# ${name}\n\n`;
+  const mcpChecked = [...document.querySelectorAll('#modal-container .mcp-check-tag input:checked')].map(cb => cb.value);
   try {
     await api('/api/templates/agents', { method: 'POST', body: {
-      id, name, temperature, max_tokens,
+      id, name, llm, temperature, max_tokens,
       prompt_content,
       prompt_file: `${id}.md`,
       team_id: dir,
     }});
+    if (mcpChecked.length) {
+      await api(`/api/templates/mcp-access/${encodeURIComponent(dir)}/${encodeURIComponent(id)}`, { method: 'PUT', body: { servers: mcpChecked } });
+    }
     toast('Agent ajoute', 'success');
     closeModal();
     loadTplTeamsList();
