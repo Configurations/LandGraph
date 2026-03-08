@@ -1929,12 +1929,15 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
         password = cfg.get("password", "").strip()
 
         _ensure_gitignore(target_dir)
-        # Remove all git.json from tracking (root + subdirs) if previously committed
+        subprocess.run(
+            ["git", "add", "-A"],
+            cwd=str(target_dir), capture_output=True, text=True, timeout=10
+        )
+        # Remove git.json from staging (root + subdirs) after add -A
         subprocess.run(
             ["git", "rm", "-r", "--cached", "--ignore-unmatch", "git.json"],
             cwd=str(target_dir), capture_output=True, text=True, timeout=10
         )
-        # Also catch git.json in subdirectories via glob
         find_result = subprocess.run(
             ["git", "ls-files", "--cached", "*/git.json"],
             cwd=str(target_dir), capture_output=True, text=True, timeout=10
@@ -1945,10 +1948,6 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
                     ["git", "rm", "--cached", "--ignore-unmatch", tracked_file],
                     cwd=str(target_dir), capture_output=True, text=True, timeout=10
                 )
-        subprocess.run(
-            ["git", "add", "-A"],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=10
-        )
         commit_result = subprocess.run(
             ["git", "commit", "-m", req.message],
             cwd=str(target_dir), capture_output=True, text=True, timeout=30
