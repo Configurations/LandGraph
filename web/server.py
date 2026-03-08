@@ -630,7 +630,7 @@ class AgentConfig(BaseModel):
     max_tokens: int = 32768
     prompt_file: str = ""
     prompt_content: str = ""
-    model: str = ""
+    llm: str = ""
     type: str = ""
     pipeline_steps: list = []
     team_id: str = "default"
@@ -654,8 +654,8 @@ async def add_agent(cfg: AgentConfig):
         "max_tokens": cfg.max_tokens,
         "prompt": prompt_file,
     }
-    if cfg.model:
-        agent_data["model"] = cfg.model
+    if cfg.llm:
+        agent_data["llm"] = cfg.llm
     if cfg.type:
         agent_data["type"] = cfg.type
     if cfg.pipeline_steps:
@@ -684,10 +684,12 @@ async def update_agent(agent_id: str, cfg: AgentConfig):
     existing["name"] = cfg.name
     existing["temperature"] = cfg.temperature
     existing["max_tokens"] = cfg.max_tokens
-    if cfg.model:
-        existing["model"] = cfg.model
-    elif "model" in existing:
-        del existing["model"]
+    if cfg.llm:
+        existing["llm"] = cfg.llm
+    elif "llm" in existing:
+        del existing["llm"]
+    # Clean legacy "model" field
+    existing.pop("model", None)
     if cfg.type:
         existing["type"] = cfg.type
     if cfg.pipeline_steps:
@@ -713,8 +715,14 @@ async def delete_agent(agent_id: str, team_id: str = "default"):
     data = _read_json(registry_path)
     if agent_id not in data.get("agents", {}):
         raise HTTPException(404, f"Agent {agent_id} not found")
+    prompt_file = data["agents"][agent_id].get("prompt", f"{agent_id}.md")
     del data["agents"][agent_id]
     _write_json(registry_path, data)
+    # Delete prompt file
+    prompt_path = tdir / prompt_file
+    if prompt_path.exists():
+        prompt_path.unlink()
+        log.info("Deleted prompt file: %s", prompt_path)
     return {"ok": True}
 
 
@@ -1224,8 +1232,8 @@ async def add_template_agent(cfg: AgentConfig):
         raise HTTPException(409, f"Agent {cfg.id} already exists")
     prompt_file = cfg.prompt_file or f"{cfg.id}.md"
     agent_data = {"name": cfg.name, "temperature": cfg.temperature, "max_tokens": cfg.max_tokens, "prompt": prompt_file}
-    if cfg.model:
-        agent_data["model"] = cfg.model
+    if cfg.llm:
+        agent_data["llm"] = cfg.llm
     if cfg.type:
         agent_data["type"] = cfg.type
     if cfg.pipeline_steps:
@@ -1250,10 +1258,11 @@ async def update_template_agent(agent_id: str, cfg: AgentConfig):
     existing["name"] = cfg.name
     existing["temperature"] = cfg.temperature
     existing["max_tokens"] = cfg.max_tokens
-    if cfg.model:
-        existing["model"] = cfg.model
-    elif "model" in existing:
-        del existing["model"]
+    if cfg.llm:
+        existing["llm"] = cfg.llm
+    elif "llm" in existing:
+        del existing["llm"]
+    existing.pop("model", None)
     if cfg.type:
         existing["type"] = cfg.type
     if cfg.pipeline_steps:
@@ -1276,8 +1285,13 @@ async def delete_template_agent(agent_id: str, team_id: str = ""):
     data = _read_json(registry_path)
     if agent_id not in data.get("agents", {}):
         raise HTTPException(404, f"Agent {agent_id} not found")
+    prompt_file = data["agents"][agent_id].get("prompt", f"{agent_id}.md")
     del data["agents"][agent_id]
     _write_json(registry_path, data)
+    prompt_path = tdir / prompt_file
+    if prompt_path.exists():
+        prompt_path.unlink()
+        log.info("Deleted prompt file: %s", prompt_path)
     return {"ok": True}
 
 

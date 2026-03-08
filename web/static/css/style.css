@@ -397,6 +397,28 @@ tr:hover { background: rgba(255,255,255,0.02); }
   margin-bottom: 0.5rem;
 }
 
+.team-chevron {
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+}
+
+.team-block.collapsed .team-chevron {
+  transform: rotate(-90deg);
+}
+
+.team-block-body {
+  transition: max-height 0.3s ease, opacity 0.2s ease;
+  overflow: hidden;
+}
+
+.team-block.collapsed .team-block-body {
+  display: none;
+}
+
+.team-block.collapsed .team-block-header {
+  margin-bottom: 0;
+}
+
 .team-block-header h3 {
   font-size: 1.1rem;
   font-weight: 700;
@@ -550,6 +572,14 @@ tr:hover { background: rgba(255,255,255,0.02); }
   background: var(--bg-input);
   border-radius: 0.5rem;
   padding: 0.25rem 0.75rem;
+}
+
+.mcp-cmd-help {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-style: italic;
+  margin: 0.25rem 0 0.5rem 0;
+  line-height: 1.4;
 }
 
 .env-var-row {

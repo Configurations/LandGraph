@@ -1360,6 +1360,11 @@ async function loadTeams() {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+function toggleTeamBlock(headerEl) {
+  const block = headerEl.closest('.team-block');
+  block.classList.toggle('collapsed');
+}
+
 function renderTeams() {
   const grid = document.getElementById('teams-grid');
   if (!teamsData.length) {
@@ -1397,24 +1402,29 @@ function renderTeams() {
 
     return `<div class="team-block">
       <div class="team-block-header">
-        <h3>
-          ${escHtml(t.name || t.id)}
-          <span style="font-weight:400;font-size:0.75rem;color:var(--text-secondary)">${escHtml(t.id)}</span>
-          <code style="font-weight:400;font-size:0.7rem;color:var(--text-secondary)">Configs/Teams/${escHtml(dir)}/</code>
-        </h3>
+        <div style="display:flex;align-items:center;gap:0.5rem;flex:1;cursor:pointer" onclick="toggleTeamBlock(this)">
+          <svg class="team-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          <h3 style="margin:0">
+            ${escHtml(t.name || t.id)}
+            <span style="font-weight:400;font-size:0.75rem;color:var(--text-secondary)">${escHtml(t.id)}</span>
+            <code style="font-weight:400;font-size:0.7rem;color:var(--text-secondary)">Configs/Teams/${escHtml(dir)}/</code>
+          </h3>
+          <span class="tag tag-blue" style="margin-left:0.5rem">${agentEntries.length} agent${agentEntries.length > 1 ? 's' : ''}</span>
+        </div>
         <div style="display:flex;gap:0.5rem">
           <button class="btn btn-primary btn-sm" onclick="showAddCfgAgentModal('${escHtml(dir)}')">+ Agent</button>
           <button class="btn btn-outline btn-sm" onclick="showCfgRawRegistry('${escHtml(dir)}')">Raw</button>
           <button class="btn btn-outline btn-sm" style="color:var(--error)" onclick="deleteTeam('${escHtml(t.id)}')">Suppr</button>
         </div>
       </div>
-      ${t.description ? `<p style="color:var(--text-secondary);margin:0 0 0.5rem 0;font-size:0.85rem">${escHtml(t.description)}</p>` : ''}
-      <div class="team-block-meta">
-        <span class="tag tag-blue">${agentEntries.length} agent${agentEntries.length > 1 ? 's' : ''}</span>
-        ${(t.discord_channels || []).map(c => `<span class="tag tag-green">#${escHtml(c)}</span>`).join('')}
-      </div>
-      <div class="agents-grid">
-        ${agentCards || '<p style="color:var(--text-secondary);padding:0.5rem">Aucun agent dans cette equipe.</p>'}
+      <div class="team-block-body">
+        ${t.description ? `<p style="color:var(--text-secondary);margin:0 0 0.5rem 0;font-size:0.85rem">${escHtml(t.description)}</p>` : ''}
+        <div class="team-block-meta">
+          ${(t.discord_channels || []).map(c => `<span class="tag tag-green">#${escHtml(c)}</span>`).join('')}
+        </div>
+        <div class="agents-grid">
+          ${agentCards || '<p style="color:var(--text-secondary);padding:0.5rem">Aucun agent dans cette equipe.</p>'}
+        </div>
       </div>
     </div>`;
   }).join('');
@@ -1477,10 +1487,19 @@ async function addCfgAgent(dir) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-function editCfgAgent(dir, agentId) {
+async function editCfgAgent(dir, agentId) {
   const team = teamsData.find(t => (t.directory || t.id) === dir);
   if (!team || !team.agents[agentId]) { toast('Agent introuvable', 'error'); return; }
   const a = team.agents[agentId];
+  // Load LLM providers for the select
+  let llmNames = [];
+  try {
+    const llmData = await api('/api/templates/llm');
+    llmNames = Object.keys(llmData.providers || {});
+  } catch { /* ignore */ }
+  const currentLlm = a.llm || a.model || '';
+  const llmOptions = `<option value="">-- Defaut --</option>` +
+    llmNames.map(p => `<option value="${escHtml(p)}" ${p === currentLlm ? 'selected' : ''}>${escHtml(p)}</option>`).join('');
 
   const promptRaw = a.prompt_content || '';
   const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
@@ -1497,7 +1516,7 @@ function editCfgAgent(dir, agentId) {
       </div>
       <div class="form-group">
         <label>Modele LLM</label>
-        <input id="cfg-agent-edit-model" value="${escHtml(a.llm || a.model || '')}" placeholder="claude-sonnet, gpt-4o..." />
+        <select id="cfg-agent-edit-llm">${llmOptions}</select>
       </div>
     </div>
     <div class="form-row">
@@ -1549,7 +1568,7 @@ function switchCfgPromptTab(tab) {
 async function saveCfgAgent(dir, agentId) {
   const name = document.getElementById('cfg-agent-edit-name').value.trim();
   if (!name) { toast('Nom requis', 'error'); return; }
-  const model = document.getElementById('cfg-agent-edit-model').value.trim();
+  const llm = document.getElementById('cfg-agent-edit-llm').value;
   const temperature = parseFloat(document.getElementById('cfg-agent-edit-temp').value);
   const max_tokens = parseInt(document.getElementById('cfg-agent-edit-tokens').value);
   const prompt_content = document.getElementById('cfg-agent-edit-prompt').value;
@@ -1557,7 +1576,7 @@ async function saveCfgAgent(dir, agentId) {
   const a = team.agents[agentId];
   try {
     await api(`/api/agents/${encodeURIComponent(agentId)}`, { method: 'PUT', body: {
-      id: agentId, name, model, temperature, max_tokens,
+      id: agentId, name, llm, temperature, max_tokens,
       prompt_content,
       prompt_file: a.prompt || `${agentId}.md`,
       type: a.type || '',
@@ -2087,7 +2106,11 @@ async function showAddTplMcpModal() {
     tplMcpCatalog = data.servers || [];
   } catch (e) { tplMcpCatalog = []; }
   const existing = Object.keys(tplMcpData.servers || {});
-  const available = tplMcpCatalog.filter(c => !c.deprecated && !existing.includes(c.id));
+  // Services with env_vars can be instantiated multiple times (different IDs)
+  // Services without env_vars are removed from the list once added
+  const available = tplMcpCatalog.filter(c =>
+    !c.deprecated && ((c.env_vars && c.env_vars.length > 0) || !existing.includes(c.id))
+  );
   if (available.length === 0) {
     toast('Tous les services du catalogue sont deja ajoutes', 'info');
     return;
@@ -2122,6 +2145,16 @@ function onTplMcpSelected() {
   document.getElementById('mcp-tpl-details').innerHTML = _renderTplMcpDetails(item);
 }
 
+const MCP_CMD_HELP = {
+  npx: "Execute un package Node.js depuis le registre npm sans l'installer globalement. C'est le plus courant pour les MCP parce que la majorite des serveurs MCP sont ecrits en TypeScript/JavaScript.",
+  uvx: "L'equivalent de npx mais pour Python, via le gestionnaire uv. Il telecharge et execute un package Python en une commande.",
+  python: "Execution directe d'un script Python local. Utile pour des serveurs MCP custom que tu developpes toi-meme.",
+  node: "Execution directe d'un script Node.js local. Utile pour des serveurs MCP custom que tu developpes toi-meme.",
+  docker: "Lance le serveur MCP dans un container isole. Plus lourd mais plus securise — le MCP n'a pas acces au systeme hote. Utile pour des serveurs qui ont besoin de dependances complexes ou pour isoler un MCP non fiable.",
+  bunx: "Comme npx mais utilise Bun au lieu de Node.js. Plus rapide au demarrage (~3x plus rapide que Node pour le cold start). Peu utilise pour l'instant dans l'ecosysteme MCP.",
+  deno: "Comme node mais avec Deno, qui a un modele de securite par permissions (acces reseau, fichiers, etc. doivent etre explicitement autorises). Marginal pour les MCP.",
+};
+
 function _renderTplMcpDetails(item) {
   const hasEnv = item.env_vars && item.env_vars.length > 0;
   const prefix = item.id.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
@@ -2129,7 +2162,8 @@ function _renderTplMcpDetails(item) {
   const idHtml = hasEnv ? `
     <div class="form-group" style="margin-top:0.5rem">
       <label>ID de l'instance</label>
-      <input id="mcp-tpl-instance" value="${escHtml(item.id)}" oninput="_updateTplMcpEnvNames()" />
+      <input id="mcp-tpl-instance" value="${escHtml(item.id)}" oninput="_updateTplMcpEnvNames(); _validateTplMcpInstanceId()" />
+      <span id="mcp-tpl-instance-error" style="color:var(--danger);font-size:0.8rem;display:none"></span>
     </div>` : '';
 
   const envHtml = hasEnv
@@ -2164,6 +2198,7 @@ function _renderTplMcpDetails(item) {
         <input value="${escHtml(item.args)}" readonly style="opacity:0.6" />
       </div>
     </div>
+    <p class="mcp-cmd-help">${escHtml(MCP_CMD_HELP[item.command] || '')}</p>
     ${envHtml}
   `;
 }
@@ -2177,6 +2212,23 @@ function _updateTplMcpEnvNames() {
   });
 }
 
+function _validateTplMcpInstanceId() {
+  const el = document.getElementById('mcp-tpl-instance');
+  const errEl = document.getElementById('mcp-tpl-instance-error');
+  if (!el || !errEl) return true;
+  const id = el.value.trim();
+  const existing = Object.keys(tplMcpData.servers || {});
+  if (id && existing.includes(id)) {
+    el.style.border = '2px solid var(--danger)';
+    errEl.textContent = `L'ID "${id}" existe deja`;
+    errEl.style.display = 'block';
+    return false;
+  }
+  el.style.border = '';
+  errEl.style.display = 'none';
+  return true;
+}
+
 async function addTplMcp() {
   const selectEl = document.getElementById('mcp-tpl-select');
   const catalogId = selectEl.value;
@@ -2185,6 +2237,7 @@ async function addTplMcp() {
   const instanceEl = document.getElementById('mcp-tpl-instance');
   const id = instanceEl ? instanceEl.value.trim() : catalogId;
   if (!id) { toast('ID requis', 'error'); return; }
+  if (instanceEl && !_validateTplMcpInstanceId()) { toast('ID deja utilise', 'error'); return; }
 
   // Build env mapping from computed names
   const env = {};
@@ -2314,24 +2367,29 @@ function renderTplTeams() {
 
     return `<div class="team-block">
       <div class="team-block-header">
-        <h3>
-          ${escHtml(t.name)}
-          <span style="font-weight:400;font-size:0.75rem;color:var(--text-secondary)">${escHtml(t.id)}</span>
-          <code style="font-weight:400;font-size:0.7rem;color:var(--text-secondary)">Shared/Teams/${escHtml(dir)}/</code>
-        </h3>
+        <div style="display:flex;align-items:center;gap:0.5rem;flex:1;cursor:pointer" onclick="toggleTeamBlock(this)">
+          <svg class="team-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          <h3 style="margin:0">
+            ${escHtml(t.name)}
+            <span style="font-weight:400;font-size:0.75rem;color:var(--text-secondary)">${escHtml(t.id)}</span>
+            <code style="font-weight:400;font-size:0.7rem;color:var(--text-secondary)">Shared/Teams/${escHtml(dir)}/</code>
+          </h3>
+          <span class="tag tag-blue" style="margin-left:0.5rem">${agentEntries.length} agent${agentEntries.length > 1 ? 's' : ''}</span>
+        </div>
         <div style="display:flex;gap:0.5rem">
           <button class="btn btn-primary btn-sm" onclick="showAddTplAgentModal('${escHtml(dir)}')">+ Agent</button>
           <button class="btn btn-outline btn-sm" onclick="showTplRawRegistry('${escHtml(dir)}')">Raw</button>
           <button class="btn btn-outline btn-sm" style="color:var(--error)" onclick="deleteTplTeam(${i})">Suppr</button>
         </div>
       </div>
-      ${t.description ? `<p style="color:var(--text-secondary);margin:0 0 0.5rem 0;font-size:0.85rem">${escHtml(t.description)}</p>` : ''}
-      <div class="team-block-meta">
-        <span class="tag tag-blue">${agentEntries.length} agent${agentEntries.length > 1 ? 's' : ''}</span>
-        ${(t.discord_channels || []).map(c => `<span class="tag tag-green">#${escHtml(c)}</span>`).join('')}
-      </div>
-      <div class="agents-grid">
-        ${agentCards || '<p style="color:var(--text-secondary);padding:0.5rem">Aucun agent dans ce template.</p>'}
+      <div class="team-block-body">
+        ${t.description ? `<p style="color:var(--text-secondary);margin:0 0 0.5rem 0;font-size:0.85rem">${escHtml(t.description)}</p>` : ''}
+        <div class="team-block-meta">
+          ${(t.discord_channels || []).map(c => `<span class="tag tag-green">#${escHtml(c)}</span>`).join('')}
+        </div>
+        <div class="agents-grid">
+          ${agentCards || '<p style="color:var(--text-secondary);padding:0.5rem">Aucun agent dans ce template.</p>'}
+        </div>
       </div>
     </div>`;
   }).join('');
@@ -2394,10 +2452,19 @@ async function addTplAgent(dir) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-function editTplAgent(dir, agentId) {
+async function editTplAgent(dir, agentId) {
   const tpl = tplTemplatesData.find(tp => tp.id === dir);
   if (!tpl || !tpl.agents[agentId]) { toast('Agent introuvable', 'error'); return; }
   const a = tpl.agents[agentId];
+  // Load LLM providers for the select
+  let llmNames = [];
+  try {
+    const llmData = await api('/api/templates/llm');
+    llmNames = Object.keys(llmData.providers || {});
+  } catch { /* ignore */ }
+  const currentLlm = a.llm || a.model || '';
+  const llmOptions = `<option value="">-- Defaut --</option>` +
+    llmNames.map(p => `<option value="${escHtml(p)}" ${p === currentLlm ? 'selected' : ''}>${escHtml(p)}</option>`).join('');
 
   const promptRaw = a.prompt_content || '';
   const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
@@ -2414,7 +2481,7 @@ function editTplAgent(dir, agentId) {
       </div>
       <div class="form-group">
         <label>Modele LLM</label>
-        <input id="tpl-agent-edit-model" value="${escHtml(a.llm || a.model || '')}" placeholder="claude-sonnet, gpt-4o..." />
+        <select id="tpl-agent-edit-llm">${llmOptions}</select>
       </div>
     </div>
     <div class="form-row">
@@ -2466,7 +2533,7 @@ function switchTplPromptTab(tab) {
 async function saveTplAgent(dir, agentId) {
   const name = document.getElementById('tpl-agent-edit-name').value.trim();
   if (!name) { toast('Nom requis', 'error'); return; }
-  const model = document.getElementById('tpl-agent-edit-model').value.trim();
+  const llm = document.getElementById('tpl-agent-edit-llm').value;
   const temperature = parseFloat(document.getElementById('tpl-agent-edit-temp').value);
   const max_tokens = parseInt(document.getElementById('tpl-agent-edit-tokens').value);
   const prompt_content = document.getElementById('tpl-agent-edit-prompt').value;
@@ -2474,7 +2541,7 @@ async function saveTplAgent(dir, agentId) {
   const a = tpl.agents[agentId];
   try {
     await api(`/api/templates/agents/${encodeURIComponent(agentId)}`, { method: 'PUT', body: {
-      id: agentId, name, model, temperature, max_tokens,
+      id: agentId, name, llm, temperature, max_tokens,
       prompt_content,
       prompt_file: a.prompt || `${agentId}.md`,
       type: a.type || '',
@@ -2536,7 +2603,11 @@ async function _saveTplTeams() {
 function showAddTplTeamModal() {
   // List available template directories
   const dirOpts = tplTemplatesData.map(tp => `<option value="${escHtml(tp.id)}">${escHtml(tp.id)} (${tp.agent_count} agents)</option>`).join('');
-  openModal('Ajouter une equipe', `
+  showModal(`
+    <div class="modal-header">
+      <h3>Ajouter une equipe (template)</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
     <div class="form-group"><label>ID</label><input id="m-tpl-team-id" class="form-control" placeholder="mon-equipe"></div>
     <div class="form-group"><label>Nom</label><input id="m-tpl-team-name" class="form-control" placeholder="Mon Equipe"></div>
     <div class="form-group"><label>Description</label><input id="m-tpl-team-desc" class="form-control"></div>
@@ -2548,7 +2619,11 @@ function showAddTplTeamModal() {
       <input id="m-tpl-team-dir-custom" class="form-control" placeholder="Ou saisir un nom de repertoire" style="margin-top:0.25rem">
     </div>
     <div class="form-group"><label>Channels Discord (virgule)</label><input id="m-tpl-team-channels" class="form-control"></div>
-  `, 'Ajouter', () => addTplTeam());
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="addTplTeam()">Ajouter</button>
+    </div>
+  `);
 }
 
 async function addTplTeam() {
@@ -2574,7 +2649,11 @@ async function addTplTeam() {
 function editTplTeam(idx) {
   const t = tplTeamsData.teams[idx];
   const dirOpts = tplTemplatesData.map(tp => `<option value="${escHtml(tp.id)}" ${t.directory === tp.id ? 'selected' : ''}>${escHtml(tp.id)} (${tp.agent_count} agents)</option>`).join('');
-  openModal('Modifier equipe', `
+  showModal(`
+    <div class="modal-header">
+      <h3>Modifier equipe (template)</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
     <div class="form-group"><label>ID</label><input id="m-tpl-team-id" class="form-control" value="${escHtml(t.id)}" disabled></div>
     <div class="form-group"><label>Nom</label><input id="m-tpl-team-name" class="form-control" value="${escHtml(t.name)}"></div>
     <div class="form-group"><label>Description</label><input id="m-tpl-team-desc" class="form-control" value="${escHtml(t.description || '')}"></div>
@@ -2586,7 +2665,11 @@ function editTplTeam(idx) {
       <input id="m-tpl-team-dir-custom" class="form-control" value="${escHtml(t.directory || '')}" style="margin-top:0.25rem">
     </div>
     <div class="form-group"><label>Channels Discord (virgule)</label><input id="m-tpl-team-channels" class="form-control" value="${(t.discord_channels || []).join(', ')}"></div>
-  `, 'Sauvegarder', () => saveTplTeam(idx));
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="saveTplTeam(${idx})">Sauvegarder</button>
+    </div>
+  `);
 }
 
 async function saveTplTeam(idx) {
