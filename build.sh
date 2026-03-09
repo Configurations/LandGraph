@@ -8,6 +8,10 @@ docker compose build --no-cache langgraph-admin langgraph-api discord-bot mail-b
 
 docker compose up -d
 sleep 12
+
+# Rejouer init.sql (idempotent — IF NOT EXISTS)
+echo "  -> Application du schema SQL..."
+docker exec -i langgraph-postgres psql -U "${POSTGRES_USER:-langgraph}" -d "${POSTGRES_DB:-langgraph}" < scripts/init.sql 2>/dev/null && echo "  -> Schema OK" || echo "  -> Schema: erreur (voir logs)"
 echo ""
 docker compose ps
 echo ""

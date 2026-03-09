@@ -530,7 +530,10 @@ async function quickInstallMcp(id) {
   try {
     await api(`/api/mcp/install/${id}`, { method: 'POST', body: { env_values: {}, env_mapping: {} } });
     toast(`Service "${id}" installe`, 'success');
-    loadMCP();
+    // Reload whichever MCP view is currently active
+    if (document.getElementById('cfg-mcp-catalog')) loadCfgMCP().catch(() => {});
+    if (document.getElementById('tpl-mcp-catalog')) loadTplMCP().catch(() => {});
+    if (document.getElementById('mcp-catalog')) loadMCP().catch(() => {});
   } catch (e) { toast(e.message, 'error'); }
 }
 

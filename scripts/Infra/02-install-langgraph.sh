@@ -12,7 +12,7 @@ PROJECT_DIR="$HOME/langgraph-project"
 REPO_RAW="https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main"
 
 echo "=================================================================="
-echo "  Script 3 : Installation LangGraph v3     version 5 - 2026-03    "
+echo "  Script 3 : Installation LangGraph v3     version 6 - 2026-03    "
 echo "=================================================================="
 echo ""
 
@@ -50,11 +50,12 @@ wget -qO Shared/Teams/mcp_servers.json "${REPO_RAW}/Shared/Teams/mcp_servers.jso
 wget -qO Shared/Teams/teams.json "${REPO_RAW}/Shared/Teams/teams.json" 2>/dev/null || true
 wget -qO Shared/Teams/mcp_catalog.csv "${REPO_RAW}/Shared/Teams/mcp_catalog.csv" 2>/dev/null || true
 wget -qO Shared/Teams/.gitignore "${REPO_RAW}/gitignore"  2>/dev/null || { echo "ERREUR: gitignore"; exit 1; }
-
 wget -qO config/Teams/.gitignore "${REPO_RAW}/gitignore" 2>/dev/null || { echo "ERREUR: gitignore"; exit 1; }
-wget -qO config/langgraph.json "${REPO_RAW}/config/langgraph.json" 2>/dev/null || { echo "ERREUR: langgraph.json"; exit 1; }
-wget -qO config/mail.json "${REPO_RAW}/config/mail.json" 2>/dev/null || { echo "ERREUR: mail.json"; exit 1; }
-wget -qO config/discord.json "${REPO_RAW}/config/discord.json" 2>/dev/null || { echo "ERREUR: discord.json"; exit 1; }
+
+
+[ -f config/langgraph.json ] || wget -qO config/langgraph.json "${REPO_RAW}/config/langgraph.json" 2>/dev/null || { echo "ERREUR: langgraph.json"; exit 1; }
+[ -f config/mail.json ]      || wget -qO config/mail.json "${REPO_RAW}/config/mail.json" 2>/dev/null || { echo "ERREUR: mail.json"; exit 1; }
+[ -f config/discord.json ]   || wget -qO config/discord.json "${REPO_RAW}/config/discord.json" 2>/dev/null || { echo "ERREUR: discord.json"; exit 1; }
 
 echo "  -> Fichiers telecharges"
 
