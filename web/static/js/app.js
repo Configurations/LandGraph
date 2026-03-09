@@ -343,7 +343,9 @@ function renderMCP() {
     } else if (c.installed && !c.enabled) {
       statusBtn = '<span class="tag tag-yellow" style="padding:0.4rem 0.75rem;font-size:0.8rem">Desactive</span>';
     } else {
-      statusBtn = `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();showAddCatalogModal('${escHtml(c.id)}')">Installer</button>`;
+      statusBtn = c.env_vars.length
+        ? `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();showAddCatalogModal('${escHtml(c.id)}')">Installer</button>`
+        : `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();quickInstallMcp('${escHtml(c.id)}')">Installer</button>`;
     }
     return `<div class="mcp-card${c.deprecated ? ' deprecated' : ''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:0.5rem">
@@ -522,6 +524,14 @@ function _markEnvVarConfigured(btn) {
   const row = btn.closest('.env-var-row');
   const tag = row.querySelector('.tag');
   if (tag) { tag.className = 'tag tag-green'; tag.textContent = 'configure'; }
+}
+
+async function quickInstallMcp(id) {
+  try {
+    await api(`/api/mcp/install/${id}`, { method: 'POST', body: { env_values: {}, env_mapping: {} } });
+    toast(`Service "${id}" installe`, 'success');
+    loadMCP();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function installSelectedService() {
@@ -5666,27 +5676,45 @@ async function loadApiKeys() {
 
 function showAddApiKeyModal() {
   document.getElementById('apikey-name').value = '';
-  document.getElementById('apikey-teams').value = '*';
-  document.getElementById('apikey-agents').value = '*';
   document.getElementById('apikey-expires').value = '';
-  // Reset scopes checkboxes
-  document.querySelectorAll('#apikey-scopes-list input[type=checkbox]').forEach(cb => { cb.checked = true; });
+  // Reset scopes
+  document.querySelectorAll('#apikey-scopes-list input[type=checkbox]').forEach(cb => { cb.checked = false; });
+
+  // Populate teams select from teamsData
+  const teamsSel = document.getElementById('apikey-teams');
+  teamsSel.innerHTML = '<option value="*" selected>* (toutes)</option>';
+  (teamsData || []).forEach(t => {
+    teamsSel.innerHTML += `<option value="${esc(t.id)}">${esc(t.name || t.id)}</option>`;
+  });
+
+  // Populate agents select from first team's agents
+  const agentsSel = document.getElementById('apikey-agents');
+  agentsSel.innerHTML = '<option value="*" selected>* (tous)</option>';
+  const allAgents = new Set();
+  (teamsData || []).forEach(t => {
+    Object.keys(t.agents || {}).forEach(a => allAgents.add(a));
+  });
+  allAgents.forEach(a => {
+    agentsSel.innerHTML += `<option value="${esc(a)}">${esc(a)}</option>`;
+  });
+
   document.getElementById('modal-add-apikey').style.display = 'flex';
 }
 
 async function createApiKey() {
   const name = document.getElementById('apikey-name').value.trim();
   if (!name) { toast('Nom requis', 'error'); return; }
-  const teamsRaw = document.getElementById('apikey-teams').value.trim();
-  const agentsRaw = document.getElementById('apikey-agents').value.trim();
-  const expiresRaw = document.getElementById('apikey-expires').value;
-
-  const teams = teamsRaw === '*' ? ['*'] : teamsRaw.split(',').map(s => s.trim()).filter(Boolean);
-  const agents = agentsRaw === '*' ? ['*'] : agentsRaw.split(',').map(s => s.trim()).filter(Boolean);
+  const teams = Array.from(document.getElementById('apikey-teams').selectedOptions).map(o => o.value);
+  const agents = Array.from(document.getElementById('apikey-agents').selectedOptions).map(o => o.value);
+  const expiresDays = document.getElementById('apikey-expires').value;
   const scopes = Array.from(document.querySelectorAll('#apikey-scopes-list input[type=checkbox]:checked')).map(cb => cb.value);
   if (scopes.length === 0) { toast('Selectionnez au moins un scope', 'error'); return; }
   const body = { name, teams, agents, scopes };
-  if (expiresRaw) body.expires_at = new Date(expiresRaw).toISOString();
+  if (expiresDays) {
+    const d = new Date();
+    d.setDate(d.getDate() + parseInt(expiresDays));
+    body.expires_at = d.toISOString();
+  }
 
   try {
     const r = await fetch('/api/keys', {

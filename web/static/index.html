@@ -206,7 +206,6 @@
           <div class="modal">
             <div class="modal-header">
               <h3>Nouvelle cle API</h3>
-              <button class="btn-close" onclick="closeModal('modal-add-apikey')">&times;</button>
             </div>
             <div class="form-group">
               <label>Nom</label>
@@ -214,26 +213,38 @@
             </div>
             <div class="form-group">
               <label>Equipes autorisees</label>
-              <input id="apikey-teams" placeholder='* pour toutes, ou team1,team2' value="*" />
-              <span style="font-size:0.75rem;color:var(--text-secondary)">Separer par des virgules</span>
+              <select id="apikey-teams" multiple style="min-height:80px">
+                <option value="*" selected>* (toutes)</option>
+              </select>
+              <span style="font-size:0.75rem;color:var(--text-secondary)">Ctrl+clic pour selection multiple</span>
             </div>
             <div class="form-group">
               <label>Agents autorises</label>
-              <input id="apikey-agents" placeholder='* pour tous, ou architect,lead_dev' value="*" />
-              <span style="font-size:0.75rem;color:var(--text-secondary)">Separer par des virgules</span>
+              <select id="apikey-agents" multiple style="min-height:100px">
+                <option value="*" selected>* (tous)</option>
+              </select>
+              <span style="font-size:0.75rem;color:var(--text-secondary)">Ctrl+clic pour selection multiple</span>
             </div>
             <div class="form-group">
               <label>Scopes</label>
               <div id="apikey-scopes-list" style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:0.25rem">
                 <label style="display:flex;align-items:center;gap:0.3rem;font-size:0.85rem;cursor:pointer">
-                  <input type="checkbox" value="call_agent" checked /> call_agent
+                  <input type="checkbox" value="call_agent" /> call_agent
                 </label>
               </div>
               <span style="font-size:0.75rem;color:var(--text-secondary)">Permissions accordees a cette cle</span>
             </div>
             <div class="form-group">
-              <label>Expiration (optionnel)</label>
-              <input id="apikey-expires" type="datetime-local" />
+              <label>Expiration</label>
+              <select id="apikey-expires">
+                <option value="">N'expire jamais</option>
+                <option value="30">30 jours</option>
+                <option value="60">60 jours</option>
+                <option value="90">90 jours</option>
+                <option value="120">120 jours</option>
+                <option value="180">180 jours</option>
+                <option value="365">365 jours</option>
+              </select>
             </div>
             <div class="modal-footer">
               <button class="btn btn-outline" onclick="closeModal('modal-add-apikey')">Annuler</button>
