@@ -2683,7 +2683,7 @@ function renderCfgMCP() {
     } else if (c.installed && !c.enabled) {
       statusBtn = '<span class="tag tag-yellow" style="padding:0.4rem 0.75rem;font-size:0.8rem">Desactive</span>';
     } else {
-      statusBtn = `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();showAddCfgCatalogModal('${escHtml(c.id)}')">Installer</button>`;
+      statusBtn = `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();quickInstallMcp('${escHtml(c.id)}')">Installer</button>`;
     }
     return `<div class="mcp-card${c.deprecated ? ' deprecated' : ''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:0.5rem">
@@ -3455,7 +3455,7 @@ function renderTplMCP() {
     } else if (c.installed && !c.enabled) {
       statusBtn = '<span class="tag tag-yellow" style="padding:0.4rem 0.75rem;font-size:0.8rem">Desactive</span>';
     } else {
-      statusBtn = `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();showAddTplCatalogModal('${escHtml(c.id)}')">Installer</button>`;
+      statusBtn = `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();quickInstallMcp('${escHtml(c.id)}')">Installer</button>`;
     }
     return `<div class="mcp-card${c.deprecated ? ' deprecated' : ''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:0.5rem">
