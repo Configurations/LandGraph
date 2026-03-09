@@ -72,7 +72,11 @@ function showModal(html, cssClass = '') {
     </div>`;
 }
 
-function closeModal() {
+function closeModal(id) {
+  if (id) {
+    const el = document.getElementById(id);
+    if (el) { el.style.display = 'none'; return; }
+  }
   document.getElementById('modal-container').innerHTML = '';
 }
 
@@ -5731,15 +5735,18 @@ async function showAddApiKeyModal() {
     teamsSel.innerHTML += `<option value="${escHtml(t.id)}">${escHtml(t.name || t.id)}</option>`;
   });
 
-  // Populate agents select from first team's agents
+  // Populate agents select with team prefix
   const agentsSel = document.getElementById('apikey-agents');
   agentsSel.innerHTML = '<option value="*" selected>* (tous)</option>';
-  const allAgents = new Set();
+  const seen = new Set();
   (teamsData || []).forEach(t => {
-    Object.keys(t.agents || {}).forEach(a => allAgents.add(a));
-  });
-  allAgents.forEach(a => {
-    agentsSel.innerHTML += `<option value="${escHtml(a)}">${escHtml(a)}</option>`;
+    const teamLabel = escHtml(t.name || t.id);
+    Object.keys(t.agents || {}).forEach(a => {
+      if (!seen.has(a)) {
+        seen.add(a);
+        agentsSel.innerHTML += `<option value="${escHtml(a)}">${teamLabel} / ${escHtml(a)}</option>`;
+      }
+    });
   });
 
   document.getElementById('modal-add-apikey').style.display = 'flex';
@@ -5813,6 +5820,15 @@ function copyApiKeyToClipboard() {
   el.select();
   navigator.clipboard.writeText(el.value).then(
     () => toast('Cle copiee dans le presse-papier', 'success'),
+    () => toast('Erreur copie', 'error')
+  );
+}
+
+function copyApiKeyAndClose() {
+  const el = document.getElementById('apikey-generated-token');
+  el.select();
+  navigator.clipboard.writeText(el.value).then(
+    () => { toast('Cle copiee dans le presse-papier', 'success'); closeModal('modal-show-apikey'); },
     () => toast('Erreur copie', 'error')
   );
 }
