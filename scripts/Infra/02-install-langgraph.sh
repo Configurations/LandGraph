@@ -27,13 +27,13 @@ if ! docker info &> /dev/null 2>&1; then
 fi
 
 # ── 1. Arborescence ──────────────────────────
-echo "[1/6] Arborescence..."
+echo "[1/7] Arborescence..."
 mkdir -p "${PROJECT_DIR}"/{agents/shared,config/Teams,scripts,data/backups,Shared/Teams}
 mkdir -p /opt/langgraph-data/{postgres,redis}
 cd "${PROJECT_DIR}"
 
 # ── 2. Fichiers de config depuis GitHub ──────
-echo "[2/6] Telechargement des fichiers de config..."
+echo "[2/7] Telechargement des fichiers de config..."
 
 wget -qO docker-compose.yml "${REPO_RAW}/docker-compose.yml" 2>/dev/null || { echo "ERREUR: docker-compose.yml"; exit 1; }
 wget -qO env.example "${REPO_RAW}/env.example" 2>/dev/null || { echo "ERREUR: env.example"; exit 1; }
@@ -67,7 +67,7 @@ chmod +x start.sh stop.sh restart.sh build.sh
 echo "  -> Scripts : start.sh, stop.sh, restart.sh, build.sh"
 
 # ── 3. Fichier .env ──────────────────────────
-echo "[3/6] Fichier .env..."
+echo "[3/7] Fichier .env..."
 if [ ! -f .env ]; then
     cp env.example .env
     chmod 600 .env
@@ -77,12 +77,12 @@ else
 fi
 
 # ── 4. Init Python ───────────────────────────
-echo "[4/6] Touches Python..."
+echo "[4/7] Touches Python..."
 touch agents/__init__.py agents/shared/__init__.py
 
 
 # ── 4b. Code Python agents ──────────────────
-echo "[4b/6] Code Python agents..."
+echo "[4b/7] Code Python agents..."
 
 # Shared modules
 SHARED_FILES=(base_agent.py agent_loader.py llm_provider.py rate_limiter.py mcp_client.py team_resolver.py workflow_engine.py channels.py human_gate.py agent_conversation.py discord_tools.py state.py __init__.py)
@@ -98,26 +98,39 @@ done
 
 echo "  -> Code agents telecharge"
 
-# ── 4c. Config globale ───────────────────────
-echo "[4c/6] Config globale..."
+# ── 4c. Admin web ────────────────────────────
+echo "[4c/7] Admin web..."
+mkdir -p web/static/css web/static/js
+wget -qO web/requirements.txt "${REPO_RAW}/web/requirements.txt" 2>/dev/null || true
+wget -qO web/server.py "${REPO_RAW}/web/server.py" 2>/dev/null || true
+wget -qO web/static/index.html "${REPO_RAW}/web/static/index.html" 2>/dev/null || true
+wget -qO web/static/css/style.css "${REPO_RAW}/web/static/css/style.css" 2>/dev/null || true
+wget -qO web/static/js/app.js "${REPO_RAW}/web/static/js/app.js" 2>/dev/null || true
+echo "  -> Admin web telecharge"
+
+# ── 4d. Config globale ───────────────────────
+echo "[4d/7] Config globale..."
 
 # Copier les fichiers globaux dans config/ (team_resolver les cherche ici)
 cp Shared/Teams/teams.json config/teams.json 2>/dev/null || true
 cp Shared/Teams/llm_providers.json config/llm_providers.json 2>/dev/null || true
 cp Shared/Teams/mcp_servers.json config/mcp_servers.json 2>/dev/null || true
 
+# config/ — fichiers par defaut si absents
+[ ! -f config/agent_mcp_access.json ] && echo '{}' > config/agent_mcp_access.json
+
 echo "  -> Config globale OK"
 
 
 # ── 5. Environnement Python local ───────────
-echo "[5/6] Environnement Python local..."
+echo "[5/7] Environnement Python local..."
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip -q
 pip install -q -r requirements.txt
 
 # ── 6. Demarrage infra ──────────────────────
-echo "[6/6] Demarrage PostgreSQL + Redis..."
+echo "[6/7] Demarrage PostgreSQL + Redis..."
 docker compose up -d langgraph-postgres langgraph-redis
 
 echo ""
@@ -140,13 +153,38 @@ else
     echo "  Redis      : EN ATTENTE"
 fi
 
+# ── 7. Demarrage complet ────────────────────
+echo "[7/7] Demarrage de la stack complete..."
+docker compose up -d --build
+
+echo ""
+sleep 12
+docker compose ps
+echo ""
+
+# Verification
+if curl -sf http://localhost:8123/health > /dev/null 2>&1; then
+    echo "  API        : OK"
+else
+    echo "  API        : EN ATTENTE"
+fi
+if curl -sf http://localhost:8080/ > /dev/null 2>&1; then
+    echo "  Admin web  : OK"
+else
+    echo "  Admin web  : EN ATTENTE"
+fi
+
 echo ""
 echo "==========================================="
 echo "  LangGraph installe."
 echo ""
 echo "  Prochaines etapes :"
 echo "  1. Editez .env : nano ${PROJECT_DIR}/.env"
-echo "  2. Installez le RAG : ./05-install-rag.sh"
-echo "  3. Installez les agents : ./06-install-agents.sh"
-echo "  4. Configurez les MCP : ./14-install-mcp.sh"
+echo "     (ANTHROPIC_API_KEY, DISCORD_BOT_TOKEN, mots de passe)"
+echo "  2. Redemarrez : ./restart.sh"
+echo "  3. Accedez au dashboard : http://<IP>:8080"
+echo "  4. Creez votre premiere equipe depuis le dashboard"
+echo ""
+echo "  Optionnel :"
+echo "  - RAG : ./03-install-rag.sh"
 echo "==========================================="
