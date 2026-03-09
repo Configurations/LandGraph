@@ -366,6 +366,11 @@ tr:hover { background: rgba(255,255,255,0.02); }
   line-height: 1.5;
 }
 
+/* Log level coloring */
+.log-error { color: #ef4444; }
+.log-warn  { color: #f59e0b; }
+.log-debug { color: #6b7280; }
+
 /* Grid for agents */
 .agents-grid {
   display: grid;
@@ -740,6 +745,8 @@ tr:hover { background: rgba(255,255,255,0.02); }
 .tpl-tab-content.active { display: block; }
 .cfg-tab-content { display: none; }
 .cfg-tab-content.active { display: block; }
+.mon-tab-content { display: none; }
+.mon-tab-content.active { display: block; }
 
 .prompt-preview {
   background: var(--bg-input);

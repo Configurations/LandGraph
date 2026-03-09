@@ -95,6 +95,24 @@ log.info("DOCKER_MODE=%s  ENV_FILE=%s  CONFIGS=%s  PROMPTS=%s", DOCKER_MODE, ENV
 app = FastAPI(title="LandGraph Admin")
 _AUTH_SECRET = secrets.token_hex(32)  # session signing key (regenerated on restart)
 
+# ── JSON helpers (needed early for restore) ───────
+def _read_json(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    content = path.read_text(encoding="utf-8").strip()
+    if not content:
+        return {}
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        return {}
+
+
+def _write_json(path: Path, data: dict):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
 # ── Restore MCP servers from Shared on startup ────
 def _restore_mcp_from_shared():
     """If Configs mcp_servers.json is empty but Shared has data, restore it."""
@@ -259,23 +277,6 @@ async def index():
 
 
 # ── Helpers ─────────────────────────────────────────
-
-def _read_json(path: Path) -> dict:
-    if not path.exists():
-        return {}
-    content = path.read_text(encoding="utf-8").strip()
-    if not content:
-        return {}
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        return {}
-
-
-def _write_json(path: Path, data: dict):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-
 
 def _parse_env(path: Path) -> list[dict]:
     """Parse .env file into list of {key, value, comment}."""
@@ -1163,6 +1164,78 @@ async def import_configs(file: UploadFile):
     except zipfile.BadZipFile:
         raise HTTPException(400, "Fichier zip invalide")
     return {"ok": True, "message": "Import config termine"}
+
+
+# ── API: Monitoring ────────────────────────────────
+
+ALLOWED_CONTAINERS = {"langgraph-api", "langgraph-discord", "langgraph-mail", "langgraph-admin"}
+
+
+@app.get("/api/monitoring/logs")
+async def get_logs(service: str = "langgraph-api", lines: int = 200):
+    """Get Docker container logs."""
+    if service not in ALLOWED_CONTAINERS:
+        raise HTTPException(400, f"Service inconnu: {service}")
+    lines = min(max(lines, 10), 5000)
+    try:
+        r = subprocess.run(
+            ["docker", "logs", "--tail", str(lines), "--timestamps", service],
+            capture_output=True, text=True, timeout=10,
+        )
+        # Docker writes normal logs to stdout, errors to stderr; combine both
+        output = r.stdout + r.stderr
+        return {"ok": True, "service": service, "lines": output.strip().split("\n") if output.strip() else []}
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "Timeout lecture logs")
+    except FileNotFoundError:
+        raise HTTPException(500, "Docker CLI non disponible")
+
+
+@app.get("/api/monitoring/containers")
+async def get_containers():
+    """Get Docker container statuses."""
+    try:
+        r = subprocess.run(
+            ["docker", "ps", "-a", "--format", "{{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}\t{{.State}}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        containers = []
+        for line in r.stdout.strip().split("\n"):
+            if not line.strip():
+                continue
+            parts = line.split("\t")
+            if len(parts) >= 5:
+                containers.append({
+                    "name": parts[0],
+                    "status": parts[1],
+                    "image": parts[2],
+                    "ports": parts[3],
+                    "state": parts[4],
+                })
+        return {"ok": True, "containers": containers}
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "Timeout")
+    except FileNotFoundError:
+        raise HTTPException(500, "Docker CLI non disponible")
+
+
+@app.post("/api/monitoring/container/{name}/{action}")
+async def container_action(name: str, action: str):
+    """Start, stop or restart a container."""
+    if name not in ALLOWED_CONTAINERS:
+        raise HTTPException(400, f"Container non autorise: {name}")
+    if action not in ("start", "stop", "restart"):
+        raise HTTPException(400, f"Action non autorisee: {action}")
+    try:
+        r = subprocess.run(
+            ["docker", action, name],
+            capture_output=True, text=True, timeout=30,
+        )
+        if r.returncode != 0:
+            raise HTTPException(500, r.stderr.strip() or f"Erreur {action}")
+        return {"ok": True, "message": f"{name} {action} OK"}
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "Timeout")
 
 
 # ── API: Chat LLM ─────────────────────────────────

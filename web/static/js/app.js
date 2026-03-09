@@ -60,7 +60,7 @@ function showSection(name) {
   document.querySelector(`.nav-item[data-section="${name}"]`).classList.add('active');
 
   // Load data on section switch
-  const loaders = { secrets: loadEnv, mcp: loadMCP, llm: loadLLM, teams: loadTeams, templates: loadTemplates, channels: loadChannels, chat: loadChat, scripts: loadScripts, git: loadGit };
+  const loaders = { secrets: loadEnv, mcp: loadMCP, llm: loadLLM, teams: loadTeams, templates: loadTemplates, channels: loadChannels, chat: loadChat, monitoring: loadMonitoring, scripts: loadScripts, git: loadGit };
   if (loaders[name]) loaders[name]();
 }
 
@@ -1416,6 +1416,111 @@ const SCRIPT_COLORS = {
   restart: 'var(--warning)',
   build: 'var(--accent)',
 };
+
+// ── Monitoring ───────────────────────────────────
+
+let monAutoInterval = null;
+let monAllLines = [];
+
+function showMonTab(tab) {
+  document.querySelectorAll('[data-mon-tab]').forEach(t => t.classList.toggle('active', t.dataset.monTab === tab));
+  document.querySelectorAll('.mon-tab-content').forEach(c => c.classList.toggle('active', c.id === `mon-tab-${tab}`));
+  if (tab === 'mon-logs') loadLogs();
+  else if (tab === 'mon-containers') loadContainers();
+}
+
+function loadMonitoring() {
+  const active = document.querySelector('[data-mon-tab].active');
+  const tab = active ? active.dataset.monTab : 'mon-logs';
+  if (tab === 'mon-logs') loadLogs();
+  else loadContainers();
+}
+
+async function loadLogs() {
+  const service = document.getElementById('mon-service').value;
+  const lines = document.getElementById('mon-lines').value;
+  try {
+    const data = await api(`/api/monitoring/logs?service=${service}&lines=${lines}`);
+    monAllLines = data.lines || [];
+    filterLogs();
+  } catch (e) {
+    document.getElementById('mon-logs-output').textContent = 'Erreur: ' + e.message;
+  }
+}
+
+function filterLogs() {
+  const filter = (document.getElementById('mon-filter').value || '').toLowerCase();
+  const out = document.getElementById('mon-logs-output');
+  const filtered = filter ? monAllLines.filter(l => l.toLowerCase().includes(filter)) : monAllLines;
+  out.innerHTML = filtered.map(l => {
+    let cls = '';
+    if (/\bERROR\b/i.test(l)) cls = 'log-error';
+    else if (/\bWARN(ING)?\b/i.test(l)) cls = 'log-warn';
+    else if (/\bDEBUG\b/i.test(l)) cls = 'log-debug';
+    return `<div class="${cls}">${escHtml(l)}</div>`;
+  }).join('') || '<div style="color:var(--text-secondary)">Aucun log</div>';
+  if (document.getElementById('mon-autoscroll').checked) {
+    out.scrollTop = out.scrollHeight;
+  }
+}
+
+function toggleAutoRefresh() {
+  const btn = document.getElementById('mon-auto-btn');
+  if (monAutoInterval) {
+    clearInterval(monAutoInterval);
+    monAutoInterval = null;
+    btn.textContent = 'Auto OFF';
+    btn.style.background = '';
+  } else {
+    monAutoInterval = setInterval(loadLogs, 5000);
+    btn.textContent = 'Auto 5s';
+    btn.style.background = 'var(--success, #22c55e)';
+    btn.style.color = '#fff';
+  }
+}
+
+async function loadContainers() {
+  const el = document.getElementById('mon-containers-list');
+  try {
+    const data = await api('/api/monitoring/containers');
+    const containers = data.containers || [];
+    if (!containers.length) { el.innerHTML = '<p style="color:var(--text-secondary)">Aucun container detecte</p>'; return; }
+    el.innerHTML = `<table class="env-table" style="width:100%">
+      <thead><tr><th>Container</th><th>Image</th><th>Etat</th><th>Status</th><th>Ports</th><th>Actions</th></tr></thead>
+      <tbody>${containers.map(c => {
+        const running = c.state === 'running';
+        const dot = running ? '🟢' : '🔴';
+        const isManaged = ['langgraph-api','langgraph-discord','langgraph-mail','langgraph-admin'].includes(c.name);
+        const actions = isManaged ? `
+          <button class="btn btn-outline btn-sm" onclick="containerAction('${c.name}','restart')" style="font-size:0.7rem">Restart</button>
+          ${running
+            ? `<button class="btn btn-outline btn-sm" onclick="containerAction('${c.name}','stop')" style="font-size:0.7rem;color:var(--error)">Stop</button>`
+            : `<button class="btn btn-outline btn-sm" onclick="containerAction('${c.name}','start')" style="font-size:0.7rem;color:var(--success,#22c55e)">Start</button>`
+          }` : '';
+        return `<tr>
+          <td><strong>${dot} ${escHtml(c.name)}</strong></td>
+          <td style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(c.image)}</td>
+          <td>${escHtml(c.state)}</td>
+          <td style="font-size:0.75rem">${escHtml(c.status)}</td>
+          <td style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(c.ports)}</td>
+          <td>${actions}</td>
+        </tr>`;
+      }).join('')}</tbody></table>`;
+  } catch (e) {
+    el.innerHTML = `<p style="color:var(--error)">Erreur: ${escHtml(e.message)}</p>`;
+  }
+}
+
+async function containerAction(name, action) {
+  if (!confirm(`${action} le container ${name} ?`)) return;
+  try {
+    const data = await api(`/api/monitoring/container/${name}/${action}`, { method: 'POST' });
+    showToast(data.message, 'success');
+    setTimeout(loadContainers, 1500);
+  } catch (e) {
+    showToast('Erreur: ' + e.message, 'error');
+  }
+}
 
 function loadScripts() {
   const grid = document.getElementById('scripts-grid');

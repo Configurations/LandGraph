@@ -442,33 +442,49 @@ Le script 02 télécharge tout depuis GitHub : Dockerfiles, code agents (`Agents
 
 ## Terminé ✅
 
+### Infrastructure
 1. Infrastructure LXC + Docker (5 containers opérationnels)
-2. 13 agents avec registry JSON (zéro fichiers Python individuels)
-3. Gateway v0.6.0 : persistence + direct routing + parallélisme + auto-dispatch workflow
-4. Thread persistence PostgreSQL + `!reset`
-5. MCP lazy install + locks thread-safe (29 serveurs catalogue)
-6. Rate limit throttling multi-provider (20 retries, backoff ×2, cap 120s)
-7. Human gate via canal factorisé (30 min, 4 rappels)
-8. Boucle conversationnelle ask_human via canal factorisé
-9. Interface Discord user-friendly (formatage, smart split 1900 chars)
-10. Volumes mappés sur l'hôte
-11. Voyage AI billing OK (RAG pgvector)
-12. Multi-modèles (llm_providers.json, 17 providers, 9 types)
-13. Multi-équipes (teams.json, isolation par channel Discord)
-14. team_resolver — source unique de vérité pour les chemins
-15. Workflow engine — phases, transitions, parallel_groups, auto-dispatch
-16. Auto-dispatch groupes séquentiels (A → B → C, max 5 niveaux)
+2. Volumes mappés sur l'hôte
+3. Langfuse dans docker-compose (port 3000)
+4. Scripts utilitaires + script d'installation unifié (02)
+
+### Agents & Orchestration
+5. 13 agents avec registry JSON (zéro fichiers Python individuels)
+6. Gateway v0.6.0 : persistence + direct routing + parallélisme + auto-dispatch workflow
+7. Thread persistence PostgreSQL + `!reset`
+8. Workflow engine — phases, transitions, parallel_groups, auto-dispatch
+9. Auto-dispatch groupes séquentiels (A → B → C, max 5 niveaux)
+10. Orchestrateur guidé par workflow engine (contexte enrichi)
+11. Prompt orchestrateur + Lead Dev (fait ou délègue)
+12. team_resolver — source unique de vérité pour les chemins
+
+### LLM & Outils
+13. Multi-modèles (llm_providers.json, 17 providers, 9 types)
+14. Rate limit throttling multi-provider (20 retries, backoff ×2, cap 120s)
+15. MCP lazy install + locks thread-safe (29 serveurs catalogue)
+16. Voyage AI billing OK (RAG pgvector)
+
+### Communication
 17. Canaux factorisés (Discord + Email, extensible Telegram)
-18. Orchestrateur guidé par workflow engine (contexte enrichi)
-19. Prompt orchestrateur + Lead Dev (fait ou délègue)
-20. Publication GitHub via Documentaliste
-21. Dashboard admin web (port 8080) avec auth, git, gestion configs
-22. Langfuse dans docker-compose (port 3000)
-23. Scripts utilitaires + script d'installation unifié (02)
+18. Interface Discord user-friendly (formatage, smart split 1900 chars)
+19. Human gate via canal factorisé (30 min, 4 rappels)
+20. Boucle conversationnelle ask_human via canal factorisé
+
+### Équipes & Dashboard
+21. Multi-équipes (teams.json, isolation par channel Discord)
+22. Dashboard admin web (port 8080) — auth, git, gestion configs, channels, import/export
+23. Publication GitHub via Documentaliste
 
 ## À faire 🔧
 
-1. **Intégration Langfuse** — Callback handler dans `base_agent.py`
-2. **Publication Notion** — Token 401 à corriger
-3. **Dashboard web features** — Logs temps réel, monitoring threads
-4. **Tests end-to-end** — Cycle complet Discovery → Design → Build avec PerformanceTracker
+1. **Intégration Langfuse** — Brancher `LangfuseCallbackHandler` dans `base_agent.py`
+2. **Publication Notion** — Token MCP 401 à corriger
+3. **Dashboard web** — Logs agents temps réel, monitoring threads actifs
+4. **Tests end-to-end** — Cycle complet Discovery → Ship avec PerformanceTracker
+5. **Long-term memory (LangMem)** — Mémoire sémantique cross-thread (chaque thread est isolé actuellement)
+6. **Cron jobs** — Tâches planifiées sur le graph
+7. **Webhooks** — Notifications de fin de run
+8. **Concurrency control** — Gérer les messages qui arrivent avant la fin du précédent
+9. **MCP endpoint par agent** — Chaque agent exposé comme serveur MCP
+10. **Inter-team outbound** — Demander une analyse à une équipe étrangère au système (intégrable dans le graph)
+11. **Inter-team inbound** — Accepter un entrant de la part d'une équipe étrangère au système (intégrable dans le graph)

@@ -43,6 +43,10 @@
       </div>
 
       <div class="nav-section">Operations</div>
+      <div class="nav-item" data-section="monitoring" onclick="showSection('monitoring')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/><circle cx="12" cy="12" r="1"/></svg>
+        Monitoring
+      </div>
       <div class="nav-item" data-section="scripts" onclick="showSection('scripts')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
         Scripts
@@ -604,6 +608,60 @@
       </div>
 
       <!-- SCRIPTS SECTION -->
+      <!-- MONITORING SECTION -->
+      <div class="section" id="section-monitoring">
+        <div class="page-header">
+          <h2>Monitoring</h2>
+        </div>
+
+        <!-- Sub-tabs -->
+        <div class="prompt-tabs" style="margin-bottom:1rem">
+          <div class="prompt-tab active" data-mon-tab="mon-logs" onclick="showMonTab('mon-logs')">Logs</div>
+          <div class="prompt-tab" data-mon-tab="mon-containers" onclick="showMonTab('mon-containers')">Containers</div>
+        </div>
+
+        <!-- Sub-tab: Logs -->
+        <div class="mon-tab-content active" id="mon-tab-mon-logs">
+          <div class="card">
+            <div class="card-header">
+              <h3>Logs des services</h3>
+              <div style="display:flex;gap:0.5rem;align-items:center">
+                <select id="mon-service" onchange="loadLogs()" style="padding:0.3rem 0.5rem;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:0.8rem">
+                  <option value="langgraph-api">API Gateway</option>
+                  <option value="langgraph-discord">Discord Bot</option>
+                  <option value="langgraph-mail">Mail Bot</option>
+                  <option value="langgraph-admin">Admin</option>
+                </select>
+                <select id="mon-lines" onchange="loadLogs()" style="padding:0.3rem 0.5rem;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:0.8rem">
+                  <option value="100">100 lignes</option>
+                  <option value="200" selected>200 lignes</option>
+                  <option value="500">500 lignes</option>
+                  <option value="1000">1000 lignes</option>
+                </select>
+                <input type="text" id="mon-filter" placeholder="Filtrer..." onkeyup="filterLogs()" style="padding:0.3rem 0.5rem;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:0.8rem;width:160px">
+                <label style="font-size:0.75rem;display:flex;align-items:center;gap:0.3rem;color:var(--text-secondary)">
+                  <input type="checkbox" id="mon-autoscroll" checked> Auto-scroll
+                </label>
+                <button class="btn btn-outline btn-sm" onclick="loadLogs()">Rafraichir</button>
+                <button class="btn btn-sm" id="mon-auto-btn" onclick="toggleAutoRefresh()" style="font-size:0.75rem">Auto OFF</button>
+              </div>
+            </div>
+            <div class="terminal" id="mon-logs-output" style="height:500px;overflow-y:auto;font-size:0.75rem;line-height:1.4">Chargement...</div>
+          </div>
+        </div>
+
+        <!-- Sub-tab: Containers -->
+        <div class="mon-tab-content" id="mon-tab-mon-containers">
+          <div class="card">
+            <div class="card-header">
+              <h3>Etat des containers</h3>
+              <button class="btn btn-outline btn-sm" onclick="loadContainers()">Rafraichir</button>
+            </div>
+            <div id="mon-containers-list"></div>
+          </div>
+        </div>
+      </div>
+
       <div class="section" id="section-scripts">
         <div class="page-header">
           <h2>Scripts</h2>
