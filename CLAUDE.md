@@ -2,7 +2,7 @@
 
 ## Vue d'ensemble
 
-LandGraph est une plateforme multi-agent basée sur **LangGraph** (Python) qui orchestre 13 agents IA spécialisés pour gérer le cycle de vie complet d'un projet logiciel (Discovery → Design → Build → Ship → Iterate). Les agents communiquent via **Discord**, sont pilotés par un **Orchestrateur IA**, et utilisent des **MCP servers** pour interagir avec GitHub, Notion, et d'autres services.
+LandGraph est une plateforme multi-agent basée sur **LangGraph** (Python) qui orchestre 13 agents IA spécialisés pour gérer le cycle de vie complet d'un projet logiciel (Discovery → Design → Build → Ship → Iterate). Les agents communiquent via un système de **canaux factorisés** (Discord, Email, extensible Telegram), sont pilotés par un **Orchestrateur IA** guidé par un **Workflow Engine**, et utilisent des **MCP servers** pour interagir avec GitHub, Notion, et d'autres services.
 
 ---
 
@@ -11,7 +11,7 @@ LandGraph est une plateforme multi-agent basée sur **LangGraph** (Python) qui o
 - **Hôte** : Proxmox LXC 110 (privileged, 8 vCPU, 8GB RAM)
 - **OS** : Ubuntu 24
 - **Container runtime** : Docker + Docker Compose
-- **Données persistantes** : `/opt/langgraph-data/{postgres,redis,langfuse-*}/`
+- **Données persistantes** : `/opt/langgraph-data/{postgres,redis}/`
 
 ### Stack Docker
 
@@ -36,77 +36,175 @@ LandGraph est une plateforme multi-agent basée sur **LangGraph** (Python) qui o
 ```
 langgraph-project/
 ├── agents/
-│   ├── gateway.py              ← API FastAPI v0.6.0 (routing, persistence, parallélisme)
-│   ├── orchestrator.py         ← Noeud LangGraph — décisions de routing
+│   ├── gateway.py              ← API FastAPI v0.6.0 (routing, persistence, parallélisme, auto-dispatch workflow)
+│   ├── orchestrator.py         ← Noeud LangGraph — décisions de routing guidées par workflow engine
 │   ├── discord_listener.py     ← Bot Discord (!agent, !reset, !new, !status)
 │   └── shared/
+│       ├── team_resolver.py    ← SOURCE UNIQUE de vérité pour trouver les fichiers (configs, prompts, workflow)
+│       ├── channels.py         ← Interface abstraite MessageChannel + implémentations Discord/Email
+│       ├── workflow_engine.py  ← Lit workflow.json, valide transitions, gère parallel_groups
 │       ├── base_agent.py       ← Classe de base — Pipeline + ReAct + tools + human gate
-│       ├── agent_loader.py     ← Charge agents depuis registry JSON (multi-équipes)
-│       ├── llm_provider.py     ← Factory multi-provider (Claude, GPT, Azure, Ollama, Kimi...)
+│       ├── agent_loader.py     ← Charge agents depuis registry JSON (multi-équipes via team_resolver)
+│       ├── llm_provider.py     ← Factory multi-provider (9 types, 17 providers)
 │       ├── rate_limiter.py     ← Throttling par env_key + retry exponentiel (20 retries)
 │       ├── mcp_client.py       ← Lazy install MCP + cache global + locks
-│       ├── human_gate.py       ← Validation humaine via Discord (30 min, rappels)
-│       ├── agent_conversation.py ← Questions ouvertes aux humains via Discord
+│       ├── human_gate.py       ← Validation humaine via canal factorisé (30 min, rappels)
+│       ├── agent_conversation.py ← Questions ouvertes aux humains via canal factorisé
 │       ├── state.py            ← State LangGraph partagé
-│       └── discord_tools.py    ← Helpers Discord
+│       └── discord_tools.py    ← Helpers Discord (embeds, tools LangChain)
 │
-├── Configs/
-│   ├── init.sql                ← Init PostgreSQL
+├── config/                     ← Dossier de config racine (team_resolver le détecte)
+│   ├── teams.json              ← Liste des équipes + channel_mapping
 │   ├── llm_providers.json      ← 17 providers LLM + throttling par env_key
-│   ├── mcp_servers.json        ← Config des serveurs MCP
-│   ├── teams.json              ← Multi-équipes (isolation par channel Discord)
-│   └── team1/                  ← Prompts de l'équipe par défaut
-│       ├── agents_registry.json    ← Définition des 13 agents (équipe default)
-│       ├── agent_mcp_access.json   ← MCP autorisés par agent
-│       ├── orchestrator.md         ← Prompt orchestrateur (routing intelligent)
-│       ├── lead_dev.md             ← Lead Dev (fait ou délègue)
-│       ├── requirements_analyst.md ← Analyste (PRD, User Stories, MoSCoW)
-│       └── ... (13 fichiers .md, un par agent)
-│
-├── Shared/Teams/team_project/  ← Exemple d'équipe isolée
-│   ├── teams.json              ← Config multi-équipes
-│   ├── mcp_servers.json        ← Config des serveurs MCP
-│   └── prompts/
-│       ├── agents_registry.json    ← Définition des agents de cette équipe
-│       ├── agent_mcp_access.json   ← MCP autorisés par agent
-│       ├── orchestrator.md         ← Prompt orchestrateur
-│       ├── lead_dev.md             ← Lead Dev
-│       ├── requirements_analyst.md ← Analyste
-│       └── ... (fichiers .md par agent)
+│   ├── mcp_servers.json        ← Config des serveurs MCP (global)
+│   ├── langgraph.json          ← Config LangGraph
+│   ├── Team1/                  ← Dossier de l'équipe (directory depuis teams.json)
+│   │   ├── agents_registry.json    ← 13 agents + orchestrator
+│   │   ├── agent_mcp_access.json   ← MCP autorisés par agent
+│   │   ├── Workflow.json           ← Phases, transitions, parallel_groups, exit_conditions
+│   │   ├── orchestrator.md         ← Prompt orchestrateur
+│   │   ├── lead_dev.md             ← Prompt Lead Dev
+│   │   ├── requirements_analyst.md ← Prompt Analyste
+│   │   └── ... (13 fichiers .md)
+│   └── Team2/                  ← Autre équipe (même structure)
 │
 ├── web/
 │   ├── server.py               ← Dashboard admin FastAPI
 │   └── static/                 ← Frontend web
 ├── docker-compose.yml
-├── Dockerfile                  ← Image langgraph-api
-├── Dockerfile.discord          ← Image discord-bot
-├── Dockerfile.admin            ← Image dashboard admin
-├── .env                        ← Secrets (clés API, tokens)
-├── start.sh / restart.sh / build.sh  ← Scripts utilitaires
+├── Dockerfile / Dockerfile.discord / Dockerfile.admin
+├── .env                        ← Secrets uniquement
+├── start.sh / restart.sh / build.sh
 └── requirements.txt
 ```
 
 ---
 
-## Agents (13)
+## Résolution des fichiers — team_resolver.py
 
-Définis dans `config/agents_registry.json`. Pas de fichiers Python individuels — tout passe par `BaseAgent` + registry.
+**Source unique de vérité** pour trouver les fichiers de config, prompts, et workflow. Tous les modules passent par lui.
+
+### Logique
+
+1. Trouve le dossier de config racine (celui qui contient `teams.json`) parmi : `config/`, `/app/config/`
+2. Lit `teams.json` pour trouver le `directory` d'une équipe
+3. Résout les chemins : `config/<directory>/<fichier>`
+4. Fallback global si le fichier n'existe pas dans le dossier de l'équipe
+
+### Modules qui l'utilisent
+
+| Module | Fichiers cherchés via team_resolver |
+|---|---|
+| `agent_loader.py` | `agents_registry.json`, `agent_mcp_access.json` |
+| `base_agent.py` | Prompts `.md` |
+| `workflow_engine.py` | `Workflow.json` |
+| `orchestrator.py` | `agents_registry.json`, `orchestrator.md` |
+| `llm_provider.py` | `llm_providers.json` |
+| `rate_limiter.py` | `llm_providers.json` (throttling) |
+| `mcp_client.py` | `mcp_servers.json`, `agent_mcp_access.json` |
+
+---
+
+## Canaux de communication — channels.py
+
+Architecture factorisée pour la communication agents ↔ humains.
+
+### Interface MessageChannel
+
+```python
+class MessageChannel(ABC):
+    async def send(channel_id, message) → bool
+    async def ask(channel_id, agent_name, question, timeout) → {answered, response, author, timed_out}
+    async def approve(channel_id, agent_name, summary, timeout) → {approved, response, reviewer, timed_out}
+    # + wrappers *_sync() automatiques
+```
+
+### Implémentations
+
+| Canal | Classe | Envoi | Réception |
+|---|---|---|---|
+| Discord | `DiscordChannel` | REST API Discord | Polling messages |
+| Email | `EmailChannel` | SMTP | IMAP polling |
+| Telegram | (à venir) | Bot API | Webhook/polling |
+
+### Utilisation
+
+```python
+from agents.shared.channels import get_channel, get_default_channel
+ch = get_default_channel()  # lit DEFAULT_CHANNEL dans .env
+await ch.send("123456", "Hello")
+await ch.approve("123456", "Lead Dev", "PRD validé ?")
+```
+
+### Modules branchés sur channels.py
+
+- `gateway.py` → `post_to_channel()` (remplace l'ancien `post_to_discord`)
+- `human_gate.py` → délègue à `channels.approve()`
+- `agent_conversation.py` → délègue à `channels.ask()`
+
+---
+
+## Workflow Engine — workflow_engine.py
+
+Lit `Workflow.json` depuis le dossier de l'équipe et pilote le cycle de vie du projet.
+
+### Fonctions principales
+
+| Fonction | Rôle |
+|---|---|
+| `get_agents_to_dispatch(phase, outputs, team)` | Quels agents lancer maintenant ? (respecte parallel_groups + depends_on) |
+| `check_phase_complete(phase, outputs, team)` | La phase est-elle terminée ? (agents requis + deliverables) |
+| `can_transition(phase, outputs, alerts, team)` | Peut-on passer à la phase suivante ? |
+| `get_workflow_status(phase, outputs, team)` | État complet pour l'affichage |
+
+### Parallel Groups
+
+Les agents d'une phase sont organisés en groupes ordonnés (A, B, C). Le groupe B ne démarre qu'après que le groupe A soit complet.
+
+```
+Discovery : A = [requirements_analyst, legal_advisor]
+Design :    A = [ux_designer, architect, planner]
+Build :     A = [lead_dev] → B = [dev_frontend, dev_backend, dev_mobile] → C = [qa_engineer]
+```
+
+### Auto-dispatch dans le gateway
+
+Après qu'un groupe termine, le gateway redemande au workflow engine s'il y a un groupe suivant. Chaînage automatique récursif (max 5 niveaux).
+
+```
+Groupe A termine → workflow engine : "groupe B suivant" → auto-dispatch B
+Groupe B termine → workflow engine : "groupe C suivant" → auto-dispatch C
+Groupe C termine → workflow engine : "phase complete" → propose human_gate
+```
+
+---
+
+## Agents (13 + Orchestrateur)
+
+Définis dans `config/Team1/agents_registry.json`. Pas de fichiers Python individuels — tout passe par `BaseAgent` + registry.
 
 ### Champs du registry
 
 ```json
 {
   "agents": {
-    "agent_id": {
-      "name": "Nom Affichable",
-      "llm": "claude-sonnet",          // ref vers llm_providers.json
+    "orchestrator": {
+      "name": "Orchestrateur",
+      "llm": "claude-sonnet",
+      "temperature": 0.2,
+      "max_tokens": 4096,
+      "prompt": "orchestrator.md",
+      "type": "orchestrator"
+    },
+    "lead_dev": {
+      "name": "Lead Dev",
+      "llm": "claude-sonnet",
       "temperature": 0.3,
       "max_tokens": 32768,
-      "prompt": "agent_id.md",         // fichier dans prompts/v1/
-      "type": "pipeline | single",
+      "prompt": "lead_dev.md",
+      "type": "single",
       "use_tools": true,
-      "requires_approval": false,
-      "pipeline_steps": [...]           // si type=pipeline
+      "requires_approval": false
     }
   }
 }
@@ -116,12 +214,13 @@ Définis dans `config/agents_registry.json`. Pas de fichiers Python individuels 
 
 | Agent | Rôle | Type | Phase |
 |---|---|---|---|
+| `orchestrator` | Routing intelligent, guidé par workflow engine | orchestrator | Système |
 | `requirements_analyst` | PRD, User Stories, MoSCoW | pipeline (3 étapes) | Discovery |
 | `legal_advisor` | Audit RGPD, conformité, CGU | pipeline (2 étapes) | Transversal |
 | `ux_designer` | Wireframes, mockups, design system | single | Design |
 | `architect` | ADRs, C4, OpenAPI specs | single | Design |
 | `planner` | Sprint backlog, roadmap, risques | single | Design |
-| `lead_dev` | Review, repo, coordination, délégation | single + tools | Build |
+| `lead_dev` | Review, repo, coordination, fait ou délègue | single + tools | Build |
 | `dev_frontend_web` | Code React/Next.js/TypeScript | single | Build |
 | `dev_backend_api` | Code Python/FastAPI/SQLAlchemy | single | Build |
 | `dev_mobile` | Code Flutter/React Native | single | Build |
@@ -129,16 +228,14 @@ Définis dans `config/agents_registry.json`. Pas de fichiers Python individuels 
 | `devops_engineer` | CI/CD, Docker, déploiement | single | Ship |
 | `docs_writer` | Documentation, rapports, README | single + tools | Ship |
 
-### Hiérarchie de routing (Orchestrateur)
+### Hiérarchie de routing
 
-```
-Demande globale/vague    → requirements_analyst (clarifie)
-Demande technique        → lead_dev (décompose, fait ou délègue aux devs)
-Demande spécialisée      → directement au spécialiste
-Brief projet complet     → requirements_analyst + legal_advisor (Discovery)
-```
+L'Orchestrateur reçoit le contexte enrichi par le workflow engine :
+- `suggested_agents_to_dispatch` : recommandation du workflow
+- `phase_complete` / `can_transition` : état de la phase
+- Il suit les recommandations du workflow sauf cas particulier
 
-Le Lead Dev est le seul à pouvoir dispatcher vers `dev_frontend_web`, `dev_backend_api`, `dev_mobile`. L'Orchestrateur ne les appelle jamais directement.
+Le Lead Dev est le seul à dispatcher vers les devs (frontend, backend, mobile).
 
 ---
 
@@ -152,142 +249,85 @@ Le Lead Dev est le seul à pouvoir dispatcher vers `dev_frontend_web`, `dev_back
 | `/status` | GET | Liste agents + équipes |
 | `/invoke` | POST | Appel agent (direct ou orchestré) |
 | `/reset` | POST | Purge le state d'un thread |
+| `/workflow/status/{thread_id}` | GET | État du workflow pour un thread |
 
-### Modes d'invocation
+### Flux d'un message
 
-1. **Direct** (`!agent <id> <tâche>`) — bypass l'orchestrateur, 1 seul agent
-2. **Orchestré** (message normal) — l'Orchestrateur analyse et route
+```
+Discord message → discord_listener → POST /invoke
+  → resolve_agents(channel_id) → team_resolver → team_id
+  → load_or_create_state(thread_id, team_id)
+  → orchestrator_node(state) ← workflow engine enrichit le contexte
+  → decisions → background_tasks.add_task(run_orchestrated)
+    → run_agents_parallel (groupe A)
+    → auto-dispatch (groupe B, C...) via workflow engine
+    → phase complete → human_gate
+```
 
 ### Thread persistence
 
 - `thread_id = "project-channel-{channel_id}"`
 - State sauvegardé dans PostgreSQL via `PostgresSaver`
-- Le contexte survit entre les messages
-- `!reset` purge le state d'un channel
-
-### Parallélisme
-
-- `asyncio.gather` pour les agents en parallèle
-- Timeout 35 min par agent (couvre les 30 min d'attente humaine)
+- Le state contient `_team_id` pour que l'orchestrateur sache quelle équipe
+- `!reset` purge le state
 
 ---
 
 ## LLM Providers (llm_providers.json)
 
-### Architecture
+### Types supportés (9)
 
-```
-llm_providers.json          → Définit les services IA disponibles
-  ├── providers: {}         → Nom, type, modèle, env_key, URLs
-  ├── throttling: {}        → Limites RPM/TPM par env_key
-  └── default: "..."        → Provider par défaut
-```
+`anthropic`, `openai`, `azure`, `google`, `mistral`, `ollama`, `groq`, `deepseek`, `moonshot`
 
-### Types supportés
+### 17 providers pré-configurés
 
-| Type | Provider | Factory |
-|---|---|---|
-| `anthropic` | Claude | `ChatAnthropic` |
-| `openai` | OpenAI | `ChatOpenAI` |
-| `azure` | Azure OpenAI | `AzureChatOpenAI` |
-| `google` | Gemini | `ChatGoogleGenerativeAI` |
-| `mistral` | Mistral | `ChatMistralAI` |
-| `ollama` | Ollama (local) | `ChatOllama` |
-| `groq` | Groq | `ChatGroq` |
-| `deepseek` | DeepSeek | `ChatOpenAI` (compat) |
-| `moonshot` | Kimi K2/K2.5 | `ChatOpenAI` (compat) |
+Claude Sonnet/Opus/Haiku, GPT-4o/Mini, Azure GPT-4o, Gemini Flash/Pro, Mistral Large, DeepSeek Chat/Coder, Kimi K2/K2.5, Groq Llama 70B, Ollama Llama3/Codestral/Qwen
 
 ### Throttling
 
 - Par `env_key` (même clé API = même compteur)
 - Sliding window 60s (RPM + TPM)
 - 20 retries avec backoff exponentiel (×2, cap 120s)
-- Config dans `llm_providers.json > throttling`
 
 ### Utilisation par agent
 
-Dans `agents_registry.json` :
-```json
-"architect": { "llm": "claude-opus", ... }
-"dev_backend_api": { "llm": "azure-gpt4o", ... }
-```
-
-Override via `.env` : `ARCHITECT_LLM=gpt-4o`
+`"llm": "claude-sonnet"` dans le registry. Override via env : `ARCHITECT_LLM=gpt-4o`
 
 ---
 
 ## MCP (Model Context Protocol)
 
-### Lazy install
-
-- Premier appel : `npm install -g <package>` ou `uv tool install <package>`
-- Appels suivants : déjà installé, démarrage immédiat
-- Lock par package (thread-safe)
-
-### Config
-
-- `config/mcp_servers.json` — définition des serveurs MCP
-- `config/agent_mcp_access.json` — quels agents ont accès à quels MCP
-- Auto-détection `use_tools` : si un agent a des MCP configurés, `use_tools=True`
-
-### Serveurs actifs
-
-GitHub, Notion, Git, Fetch + RAG (pgvector/Voyage AI)
-
----
-
-## Human Gate & Ask Human
-
-### Human Gate (validation)
-
-- `requires_approval: true` dans le registry
-- Poste dans `#human-review` après l'output de l'agent
-- Réponses : `approve`, `revise <commentaire>`, `reject`
-- Timeout 30 min avec 4 rappels (2, 4, 8, 16 min)
-- Rappels : juste "attend toujours une réponse (question posée à HH:MM)"
-
-### Ask Human (question ouverte)
-
-- Tool `ask_human(question, context)` disponible pour tous les agents avec tools
-- Le LLM décide quand poser une question
-- Même timeout 30 min avec rappels
-- Timeout → "Continue avec ton meilleur jugement"
+- 29 serveurs dans le catalogue (`mcp_catalog.csv`)
+- Types : `npx` (80%), `uvx` (20%), `python`, `node`, `docker`, `bunx`, `deno`
+- Lazy install : premier appel installe globalement, les suivants sont immédiats
+- Lock par package (thread-safe, pas deux installs simultanées)
+- Config : `mcp_servers.json` (global) + `agent_mcp_access.json` (par équipe)
 
 ---
 
 ## Multi-équipes (teams.json)
 
-### Concept
-
-Chaque équipe est isolée avec :
-- Son propre `agents_registry.json`
-- Ses propres prompts
-- Son propre channel Discord
-- Son propre state (thread isolé)
-
-### Configuration
+### Structure
 
 ```json
 {
-  "teams": {
-    "default": {
-      "name": "Equipe Produit",
-      "agents_registry": "agents_registry.json",
-      "llm_providers": "llm_providers.json",
-      "prompts_dir": "v1",
-      "discord_channels": ["ID_CHANNEL"],
-      "mcp_access": "agent_mcp_access.json"
+  "teams": [
+    {
+      "id": "team1",
+      "name": "Team 1",
+      "directory": "Team1",
+      "discord_channels": []
     }
-  },
-  "channel_mapping": {
-    "ID_CHANNEL": "default"
-  }
+  ],
+  "channel_mapping": {}
 }
 ```
 
-### Convention d'ID
+Le `directory` est relatif au dossier de config. `team_resolver` résout : `config/Team1/agents_registry.json`, `config/Team1/Workflow.json`, `config/Team1/lead_dev.md`, etc.
 
-`^[a-z0-9][a-z0-9_-]*$` — lowercase, pas d'espaces ni caractères spéciaux.
+### Isolation
+
+Chaque équipe a son propre registry, workflow, prompts, MCP access, et channel Discord.
 
 ---
 
@@ -296,66 +336,84 @@ Chaque équipe est isolée avec :
 | Commande | Effet |
 |---|---|
 | `!agent <id> <tâche>` | Route directement vers un agent |
-| `!a <alias> <tâche>` | Raccourci (ex: `!a lead Cree le repo`) |
+| `!a <alias> <tâche>` | Raccourci |
 | `!reset` | Purge le state du channel |
 | `!new <nom>` | Nouveau contexte projet |
 | `!status` | État de la plateforme |
 
-### Aliases
-
-`analyste`, `designer`, `ux`, `architecte`, `archi`, `lead`, `frontend`, `front`, `backend`, `back`, `mobile`, `qa`, `test`, `devops`, `ops`, `docs`, `doc`, `avocat`, `legal`
+Aliases : `analyste`, `designer`, `ux`, `architecte`, `archi`, `lead`, `frontend`, `front`, `backend`, `back`, `mobile`, `qa`, `test`, `devops`, `ops`, `docs`, `doc`, `avocat`, `legal`
 
 ---
 
-## Formatage Discord
+## Human Gate & Ask Human
 
-- Messages découpés intelligemment à 1900 chars (coupe sur les sauts de ligne)
-- Booléens groupés : `✅ Api Contract · ❌ Merge Conflicts · Files: 0`
-- Structures imbriquées : `▸ Repository Structure :` avec indentation
-- Profondeur max 2 niveaux pour éviter le spam
-
----
-
-## RAG (Retrieval Augmented Generation)
-
-- **Embeddings** : Voyage AI (`voyage-3-large`)
-- **Vector store** : pgvector dans PostgreSQL
-- **Tools** : `rag_search(query, source_type, top_k)` et `rag_index(content)`
-- Chaque agent peut chercher dans le RAG et y indexer ses livrables
+- **Human Gate** : `requires_approval: true` → validation via `channels.approve()` (Discord ou Email)
+- **Ask Human** : tool `ask_human(question, context)` → via `channels.ask()`
+- Timeout 30 min avec 4 rappels (2, 4, 8, 16 min)
+- Gateway timeout 35 min (couvre l'attente humaine)
 
 ---
 
 ## Dashboard Admin (port 8080)
 
 - FastAPI + HTML/JS statique
-- Auth cookie (`WEB_ADMIN_USERNAME` / `WEB_ADMIN_PASSWORD` dans `.env`)
-- Gestion : agents, LLM providers, MCP, équipes, prompts, .env
-- Git : pull, commit, status (credentials configurables dans l'UI)
-- Scripts : start, restart, build
-- Chat LLM intégré pour tester les providers
+- Auth cookie (`WEB_ADMIN_USERNAME` / `WEB_ADMIN_PASSWORD`)
+- Git : pull (auto-reconfigure remote), commit, status
+- `.gitignore` auto-généré au démarrage si absent
+- `GIT_USER_EMAIL` / `GIT_USER_NAME` configurables via `.env`
 
 ---
 
 ## Observabilité — Langfuse (port 3000)
 
 - Open-source, self-hosted
-- Trace chaque appel LLM : prompt, réponse, tokens, latence
-- Remplace LangSmith (pas de dépendance cloud)
-- Intégration via callback handler dans `base_agent.py`
+- Containers dans le docker-compose
+- Callback handler à brancher dans `base_agent.py` (TODO)
 
 ---
 
-## Fichiers de configuration — Résumé
+## Fichiers de configuration
 
-| Fichier | Contenu | Secrets ? |
-|---|---|---|
-| `.env` | Clés API, tokens, passwords | **OUI** |
-| `config/agents_registry.json` | Définition des agents | Non |
-| `config/llm_providers.json` | Providers LLM + throttling | Non |
-| `config/teams.json` | Multi-équipes | Non |
-| `config/agent_mcp_access.json` | MCP par agent | Non |
-| `config/mcp_servers.json` | Serveurs MCP | Non |
-| `prompts/v1/*.md` | Prompts des agents | Non |
+| Fichier | Emplacement | Contenu | Secrets ? |
+|---|---|---|---|
+| `.env` | Racine projet | Clés API, tokens, passwords | **OUI** |
+| `teams.json` | `config/` | Liste équipes + channel_mapping | Non |
+| `llm_providers.json` | `config/` | 17 providers + throttling | Non |
+| `mcp_servers.json` | `config/` | Serveurs MCP (global) | Non |
+| `langgraph.json` | `config/` | Config LangGraph | Non |
+| `agents_registry.json` | `config/Team1/` | 13 agents + orchestrator | Non |
+| `agent_mcp_access.json` | `config/Team1/` | MCP par agent | Non |
+| `Workflow.json` | `config/Team1/` | Phases, transitions, rules | Non |
+| `*.md` | `config/Team1/` | Prompts des agents | Non |
+
+---
+
+## Variables d'environnement clés
+
+```bash
+# Canal par défaut (discord | email)
+DEFAULT_CHANNEL=discord
+
+# Discord
+DISCORD_BOT_TOKEN=...
+DISCORD_CHANNEL_COMMANDS=...
+DISCORD_CHANNEL_REVIEW=...
+
+# Email (si DEFAULT_CHANNEL=email)
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=...
+SMTP_PASSWORD=...
+IMAP_HOST=imap.gmail.com
+
+# LLM
+ANTHROPIC_API_KEY=...
+OPENAI_API_KEY=...
+
+# Base de données
+DATABASE_URI=postgresql://langgraph:...@langgraph-postgres:5432/langgraph
+REDIS_URI=redis://:...@langgraph-redis:6379/0
+```
 
 ---
 
@@ -365,11 +423,10 @@ Chaque équipe est isolée avec :
 |---|---|
 | `00-configure-lxc.sh` | Config LXC Proxmox |
 | `01-proxmox-create-vm.sh` | Création VM |
-| `02-install-docker.sh` | Installation Docker |
-| `03-install-langgraph.sh` | Déploiement stack Docker + téléchargement configs |
-| `05-install-rag.sh` | Installation RAG pgvector |
-| `06-install-agents.sh` | Installation agents + prompts + Discord |
-| `14-install-mcp.sh` | Installation MCP (interactif, 29 serveurs) |
+| `02-install-langgraph.sh` | Docker + infra + code agents + configs équipe |
+| `start.sh / restart.sh / build.sh` | Gestion des containers |
+
+Le script 02 télécharge tout depuis GitHub : Dockerfiles, code agents (`Agents/Shared/*.py`, `Agents/*.py`), configs globales, et structure d'équipe. Les prompts sont gérés via git pull depuis le dashboard admin.
 
 ---
 
@@ -377,54 +434,41 @@ Chaque équipe est isolée avec :
 
 - **Brief** : SaaS suivi performances sportives multi-disciplines
 - **Stack** : Flutter Android + FastAPI + PostgreSQL
-- **Modèle** : Freemium (gratuit limité + premium)
+- **Modèle** : Freemium
 - **Repo GitHub** : `gaelgael5/PerformanceTracker`
-- **État** : Structure initialisée, Discovery en cours (PRD + Audit juridique)
+- **État** : Structure initialisée, Discovery en cours
 
 ---
 
-## Points d'attention
+## Terminé ✅
 
-1. **Rate limit Anthropic** : 30K TPM (Tier 1). Le throttling est configuré dans `llm_providers.json`. Éviter plus de 2 agents en parallèle.
-2. **Notion MCP** : Token API à vérifier (`ntn_...`). L'agent utilise `API-post-search`, `API-post-page`.
-3. **Le Lead Dev** utilise `gaelgael5` comme owner GitHub (pas `gaelbeard`).
-4. **Les outputs `blocked`** sont filtrés du contexte pour ne pas empoisonner les futurs appels.
-5. **Le gateway timeout** est 35 min pour couvrir les 30 min d'attente humaine.
-
----
-
-## TODO — Tâches restantes
-
-### Terminé ✅
-1. Infrastructure LXC + Docker opérationnelle
+1. Infrastructure LXC + Docker (5 containers opérationnels)
 2. 13 agents avec registry JSON (zéro fichiers Python individuels)
-3. Gateway v0.6.0 : persistence + direct routing + parallélisme réel
-4. Thread persistence PostgreSQL + commande `!reset`
-5. MCP lazy install + locks thread-safe
+3. Gateway v0.6.0 : persistence + direct routing + parallélisme + auto-dispatch workflow
+4. Thread persistence PostgreSQL + `!reset`
+5. MCP lazy install + locks thread-safe (29 serveurs catalogue)
 6. Rate limit throttling multi-provider (20 retries, backoff ×2, cap 120s)
-7. Human gate Discord (30 min, 4 rappels)
-8. Boucle conversationnelle ask_human (30 min, rappels)
+7. Human gate via canal factorisé (30 min, 4 rappels)
+8. Boucle conversationnelle ask_human via canal factorisé
 9. Interface Discord user-friendly (formatage, smart split 1900 chars)
-10. Volumes mappés sur l'hôte (`/opt/langgraph-data/`)
+10. Volumes mappés sur l'hôte
 11. Voyage AI billing OK (RAG pgvector)
-12. Support multi-modèles (llm_providers.json, 17 providers, 9 types)
+12. Multi-modèles (llm_providers.json, 17 providers, 9 types)
 13. Multi-équipes (teams.json, isolation par channel Discord)
-14. Prompt orchestrateur amélioré (routing intelligent par type de demande)
-15. Prompt Lead Dev (fait ou délègue)
-16. Publication GitHub via Documentaliste (testé, fonctionne)
-17. Dashboard admin web (port 8080) avec auth, git, gestion configs
-18. Langfuse ajouté au docker-compose (port 3000)
-19. Scripts utilitaires (start.sh, restart.sh, build.sh)
+14. team_resolver — source unique de vérité pour les chemins
+15. Workflow engine — phases, transitions, parallel_groups, auto-dispatch
+16. Auto-dispatch groupes séquentiels (A → B → C, max 5 niveaux)
+17. Canaux factorisés (Discord + Email, extensible Telegram)
+18. Orchestrateur guidé par workflow engine (contexte enrichi)
+19. Prompt orchestrateur + Lead Dev (fait ou délègue)
+20. Publication GitHub via Documentaliste
+21. Dashboard admin web (port 8080) avec auth, git, gestion configs
+22. Langfuse dans docker-compose (port 3000)
+23. Scripts utilitaires + script d'installation unifié (02)
 
-### En cours / À faire 🔧
-20. **Transition de phases** — Discovery → Design → Build → Ship. L'orchestrateur a les règles mais le mécanisme de human gate pour les transitions n'est pas testé end-to-end.
-21. **Publication Notion** — Le MCP Notion retourne 401 (token invalide). À corriger : vérifier le token sur https://developers.notion.com/, re-tester avec `!agent docs`.
-22. **Délégation Lead Dev → sous-agents** — Le Lead Dev retourne `status: delegating` mais le gateway ne détecte pas encore ce status pour lancer automatiquement les sous-agents ciblés. À implémenter dans `gateway.py`.
-23. **Intégration Langfuse** — Les containers sont dans le docker-compose mais le callback handler n'est pas encore branché dans `base_agent.py`. À ajouter : `LangfuseCallbackHandler` dans `get_llm()` ou `_call_llm()`.
-24. **Dashboard web — features manquantes** :
-    - Visualisation des logs agents en temps réel
-    - Gestion des équipes (créer, modifier, supprimer) — partiellement fait, bug sur fichier teams.json vide corrigé
-    - Monitoring des threads actifs et leur state
-25. **Communication email** — Alternative à Discord (SMTP ou API comme SendGrid/Mailgun) pour les notifications et le human gate.
-26. **Tests end-to-end** — Tester un cycle complet Discovery → Design → Build avec le projet PerformanceTracker.
-27. **Structure Shared/Teams/** — La nouvelle arborescence avec `Shared/Teams/team_project/` n'est pas encore implémentée dans `agent_loader.py`. Le loader lit actuellement `config/` uniquement.
+## À faire 🔧
+
+1. **Intégration Langfuse** — Callback handler dans `base_agent.py`
+2. **Publication Notion** — Token 401 à corriger
+3. **Dashboard web features** — Logs temps réel, monitoring threads
+4. **Tests end-to-end** — Cycle complet Discovery → Design → Build avec PerformanceTracker

@@ -31,6 +31,11 @@
         Templates
       </div>
 
+      <div class="nav-item" data-section="channels" onclick="showSection('channels')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        Channels
+      </div>
+
       <div class="nav-section">Outils</div>
       <div class="nav-item" data-section="chat" onclick="showSection('chat')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
@@ -86,6 +91,9 @@
         <div class="page-header">
           <h2>Equipes</h2>
           <button class="btn btn-outline btn-sm" onclick="loadTeams()">Rafraichir</button>
+          <button class="btn btn-outline btn-sm" onclick="window.location='/api/export/configs'">Exporter</button>
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('import-configs-file').click()">Importer</button>
+          <input type="file" id="import-configs-file" accept=".zip" style="display:none" onchange="importArchive('configs', this)">
         </div>
         <p style="color:var(--text-secondary);margin-bottom:0.75rem;font-size:0.85rem">
           Configuration active (<code>config/Teams/</code>) — modeles LLM, serveurs MCP et equipes operationnelles.
@@ -221,6 +229,9 @@
         <div class="page-header">
           <h2>Templates</h2>
           <button class="btn btn-outline btn-sm" onclick="loadTemplates()">Rafraichir</button>
+          <button class="btn btn-outline btn-sm" onclick="window.location='/api/export/shared'">Exporter</button>
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('import-shared-file').click()">Importer</button>
+          <input type="file" id="import-shared-file" accept=".zip" style="display:none" onchange="importArchive('shared', this)">
         </div>
         <p style="color:var(--text-secondary);margin-bottom:0.75rem;font-size:0.85rem">
           Configuration des templates partages (<code>Shared/Teams/</code>) utilises comme base pour creer de nouvelles equipes.
@@ -341,6 +352,228 @@
                 <p style="color:var(--text-secondary);font-size:0.8rem">Chargement...</p>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CHANNELS SECTION -->
+      <div class="section" id="section-channels">
+        <div class="page-header">
+          <h2>Channels</h2>
+          <button class="btn btn-outline btn-sm" onclick="loadChannels()">Rafraichir</button>
+        </div>
+        <p style="color:var(--text-secondary);margin-bottom:0.75rem;font-size:0.85rem">
+          Configuration des canaux de communication (email, Discord, etc.).
+        </p>
+
+        <!-- Sub-tabs -->
+        <div class="prompt-tabs" style="margin-bottom:1rem">
+          <div class="prompt-tab active" data-ch-tab="ch-discord" onclick="showChannelTab('ch-discord')">Discord</div>
+          <div class="prompt-tab" data-ch-tab="ch-mail" onclick="showChannelTab('ch-mail')">Mail</div>
+        </div>
+
+        <!-- Sub-tab: Discord -->
+        <div class="ch-tab-content active" id="ch-tab-ch-discord">
+          <!-- General -->
+          <div class="card">
+            <div class="card-header"><h3>Configuration generale</h3></div>
+            <div class="form-row">
+              <div class="form-group" style="max-width:120px">
+                <label>Active</label>
+                <div class="toggle" id="discord-enabled-toggle" onclick="this.classList.toggle('active')"></div>
+              </div>
+              <div class="form-group">
+                <label>Prefixe commande</label>
+                <input id="discord-bot-prefix" style="max-width:80px" placeholder="!" />
+              </div>
+              <div class="form-group">
+                <label>Var env token bot</label>
+                <input id="discord-bot-token-env" placeholder="DISCORD_BOT_TOKEN" />
+              </div>
+              <div class="form-group">
+                <label>Message de statut</label>
+                <input id="discord-bot-status" placeholder="LangGraph Multi-Agent" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Channels -->
+          <div class="card" style="margin-top:1rem">
+            <div class="card-header"><h3>Channels Discord</h3></div>
+            <div class="form-row">
+              <div class="form-group"><label>Commands (ID)</label><input id="discord-ch-commands" placeholder="ID du channel commandes" /></div>
+              <div class="form-group"><label>Review (ID)</label><input id="discord-ch-review" placeholder="ID du channel review" /></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label>Logs (ID)</label><input id="discord-ch-logs" placeholder="ID du channel logs" /></div>
+              <div class="form-group"><label>Alerts (ID)</label><input id="discord-ch-alerts" placeholder="ID du channel alertes" /></div>
+            </div>
+            <div class="form-group">
+              <label>Guild ID</label>
+              <input id="discord-guild-id" placeholder="ID du serveur Discord" style="max-width:300px" />
+            </div>
+          </div>
+
+          <!-- Aliases -->
+          <div class="card" style="margin-top:1rem">
+            <div class="card-header">
+              <h3>Aliases</h3>
+              <button class="btn btn-primary btn-sm" onclick="addDiscordAlias()">+ Ajouter</button>
+            </div>
+            <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.5rem">
+              Raccourcis pour invoquer les agents (ex: <code>!a lead</code> au lieu de <code>!agent lead_dev</code>).
+            </p>
+            <div class="table-container">
+              <table>
+                <thead><tr><th>Alias</th><th>Agent</th><th style="width:60px"></th></tr></thead>
+                <tbody id="discord-aliases-body"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Formatting -->
+          <div class="card" style="margin-top:1rem">
+            <div class="card-header"><h3>Formatage</h3></div>
+            <div class="form-row">
+              <div class="form-group" style="max-width:180px"><label>Longueur max message</label><input id="discord-fmt-maxlen" type="number" placeholder="1900" /></div>
+              <div class="form-group" style="max-width:120px"><label>Split newlines</label><div class="toggle" id="discord-fmt-split" onclick="this.classList.toggle('active')"></div></div>
+              <div class="form-group" style="max-width:120px"><label>Reaction traitement</label><input id="discord-fmt-react-proc" style="max-width:60px" /></div>
+              <div class="form-group" style="max-width:120px"><label>Reaction orchestrateur</label><input id="discord-fmt-react-orch" style="max-width:60px" /></div>
+            </div>
+          </div>
+
+          <!-- Timeouts -->
+          <div class="card" style="margin-top:1rem">
+            <div class="card-header"><h3>Timeouts</h3></div>
+            <div class="form-row">
+              <div class="form-group" style="max-width:160px"><label>API call (sec)</label><input id="discord-to-api" type="number" placeholder="30" /></div>
+              <div class="form-group" style="max-width:160px"><label>Human gate (sec)</label><input id="discord-to-gate" type="number" placeholder="1800" /></div>
+            </div>
+            <div class="form-group">
+              <label>Intervalles rappels (sec, separes par virgule)</label>
+              <input id="discord-to-reminders" placeholder="120, 240, 480, 960" />
+            </div>
+          </div>
+
+          <!-- Save -->
+          <div style="margin-top:1.5rem;display:flex;justify-content:flex-end">
+            <button class="btn btn-primary" onclick="saveDiscord()">Sauvegarder</button>
+          </div>
+        </div>
+
+        <!-- Sub-tab: Mail -->
+        <div class="ch-tab-content" id="ch-tab-ch-mail">
+          <!-- General -->
+          <div class="card">
+            <div class="card-header">
+              <h3>Configuration generale</h3>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Email active</label>
+                <div class="toggle" id="mail-enabled-toggle" onclick="toggleMailEnabled()"></div>
+              </div>
+              <div class="form-group">
+                <label>Canal par defaut</label>
+                <select id="mail-default-channel">
+                  <option value="discord">Discord</option>
+                  <option value="email">Email</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- SMTP -->
+          <div class="card" style="margin-top:1rem">
+            <div class="card-header">
+              <h3>SMTP (envoi)</h3>
+              <div style="display:flex;gap:0.5rem">
+                <select id="mail-preset-select" style="font-size:0.8rem">
+                  <option value="">Preset...</option>
+                </select>
+                <button class="btn btn-outline btn-sm" onclick="applyMailPreset()">Appliquer</button>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label>Host</label><input id="mail-smtp-host" placeholder="smtp.gmail.com" /></div>
+              <div class="form-group" style="max-width:100px"><label>Port</label><input id="mail-smtp-port" type="number" placeholder="587" /></div>
+              <div class="form-group" style="max-width:80px"><label>TLS</label><div class="toggle" id="mail-smtp-tls" onclick="this.classList.toggle('active')"></div></div>
+              <div class="form-group" style="max-width:80px"><label>SSL</label><div class="toggle" id="mail-smtp-ssl" onclick="this.classList.toggle('active')"></div></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label>Utilisateur</label><input id="mail-smtp-user" placeholder="user@example.com" /></div>
+              <div class="form-group"><label>Var env mot de passe</label><input id="mail-smtp-password-env" placeholder="SMTP_PASSWORD" /></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label>Adresse expediteur</label><input id="mail-smtp-from-address" placeholder="noreply@example.com" /></div>
+              <div class="form-group"><label>Nom expediteur</label><input id="mail-smtp-from-name" placeholder="LangGraph Agent" /></div>
+            </div>
+          </div>
+
+          <!-- IMAP -->
+          <div class="card" style="margin-top:1rem">
+            <div class="card-header"><h3>IMAP (reception)</h3></div>
+            <div class="form-row">
+              <div class="form-group"><label>Host</label><input id="mail-imap-host" placeholder="imap.gmail.com" /></div>
+              <div class="form-group" style="max-width:100px"><label>Port</label><input id="mail-imap-port" type="number" placeholder="993" /></div>
+              <div class="form-group" style="max-width:80px"><label>SSL</label><div class="toggle" id="mail-imap-ssl" onclick="this.classList.toggle('active')"></div></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label>Utilisateur</label><input id="mail-imap-user" placeholder="user@example.com" /></div>
+              <div class="form-group"><label>Var env mot de passe</label><input id="mail-imap-password-env" placeholder="IMAP_PASSWORD" /></div>
+            </div>
+          </div>
+
+          <!-- Listener -->
+          <div class="card" style="margin-top:1rem">
+            <div class="card-header"><h3>Listener (polling)</h3></div>
+            <div class="form-row">
+              <div class="form-group" style="max-width:150px">
+                <label>Intervalle (sec)</label>
+                <input id="mail-listener-interval" type="number" placeholder="15" />
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Expediteurs autorises (un par ligne)</label>
+              <textarea id="mail-listener-allowed" rows="3" placeholder="user@company.com&#10;admin@company.com"></textarea>
+            </div>
+            <div class="form-group">
+              <label>Patterns a ignorer (un par ligne)</label>
+              <textarea id="mail-listener-ignore" rows="3" placeholder="noreply@&#10;no-reply@&#10;mailer-daemon@"></textarea>
+            </div>
+          </div>
+
+          <!-- Templates -->
+          <div class="card" style="margin-top:1rem">
+            <div class="card-header"><h3>Templates email</h3></div>
+            <div class="form-row">
+              <div class="form-group"><label>Sujet notification</label><input id="mail-tpl-notification" /></div>
+              <div class="form-group"><label>Sujet question</label><input id="mail-tpl-question" /></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label>Sujet approbation</label><input id="mail-tpl-approval" /></div>
+              <div class="form-group"><label>Prefixe rappel</label><input id="mail-tpl-reminder" /></div>
+            </div>
+            <div class="form-group"><label>Texte footer</label><input id="mail-tpl-footer" /></div>
+            <div class="form-group">
+              <label>Instructions approbation</label>
+              <textarea id="mail-tpl-instructions" rows="4"></textarea>
+            </div>
+          </div>
+
+          <!-- Security -->
+          <div class="card" style="margin-top:1rem">
+            <div class="card-header"><h3>Securite</h3></div>
+            <div class="form-row">
+              <div class="form-group" style="max-width:120px"><label>Exiger TLS</label><div class="toggle" id="mail-sec-tls" onclick="this.classList.toggle('active')"></div></div>
+              <div class="form-group" style="max-width:120px"><label>Verifier expediteur</label><div class="toggle" id="mail-sec-verify" onclick="this.classList.toggle('active')"></div></div>
+              <div class="form-group" style="max-width:180px"><label>Taille max body</label><input id="mail-sec-maxsize" type="number" placeholder="50000" /></div>
+            </div>
+          </div>
+
+          <!-- Save -->
+          <div style="margin-top:1.5rem;display:flex;justify-content:flex-end">
+            <button class="btn btn-primary" onclick="saveMail()">Sauvegarder</button>
           </div>
         </div>
       </div>

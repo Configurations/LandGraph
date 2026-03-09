@@ -16,28 +16,39 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelna
 
 app = FastAPI(title="LangGraph Multi-Agent API", version="0.6.0")
 
-from agents.shared.agent_loader import get_agents, get_team_for_channel
+from agents.shared.agent_loader import get_agents
+from agents.shared.team_resolver import get_team_for_channel, get_all_team_ids
 from agents.orchestrator import orchestrator_node, route_after_orchestrator
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.postgres import PostgresSaver
 
-DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")
 
-# Aliases pour les commandes Discord (francais, raccourcis)
-ALIASES = {
-    "analyste": "requirements_analyst", "analyst": "requirements_analyst",
-    "designer": "ux_designer", "ux": "ux_designer",
-    "architecte": "architect", "archi": "architect",
-    "planificateur": "planner", "planning": "planner",
-    "lead": "lead_dev", "leaddev": "lead_dev",
-    "frontend": "dev_frontend_web", "front": "dev_frontend_web",
-    "backend": "dev_backend_api", "back": "dev_backend_api",
-    "mobile": "dev_mobile",
-    "qa": "qa_engineer", "test": "qa_engineer", "qualite": "qa_engineer",
-    "devops": "devops_engineer", "ops": "devops_engineer",
-    "docs": "docs_writer", "doc": "docs_writer", "documentaliste": "docs_writer",
-    "avocat": "legal_advisor", "legal": "legal_advisor", "juridique": "legal_advisor",
-}
+# Aliases — charges depuis discord.json ou fallback
+def _load_aliases() -> dict:
+    try:
+        from agents.shared.team_resolver import find_global_file
+        path = find_global_file("discord.json")
+        if path:
+            import json
+            with open(path) as f:
+                return json.load(f).get("aliases", {})
+    except Exception:
+        pass
+    return {
+        "analyste": "requirements_analyst", "analyst": "requirements_analyst",
+        "designer": "ux_designer", "ux": "ux_designer",
+        "architecte": "architect", "archi": "architect",
+        "lead": "lead_dev", "leaddev": "lead_dev",
+        "frontend": "dev_frontend_web", "front": "dev_frontend_web",
+        "backend": "dev_backend_api", "back": "dev_backend_api",
+        "mobile": "dev_mobile",
+        "qa": "qa_engineer", "test": "qa_engineer",
+        "devops": "devops_engineer", "ops": "devops_engineer",
+        "docs": "docs_writer", "doc": "docs_writer",
+        "avocat": "legal_advisor", "legal": "legal_advisor",
+    }
+
+ALIASES = _load_aliases()
 
 
 def resolve_agents(channel_id: str = ""):
@@ -51,21 +62,14 @@ def resolve_agents(channel_id: str = ""):
     return canonical, agent_map, team_id
 
 
-# ── Discord ──────────────────────────────────
-async def post_to_discord(channel_id, message):
-    if not DISCORD_BOT_TOKEN or not channel_id:
+# ── Canal de communication ────────────────────
+async def post_to_channel(channel_id, message):
+    """Envoie un message via le canal par defaut (Discord, Email, etc.)."""
+    if not channel_id:
         return
-    import aiohttp
-    url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
-    headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}", "Content-Type": "application/json"}
-    async with aiohttp.ClientSession() as session:
-        for chunk in [message[i:i+1900] for i in range(0, len(message), 1900)]:
-            try:
-                async with session.post(url, headers=headers, json={"content": chunk}) as resp:
-                    if resp.status not in (200, 201):
-                        logger.error(f"Discord: {resp.status}")
-            except Exception as e:
-                logger.error(f"Discord: {e}")
+    from agents.shared.channels import get_default_channel
+    ch = get_default_channel()
+    await ch.send(channel_id, message)
 
 
 # ── Checkpointer + Graph ─────────────────────
@@ -152,15 +156,16 @@ async def run_single_agent(agent_id, agent_callable, state, channel_id):
         return result
     except asyncio.TimeoutError:
         logger.error(f"[bg] {agent_id} timeout")
-        await post_to_discord(channel_id, f"⏰ **{agent_id}** timeout (35min)")
+        await post_to_channel(channel_id, f"⏰ **{agent_id}** timeout (35min)")
         return state
     except Exception as e:
         logger.error(f"[bg] {agent_id} error: {e}")
-        await post_to_discord(channel_id, f"❌ **{agent_id}** erreur : {str(e)[:300]}")
+        await post_to_channel(channel_id, f"❌ **{agent_id}** erreur : {str(e)[:300]}")
         return state
 
 
-async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="default"):
+async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="default", _depth=0):
+    MAX_CHAIN_DEPTH = 5  # max groupes enchaines automatiquement
     tasks = [run_single_agent(a["agent_id"], a["agent"], dict(state), channel_id) for a in agents_to_run]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     merged = dict(state.get("agent_outputs", {}))
@@ -178,8 +183,7 @@ async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="defau
     except Exception as e:
         logger.error(f"Could not save state for {thread_id}: {e}")
 
-    # Message de fin lisible — pas de doublon avec ce que l'agent a deja poste
-    # L'agent poste ses propres resultats detailles, ici on poste juste le recap si plusieurs agents
+    # Message de fin
     if len(agents_to_run) > 1:
         names = []
         for a in agents_to_run:
@@ -189,7 +193,60 @@ async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="defau
             status = output.get("status", "?")
             emoji = "✅" if status == "complete" else "❌" if status == "blocked" else "⏳"
             names.append(f"{emoji} {name}")
-        await post_to_discord(channel_id, f"📋 **Recap** : {' | '.join(names)}")
+        await post_to_channel(channel_id, f"📋 **Recap** : {' | '.join(names)}")
+
+    # ── Auto-dispatch : le workflow engine decide s'il y a un groupe suivant ──
+    if _depth >= MAX_CHAIN_DEPTH:
+        logger.warning(f"[workflow] Max chain depth ({MAX_CHAIN_DEPTH}) reached, stopping auto-dispatch")
+        await post_to_channel(channel_id, f"⚠️ Profondeur max atteinte ({MAX_CHAIN_DEPTH} groupes). Relancez si nécessaire.")
+        return
+
+    try:
+        from agents.shared.workflow_engine import get_agents_to_dispatch, can_transition
+        team_id = state.get("_team_id", "team1")
+        current_phase = state.get("project_phase", "discovery")
+
+        # Verifier s'il y a de nouveaux agents a lancer (groupe B apres A, etc.)
+        next_agents = get_agents_to_dispatch(current_phase, merged, team_id)
+        if next_agents:
+            # Resoudre les agents callables
+            canonical_agents, _, _ = resolve_agents(channel_id)
+            next_to_run = []
+            for na in next_agents:
+                aid = na["agent_id"]
+                if aid in canonical_agents:
+                    next_to_run.append({"agent_id": aid, "agent": canonical_agents[aid]})
+                    logger.info(f"[workflow] Auto-dispatch: {aid} (group {na.get('parallel_group', '?')})")
+
+            if next_to_run:
+                await post_to_channel(channel_id,
+                    f"⚡ Workflow : groupe suivant → {', '.join(a['agent_id'] for a in next_to_run)}")
+                await run_agents_parallel(next_to_run, state, channel_id, thread_id, _depth + 1)
+                return  # Le recursif gere la suite
+
+        # Verifier si la phase est complete → proposer transition
+        transition = can_transition(current_phase, merged, state.get("legal_alerts", []), team_id)
+        if transition["allowed"]:
+            next_phase = transition["next_phase"]
+            needs_gate = transition.get("needs_human_gate", True)
+            if needs_gate:
+                await post_to_channel(channel_id,
+                    f"🚦 **Phase {current_phase} complete !**\n"
+                    f"Transition vers **{next_phase}** possible.\n"
+                    f"Repondez `approve` pour continuer ou `revise` pour corriger.")
+            else:
+                # Auto-transition
+                state["project_phase"] = next_phase
+                try:
+                    graph.update_state(config, state)
+                    logger.info(f"Auto-transition: {current_phase} → {next_phase}")
+                except Exception:
+                    pass
+                await post_to_channel(channel_id,
+                    f"✅ Transition automatique : **{current_phase}** → **{next_phase}**")
+
+    except Exception as e:
+        logger.warning(f"Workflow auto-dispatch error: {e}")
 
 
 async def run_orchestrated(state, decisions, channel_id, thread_id="default", canonical_agents=None):
@@ -213,14 +270,14 @@ async def run_orchestrated(state, decisions, channel_id, thread_id="default", ca
                     from_phase = a.get("from_phase", state.get("project_phase", ""))
                     to_phase = a.get("to_phase", "")
                     if to_phase:
-                        await post_to_discord(channel_id,
+                        await post_to_channel(channel_id,
                             f"🚦 **HUMAN GATE** — {from_phase} → {to_phase}\n"
                             f"Repondez `approve` pour continuer ou `revise` pour corriger.")
 
     if agents:
         await run_agents_parallel(agents, state, channel_id, thread_id)
     elif not any(d.get("decision_type") == "phase_transition" for d in decisions):
-        await post_to_discord(channel_id, "Aucun agent dispatche.")
+        await post_to_channel(channel_id, "Aucun agent dispatche.")
 
 
 # ── Endpoints ────────────────────────────────
@@ -230,7 +287,6 @@ async def health():
 
 @app.get("/status")
 async def status():
-    from agents.shared.agent_loader import get_all_team_ids
     teams = get_all_team_ids()
     default_agents, _, _ = resolve_agents()
     return {

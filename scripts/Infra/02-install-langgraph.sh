@@ -40,6 +40,7 @@ wget -qO env.example "${REPO_RAW}/env.example" 2>/dev/null || { echo "ERREUR: en
 wget -qO Dockerfile "${REPO_RAW}/Dockerfile" 2>/dev/null || { echo "ERREUR: Dockerfile"; exit 1; }
 wget -qO Dockerfile.admin "${REPO_RAW}/Dockerfile.admin" 2>/dev/null || true
 wget -qO Dockerfile.discord "${REPO_RAW}/Dockerfile.discord" 2>/dev/null || true
+wget -qO Dockerfile.mail "${REPO_RAW}/Dockerfile.mail" 2>/dev/null || true
 wget -qO requirements.txt "${REPO_RAW}/requirements.txt" 2>/dev/null || { echo "ERREUR: requirements.txt"; exit 1; }
 
 wget -qO scripts/init.sql "${REPO_RAW}/scripts/init.sql" 2>/dev/null || { echo "ERREUR: init.sql"; exit 1; }
@@ -52,6 +53,8 @@ wget -qO Shared/Teams/.gitignore "${REPO_RAW}/gitignore"  2>/dev/null || { echo 
 
 wget -qO config/Teams/.gitignore "${REPO_RAW}/gitignore" 2>/dev/null || { echo "ERREUR: gitignore"; exit 1; }
 wget -qO config/langgraph.json "${REPO_RAW}/config/langgraph.json" 2>/dev/null || { echo "ERREUR: langgraph.json"; exit 1; }
+wget -qO config/mail.json "${REPO_RAW}/config/mail.json" 2>/dev/null || { echo "ERREUR: mail.json"; exit 1; }
+wget -qO config/discord.json "${REPO_RAW}/config/discord.json" 2>/dev/null || { echo "ERREUR: discord.json"; exit 1; }
 
 echo "  -> Fichiers telecharges"
 
@@ -82,16 +85,28 @@ touch agents/__init__.py agents/shared/__init__.py
 echo "[4b/6] Code Python agents..."
 
 # Shared modules
-SHARED_FILES=(base_agent.py agent_loader.py llm_provider.py rate_limiter.py mcp_client.py team_resolver.py workflow_engine.py human_gate.py agent_conversation.py discord_tools.py state.py __init__.py)
+SHARED_FILES=(base_agent.py agent_loader.py llm_provider.py rate_limiter.py mcp_client.py team_resolver.py workflow_engine.py channels.py human_gate.py agent_conversation.py discord_tools.py state.py __init__.py)
 for f in "${SHARED_FILES[@]}"; do
     wget -qO "agents/shared/${f}" "${REPO_RAW}/Agents/Shared/${f}" 2>/dev/null || true
 done
 
 # Main agents
-MAIN_FILES=(orchestrator.py gateway.py discord_listener.py)
+MAIN_FILES=(orchestrator.py gateway.py discord_listener.py mail_listener.py)
 for f in "${MAIN_FILES[@]}"; do
     wget -qO "agents/${f}" "${REPO_RAW}/Agents/${f}" 2>/dev/null || true
 done
+
+echo "  -> Code agents telecharge"
+
+# ── 4c. Config globale ───────────────────────
+echo "[4c/6] Config globale..."
+
+# Copier les fichiers globaux dans config/ (team_resolver les cherche ici)
+cp Shared/Teams/teams.json config/teams.json 2>/dev/null || true
+cp Shared/Teams/llm_providers.json config/llm_providers.json 2>/dev/null || true
+cp Shared/Teams/mcp_servers.json config/mcp_servers.json 2>/dev/null || true
+
+echo "  -> Config globale OK"
 
 
 # ── 5. Environnement Python local ───────────

@@ -60,7 +60,7 @@ function showSection(name) {
   document.querySelector(`.nav-item[data-section="${name}"]`).classList.add('active');
 
   // Load data on section switch
-  const loaders = { secrets: loadEnv, mcp: loadMCP, llm: loadLLM, teams: loadTeams, templates: loadTemplates, chat: loadChat, scripts: loadScripts, git: loadGit };
+  const loaders = { secrets: loadEnv, mcp: loadMCP, llm: loadLLM, teams: loadTeams, templates: loadTemplates, channels: loadChannels, chat: loadChat, scripts: loadScripts, git: loadGit };
   if (loaders[name]) loaders[name]();
 }
 
@@ -1568,6 +1568,28 @@ async function gitCommit() {
 let teamsData = {};
 let templatesData = [];
 
+async function importArchive(type, input) {
+  const file = input.files[0];
+  if (!file) return;
+  if (!confirm(`Importer "${file.name}" ?\n\nTous les fichiers existants seront remplaces. Les fichiers absents de l'archive seront supprimes.`)) {
+    input.value = '';
+    return;
+  }
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const r = await fetch(`/api/import/${type}`, { method: 'POST', body: fd });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || 'Erreur import');
+    showToast(j.message || 'Import termine', 'success');
+    if (type === 'configs') loadTeams();
+    else loadTemplates();
+  } catch (e) {
+    showToast('Erreur import : ' + e.message, 'error');
+  }
+  input.value = '';
+}
+
 async function loadTeams() {
   // Load active config sub-tab
   const active = document.querySelector('[data-cfg-tab].active');
@@ -1633,7 +1655,7 @@ function renderTeams() {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
           </button>
           <button class="btn btn-primary btn-sm" onclick="showAddCfgAgentModal('${escHtml(dir)}')">+ Agent</button>
-          <button class="btn btn-outline btn-sm" onclick="showCfgWorkflow('${escHtml(dir)}')">Workflow</button>
+          <button class="btn btn-outline btn-sm" id="btn-wf-cfg-${escHtml(dir)}" onclick="showCfgWorkflow('${escHtml(dir)}')">Workflow</button>
           <button class="btn btn-outline btn-sm" onclick="showCfgRawRegistry('${escHtml(dir)}')">Raw</button>
           <button class="btn btn-outline btn-sm" style="color:var(--error)" onclick="deleteTeam('${escHtml(t.id)}')">Suppr</button>
         </div>
@@ -1649,6 +1671,11 @@ function renderTeams() {
       </div>
     </div>`;
   }).join('');
+  // Validate workflows after render
+  teamsData.forEach(t => {
+    const dir = t.directory || t.id;
+    _wfCheckStatus(dir, '/api/workflow', '/api/agents/registry', 'cfg');
+  });
 }
 
 async function showAddCfgAgentModal(dir) {
@@ -3441,7 +3468,7 @@ function renderTplTeams() {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
           </button>
           <button class="btn btn-primary btn-sm" onclick="showAddTplAgentModal('${escHtml(dir)}')">+ Agent</button>
-          <button class="btn btn-outline btn-sm" onclick="showTplWorkflow('${escHtml(dir)}')">Workflow</button>
+          <button class="btn btn-outline btn-sm" id="btn-wf-tpl-${escHtml(dir)}" onclick="showTplWorkflow('${escHtml(dir)}')">Workflow</button>
           <button class="btn btn-outline btn-sm" onclick="showTplRawRegistry('${escHtml(dir)}')">Raw</button>
           <button class="btn btn-outline btn-sm" style="color:var(--error)" onclick="deleteTplTeam(${i})">Suppr</button>
         </div>
@@ -3457,6 +3484,11 @@ function renderTplTeams() {
       </div>
     </div>`;
   }).join('');
+  // Validate workflows after render
+  tplTeamsData.teams.forEach(t => {
+    const dir = t.directory || '';
+    _wfCheckStatus(dir, '/api/templates/workflow', '/api/templates/registry', 'tpl');
+  });
 }
 
 async function showAddTplAgentModal(dir) {
@@ -4883,9 +4915,474 @@ function wfImportJSON() {
   _wfOpenEditorUI();
 }
 
+// ═══════════════════════════════════════════════════
+// CHANNELS
+// ═══════════════════════════════════════════════════
+let _mailData = {};
+let _discordData = {};
+
+function showChannelTab(tabId) {
+  document.querySelectorAll('.ch-tab-content').forEach(c => c.classList.remove('active'));
+  document.querySelectorAll('[data-ch-tab]').forEach(t => t.classList.remove('active'));
+  document.getElementById('ch-tab-' + tabId).classList.add('active');
+  document.querySelector(`[data-ch-tab="${tabId}"]`).classList.add('active');
+  if (tabId === 'ch-discord') loadDiscord();
+  else if (tabId === 'ch-mail') loadMail();
+}
+
+async function loadChannels() {
+  const active = document.querySelector('[data-ch-tab].active');
+  const tab = active ? active.getAttribute('data-ch-tab') : 'ch-discord';
+  showChannelTab(tab);
+}
+
+// ── Discord ──
+async function loadDiscord() {
+  try {
+    _discordData = await api('/api/discord');
+    _renderDiscord();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function _renderDiscord() {
+  const d = _discordData;
+  const bot = d.bot || {};
+  const ch = d.channels || {};
+  const fmt = d.formatting || {};
+  const to = d.timeouts || {};
+
+  // General
+  const toggle = document.getElementById('discord-enabled-toggle');
+  if (d.enabled) toggle.classList.add('active'); else toggle.classList.remove('active');
+  document.getElementById('discord-bot-prefix').value = bot.prefix || '!';
+  document.getElementById('discord-bot-token-env').value = bot.token_env || '';
+  document.getElementById('discord-bot-status').value = bot.status_message || '';
+
+  // Channels
+  document.getElementById('discord-ch-commands').value = ch.commands || '';
+  document.getElementById('discord-ch-review').value = ch.review || '';
+  document.getElementById('discord-ch-logs').value = ch.logs || '';
+  document.getElementById('discord-ch-alerts').value = ch.alerts || '';
+  document.getElementById('discord-guild-id').value = (d.guild || {}).id || '';
+
+  // Aliases
+  _renderDiscordAliases();
+
+  // Formatting
+  document.getElementById('discord-fmt-maxlen').value = fmt.max_message_length || 1900;
+  const splitToggle = document.getElementById('discord-fmt-split');
+  if (fmt.split_on_newlines !== false) splitToggle.classList.add('active'); else splitToggle.classList.remove('active');
+  document.getElementById('discord-fmt-react-proc').value = fmt.reaction_processing || '';
+  document.getElementById('discord-fmt-react-orch').value = fmt.reaction_orchestrator || '';
+
+  // Timeouts
+  document.getElementById('discord-to-api').value = to.api_call || '';
+  document.getElementById('discord-to-gate').value = to.human_gate || '';
+  document.getElementById('discord-to-reminders').value = (to.reminder_intervals || []).join(', ');
+}
+
+function _renderDiscordAliases() {
+  const aliases = _discordData.aliases || {};
+  const tbody = document.getElementById('discord-aliases-body');
+  const rows = Object.entries(aliases).sort(([a], [b]) => a.localeCompare(b)).map(([alias, agent]) =>
+    `<tr>
+      <td><input class="discord-alias-key" value="${escHtml(alias)}" style="font-size:0.85rem" /></td>
+      <td><input class="discord-alias-val" value="${escHtml(agent)}" style="font-size:0.85rem" /></td>
+      <td><button class="btn-icon danger" onclick="this.closest('tr').remove()" title="Supprimer">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+      </button></td>
+    </tr>`
+  ).join('');
+  tbody.innerHTML = rows || '<tr><td colspan="3" style="text-align:center;color:var(--text-secondary)">Aucun alias</td></tr>';
+}
+
+function addDiscordAlias() {
+  const tbody = document.getElementById('discord-aliases-body');
+  // Remove "aucun alias" placeholder if present
+  if (tbody.querySelector('td[colspan]')) tbody.innerHTML = '';
+  tbody.insertAdjacentHTML('beforeend', `<tr>
+    <td><input class="discord-alias-key" placeholder="alias" style="font-size:0.85rem" /></td>
+    <td><input class="discord-alias-val" placeholder="agent_id" style="font-size:0.85rem" /></td>
+    <td><button class="btn-icon danger" onclick="this.closest('tr').remove()" title="Supprimer">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+    </button></td>
+  </tr>`);
+}
+
+function _collectDiscordData() {
+  const _isActive = (id) => document.getElementById(id).classList.contains('active');
+  // Collect aliases from table rows
+  const aliases = {};
+  document.querySelectorAll('#discord-aliases-body tr').forEach(row => {
+    const key = row.querySelector('.discord-alias-key');
+    const val = row.querySelector('.discord-alias-val');
+    if (key && val && key.value.trim() && val.value.trim()) {
+      aliases[key.value.trim()] = val.value.trim();
+    }
+  });
+  const reminders = document.getElementById('discord-to-reminders').value
+    .split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+
+  return {
+    enabled: _isActive('discord-enabled-toggle'),
+    default_channel: 'discord',
+    bot: {
+      token_env: document.getElementById('discord-bot-token-env').value.trim(),
+      prefix: document.getElementById('discord-bot-prefix').value.trim() || '!',
+      status_message: document.getElementById('discord-bot-status').value.trim(),
+    },
+    channels: {
+      commands: document.getElementById('discord-ch-commands').value.trim(),
+      review: document.getElementById('discord-ch-review').value.trim(),
+      logs: document.getElementById('discord-ch-logs').value.trim(),
+      alerts: document.getElementById('discord-ch-alerts').value.trim(),
+    },
+    guild: {
+      id: document.getElementById('discord-guild-id').value.trim(),
+    },
+    aliases,
+    formatting: {
+      max_message_length: parseInt(document.getElementById('discord-fmt-maxlen').value) || 1900,
+      split_on_newlines: _isActive('discord-fmt-split'),
+      reaction_processing: document.getElementById('discord-fmt-react-proc').value,
+      reaction_orchestrator: document.getElementById('discord-fmt-react-orch').value,
+    },
+    timeouts: {
+      api_call: parseInt(document.getElementById('discord-to-api').value) || 30,
+      human_gate: parseInt(document.getElementById('discord-to-gate').value) || 1800,
+      reminder_intervals: reminders.length ? reminders : [120, 240, 480, 960],
+    },
+  };
+}
+
+async function saveDiscord() {
+  try {
+    const data = _collectDiscordData();
+    await api('/api/discord', { method: 'PUT', body: data });
+    _discordData = data;
+    toast('Configuration Discord sauvegardee', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ── Mail ──
+async function loadMail() {
+  try {
+    _mailData = await api('/api/mail');
+    _renderMail();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function _renderMail() {
+  const d = _mailData;
+  const smtp = d.smtp || {};
+  const imap = d.imap || {};
+  const listener = d.listener || {};
+  const tpl = d.templates || {};
+  const sec = d.security || {};
+
+  // General
+  const toggle = document.getElementById('mail-enabled-toggle');
+  if (toggle) { if (d.enabled) toggle.classList.add('active'); else toggle.classList.remove('active'); }
+  const chSel = document.getElementById('mail-default-channel');
+  if (chSel) chSel.value = d.default_channel || 'discord';
+
+  // SMTP
+  document.getElementById('mail-smtp-host').value = smtp.host || '';
+  document.getElementById('mail-smtp-port').value = smtp.port || '';
+  document.getElementById('mail-smtp-user').value = smtp.user || '';
+  document.getElementById('mail-smtp-password-env').value = smtp.password_env || '';
+  document.getElementById('mail-smtp-from-address').value = smtp.from_address || '';
+  document.getElementById('mail-smtp-from-name').value = smtp.from_name || '';
+  const smtpTls = document.getElementById('mail-smtp-tls');
+  if (smtp.use_tls) smtpTls.classList.add('active'); else smtpTls.classList.remove('active');
+  const smtpSsl = document.getElementById('mail-smtp-ssl');
+  if (smtp.use_ssl) smtpSsl.classList.add('active'); else smtpSsl.classList.remove('active');
+
+  // IMAP
+  document.getElementById('mail-imap-host').value = imap.host || '';
+  document.getElementById('mail-imap-port').value = imap.port || '';
+  document.getElementById('mail-imap-user').value = imap.user || '';
+  document.getElementById('mail-imap-password-env').value = imap.password_env || '';
+  const imapSsl = document.getElementById('mail-imap-ssl');
+  if (imap.use_ssl) imapSsl.classList.add('active'); else imapSsl.classList.remove('active');
+
+  // Listener
+  document.getElementById('mail-listener-interval').value = listener.poll_interval || '';
+  document.getElementById('mail-listener-allowed').value = (listener.allowed_senders || []).join('\n');
+  document.getElementById('mail-listener-ignore').value = (listener.ignore_patterns || []).join('\n');
+
+  // Templates
+  document.getElementById('mail-tpl-notification').value = tpl.notification_subject || '';
+  document.getElementById('mail-tpl-question').value = tpl.question_subject || '';
+  document.getElementById('mail-tpl-approval').value = tpl.approval_subject || '';
+  document.getElementById('mail-tpl-reminder').value = tpl.reminder_prefix || '';
+  document.getElementById('mail-tpl-footer').value = tpl.footer_text || '';
+  document.getElementById('mail-tpl-instructions').value = tpl.approval_instructions || '';
+
+  // Security
+  const secTls = document.getElementById('mail-sec-tls');
+  if (sec.require_tls) secTls.classList.add('active'); else secTls.classList.remove('active');
+  const secVerify = document.getElementById('mail-sec-verify');
+  if (sec.verify_sender) secVerify.classList.add('active'); else secVerify.classList.remove('active');
+  document.getElementById('mail-sec-maxsize').value = sec.max_body_size || '';
+
+  // Presets
+  const presetSel = document.getElementById('mail-preset-select');
+  presetSel.innerHTML = '<option value="">Preset...</option>';
+  for (const [name, preset] of Object.entries(d.presets || {})) {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name.charAt(0).toUpperCase() + name.slice(1) + (preset.notes ? ` — ${preset.notes.substring(0, 40)}` : '');
+    presetSel.appendChild(opt);
+  }
+}
+
+function toggleMailEnabled() {
+  document.getElementById('mail-enabled-toggle').classList.toggle('active');
+}
+
+function applyMailPreset() {
+  const name = document.getElementById('mail-preset-select').value;
+  if (!name) { toast('Selectionnez un preset', 'error'); return; }
+  const preset = (_mailData.presets || {})[name];
+  if (!preset) return;
+  if (preset.smtp) {
+    if (preset.smtp.host) document.getElementById('mail-smtp-host').value = preset.smtp.host;
+    if (preset.smtp.port) document.getElementById('mail-smtp-port').value = preset.smtp.port;
+    const tls = document.getElementById('mail-smtp-tls');
+    if (preset.smtp.use_tls) tls.classList.add('active'); else tls.classList.remove('active');
+    const ssl = document.getElementById('mail-smtp-ssl');
+    if (preset.smtp.use_ssl) ssl.classList.add('active'); else ssl.classList.remove('active');
+  }
+  if (preset.imap) {
+    if (preset.imap.host) document.getElementById('mail-imap-host').value = preset.imap.host;
+    if (preset.imap.port) document.getElementById('mail-imap-port').value = preset.imap.port;
+    const ssl = document.getElementById('mail-imap-ssl');
+    if (preset.imap.use_ssl) ssl.classList.add('active'); else ssl.classList.remove('active');
+  }
+  toast(`Preset "${name}" applique${preset.notes ? ' — ' + preset.notes : ''}`, 'success');
+}
+
+function _collectMailData() {
+  const _isActive = (id) => document.getElementById(id).classList.contains('active');
+  const _lines = (id) => document.getElementById(id).value.split('\n').map(l => l.trim()).filter(Boolean);
+
+  return {
+    enabled: _isActive('mail-enabled-toggle'),
+    default_channel: document.getElementById('mail-default-channel').value,
+    smtp: {
+      host: document.getElementById('mail-smtp-host').value.trim(),
+      port: parseInt(document.getElementById('mail-smtp-port').value) || 587,
+      use_tls: _isActive('mail-smtp-tls'),
+      use_ssl: _isActive('mail-smtp-ssl'),
+      user: document.getElementById('mail-smtp-user').value.trim(),
+      password_env: document.getElementById('mail-smtp-password-env').value.trim(),
+      from_address: document.getElementById('mail-smtp-from-address').value.trim(),
+      from_name: document.getElementById('mail-smtp-from-name').value.trim(),
+    },
+    imap: {
+      host: document.getElementById('mail-imap-host').value.trim(),
+      port: parseInt(document.getElementById('mail-imap-port').value) || 993,
+      use_ssl: _isActive('mail-imap-ssl'),
+      user: document.getElementById('mail-imap-user').value.trim(),
+      password_env: document.getElementById('mail-imap-password-env').value.trim(),
+    },
+    listener: {
+      poll_interval: parseInt(document.getElementById('mail-listener-interval').value) || 15,
+      allowed_senders: _lines('mail-listener-allowed'),
+      ignore_patterns: _lines('mail-listener-ignore'),
+    },
+    templates: {
+      notification_subject: document.getElementById('mail-tpl-notification').value,
+      question_subject: document.getElementById('mail-tpl-question').value,
+      approval_subject: document.getElementById('mail-tpl-approval').value,
+      reminder_prefix: document.getElementById('mail-tpl-reminder').value,
+      footer_text: document.getElementById('mail-tpl-footer').value,
+      approval_instructions: document.getElementById('mail-tpl-instructions').value,
+    },
+    security: {
+      require_tls: _isActive('mail-sec-tls'),
+      verify_sender: _isActive('mail-sec-verify'),
+      max_body_size: parseInt(document.getElementById('mail-sec-maxsize').value) || 50000,
+    },
+    presets: _mailData.presets || {},
+  };
+}
+
+async function saveMail() {
+  try {
+    const data = _collectMailData();
+    await api('/api/mail', { method: 'PUT', body: data });
+    _mailData = data;
+    toast('Configuration mail sauvegardee', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ── Workflow status check (lightweight, called after team render) ──
+async function _wfCheckStatus(dir, wfApiBase, registryApiBase, prefix) {
+  const btn = document.getElementById(`btn-wf-${prefix}-${dir}`);
+  if (!btn) return;
+  try {
+    const wfData = await api(`${wfApiBase}/${encodeURIComponent(dir)}`);
+    if (!wfData || !wfData.phases || Object.keys(wfData.phases).length === 0) return;
+
+    const reg = await api(`${registryApiBase}/${encodeURIComponent(dir)}`);
+    const registryAgents = new Set(Object.keys(reg.agents || reg || {}));
+    if (registryAgents.size === 0) return;
+
+    let hasError = false;
+    for (const [, phase] of Object.entries(wfData.phases)) {
+      const phaseAgents = new Set(Object.keys(phase.agents || {}));
+      // Check agents exist in registry
+      for (const agentId of phaseAgents) {
+        if (!registryAgents.has(agentId)) { hasError = true; break; }
+        const cfg = phase.agents[agentId];
+        if (Array.isArray(cfg.can_delegate_to) && cfg.can_delegate_to.some(r => !phaseAgents.has(r) || !registryAgents.has(r))) { hasError = true; break; }
+        if (cfg.delegated_by && (!phaseAgents.has(cfg.delegated_by) || !registryAgents.has(cfg.delegated_by))) { hasError = true; break; }
+        if (Array.isArray(cfg.depends_on) && cfg.depends_on.some(r => !phaseAgents.has(r) || !registryAgents.has(r))) { hasError = true; break; }
+      }
+      if (hasError) break;
+      // Check deliverables
+      for (const [, del] of Object.entries(phase.deliverables || {})) {
+        if (del.agent && (!registryAgents.has(del.agent) || !phaseAgents.has(del.agent))) { hasError = true; break; }
+      }
+      if (hasError) break;
+    }
+
+    btn.style.borderColor = hasError ? 'var(--error)' : 'var(--success, #22c55e)';
+    btn.style.color = hasError ? 'var(--error)' : 'var(--success, #22c55e)';
+  } catch {
+    // Workflow doesn't exist or API error — leave default style
+  }
+}
+
+// ── Validation ──
+async function _wfValidate() {
+  const errors = [];
+  const warnings = [];
+  const phases = _wf.data.phases || {};
+  const phaseIds = Object.keys(phases);
+
+  // 1. Load agents_registry for this team
+  const registryBase = _wf.apiBase.includes('templates') ? '/api/templates/registry' : '/api/agents/registry';
+  let registryAgents = new Set();
+  try {
+    const reg = await api(`${registryBase}/${encodeURIComponent(_wf.dir)}`);
+    registryAgents = new Set(Object.keys(reg.agents || reg || {}));
+  } catch {
+    warnings.push('Impossible de charger agents_registry.json — validation des agents ignoree');
+  }
+
+  // 2. Validate all agent references in the workflow
+  for (const [phaseId, phase] of Object.entries(phases)) {
+    const phaseName = phase.name || phaseId;
+    const phaseAgents = new Set(Object.keys(phase.agents || {}));
+
+    // 2a. Agents assigned to the phase must exist in the registry
+    if (registryAgents.size > 0) {
+      for (const agentId of phaseAgents) {
+        if (!registryAgents.has(agentId)) {
+          errors.push(`Phase "${phaseName}" : l'agent "${agentId}" n'existe pas dans agents_registry.json`);
+        }
+      }
+    }
+
+    for (const [agentId, agentCfg] of Object.entries(phase.agents || {})) {
+      // 2b. can_delegate_to — must be in registry AND assigned in this phase
+      if (Array.isArray(agentCfg.can_delegate_to)) {
+        for (const ref of agentCfg.can_delegate_to) {
+          if (registryAgents.size > 0 && !registryAgents.has(ref)) {
+            errors.push(`Phase "${phaseName}" / ${agentId} : can_delegate_to "${ref}" n'existe pas dans agents_registry.json`);
+          } else if (!phaseAgents.has(ref)) {
+            errors.push(`Phase "${phaseName}" / ${agentId} : can_delegate_to "${ref}" n'est pas assigne dans cette phase`);
+          }
+        }
+      }
+      // 2c. delegated_by — must be in registry AND assigned in this phase
+      if (agentCfg.delegated_by) {
+        if (registryAgents.size > 0 && !registryAgents.has(agentCfg.delegated_by)) {
+          errors.push(`Phase "${phaseName}" / ${agentId} : delegated_by "${agentCfg.delegated_by}" n'existe pas dans agents_registry.json`);
+        } else if (!phaseAgents.has(agentCfg.delegated_by)) {
+          errors.push(`Phase "${phaseName}" / ${agentId} : delegated_by "${agentCfg.delegated_by}" n'est pas assigne dans cette phase`);
+        }
+      }
+      // 2d. depends_on — must be in registry AND assigned in this phase
+      if (Array.isArray(agentCfg.depends_on)) {
+        for (const ref of agentCfg.depends_on) {
+          if (registryAgents.size > 0 && !registryAgents.has(ref)) {
+            errors.push(`Phase "${phaseName}" / ${agentId} : depends_on "${ref}" n'existe pas dans agents_registry.json`);
+          } else if (!phaseAgents.has(ref)) {
+            errors.push(`Phase "${phaseName}" / ${agentId} : depends_on "${ref}" n'est pas assigne dans cette phase`);
+          }
+        }
+      }
+    }
+
+    // 2e. Deliverables — agent must be in registry AND assigned in this phase
+    for (const [delId, del] of Object.entries(phase.deliverables || {})) {
+      if (del.agent) {
+        if (registryAgents.size > 0 && !registryAgents.has(del.agent)) {
+          errors.push(`Phase "${phaseName}" / livrable "${delId}" : l'agent "${del.agent}" n'existe pas dans agents_registry.json`);
+        } else if (!phaseAgents.has(del.agent)) {
+          errors.push(`Phase "${phaseName}" / livrable "${delId}" : l'agent "${del.agent}" n'est pas assigne dans cette phase`);
+        }
+      }
+    }
+  }
+
+  // 3. Validate transitions reference existing phases
+  for (const t of (_wf.data.transitions || [])) {
+    if (t.from && !phaseIds.includes(t.from)) {
+      errors.push(`Transition : la phase source "${t.from}" n'existe pas`);
+    }
+    if (t.to && !phaseIds.includes(t.to)) {
+      errors.push(`Transition : la phase cible "${t.to}" n'existe pas`);
+    }
+  }
+
+  // 4. Check phases have at least one agent
+  for (const [phaseId, phase] of Object.entries(phases)) {
+    if (!phase.agents || Object.keys(phase.agents).length === 0) {
+      warnings.push(`Phase "${phase.name || phaseId}" : aucun agent assigne`);
+    }
+  }
+
+  // 5. Check parallel_groups referenced by agents exist in the order list
+  const pgOrder = (_wf.data.parallel_groups && _wf.data.parallel_groups.order) || [];
+  for (const [phaseId, phase] of Object.entries(phases)) {
+    for (const [agentId, agentCfg] of Object.entries(phase.agents || {})) {
+      if (agentCfg.parallel_group && !pgOrder.includes(agentCfg.parallel_group)) {
+        warnings.push(`Phase "${phase.name || phaseId}" / ${agentId} : groupe parallele "${agentCfg.parallel_group}" n'est pas dans l'ordre des groupes`);
+      }
+    }
+  }
+
+  return { errors, warnings };
+}
+
 // ── Save ──
 async function wfSave() {
   try {
+    const { errors, warnings } = await _wfValidate();
+    if (errors.length > 0) {
+      const msg = 'Erreurs de validation :\n\n' + errors.map(e => '- ' + e).join('\n')
+        + (warnings.length ? '\n\nAvertissements :\n' + warnings.map(w => '- ' + w).join('\n') : '');
+      showModal(`
+        <div class="modal-header">
+          <h3>Workflow invalide</h3>
+          <button class="btn-icon" onclick="closeModal();_wfOpenEditorUI()">&times;</button>
+        </div>
+        <div style="max-height:400px;overflow:auto;white-space:pre-wrap;font-size:0.85rem;padding:1rem;background:var(--bg-secondary);border-radius:0.5rem;color:var(--text-error,#f87171)">${escHtml(msg)}</div>
+        <div class="modal-actions">
+          <button class="btn btn-outline" onclick="closeModal();_wfOpenEditorUI()">Corriger</button>
+        </div>
+      `);
+      return;
+    }
+    if (warnings.length > 0) {
+      const ok = await confirmModal('Avertissements :\n\n' + warnings.map(w => '- ' + w).join('\n') + '\n\nSauvegarder quand meme ?');
+      if (!ok) return;
+    }
     await Promise.all([
       api(`${_wf.apiBase}/${encodeURIComponent(_wf.dir)}`, { method: 'PUT', body: _wf.data }),
       api(`${_wf.designBase}/${encodeURIComponent(_wf.dir)}`, { method: 'PUT', body: { positions: _wf.positions } })

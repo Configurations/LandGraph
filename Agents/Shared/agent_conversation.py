@@ -1,128 +1,30 @@
-"""Agent Conversation — Les agents posent des questions aux humains via Discord."""
-import asyncio
+"""Agent Conversation — Les agents posent des questions aux humains via le canal configure."""
 import logging
 import os
-import time
-from datetime import datetime, timezone
-
-import aiohttp
 from dotenv import load_dotenv
 
 load_dotenv()
 logger = logging.getLogger("agent_conversation")
 
-DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")
-
-# Rappels : 5 tentatives, intervalle double a chaque fois
-# 2 min, 4 min, 8 min, 16 min = ~30 min total
-REMINDER_INTERVALS = [120, 240, 480, 960]  # secondes entre chaque rappel
-TOTAL_TIMEOUT = 1800  # 30 minutes
+DEFAULT_TIMEOUT = 1800
 
 
 async def ask_human(agent_name: str, question: str, channel_id: str,
-                     context: str = "", timeout: int = TOTAL_TIMEOUT) -> dict:
-    """
-    Pose une question a l'humain dans Discord et attend la reponse.
-    Envoie des rappels periodiques avec intervalle doublant.
-    """
-    if not DISCORD_BOT_TOKEN or not channel_id:
-        logger.warning("ask_human: pas de token ou channel — skip")
-        return {"answered": False, "response": "", "author": "", "timed_out": True}
-
-    url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
-    headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}", "Content-Type": "application/json"}
-
-    # Formater la question
-    asked_at = datetime.now(timezone.utc).strftime("%H:%M UTC")
-    message = f"❓ **{agent_name} a besoin d'une reponse**\n\n{question}\n"
-    if context:
-        message += f"\n*Contexte : {context[:500]}*\n"
-    message += f"\n💬 Repondez directement dans ce channel.\n⏰ Timeout : {timeout // 60} min"
-
-    async with aiohttp.ClientSession() as session:
-        # Poster la question
-        try:
-            async with session.post(url, headers=headers, json={"content": message}) as resp:
-                if resp.status not in (200, 201):
-                    logger.error(f"ask_human: Discord POST failed {resp.status}")
-                    return {"answered": False, "response": "", "author": "", "timed_out": False}
-                msg_data = await resp.json()
-                question_msg_id = msg_data["id"]
-        except Exception as e:
-            logger.error(f"ask_human: {e}")
-            return {"answered": False, "response": "", "author": "", "timed_out": False}
-
-        # Poller les reponses avec rappels
-        logger.info(f"ask_human: [{agent_name}] waiting (timeout={timeout}s)")
-        start = time.time()
-        reminder_idx = 0
-        next_reminder = start + (REMINDER_INTERVALS[0] if REMINDER_INTERVALS else timeout)
-
-        while time.time() - start < timeout:
-            await asyncio.sleep(5)
-            now = time.time()
-
-            # Envoyer un rappel si c'est le moment
-            if now >= next_reminder and reminder_idx < len(REMINDER_INTERVALS):
-                try:
-                    reminder_msg = f"⏳ **{agent_name}** attend toujours une reponse (question posee a {asked_at})"
-                    await session.post(url, headers=headers, json={"content": reminder_msg})
-                    logger.info(f"ask_human: [{agent_name}] reminder {reminder_idx + 1}")
-                except Exception:
-                    pass
-                reminder_idx += 1
-                if reminder_idx < len(REMINDER_INTERVALS):
-                    next_reminder = now + REMINDER_INTERVALS[reminder_idx]
-                else:
-                    next_reminder = start + timeout  # plus de rappels
-
-            # Chercher une reponse
-            try:
-                params = {"after": question_msg_id, "limit": 20}
-                async with session.get(url, headers=headers, params=params) as resp:
-                    if resp.status != 200:
-                        continue
-                    messages = await resp.json()
-
-                for msg in messages:
-                    if msg.get("author", {}).get("bot", False):
-                        continue
-                    content = msg.get("content", "").strip()
-                    author = msg.get("author", {}).get("username", "unknown")
-                    if content.startswith("!") or len(content) < 2:
-                        continue
-
-                    logger.info(f"ask_human: [{agent_name}] answer from {author}: {content[:100]}")
-                    await session.post(url, headers=headers, json={
-                        "content": f"📝 **{agent_name}** a recu votre reponse. Traitement en cours..."
-                    })
-                    return {"answered": True, "response": content, "author": author, "timed_out": False}
-
-            except Exception as e:
-                logger.warning(f"ask_human poll error: {e}")
-                continue
-
-        # Timeout final
-        logger.warning(f"ask_human: [{agent_name}] timeout after {timeout}s")
-        try:
-            await session.post(url, headers=headers, json={
-                "content": f"⏰ **{agent_name}** — pas de reponse apres {timeout // 60} min. Continue avec son meilleur jugement."
-            })
-        except Exception:
-            pass
-        return {"answered": False, "response": "", "author": "", "timed_out": True}
+                     context: str = "", timeout: int = DEFAULT_TIMEOUT,
+                     channel_type: str = "") -> dict:
+    from agents.shared.channels import get_channel, get_default_channel_type
+    ctype = channel_type or get_default_channel_type()
+    ch = get_channel(ctype)
+    return await ch.ask(channel_id, agent_name, question, context, timeout)
 
 
 def ask_human_sync(agent_name: str, question: str, channel_id: str,
-                    context: str = "", timeout: int = TOTAL_TIMEOUT) -> dict:
-    """Version synchrone pour appel depuis les agents."""
-    try:
-        loop = asyncio.new_event_loop()
-        result = loop.run_until_complete(
-            ask_human(agent_name, question, channel_id, context, timeout)
-        )
-        loop.close()
-        return result
-    except Exception as e:
-        logger.error(f"ask_human_sync error: {e}")
-        return {"answered": False, "response": "", "author": "", "timed_out": False}
+                    context: str = "", timeout: int = DEFAULT_TIMEOUT,
+                    channel_type: str = "") -> dict:
+    from agents.shared.channels import get_channel, get_default_channel_type, _run_async
+    ctype = channel_type or get_default_channel_type()
+    ch = get_channel(ctype)
+    result = _run_async(ch.ask(channel_id, agent_name, question, context, timeout))
+    if result is None:
+        return {"answered": False, "response": "", "author": "", "timed_out": True}
+    return result

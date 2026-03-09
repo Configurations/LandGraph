@@ -1,51 +1,55 @@
-# LangGraph Multi-Agent sur Proxmox
+# LangGraph Multi-Agent Platform
 
-Plateforme multi-agents LangGraph auto-hebergee sur une VM ou un LXC Proxmox, avec PostgreSQL, Redis et communication Discord.
+Plateforme multi-agents IA auto-hebergee sur Proxmox (VM ou LXC). 13 agents specialises orchestres par un Workflow Engine pour gerer le cycle de vie complet d'un projet logiciel : Discovery → Design → Build → Ship → Iterate.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│              PROXMOX VE HOST                    │
-│                                                 │
-│  ┌───────────────────────────────────────────┐  │
-│  │     VM ou LXC : langgraph-agents          │  │
-│  │         Ubuntu 24.04 LTS                  │  │
-│  │                                           │  │
-│  │   Docker Compose Stack :                  │  │
-│  │   ├── PostgreSQL 16 + pgvector (:5432)    │  │
-│  │   ├── Redis 7 (:6379)                     │  │
-│  │   ├── LangGraph API (:8123)               │  │
-│  │   └── Discord Bot                         │  │
-│  └───────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                    PROXMOX VE HOST                       │
+│                                                          │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │         LXC / VM : langgraph-agents                │  │
+│  │              Ubuntu 24.04 LTS                      │  │
+│  │                                                    │  │
+│  │   Docker Compose :                                 │  │
+│  │   ├── PostgreSQL 16 + pgvector    (:5432 local)    │  │
+│  │   ├── Redis 7                     (:6379 local)    │  │
+│  │   ├── LangGraph API (FastAPI)     (:8123)          │  │
+│  │   ├── Discord Bot                                  │  │
+│  │   ├── Mail Bot                                     │  │
+│  │   ├── Admin Dashboard             (:8080)          │  │
+│  │   └── Langfuse (observabilite)    (:3000)          │  │
+│  └────────────────────────────────────────────────────┘  │
+│                                                          │
+│  Donnees : /opt/langgraph-data/{postgres,redis}/         │
+└──────────────────────────────────────────────────────────┘
 ```
 
 ## Prerequis
 
 - Serveur **Proxmox VE 8.x / 9.x**
-- ISO **Ubuntu 24.04 LTS** disponible dans le stockage Proxmox (`local:iso/`)
+- ISO **Ubuntu 24.04 LTS** dans le stockage Proxmox
 - Acces SSH a l'hote Proxmox
-- Cle API **Anthropic** (pour Claude)
-- *(Optionnel)* Bot Discord cree sur [discord.com/developers](https://discord.com/developers/applications)
+- Cle API **Anthropic** (Claude) — seul cout recurrent
 
 ## Installation
 
-L'installation se deroule en plusieurs etapes sequentielles. Chaque script est telecharge et execute en une seule commande.
+Trois scripts sequentiels. Chaque script se telecharge et s'execute en une commande.
 
 > **Base URL** : `https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/`
 
----
+### Etape 0 — Creer le container/VM
 
-### Etape 0 — Creer un container sur Proxmox
-
-**Ou** : sur le shell de l'hote Proxmox.
+**Ou** : shell de l'hote Proxmox.
 
 ```bash
+# Option A — Creer un container LXC (recommande)
 bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/00-create-lxc.sh)"
-```
 
-Ce script cree une VM avec la configuration suivante :
+# Option B — Configurer un LXC existant pour Docker
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/00-configure-lxc.sh)" _ <CTID>
+```
 
 | Parametre | Valeur par defaut  |
 |-----------|--------------------|
@@ -53,334 +57,303 @@ Ce script cree une VM avec la configuration suivante :
 | CPU       | 4 cores            |
 | RAM       | 8 Go               |
 | Disque    | 30 Go (local-lvm)  |
-| Reseau    | `vmbr0`            |
 
-Le VMID est optionnel (defaut : `200`).
+### Etape 1 — Installer Docker
 
-**Apres execution** : installer Ubuntu 24.04 via la console VNC de Proxmox, configurer une IP statique, puis se connecter en SSH a la VM.
-
----
-
-
-### Etape 1 — Configurer un LXC pour Docker (si déjà existant)
-
-**Ou** : sur le shell de l'hote Proxmox (uniquement si vous utilisez un container LXC au lieu d'une VM).
+**Ou** : SSH sur la VM/LXC Ubuntu.
 
 ```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/00-configure-lxc.sh)" _ <ID>
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/01-install-docker.sh)"
 ```
 
-Ce script configure un container LXC existant pour supporter Docker :
-- AppArmor, nesting, cgroup permissions
-- Reseau (DHCP)
-- Sysctl necessaires pour Docker
+Installe Docker Engine + Compose, configure les logs, active UFW (ports 8123, 8080, 3000 en reseau local). **Se reconnecter apres execution** (groupe docker).
 
-**Usage** : `./00-configure-lxc.sh _ <CTID>`
+### Etape 2 — Installer LangGraph
 
-> Si vous utilisez une VM, passez directement a l'etape 1.
-
----
-
-
-### Etape 2 — Installer Docker
-
-**Ou** : sur la VM/LXC Ubuntu fraichement installee.
-
-```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/01-install-docker.sh)" _ <ID>
-```
-
-Ce script :
-- Met a jour le systeme et installe les outils de base
-- Installe Docker Engine + Docker Compose (repo officiel)
-- Configure Docker pour la production (logs, overlay2, live-restore)
-- Active le firewall UFW (SSH + ports 8123 et 3000 en reseau local)
-- Active le `qemu-guest-agent` pour Proxmox
-
-**Important** : se deconnecter et se reconnecter apres execution pour que le groupe `docker` soit pris en compte.
-
----
-
-### Etape 3 — Installer LangGraph
-
-**Ou** : sur la VM/LXC Ubuntu, apres reconnexion.
+**Ou** : SSH sur la VM/LXC, apres reconnexion.
 
 ```bash
 bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/02-install-langgraph.sh)"
 ```
 
-Ce script cree le projet dans `~/langgraph-project/` avec :
-- Un fichier `.env` a completer avec vos cles API
-- PostgreSQL 16 + pgvector et Redis 7 via Docker Compose
-- Un Dockerfile pour le serveur LangGraph API
-- Un agent orchestrateur minimal de test
-- Un environnement Python virtualenv local
+Ce script deploie le socle complet :
+
+| Composant | Detail |
+|-----------|--------|
+| Dockerfiles | API, Discord Bot, Mail Bot, Admin |
+| Code Python | 13 agents + orchestrateur + gateway + listeners |
+| Configs globales | `teams.json`, `llm_providers.json`, `mcp_servers.json`, `discord.json`, `mail.json` |
+| Infra | PostgreSQL 16 + pgvector, Redis 7 |
+| Scripts | `start.sh`, `stop.sh`, `restart.sh`, `build.sh` |
 
 **Apres execution** :
 
-1. Editer le `.env` avec vos vraies cles :
+1. Configurer le `.env` :
    ```bash
    nano ~/langgraph-project/.env
    ```
-   Voir la section [Configuration des cles API](#configuration-des-cles-api) ci-dessous.
 
-2. Tester l'agent orchestrateur :
+2. Lancer la stack :
    ```bash
    cd ~/langgraph-project
-   source .venv/bin/activate
-   python agents/orchestrator.py
+   ./start.sh
    ```
 
-3. Lancer la stack complete :
-   ```bash
-   docker compose up -d
-   ```
+3. Creer une equipe et ses agents depuis le dashboard admin : `http://<IP>:8080`
 
----
-
-### Etape 5 — Installer la couche RAG (pgvector + embeddings)
-
-**Ou** : sur la VM/LXC Ubuntu, apres l'etape 3 (stack Docker en fonctionnement).
+### Etape 3 (optionnel) — RAG
 
 ```bash
 bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/03-install-rag.sh)"
 ```
 
-**Prerequis** : PostgreSQL + pgvector doit etre running/healthy (`docker compose up -d`).
+Ajoute la couche RAG (embeddings Voyage AI + pgvector). Necessite une cle Voyage AI (gratuit 50M tokens/mois).
 
-Ce script :
-- Ajoute les variables d'embeddings (Voyage AI) dans le `.env`
-- Cree le schema `rag.documents` dans PostgreSQL avec index HNSW
-- Cree les fonctions SQL `search_similar` et `upsert_document_chunks`
-- Genere le service Python `agents/shared/rag_service.py` (chunking, indexation, recherche)
-- Fournit des tools LangGraph (`rag_search`, `rag_index`) utilisables par tous les agents
-- Installe les dependances Python (voyageai, tiktoken)
-
-**Apres execution** :
-
-1. Configurer votre cle Voyage AI dans le `.env` :
-   ```bash
-   nano ~/langgraph-project/.env
-   ```
-   (Obtenez une cle sur [dash.voyageai.com](https://dash.voyageai.com))
-
-2. Rebuild l'image Docker pour inclure le RAG :
-   ```bash
-   docker compose up -d --build langgraph-api
-   ```
-
----
-
-## Configuration des cles API
-
-### ANTHROPIC_API_KEY (obligatoire — seul cout recurrent)
-```
-1. Aller sur https://console.anthropic.com
-2. Creer un compte (ou se connecter)
-3. Menu gauche -> API Keys -> Create Key -> nommer "langgraph-agents"
-4. Copier la cle (commence par `sk-ant-api03-...`)
-5. Onglet Plans & Billing -> ajouter une carte et mettre un spending limit (ex: 10 EUR/mois pour commencer)
-```
-
-### VOYAGE_API_KEY (pour le RAG — quasi gratuit)
-```
-1. Aller sur https://dash.voyageai.com
-2. Creer un compte (gratuit — 50M tokens/mois offerts)
-3. Menu API Keys -> Create new API key
-4. Copier la cle (commence par `pa-...`)
-```
-
-
-> Alternative 0 EUR : ne pas mettre de cle Voyage et utiliser Ollama en local (voir `EMBEDDING_MODEL=local` dans le script RAG). Necessite un GPU ou accepter des temps plus longs.
-
-
-### DISCORD_BOT_TOKEN (gratuit)
-```
-1. Aller sur https://discord.com/developers/applications
-2. New Application -> nommer "LangGraph Agent" -> Create
-3. Menu gauche -> Bot -> Reset Token -> copier le token
-4. Desactiver Public Bot
-5. Activer les 3 Privileged Gateway Intents :
-   - PRESENCE INTENT
-   - SERVER MEMBERS INTENT
-   - MESSAGE CONTENT INTENT
-6. Menu gauche -> OAuth2 -> URL Generator :
-   - Scopes : `bot` + `applications.commands`
-   - Bot Permissions : Send Messages, Read Message History, Add Reactions, Embed Links, Attach Files, Use Slash Commands
-7. Copier l'URL generee -> ouvrir dans le navigateur -> choisir votre serveur Discord -> Autoriser
-
-**Channel IDs Discord** : Dans Discord -> Parametres utilisateur -> Avances -> activer Mode developpeur. Clic droit sur chaque channel -> Copier l'identifiant du salon.
-```
-
-### LANGSMITH_API_KEY (optionnel — gratuit)
-```
-1. Aller sur https://smith.langchain.com
-2. Creer un compte (gratuit — 100K traces/mois)
-3. Settings -> API Keys -> Create API Key
-4. Copier la cle (commence par `lsv2_pt_...`)
-```
-
-### Recapitulatif du .env
-
-```bash
-# --- OBLIGATOIRE ---
-ANTHROPIC_API_KEY=sk-ant-api03-xxxxx          # console.anthropic.com
-LANGGRAPH_API_KEY=lsv2_...                    # Cle API LangGraph (si applicable)
-
-# --- RAG ---
-VOYAGE_API_KEY=pa-xxxxx                        # dash.voyageai.com
-
-# --- DISCORD (optionnel) ---
-DISCORD_BOT_TOKEN=MTIzNDU2Nzg5.xxxxx          # discord.com/developers
-DISCORD_CHANNEL_REVIEW=1234567890123456789
-DISCORD_CHANNEL_LOGS=1234567890123456789
-DISCORD_CHANNEL_COMMANDS=1234567890123456789
-DISCORD_GUILD_ID=1234567890123456789
-
-# --- OBSERVABILITE (optionnel) ---
-LANGSMITH_API_KEY=lsv2_pt_xxxxx                # smith.langchain.com
-LANGCHAIN_TRACING_V2=true
-LANGCHAIN_PROJECT=langgraph-multi-agent
-
-# --- INFRA (ne pas modifier) ---
-POSTGRES_DB=langgraph
-POSTGRES_USER=langgraph
-POSTGRES_PASSWORD=ton-mot-de-passe-ici
-REDIS_PASSWORD=ton-mot-de-passe-redis
-DATABASE_URI=postgres://langgraph:ton-mot-de-passe-ici@langgraph-postgres:5432/langgraph?sslmode=disable
-REDIS_URI=redis://:ton-mot-de-passe-redis@langgraph-redis:6379/0
-```
-
-### Structure Discord recommandee
-
-| Channel                | Role                              |
-|------------------------|-----------------------------------|
-| `#orchestrateur-logs`  | Transitions de phase des agents   |
-| `#human-review`        | Validations human-in-the-loop     |
-| `#alerts`              | Erreurs et escalades              |
-| `#commandes`           | Instructions utilisateur          |
-| `#rapports`            | Resumes generes par les agents    |
-
-### Etape 15 — Installer le panneau d'administration web
-
-```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/04-install-admin.sh)"
-```
-
-Ce script installe une interface web d'administration accessible sur le port **8080** :
-
-- **Secrets (.env)** — Ajouter, modifier, supprimer des variables d'environnement (valeurs masquees)
-- **Services MCP** — Catalogue de 20+ serveurs, installation en un clic, activation/desactivation par agent
-- **Agents** — CRUD complet, edition du prompt, choix du modele LLM, gestion des acces MCP
-- **Scripts** — Boutons start / stop / restart / build avec sortie terminal
-- **Git** — Status, historique, pull pour mise a jour, commit des configs
-
-Fichiers deployes :
-
-```
-~/langgraph-project/
-  Dockerfile.admin
-  web/
-    server.py
-    requirements.txt
-    static/
-      index.html
-      css/style.css
-      js/app.js
-```
-
-**Apres execution** : acceder a `http://<IP-VM>:8080`
-
-> **Securite** : le port 8080 est expose sans authentification. Pensez a restreindre l'acces via le firewall UFW (`ufw allow from 192.168.1.0/24 to any port 8080`) ou un reverse proxy avec authentification.
-
----
-
-## Ports exposes
-
-| Service        | Port  | Acces              |
-|----------------|-------|---------------------|
-| LangGraph API  | 8123  | Reseau local (UFW)  |
-| Admin Web      | 8080  | Reseau local (UFW)  |
-| PostgreSQL     | 5432  | localhost uniquement |
-| Redis          | 6379  | localhost uniquement |
-
-
-## Install agents
-```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/06-install-agents.sh)"
-```
-
-
-
-## Install services mcp
+### Etape 4 (optionnel) — MCP Servers
 
 ```bash
 bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/14-install-mcp.sh)"
 ```
 
+Installation interactive de serveurs MCP (GitHub, Notion, Git, Fetch, etc.). 29 serveurs dans le catalogue.
 
-Le flow :
-```
-🔍 Recherche : github
+## Configuration
 
-  3 resultats pour 'github' :
-  ────────────────────────────────────────
+### Fichiers de configuration (config/)
 
-  1) io.github.modelcontextprotocol/server-github
-     Tools to read, search, and manipulate GitHub repositories, issues, PRs...
+Tout est dans le dossier `config/`. Pas de config en dur dans le code.
 
-  2) io.github.someone/github-actions
-     Run GitHub Actions workflows...
+| Fichier | Contenu |
+|---------|---------|
+| `teams.json` | Liste des equipes, channel mapping |
+| `llm_providers.json` | 17 providers LLM (Claude, GPT, Gemini, Ollama...) + throttling |
+| `mcp_servers.json` | Serveurs MCP disponibles |
+| `discord.json` | Config Discord (prefix, aliases, channels, timeouts) |
+| `mail.json` | Config Email (SMTP, IMAP, templates, presets Gmail/Outlook/OVH) |
+| `langgraph.json` | Config LangGraph |
+| `Team1/` | Dossier equipe : registry, workflow, prompts |
 
-  3) ...
-
-  Choix : 1
-
-  ═══════════════════════════════════════
-  io.github.modelcontextprotocol/server-github
-  ═══════════════════════════════════════
-  Packages : npm : @modelcontextprotocol/server-github (stdio)
-  Variables : GITHUB_PERSONAL_ACCESS_TOKEN
-
-  i) Installer    0) Retour    q) Quitter
-
-  Choix : i
-
-  ✅ server-github installe.
-  -> GITHUB_PERSONAL_ACCESS_TOKEN ajoute au .env (a remplir !)
-
-🔍 Recherche : postgres
-  ...
-```
-
-## mode ReAct
-
-(appel de tools MCP). Les agents sont configurés pour accéder aux MCP, mais le code qui leur permet d'appeler les tools n'est pas encore en place. 
+### Fichier .env (secrets uniquement)
 
 ```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/15-activate-mcp-tools.sh)"
+# LLM (obligatoire)
+ANTHROPIC_API_KEY=sk-ant-api03-xxxxx
+
+# Discord (secret)
+DISCORD_BOT_TOKEN=MTIzNDU2Nzg5.xxxxx
+
+# Email (secrets)
+SMTP_PASSWORD=xxxx-xxxx-xxxx-xxxx
+IMAP_PASSWORD=xxxx-xxxx-xxxx-xxxx
+
+# RAG (optionnel)
+VOYAGE_API_KEY=pa-xxxxx
+
+# Infra (generes a l'installation)
+POSTGRES_DB=langgraph
+POSTGRES_USER=langgraph
+POSTGRES_PASSWORD=xxxxx
+REDIS_PASSWORD=xxxxx
+DATABASE_URI=postgres://langgraph:xxxxx@langgraph-postgres:5432/langgraph?sslmode=disable
+REDIS_URI=redis://:xxxxx@langgraph-redis:6379/0
+
+# Admin
+WEB_ADMIN_USERNAME=admin
+WEB_ADMIN_PASSWORD=xxxxx
 ```
 
-**Ce que ça fait :**
+> Toute la config non-secrete (hosts, ports, channels, aliases, templates) est dans les fichiers JSON.
 
-1. **BaseAgent** gagne `_call_llm_with_tools()` — une boucle ReAct où le LLM peut appeler des MCP tools, lire le résultat, et re-appeler (max 20 itérations)
-2. **Activation dynamique** — le script lit `config/agent_mcp_access.json` et ajoute `use_tools = True` uniquement sur les agents qui ont des MCP configurés via le script 14
-3. **Fallback gracieux** — si un agent a `use_tools = True` mais qu'aucun tool n'est disponible (clé manquante, serveur MCP en panne), il fonctionne comme avant sans tools
+### Obtenir les cles API
 
-Exemple de ce qui se passe quand le Lead Dev reçoit la tâche "crée un repo" avec GitHub MCP :
+**Anthropic** (obligatoire) : [console.anthropic.com](https://console.anthropic.com) → API Keys → Create Key. Budget recommande : 10 EUR/mois.
+
+**Discord Bot** (gratuit) : [discord.com/developers](https://discord.com/developers/applications) → New Application → Bot → Reset Token. Activer les 3 Privileged Gateway Intents (Presence, Server Members, Message Content). OAuth2 scopes : `bot` + `applications.commands`.
+
+**Voyage AI** (quasi gratuit) : [dash.voyageai.com](https://dash.voyageai.com) → API Keys. 50M tokens/mois gratuits.
+
+**Autres LLM** (optionnel) : OpenAI, Google, Mistral, DeepSeek, Kimi, Groq — ajouter les cles dans `.env` et configurer dans `llm_providers.json`.
+
+## Structure du projet
 
 ```
-[lead_dev] Start — pipeline=0, tools=True
-[lead_dev] 3 MCP tools loaded
-[lead_dev] Tool: create_repository({"name":"PerformanceTracker",...})
-[lead_dev] Tool: create_or_update_file({"path":"README.md",...})
-[lead_dev] ReAct done — 3 iterations
+langgraph-project/
+├── agents/
+│   ├── gateway.py              ← API FastAPI v0.6.0
+│   ├── orchestrator.py         ← Decisions de routing (guide par workflow engine)
+│   ├── discord_listener.py     ← Bot Discord
+│   ├── mail_listener.py        ← Bot Email (IMAP polling)
+│   └── shared/
+│       ├── team_resolver.py    ← Source unique pour trouver les fichiers
+│       ├── channels.py         ← Canaux factorises (Discord, Email, extensible)
+│       ├── workflow_engine.py  ← Phases, transitions, parallel groups
+│       ├── base_agent.py       ← Classe de base (Pipeline + ReAct + tools)
+│       ├── agent_loader.py     ← Chargement dynamique depuis registry JSON
+│       ├── llm_provider.py     ← Factory multi-provider (9 types)
+│       ├── rate_limiter.py     ← Throttling + retry exponentiel
+│       ├── mcp_client.py       ← Lazy install MCP + cache
+│       ├── human_gate.py       ← Validation humaine
+│       ├── agent_conversation.py ← Questions aux humains
+│       └── state.py            ← State LangGraph partage
+│
+├── config/
+│   ├── teams.json              ← Equipes
+│   ├── llm_providers.json      ← Providers LLM
+│   ├── mcp_servers.json        ← Serveurs MCP
+│   ├── discord.json            ← Config Discord
+│   ├── mail.json               ← Config Email
+│   ├── langgraph.json          ← Config LangGraph
+│   └── Team1/                  ← Dossier equipe (cree depuis le dashboard)
+│       ├── agents_registry.json
+│       ├── Workflow.json
+│       ├── agent_mcp_access.json
+│       └── *.md                ← Prompts des agents
+│
+├── web/
+│   ├── server.py               ← Dashboard admin
+│   └── static/
+│
+├── docker-compose.yml
+├── Dockerfile / Dockerfile.discord / Dockerfile.mail / Dockerfile.admin
+├── .env
+├── start.sh / stop.sh / restart.sh / build.sh
+└── requirements.txt
 ```
 
+## Agents (13 + Orchestrateur)
 
-## Documentation detaillee
+Definis dans `config/Team1/agents_registry.json`. Aucun fichier Python individuel — tout passe par `BaseAgent` + registry.
 
-Le fichier [scripts/Infra/langgraph-proxmox-install.md](scripts/Infra/langgraph-proxmox-install.md) contient la methodologie complete d'installation avec les phases supplementaires :
-- Observabilite avec Langfuse (self-hosted)
-- Securisation et reseau
-- Troubleshooting
+| Agent | Role | Phase |
+|-------|------|-------|
+| `orchestrator` | Routing intelligent, guide par workflow engine | Systeme |
+| `requirements_analyst` | PRD, User Stories, MoSCoW | Discovery |
+| `legal_advisor` | Audit RGPD, conformite, CGU | Transversal |
+| `ux_designer` | Wireframes, mockups, design system | Design |
+| `architect` | ADRs, C4, OpenAPI specs | Design |
+| `planner` | Sprint backlog, roadmap, risques | Design |
+| `lead_dev` | Coordination, fait ou delegue aux devs | Build |
+| `dev_frontend_web` | React/Next.js/TypeScript | Build |
+| `dev_backend_api` | Python/FastAPI/SQLAlchemy | Build |
+| `dev_mobile` | Flutter/React Native | Build |
+| `qa_engineer` | Tests E2E, unitaires, validation | Build |
+| `devops_engineer` | CI/CD, Docker, deploiement | Ship |
+| `docs_writer` | Documentation, rapports, README | Ship |
+
+## Workflow Engine
+
+Le workflow est defini dans `config/Team1/Workflow.json` et pilote automatiquement le cycle de vie :
+
+```
+Discovery (A: analyst + legal)
+    ↓ human gate
+Design (A: ux + architect + planner)
+    ↓ human gate
+Build (A: lead_dev → B: devs → C: qa)
+    ↓ human gate
+Ship (A: devops + docs)
+    ↓
+Iterate → Design (cyclique)
+```
+
+Les groupes s'enchainent automatiquement (A termine → B demarre → C demarre). L'humain valide les transitions de phase.
+
+## Canaux de communication
+
+Architecture factorisee — meme interface pour Discord, Email, ou Telegram (a venir).
+
+| Canal | Envoi | Reception | Config |
+|-------|-------|-----------|--------|
+| Discord | REST API | Bot listener | `discord.json` |
+| Email | SMTP | IMAP polling | `mail.json` |
+
+Variable `DEFAULT_CHANNEL` dans `.env` pour choisir le canal principal.
+
+### Commandes (Discord et Email)
+
+| Commande | Effet |
+|----------|-------|
+| `!agent <id> <tache>` | Route directement vers un agent |
+| `!a <alias> <tache>` | Raccourci (ex: `!a lead Cree le repo`) |
+| `!reset` | Purge le state du thread |
+| `!new <nom>` | Nouveau contexte projet |
+| `!status` | Etat de la plateforme |
+
+Par email, les commandes se mettent dans le sujet ou la premiere ligne du body.
+
+## Dashboard Admin (port 8080)
+
+Interface web pour gerer la plateforme sans toucher au code ni aux fichiers. Authentification par cookie (`WEB_ADMIN_USERNAME` / `WEB_ADMIN_PASSWORD` dans `.env`).
+
+### Onglets
+
+| Onglet | Fonctionnalites |
+|--------|-----------------|
+| **Secrets** | Gestion du `.env` — ajout, modification, suppression de variables. Valeurs masquees. |
+| **MCP** | Catalogue de 29 serveurs MCP. Installation en un clic, activation/desactivation par agent, variables d'environnement requises. |
+| **LLM** | Configuration des providers dans `llm_providers.json`. Ajout de providers, choix du modele, test de connexion. |
+| **Equipes** | CRUD complet des equipes. Pour chaque equipe : registry des agents, prompts (edition en ligne), workflow (editeur visuel avec validation), MCP access. |
+| **Channels** | Configuration Discord (`discord.json`) et Email (`mail.json`) depuis l'interface. Sous-onglets Discord / Mail. |
+| **Chat** | Test en direct des providers LLM configures. Choix du modele, temperature, envoi de messages. |
+| **Scripts** | Boutons start / stop / restart / build avec sortie terminal en temps reel. |
+| **Git** | Status, pull, commit + push. Configuration du remote, credentials. Purge automatique des fichiers sensibles de l'historique. |
+
+### Channels — Discord
+
+- Toggle enabled / disabled
+- Prefix des commandes (defaut `!`)
+- IDs des channels (commands, review, logs, alerts)
+- Guild ID
+- Table des aliases (CRUD : ajouter, modifier, supprimer)
+- Formatage (longueur max, reactions, split sur newlines)
+- Timeouts (API call, human gate, intervalles de rappel)
+
+### Channels — Mail
+
+- Toggle enabled / disabled
+- Config SMTP (host, port, TLS/SSL, user, from address, from name)
+- Config IMAP (host, port, SSL, user)
+- Presets en un clic : Gmail, Outlook, OVH, Infomaniak
+- Listener (intervalle de polling, expediteurs autorises, patterns ignores)
+- Templates (sujets des mails, instructions de validation, footer)
+- Securite (require TLS, verification expediteur, taille max body)
+
+### Equipes — Workflow Editor
+
+- Editeur visuel des phases (drag & drop)
+- Configuration des agents par phase (parallel group, required, depends_on, delegated_by)
+- Deliverables par phase (agent responsable, required)
+- Transitions entre phases (with human gate)
+- Regles globales (max agents parallele, QA apres dev)
+- Validation automatique : verifie la coherence agents registry ↔ workflow avant sauvegarde
+
+### Acces
+
+```
+http://<IP-VM>:8080
+```
+
+> **Securite** : restreindre l'acces via UFW (`ufw allow from 192.168.1.0/24 to any port 8080`) ou un reverse proxy avec HTTPS.
+
+## Ports exposes
+
+| Service | Port | Acces |
+|---------|------|-------|
+| LangGraph API | 8123 | Reseau local |
+| Admin Dashboard | 8080 | Reseau local |
+| Langfuse | 3000 | Reseau local |
+| PostgreSQL | 5432 | localhost uniquement |
+| Redis | 6379 | localhost uniquement |
+
+## Scripts utilitaires
+
+```bash
+./start.sh     # Demarre tous les containers
+./stop.sh      # Arrete tous les containers
+./restart.sh   # Arrete + demarre
+./build.sh     # Rebuild les images + demarre
+```
+
+## Documentation technique
+
+Le fichier [CLAUDE.md](CLAUDE.md) contient la documentation technique detaillee : architecture interne, flux de donnees, resolution des fichiers, formats JSON, et etat d'avancement du projet.

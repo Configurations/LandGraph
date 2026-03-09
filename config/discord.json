@@ -1,0 +1,63 @@
+{
+  "enabled": true,
+  "default_channel": "discord",
+
+  "bot": {
+    "token_env": "DISCORD_BOT_TOKEN",
+    "prefix": "!",
+    "status_message": "LangGraph Multi-Agent"
+  },
+
+  "channels": {
+    "commands": "",
+    "review": "",
+    "logs": "",
+    "alerts": ""
+  },
+
+  "guild": {
+    "id": ""
+  },
+
+  "aliases": {
+    "analyste": "requirements_analyst",
+    "analyst": "requirements_analyst",
+    "designer": "ux_designer",
+    "ux": "ux_designer",
+    "architecte": "architect",
+    "archi": "architect",
+    "planificateur": "planner",
+    "planning": "planner",
+    "lead": "lead_dev",
+    "leaddev": "lead_dev",
+    "frontend": "dev_frontend_web",
+    "front": "dev_frontend_web",
+    "backend": "dev_backend_api",
+    "back": "dev_backend_api",
+    "mobile": "dev_mobile",
+    "qa": "qa_engineer",
+    "test": "qa_engineer",
+    "qualite": "qa_engineer",
+    "devops": "devops_engineer",
+    "ops": "devops_engineer",
+    "docs": "docs_writer",
+    "doc": "docs_writer",
+    "documentaliste": "docs_writer",
+    "avocat": "legal_advisor",
+    "legal": "legal_advisor",
+    "juridique": "legal_advisor"
+  },
+
+  "formatting": {
+    "max_message_length": 1900,
+    "split_on_newlines": true,
+    "reaction_processing": "⚡",
+    "reaction_orchestrator": "✅"
+  },
+
+  "timeouts": {
+    "api_call": 30,
+    "human_gate": 1800,
+    "reminder_intervals": [120, 240, 480, 960]
+  }
+}

@@ -9,10 +9,12 @@ import os
 import secrets
 import subprocess
 import asyncio
+import zipfile
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, Request
+import shutil
+from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import httpx
@@ -78,6 +80,8 @@ SHARED_TEAMS_DIR = SHARED_DIR / "Teams"
 SHARED_LLM_FILE = SHARED_TEAMS_DIR / "llm_providers.json"
 SHARED_MCP_FILE = SHARED_TEAMS_DIR / "mcp_servers.json"
 SHARED_TEAMS_FILE = SHARED_TEAMS_DIR / "teams.json"
+MAIL_FILE = CONFIGS / "mail.json"
+DISCORD_FILE = CONFIGS / "discord.json"
 
 logging.basicConfig(
     level=logging.DEBUG if os.environ.get("DEBUG") else logging.INFO,
@@ -1020,6 +1024,145 @@ async def delete_throttling(env_key: str):
         del data["throttling"][env_key]
         _write_json(LLM_PROVIDERS_FILE, data)
     return {"ok": True}
+
+
+# ── API: Mail ──────────────────────────────────────
+
+@app.get("/api/mail")
+async def get_mail():
+    """Read mail.json config."""
+    if not MAIL_FILE.exists():
+        return {"enabled": False, "default_channel": "discord", "smtp": {}, "imap": {}, "listener": {}, "templates": {}, "security": {}, "presets": {}}
+    return _read_json(MAIL_FILE)
+
+
+@app.put("/api/mail")
+async def save_mail(request: Request):
+    """Write mail.json config."""
+    data = await request.json()
+    _write_json(MAIL_FILE, data)
+    return {"ok": True}
+
+
+@app.get("/api/discord")
+async def get_discord():
+    """Read discord.json config."""
+    if not DISCORD_FILE.exists():
+        return {"enabled": True, "default_channel": "discord", "bot": {}, "channels": {}, "guild": {}, "aliases": {}, "formatting": {}, "timeouts": {}}
+    return _read_json(DISCORD_FILE)
+
+
+@app.put("/api/discord")
+async def save_discord(request: Request):
+    """Write discord.json config."""
+    data = await request.json()
+    _write_json(DISCORD_FILE, data)
+    return {"ok": True}
+
+
+# ── API: Export ────────────────────────────────────
+
+def _zip_directory(dir_path: Path) -> io.BytesIO:
+    """Create a zip archive of a directory, return as BytesIO."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for file in sorted(dir_path.rglob('*')):
+            if file.is_file() and '.git' not in file.parts:
+                arcname = file.relative_to(dir_path.parent)
+                zf.write(file, arcname)
+    buf.seek(0)
+    return buf
+
+
+@app.get("/api/export/shared")
+async def export_shared():
+    """Export Shared/ directory as a zip archive."""
+    if not SHARED_DIR.exists():
+        raise HTTPException(404, "Shared directory not found")
+    buf = _zip_directory(SHARED_DIR)
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=Shared.zip"},
+    )
+
+
+@app.get("/api/export/configs")
+async def export_configs():
+    """Export config/ directory as a zip archive."""
+    if not CONFIGS.exists():
+        raise HTTPException(404, "config directory not found")
+    buf = _zip_directory(CONFIGS)
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=config.zip"},
+    )
+
+
+def _import_zip_replace(target_dir: Path, data: bytes):
+    """Extract zip archive into target_dir, removing files not in the archive."""
+    import tempfile
+    # Extract to a temp directory first
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        with zipfile.ZipFile(io.BytesIO(data), 'r') as zf:
+            zf.extractall(tmp)
+        # The archive root may contain the directory name (e.g. "Teams/" or "config/")
+        # Detect: if tmp has a single subdirectory matching target_dir.name, use that
+        children = [c for c in tmp.iterdir()]
+        src = tmp
+        if len(children) == 1 and children[0].is_dir():
+            src = children[0]
+        # Collect new file set (relative paths)
+        new_files = set()
+        for f in src.rglob('*'):
+            if f.is_file():
+                new_files.add(f.relative_to(src))
+        # Remove existing files not in the archive
+        if target_dir.exists():
+            for f in list(target_dir.rglob('*')):
+                if f.is_file() and '.git' not in f.parts:
+                    rel = f.relative_to(target_dir)
+                    if rel not in new_files:
+                        f.unlink()
+            # Clean empty directories
+            for d in sorted(target_dir.rglob('*'), reverse=True):
+                if d.is_dir() and not any(d.iterdir()):
+                    d.rmdir()
+        # Copy new files
+        for rel in new_files:
+            dest = target_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src / rel, dest)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@app.post("/api/import/shared")
+async def import_shared(file: UploadFile):
+    """Import a zip archive to replace Shared/Teams/ contents."""
+    if not file.filename or not file.filename.endswith('.zip'):
+        raise HTTPException(400, "Un fichier .zip est requis")
+    data = await file.read()
+    try:
+        _import_zip_replace(SHARED_DIR, data)
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "Fichier zip invalide")
+    return {"ok": True, "message": "Import Shared termine"}
+
+
+@app.post("/api/import/configs")
+async def import_configs(file: UploadFile):
+    """Import a zip archive to replace config/Teams/ contents."""
+    if not file.filename or not file.filename.endswith('.zip'):
+        raise HTTPException(400, "Un fichier .zip est requis")
+    data = await file.read()
+    try:
+        _import_zip_replace(CONFIGS, data)
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "Fichier zip invalide")
+    return {"ok": True, "message": "Import config termine"}
 
 
 # ── API: Chat LLM ─────────────────────────────────

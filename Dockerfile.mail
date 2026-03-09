@@ -5,5 +5,4 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY agents/ ./agents/
 COPY config/ ./config/
-COPY prompts/ ./prompts/
-CMD ["python", "agents/discord_listener.py"]
+CMD ["python", "agents/mail_listener.py"]
