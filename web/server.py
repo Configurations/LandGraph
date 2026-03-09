@@ -1239,14 +1239,14 @@ async def container_action(name: str, action: str):
 @app.get("/api/monitoring/events")
 async def get_events(n: int = 100, event_type: str = "", agent_id: str = ""):
     """Proxy vers le bus d'events du gateway."""
-    import requests as req
+    import httpx
     params = {"n": min(n, 500)}
     if event_type:
         params["event_type"] = event_type
     if agent_id:
         params["agent_id"] = agent_id
     try:
-        r = req.get(f"{GATEWAY_URL}/events", params=params, timeout=5)
+        r = httpx.get(f"{GATEWAY_URL}/events", params=params, timeout=5)
         return r.json()
     except Exception as e:
         return {"events": [], "error": str(e)}
@@ -1255,9 +1255,9 @@ async def get_events(n: int = 100, event_type: str = "", agent_id: str = ""):
 @app.get("/api/monitoring/gateway")
 async def gateway_health():
     """Health check du gateway."""
-    import requests as req
+    import httpx
     try:
-        r = req.get(f"{GATEWAY_URL}/health", timeout=5)
+        r = httpx.get(f"{GATEWAY_URL}/health", timeout=5)
         return r.json()
     except Exception as e:
         return {"status": "unreachable", "error": str(e)}

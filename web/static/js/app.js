@@ -1777,7 +1777,7 @@ async function gitCommit() {
 // ═══════════════════════════════════════════════════
 // TEAMS
 // ═══════════════════════════════════════════════════
-let teamsData = {};
+let teamsData = [];
 let templatesData = [];
 
 async function importArchive(type, input) {
@@ -5710,11 +5710,19 @@ async function loadApiKeys() {
   }
 }
 
-function showAddApiKeyModal() {
+async function showAddApiKeyModal() {
   document.getElementById('apikey-name').value = '';
   document.getElementById('apikey-expires').value = '';
   // Reset scopes
   document.querySelectorAll('#apikey-scopes-list input[type=checkbox]').forEach(cb => { cb.checked = false; });
+
+  // Ensure teamsData is loaded
+  if (!Array.isArray(teamsData) || teamsData.length === 0) {
+    try {
+      const data = await api('/api/teams');
+      teamsData = data.teams || [];
+    } catch (e) { /* ignore, will show empty selects */ }
+  }
 
   // Populate teams select from teamsData
   const teamsSel = document.getElementById('apikey-teams');

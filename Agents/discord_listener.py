@@ -39,6 +39,8 @@ REACTION_DIRECT = _formatting.get("reaction_processing", "⚡")
 REACTION_ORCH = _formatting.get("reaction_orchestrator", "✅")
 API_TIMEOUT = _timeouts.get("api_call", 30)
 
+logger.info(f"Discord config loaded: token={'***' if TOKEN else 'MISSING'}, channel={CHANNEL_COMMANDS!r}, api={API_URL}")
+
 AGENT_ALIASES = _conf.get("aliases", {})
 # Fallback si discord.json absent ou vide
 if not AGENT_ALIASES:
@@ -77,6 +79,7 @@ async def on_ready():
 
 @client.event
 async def on_message(message):
+    logger.info(f"MSG from {message.author} in {message.channel.id}: {message.content[:50]!r}")
     if message.author == client.user:
         return
 
