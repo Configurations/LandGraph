@@ -75,11 +75,14 @@ def get_thread_id(message):
 @client.event
 async def on_ready():
     logger.info(f"Bot connecte : {client.user}")
+    logger.info(f"Guilds: {[g.name for g in client.guilds]}")
+    logger.info(f"Intents: message_content={client.intents.message_content}, guilds={client.intents.guilds}, guild_messages={client.intents.guild_messages}")
+    logger.info(f"Channel filter: {CHANNEL_COMMANDS!r}")
 
 
 @client.event
 async def on_message(message):
-    logger.info(f"MSG from {message.author} in {message.channel.id}: {message.content[:50]!r}")
+    logger.info(f"MSG from {message.author} in #{message.channel} ({message.channel.id}): {message.content[:80]!r}")
     if message.author == client.user:
         return
 

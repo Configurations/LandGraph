@@ -5728,7 +5728,7 @@ async function showAddApiKeyModal() {
   const teamsSel = document.getElementById('apikey-teams');
   teamsSel.innerHTML = '<option value="*" selected>* (toutes)</option>';
   (teamsData || []).forEach(t => {
-    teamsSel.innerHTML += `<option value="${esc(t.id)}">${esc(t.name || t.id)}</option>`;
+    teamsSel.innerHTML += `<option value="${escHtml(t.id)}">${escHtml(t.name || t.id)}</option>`;
   });
 
   // Populate agents select from first team's agents
@@ -5739,7 +5739,7 @@ async function showAddApiKeyModal() {
     Object.keys(t.agents || {}).forEach(a => allAgents.add(a));
   });
   allAgents.forEach(a => {
-    agentsSel.innerHTML += `<option value="${esc(a)}">${esc(a)}</option>`;
+    agentsSel.innerHTML += `<option value="${escHtml(a)}">${escHtml(a)}</option>`;
   });
 
   document.getElementById('modal-add-apikey').style.display = 'flex';
