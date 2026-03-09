@@ -109,14 +109,6 @@ bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGrap
 
 Ajoute la couche RAG (embeddings Voyage AI + pgvector). Necessite une cle Voyage AI (gratuit 50M tokens/mois).
 
-### Etape 4 (optionnel) — MCP Servers
-
-```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/14-install-mcp.sh)"
-```
-
-Installation interactive de serveurs MCP (GitHub, Notion, Git, Fetch, etc.). 29 serveurs dans le catalogue.
-
 ## Configuration
 
 ### Fichiers de configuration (config/)
@@ -178,82 +170,97 @@ WEB_ADMIN_PASSWORD=xxxxx
 
 ```
 langgraph-project/
-├── agents/
-│   ├── gateway.py              ← API FastAPI v0.6.0
-│   ├── orchestrator.py         ← Decisions de routing (guide par workflow engine)
-│   ├── discord_listener.py     ← Bot Discord
-│   ├── mail_listener.py        ← Bot Email (IMAP polling)
+├── agents/                         ← Code Python (socle technique)
+│   ├── gateway.py                  ← API FastAPI v0.6.0
+│   ├── orchestrator.py             ← Decisions de routing (guide par workflow engine)
+│   ├── discord_listener.py         ← Bot Discord
+│   ├── mail_listener.py            ← Bot Email (IMAP polling)
 │   └── shared/
-│       ├── team_resolver.py    ← Source unique pour trouver les fichiers
-│       ├── channels.py         ← Canaux factorises (Discord, Email, extensible)
-│       ├── workflow_engine.py  ← Phases, transitions, parallel groups
-│       ├── base_agent.py       ← Classe de base (Pipeline + ReAct + tools)
-│       ├── agent_loader.py     ← Chargement dynamique depuis registry JSON
-│       ├── llm_provider.py     ← Factory multi-provider (9 types)
-│       ├── rate_limiter.py     ← Throttling + retry exponentiel
-│       ├── mcp_client.py       ← Lazy install MCP + cache
-│       ├── human_gate.py       ← Validation humaine
-│       ├── agent_conversation.py ← Questions aux humains
-│       └── state.py            ← State LangGraph partage
+│       ├── team_resolver.py        ← Source unique pour trouver les fichiers
+│       ├── channels.py             ← Canaux factorises (Discord, Email, extensible)
+│       ├── workflow_engine.py      ← Phases, transitions, parallel groups
+│       ├── base_agent.py           ← Classe de base (Pipeline + ReAct + tools)
+│       ├── agent_loader.py         ← Chargement dynamique depuis registry JSON
+│       ├── llm_provider.py         ← Factory multi-provider (9 types)
+│       ├── rate_limiter.py         ← Throttling + retry exponentiel
+│       ├── mcp_client.py           ← Lazy install MCP + cache
+│       ├── human_gate.py           ← Validation humaine
+│       ├── agent_conversation.py   ← Questions aux humains
+│       └── state.py                ← State LangGraph partage
 │
-├── config/
-│   ├── teams.json              ← Equipes
-│   ├── llm_providers.json      ← Providers LLM
-│   ├── mcp_servers.json        ← Serveurs MCP
-│   ├── discord.json            ← Config Discord
-│   ├── mail.json               ← Config Email
-│   ├── langgraph.json          ← Config LangGraph
-│   └── Team1/                  ← Dossier equipe (cree depuis le dashboard)
+├── config/                         ← Configuration (socle + equipes)
+│   ├── teams.json                  ← Liste des equipes + channel mapping
+│   ├── llm_providers.json          ← Providers LLM
+│   ├── mcp_servers.json            ← Serveurs MCP
+│   ├── discord.json                ← Config Discord
+│   ├── mail.json                   ← Config Email
+│   ├── langgraph.json              ← Config LangGraph
+│   └── Team1/                      ← Equipe (cree depuis le dashboard)
 │       ├── agents_registry.json
 │       ├── Workflow.json
 │       ├── agent_mcp_access.json
-│       └── *.md                ← Prompts des agents
+│       └── *.md                    ← Prompts des agents
 │
-├── web/
-│   ├── server.py               ← Dashboard admin
-│   └── static/
+├── Shared/Teams/                   ← Templates (modeles d'equipes)
+│   ├── DevProject/                 ← Template "Projet de dev"
+│   │   ├── agents_registry.json
+│   │   ├── Workflow.json
+│   │   ├── agent_mcp_access.json
+│   │   └── *.md                    ← Prompts pre-configures
+│   ├── llm_providers.json          ← Providers partages
+│   ├── mcp_servers.json            ← MCP partages
+│   └── teams.json
 │
+├── web/                            ← Dashboard admin
 ├── docker-compose.yml
 ├── Dockerfile / Dockerfile.discord / Dockerfile.mail / Dockerfile.admin
-├── .env
+├── .env                            ← Secrets uniquement
 ├── start.sh / stop.sh / restart.sh / build.sh
 └── requirements.txt
 ```
 
-## Agents (13 + Orchestrateur)
+## Templates — Modeles d'equipes
 
-Definis dans `config/Team1/agents_registry.json`. Aucun fichier Python individuel — tout passe par `BaseAgent` + registry.
+Le dossier `Shared/Teams/` contient des **templates** : des modeles d'equipes pre-configures avec leurs agents, workflow, prompts et MCP.
 
-| Agent | Role | Phase |
-|-------|------|-------|
-| `orchestrator` | Routing intelligent, guide par workflow engine | Systeme |
-| `requirements_analyst` | PRD, User Stories, MoSCoW | Discovery |
-| `legal_advisor` | Audit RGPD, conformite, CGU | Transversal |
-| `ux_designer` | Wireframes, mockups, design system | Design |
-| `architect` | ADRs, C4, OpenAPI specs | Design |
-| `planner` | Sprint backlog, roadmap, risques | Design |
-| `lead_dev` | Coordination, fait ou delegue aux devs | Build |
-| `dev_frontend_web` | React/Next.js/TypeScript | Build |
-| `dev_backend_api` | Python/FastAPI/SQLAlchemy | Build |
-| `dev_mobile` | Flutter/React Native | Build |
-| `qa_engineer` | Tests E2E, unitaires, validation | Build |
-| `devops_engineer` | CI/CD, Docker, deploiement | Ship |
-| `docs_writer` | Documentation, rapports, README | Ship |
+Quand vous creez une nouvelle equipe depuis le dashboard admin, vous pouvez choisir un template existant comme base. Le template est copie dans `config/<NouvelleEquipe>/` et devient independant — vous pouvez le personnaliser sans affecter le template d'origine.
+
+### Exemple de template : DevProject
+
+Un template pour projet de developpement logiciel (13 agents, 5 phases) est disponible separement dans le depot [Configurations/LandGraph-Templates](https://github.com/Configurations/LandGraph-Templates). Pour l'utiliser, telechargez-le dans `Shared/Teams/DevProject/`.
+
+### Creer son propre template
+
+Depuis le dashboard admin (onglet Templates) ou manuellement :
+
+1. Creer un dossier dans `Shared/Teams/<NomTemplate>/`
+2. Y placer `agents_registry.json`, `Workflow.json`, `agent_mcp_access.json`
+3. Ajouter les prompts `.md` pour chaque agent
+4. Le template apparait dans le dashboard pour les nouvelles equipes
 
 ## Workflow Engine
 
-Le workflow est defini dans `config/Team1/Workflow.json` et pilote automatiquement le cycle de vie :
+Le workflow est defini dans `Workflow.json` (par equipe) et pilote automatiquement le cycle de vie :
 
-```
-Discovery (A: analyst + legal)
-    ↓ human gate
-Design (A: ux + architect + planner)
-    ↓ human gate
-Build (A: lead_dev → B: devs → C: qa)
-    ↓ human gate
-Ship (A: devops + docs)
-    ↓
-Iterate → Design (cyclique)
+```mermaid
+graph TD
+    D[Discovery<br/><small>A: analyst + legal</small>]
+    DE[Design<br/><small>A: ux + architect + planner</small>]
+    B[Build<br/><small>A: lead_dev → B: devs → C: qa</small>]
+    S[Ship<br/><small>A: devops + docs</small>]
+    I[Iterate]
+
+    D -->|human gate| DE
+    DE -->|human gate| B
+    B -->|human gate| S
+    S --> I
+    I -->|cyclique| DE
+
+    style D fill:#6366f1,color:#fff,stroke:#4f46e5
+    style DE fill:#818cf8,color:#fff,stroke:#6366f1
+    style B fill:#f59e0b,color:#fff,stroke:#d97706
+    style S fill:#10b981,color:#fff,stroke:#059669
+    style I fill:#71717a,color:#fff,stroke:#52525b
 ```
 
 Les groupes s'enchainent automatiquement (A termine → B demarre → C demarre). L'humain valide les transitions de phase.
