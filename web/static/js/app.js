@@ -1578,6 +1578,14 @@ function toggleAutoRefresh() {
   }
 }
 
+function formatPorts(portsStr) {
+  if (!portsStr) return '';
+  const host = window.location.hostname;
+  return escHtml(portsStr).replace(/0\.0\.0\.0:(\d+)/g, (match, port) => {
+    return `<a href="http://${host}:${port}" target="_blank" rel="noopener" style="color:var(--accent)">${host}:${port}</a>`;
+  });
+}
+
 async function loadContainers() {
   const el = document.getElementById('mon-containers-list');
   try {
@@ -1601,7 +1609,7 @@ async function loadContainers() {
           <td style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(c.image)}</td>
           <td>${escHtml(c.state)}</td>
           <td style="font-size:0.75rem">${escHtml(c.status)}</td>
-          <td style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(c.ports)}</td>
+          <td style="font-size:0.75rem;color:var(--text-secondary)">${formatPorts(c.ports)}</td>
           <td>${actions}</td>
         </tr>`;
       }).join('')}</tbody></table>`;
@@ -5691,8 +5699,8 @@ async function loadApiKeys() {
     // Check MCP_SECRET status
     try {
       const env = await api('/api/env');
-      const vars = env.variables || [];
-      const hasSecret = vars.some(v => v.key === 'MCP_SECRET');
+      const vars = env.entries || [];
+      const hasSecret = vars.some(v => v.key === 'MCP_SECRET' && v.value);
       statusEl.innerHTML = hasSecret
         ? '<span class="tag tag-green">Configure</span>'
         : '<span class="tag tag-red">Non defini</span> — Ajoutez <code>MCP_SECRET</code> dans l\'onglet Secrets (.env)';

@@ -544,7 +544,6 @@ async def install_mcp(entry_id: str, req: MCPInstallRequest):
         "enabled": True,
     }
     _write_json(MCP_SERVERS_FILE, data)
-    _sync_mcp_to_shared()
 
     # Add env vars to .env if provided
     if req.env_values:
@@ -573,7 +572,6 @@ async def uninstall_mcp(entry_id: str):
     if entry_id in data.get("servers", {}):
         del data["servers"][entry_id]
         _write_json(MCP_SERVERS_FILE, data)
-        _sync_mcp_to_shared()
     access = _read_json(MCP_ACCESS_FILE)
     changed = False
     for aid in access:
@@ -598,7 +596,6 @@ async def toggle_mcp(entry_id: str, req: MCPToggle):
         raise HTTPException(404, f"Serveur '{entry_id}' non installe")
     data["servers"][entry_id]["enabled"] = req.enabled
     _write_json(MCP_SERVERS_FILE, data)
-    _sync_mcp_to_shared()
     return {"ok": True}
 
 
