@@ -42,6 +42,29 @@ CREATE TABLE IF NOT EXISTS project.mcp_api_keys (
 
 CREATE INDEX IF NOT EXISTS idx_api_keys_revoked ON project.mcp_api_keys(revoked);
 
+-- ── HITL (Human-In-The-Loop) requests ────────────
+CREATE TABLE IF NOT EXISTS project.hitl_requests (
+    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    thread_id     TEXT NOT NULL,
+    agent_id      TEXT NOT NULL,
+    team_id       TEXT NOT NULL DEFAULT 'default',
+    request_type  TEXT NOT NULL CHECK (request_type IN ('approval', 'question')),
+    prompt        TEXT NOT NULL,
+    context       JSONB DEFAULT '{}',
+    channel       TEXT NOT NULL DEFAULT 'discord',
+    status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'answered', 'timeout', 'cancelled')),
+    response      TEXT,
+    reviewer      TEXT,
+    response_channel TEXT,
+    created_at    TIMESTAMPTZ DEFAULT NOW(),
+    answered_at   TIMESTAMPTZ,
+    expires_at    TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_hitl_status ON project.hitl_requests(status);
+CREATE INDEX IF NOT EXISTS idx_hitl_team ON project.hitl_requests(team_id);
+CREATE INDEX IF NOT EXISTS idx_hitl_created ON project.hitl_requests(created_at DESC);
+
 -- Migration: add scopes column if missing (existing installs)
 DO $$
 BEGIN

@@ -12,7 +12,7 @@ PROJECT_DIR="$HOME/langgraph-project"
 REPO_RAW="https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main"
 
 echo "=================================================================="
-echo "  Script 3 : Installation LangGraph v3     version 4 - 2026-03    "
+echo "  Script 3 : Installation LangGraph v3     version 5 - 2026-03    "
 echo "=================================================================="
 echo ""
 
@@ -155,8 +155,8 @@ else
 fi
 
 # ── 7. Demarrage complet ────────────────────
-echo "[7/7] Demarrage de la stack complete..."
-docker compose up -d --build
+echo "[7/7] build..."
+./build.sh
 
 echo ""
 sleep 12

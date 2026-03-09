@@ -1577,6 +1577,25 @@ tr:hover { background: rgba(255,255,255,0.02); }
   color: var(--text-primary);
 }
 
+/* ── HITL stat cards ─────────────────── */
+.stat-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  text-align: center;
+}
+.stat-card .stat-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.stat-card .stat-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-top: 0.25rem;
+}
+
 /* Responsive sidebar collapse */
 @media (max-width: 900px) {
   .wf-sidebar { width: 260px; }

@@ -6,7 +6,7 @@
   <title>LandGraph Admin</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260309">
 </head>
 <body>
   <div class="app-layout">
@@ -43,6 +43,11 @@
       </div>
 
       <div class="nav-section">Operations</div>
+      <div class="nav-item" data-section="hitl" onclick="showSection('hitl')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><path d="M20 8v6"/><path d="M23 11h-6"/></svg>
+        Validations
+        <span id="hitl-badge" class="nav-badge" style="display:none;margin-left:auto;background:#f87171;color:#fff;border-radius:10px;padding:0 6px;font-size:0.7rem;min-width:18px;text-align:center"></span>
+      </div>
       <div class="nav-item" data-section="monitoring" onclick="showSection('monitoring')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/><circle cx="12" cy="12" r="1"/></svg>
         Monitoring
@@ -762,6 +767,30 @@
         </div>
       </div>
 
+      <!-- HITL (Validations) SECTION -->
+      <div class="section" id="section-hitl">
+        <div class="page-header">
+          <h2>Validations (HITL)</h2>
+          <div style="display:flex;gap:0.5rem;align-items:center">
+            <select id="hitl-status-filter" onchange="loadHitl()" style="padding:0.3rem 0.5rem;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:0.8rem">
+              <option value="">Tous</option>
+              <option value="pending" selected>En attente</option>
+              <option value="answered">Repondus</option>
+              <option value="timeout">Timeout</option>
+              <option value="cancelled">Annules</option>
+            </select>
+            <button class="btn btn-outline btn-sm" onclick="loadHitl()">Rafraichir</button>
+            <button class="btn btn-sm" id="hitl-auto-btn" onclick="toggleHitlAutoRefresh()" style="font-size:0.75rem">Auto OFF</button>
+          </div>
+        </div>
+
+        <!-- Stats bar -->
+        <div id="hitl-stats" style="display:flex;gap:1rem;margin-bottom:1rem;flex-wrap:wrap"></div>
+
+        <!-- Requests list -->
+        <div id="hitl-list"></div>
+      </div>
+
       <!-- SCRIPTS SECTION -->
       <!-- MONITORING SECTION -->
       <div class="section" id="section-monitoring">
@@ -873,6 +902,6 @@
   <div id="modal-container"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="/static/js/app.js"></script>
+  <script src="/static/js/app.js?v=20260309"></script>
 </body>
 </html>

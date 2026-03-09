@@ -1,5 +1,9 @@
 """Message Channels — Interface abstraite + implementations Discord, Email.
 
+Each channel creates a HITL request in the DB, sends a notification,
+then polls BOTH its own source AND the DB for responses.
+Any channel (including the web dashboard) can answer any pending request.
+
 Usage :
     from agents.shared.channels import get_channel
     ch = get_channel("discord")   # ou "email"
@@ -23,6 +27,58 @@ REMINDER_INTERVALS = [120, 240, 480, 960]
 DEFAULT_TIMEOUT = 1800
 
 
+def _hitl_available() -> bool:
+    """Check if HITL DB is available (DATABASE_URI set)."""
+    return bool(os.getenv("DATABASE_URI", ""))
+
+
+def _hitl_create(request_type, agent, prompt, thread_id="", team_id="default",
+                 channel="discord", context=None, timeout=1800):
+    """Create a HITL request if DB is available. Returns request_id or None."""
+    if not _hitl_available():
+        return None
+    try:
+        from agents.shared.hitl import create_request
+        return create_request(request_type, agent, prompt, thread_id, team_id,
+                              channel, context, timeout)
+    except Exception as e:
+        logger.warning(f"HITL create failed (non-blocking): {e}")
+        return None
+
+
+def _hitl_check(request_id):
+    """Check if a HITL request was answered via another channel."""
+    if not request_id:
+        return None
+    try:
+        from agents.shared.hitl import check_response
+        return check_response(request_id)
+    except Exception:
+        return None
+
+
+def _hitl_submit(request_id, response, reviewer="", channel="discord"):
+    """Submit a response to HITL DB."""
+    if not request_id:
+        return
+    try:
+        from agents.shared.hitl import submit_response
+        submit_response(request_id, response, reviewer, channel)
+    except Exception as e:
+        logger.warning(f"HITL submit failed (non-blocking): {e}")
+
+
+def _hitl_timeout(request_id):
+    """Mark a HITL request as timed out."""
+    if not request_id:
+        return
+    try:
+        from agents.shared.hitl import mark_timeout
+        mark_timeout(request_id)
+    except Exception:
+        pass
+
+
 # ══════════════════════════════════════════════
 # Interface abstraite
 # ══════════════════════════════════════════════
@@ -35,24 +91,30 @@ class MessageChannel(ABC):
 
     @abstractmethod
     async def ask(self, channel_id: str, agent_name: str, question: str,
-                  context: str = "", timeout: int = DEFAULT_TIMEOUT) -> dict:
+                  context: str = "", timeout: int = DEFAULT_TIMEOUT,
+                  thread_id: str = "", team_id: str = "default") -> dict:
         ...
 
     @abstractmethod
     async def approve(self, channel_id: str, agent_name: str, summary: str,
-                      details: str = "", timeout: int = DEFAULT_TIMEOUT) -> dict:
+                      details: str = "", timeout: int = DEFAULT_TIMEOUT,
+                      thread_id: str = "", team_id: str = "default") -> dict:
         ...
 
     def send_sync(self, channel_id: str, message: str) -> bool:
         return _run_async(self.send(channel_id, message))
 
     def ask_sync(self, channel_id: str, agent_name: str, question: str,
-                 context: str = "", timeout: int = DEFAULT_TIMEOUT) -> dict:
-        return _run_async(self.ask(channel_id, agent_name, question, context, timeout))
+                 context: str = "", timeout: int = DEFAULT_TIMEOUT,
+                 thread_id: str = "", team_id: str = "default") -> dict:
+        return _run_async(self.ask(channel_id, agent_name, question, context,
+                                   timeout, thread_id, team_id))
 
     def approve_sync(self, channel_id: str, agent_name: str, summary: str,
-                     details: str = "", timeout: int = DEFAULT_TIMEOUT) -> dict:
-        return _run_async(self.approve(channel_id, agent_name, summary, details, timeout))
+                     details: str = "", timeout: int = DEFAULT_TIMEOUT,
+                     thread_id: str = "", team_id: str = "default") -> dict:
+        return _run_async(self.approve(channel_id, agent_name, summary, details,
+                                        timeout, thread_id, team_id))
 
 
 def _run_async(coro):
@@ -117,9 +179,16 @@ class DiscordChannel(MessageChannel):
         return True
 
     async def ask(self, channel_id: str, agent_name: str, question: str,
-                  context: str = "", timeout: int = DEFAULT_TIMEOUT) -> dict:
+                  context: str = "", timeout: int = DEFAULT_TIMEOUT,
+                  thread_id: str = "", team_id: str = "default") -> dict:
         if not self.token or not channel_id:
             return {"answered": False, "response": "", "author": "", "timed_out": True}
+
+        # Create HITL request in DB
+        hitl_id = _hitl_create("question", agent_name, question,
+                               thread_id=thread_id, team_id=team_id,
+                               channel="discord", context={"context": context},
+                               timeout=timeout)
 
         asked_at = datetime.now(timezone.utc).strftime("%H:%M UTC")
         msg = f"❓ **{agent_name} a besoin d'une reponse**\n\n{question}\n"
@@ -138,12 +207,20 @@ class DiscordChannel(MessageChannel):
                 logger.error(f"Discord ask: {e}")
                 return {"answered": False, "response": "", "author": "", "timed_out": False}
 
-            return await self._poll_response(session, channel_id, anchor_id, agent_name, asked_at, timeout)
+            return await self._poll_response(session, channel_id, anchor_id,
+                                             agent_name, asked_at, timeout, hitl_id)
 
     async def approve(self, channel_id: str, agent_name: str, summary: str,
-                      details: str = "", timeout: int = DEFAULT_TIMEOUT) -> dict:
+                      details: str = "", timeout: int = DEFAULT_TIMEOUT,
+                      thread_id: str = "", team_id: str = "default") -> dict:
         if not self.token or not channel_id:
             return {"approved": True, "response": "auto-approve", "reviewer": "system", "timed_out": False}
+
+        # Create HITL request in DB
+        hitl_id = _hitl_create("approval", agent_name, summary,
+                               thread_id=thread_id, team_id=team_id,
+                               channel="discord", context={"details": details},
+                               timeout=timeout)
 
         asked_at = datetime.now(timezone.utc).strftime("%H:%M UTC")
         msg = f"🔒 **Validation requise — {agent_name}**\n\n**Resume :** {summary}\n"
@@ -164,9 +241,11 @@ class DiscordChannel(MessageChannel):
                 logger.error(f"Discord approve: {e}")
                 return {"approved": True, "response": f"error: {e}", "reviewer": "system", "timed_out": False}
 
-            return await self._poll_approval(session, channel_id, anchor_id, agent_name, asked_at, timeout)
+            return await self._poll_approval(session, channel_id, anchor_id,
+                                             agent_name, asked_at, timeout, hitl_id)
 
-    async def _poll_response(self, session, channel_id, anchor_id, agent_name, asked_at, timeout):
+    async def _poll_response(self, session, channel_id, anchor_id, agent_name,
+                             asked_at, timeout, hitl_id=None):
         start = time.time()
         reminder_idx = 0
         next_reminder = start + (self.reminder_intervals[0] if self.reminder_intervals else timeout)
@@ -174,6 +253,14 @@ class DiscordChannel(MessageChannel):
         while time.time() - start < timeout:
             await asyncio.sleep(5)
             now = time.time()
+
+            # Check HITL DB for response from another channel (web dashboard, etc.)
+            db_resp = _hitl_check(hitl_id)
+            if db_resp:
+                await session.post(self._url(channel_id), headers=self._headers(), json={
+                    "content": f"📝 **{agent_name}** a recu une reponse via {db_resp.get('response_channel', 'web')}."})
+                return {"answered": True, "response": db_resp["response"],
+                        "author": db_resp.get("reviewer", ""), "timed_out": False}
 
             if now >= next_reminder and reminder_idx < len(self.reminder_intervals):
                 try:
@@ -199,14 +286,17 @@ class DiscordChannel(MessageChannel):
                         continue
                     await session.post(self._url(channel_id), headers=self._headers(), json={
                         "content": f"📝 **{agent_name}** a recu votre reponse."})
+                    _hitl_submit(hitl_id, content, author, "discord")
                     return {"answered": True, "response": content, "author": author, "timed_out": False}
             except Exception:
                 continue
 
+        _hitl_timeout(hitl_id)
         await self.send(channel_id, f"⏰ **{agent_name}** — pas de reponse apres {timeout // 60} min.")
         return {"answered": False, "response": "", "author": "", "timed_out": True}
 
-    async def _poll_approval(self, session, channel_id, anchor_id, agent_name, asked_at, timeout):
+    async def _poll_approval(self, session, channel_id, anchor_id, agent_name,
+                             asked_at, timeout, hitl_id=None):
         start = time.time()
         reminder_idx = 0
         next_reminder = start + (self.reminder_intervals[0] if self.reminder_intervals else timeout)
@@ -214,6 +304,26 @@ class DiscordChannel(MessageChannel):
         while time.time() - start < timeout:
             await asyncio.sleep(5)
             now = time.time()
+
+            # Check HITL DB for response from another channel (web dashboard, etc.)
+            db_resp = _hitl_check(hitl_id)
+            if db_resp:
+                raw = db_resp["response"]
+                reviewer = db_resp.get("reviewer", "")
+                via = db_resp.get("response_channel", "web")
+                content = raw.strip().lower()
+                if content.startswith("approve") or content in ("ok", "yes", "oui"):
+                    await session.post(self._url(channel_id), headers=self._headers(), json={
+                        "content": f"✅ **Approuve** par {reviewer} (via {via})."})
+                    return {"approved": True, "response": raw, "reviewer": reviewer, "timed_out": False}
+                elif content.startswith("reject"):
+                    await session.post(self._url(channel_id), headers=self._headers(), json={
+                        "content": f"❌ **Rejete** par {reviewer} (via {via})."})
+                    return {"approved": False, "response": "rejected", "reviewer": reviewer, "timed_out": False}
+                else:
+                    await session.post(self._url(channel_id), headers=self._headers(), json={
+                        "content": f"🔄 **Revision** demandee par {reviewer} (via {via})."})
+                    return {"approved": False, "response": raw, "reviewer": reviewer, "timed_out": False}
 
             if now >= next_reminder and reminder_idx < len(self.reminder_intervals):
                 try:
@@ -239,18 +349,22 @@ class DiscordChannel(MessageChannel):
                     if content.startswith("approve") or content in ("ok", "yes"):
                         await session.post(self._url(channel_id), headers=self._headers(), json={
                             "content": f"✅ **Approuve** par {author}."})
+                        _hitl_submit(hitl_id, raw, author, "discord")
                         return {"approved": True, "response": raw, "reviewer": author, "timed_out": False}
                     if content.startswith("revise"):
                         await session.post(self._url(channel_id), headers=self._headers(), json={
                             "content": f"🔄 **Revision** demandee par {author}."})
+                        _hitl_submit(hitl_id, raw[6:].strip(), author, "discord")
                         return {"approved": False, "response": raw[6:].strip(), "reviewer": author, "timed_out": False}
                     if content.startswith("reject"):
                         await session.post(self._url(channel_id), headers=self._headers(), json={
                             "content": f"❌ **Rejete** par {author}."})
+                        _hitl_submit(hitl_id, "rejected", author, "discord")
                         return {"approved": False, "response": "rejected", "reviewer": author, "timed_out": False}
             except Exception:
                 continue
 
+        _hitl_timeout(hitl_id)
         await self.send(channel_id, f"⏰ **{agent_name}** — pas de validation apres {timeout // 60} min. Escalade.")
         return {"approved": False, "response": "timeout", "reviewer": None, "timed_out": True}
 
@@ -535,7 +649,14 @@ class EmailChannel(MessageChannel):
         return bool(result)
 
     async def ask(self, channel_id: str, agent_name: str, question: str,
-                  context: str = "", timeout: int = DEFAULT_TIMEOUT) -> dict:
+                  context: str = "", timeout: int = DEFAULT_TIMEOUT,
+                  thread_id: str = "", team_id: str = "default") -> dict:
+        # Create HITL request in DB
+        hitl_id = _hitl_create("question", agent_name, question,
+                               thread_id=thread_id, team_id=team_id,
+                               channel="email", context={"context": context},
+                               timeout=timeout)
+
         subject = self.tpl_question.format(agent_name=agent_name)
         body = (
             f"{agent_name} a besoin d'une reponse :\n\n"
@@ -553,15 +674,18 @@ class EmailChannel(MessageChannel):
         if not message_id:
             return {"answered": False, "response": "", "author": "", "timed_out": False}
 
-        # Rappel email a mi-timeout
         reminder_sent = False
-
         start_time = datetime.now(timezone.utc)
         start = time.time()
         while time.time() - start < timeout:
             await asyncio.sleep(30)
 
-            # Rappel a mi-timeout
+            # Check HITL DB for response from another channel
+            db_resp = _hitl_check(hitl_id)
+            if db_resp:
+                return {"answered": True, "response": db_resp["response"],
+                        "author": db_resp.get("reviewer", ""), "timed_out": False}
+
             elapsed = time.time() - start
             if not reminder_sent and elapsed > timeout / 2:
                 await asyncio.to_thread(
@@ -577,16 +701,16 @@ class EmailChannel(MessageChannel):
             )
             if replies:
                 r = replies[0]
-                # Confirmer reception
                 await asyncio.to_thread(
                     self._send_email, channel_id,
                     f"Re: {subject}",
                     f"Reponse recue. {agent_name} traite votre message.",
                     message_id
                 )
+                _hitl_submit(hitl_id, r["content"], r["author"], "email")
                 return {"answered": True, "response": r["content"], "author": r["author"], "timed_out": False}
 
-        # Timeout
+        _hitl_timeout(hitl_id)
         await asyncio.to_thread(
             self._send_email, channel_id,
             f"Re: {subject}",
@@ -596,7 +720,14 @@ class EmailChannel(MessageChannel):
         return {"answered": False, "response": "", "author": "", "timed_out": True}
 
     async def approve(self, channel_id: str, agent_name: str, summary: str,
-                      details: str = "", timeout: int = DEFAULT_TIMEOUT) -> dict:
+                      details: str = "", timeout: int = DEFAULT_TIMEOUT,
+                      thread_id: str = "", team_id: str = "default") -> dict:
+        # Create HITL request in DB
+        hitl_id = _hitl_create("approval", agent_name, summary,
+                               thread_id=thread_id, team_id=team_id,
+                               channel="email", context={"details": details},
+                               timeout=timeout)
+
         subject = self.tpl_approval.format(agent_name=agent_name)
         body = (
             f"**Validation requise — {agent_name}**\n\n"
@@ -621,6 +752,19 @@ class EmailChannel(MessageChannel):
         while time.time() - start < timeout:
             await asyncio.sleep(30)
 
+            # Check HITL DB for response from another channel
+            db_resp = _hitl_check(hitl_id)
+            if db_resp:
+                raw = db_resp["response"]
+                reviewer = db_resp.get("reviewer", "")
+                content = raw.strip().lower()
+                if content.startswith("approve") or content in ("ok", "yes", "oui"):
+                    return {"approved": True, "response": raw, "reviewer": reviewer, "timed_out": False}
+                elif content.startswith("reject"):
+                    return {"approved": False, "response": "rejected", "reviewer": reviewer, "timed_out": False}
+                else:
+                    return {"approved": False, "response": raw, "reviewer": reviewer, "timed_out": False}
+
             elapsed = time.time() - start
             if not reminder_sent and elapsed > timeout / 2:
                 await asyncio.to_thread(
@@ -644,6 +788,7 @@ class EmailChannel(MessageChannel):
                         self._send_email, channel_id,
                         f"Re: {subject}", f"Approuve par {author}. Les agents continuent.",
                         message_id)
+                    _hitl_submit(hitl_id, raw, author, "email")
                     return {"approved": True, "response": raw, "reviewer": author, "timed_out": False}
 
                 if content.startswith("revise"):
@@ -652,6 +797,7 @@ class EmailChannel(MessageChannel):
                         self._send_email, channel_id,
                         f"Re: {subject}", f"Revision demandee par {author}.",
                         message_id)
+                    _hitl_submit(hitl_id, comment, author, "email")
                     return {"approved": False, "response": comment, "reviewer": author, "timed_out": False}
 
                 if content.startswith("reject"):
@@ -659,9 +805,10 @@ class EmailChannel(MessageChannel):
                         self._send_email, channel_id,
                         f"Re: {subject}", f"Rejete par {author}.",
                         message_id)
+                    _hitl_submit(hitl_id, "rejected", author, "email")
                     return {"approved": False, "response": "rejected", "reviewer": author, "timed_out": False}
 
-        # Timeout
+        _hitl_timeout(hitl_id)
         await asyncio.to_thread(
             self._send_email, channel_id,
             f"Re: {subject}",

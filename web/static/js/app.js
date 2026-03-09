@@ -60,7 +60,7 @@ function showSection(name) {
   document.querySelector(`.nav-item[data-section="${name}"]`).classList.add('active');
 
   // Load data on section switch
-  const loaders = { secrets: loadEnv, mcp: loadMCP, llm: loadLLM, teams: loadTeams, templates: loadTemplates, channels: loadChannels, chat: loadChat, monitoring: loadMonitoring, scripts: loadScripts, git: loadGit };
+  const loaders = { secrets: loadEnv, mcp: loadMCP, llm: loadLLM, teams: loadTeams, templates: loadTemplates, channels: loadChannels, chat: loadChat, monitoring: loadMonitoring, hitl: loadHitl, scripts: loadScripts, git: loadGit };
   if (loaders[name]) loaders[name]();
 }
 
@@ -5254,6 +5254,15 @@ async function saveDiscord() {
     await api('/api/discord', { method: 'PUT', body: data });
     _discordData = data;
     toast('Configuration Discord sauvegardee', 'success');
+    // Restart discord-bot container if enabled
+    if (data.enabled) {
+      try {
+        await api('/api/monitoring/container/discord-bot/restart', { method: 'POST' });
+        toast('Container discord-bot redémarre', 'success');
+      } catch (e) {
+        toast('Config sauvegardee mais le container n\'a pas pu etre redémarre : ' + e.message, 'warning');
+      }
+    }
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -5453,6 +5462,15 @@ async function saveMail() {
     await api('/api/mail', { method: 'PUT', body: data });
     _mailData = data;
     toast('Configuration mail sauvegardee', 'success');
+    // Restart mail-bot container if enabled
+    if (data.enabled) {
+      try {
+        await api('/api/monitoring/container/mail-bot/restart', { method: 'POST' });
+        toast('Container mail-bot redémarre', 'success');
+      } catch (e) {
+        toast('Config sauvegardee mais le container n\'a pas pu etre redémarre : ' + e.message, 'warning');
+      }
+    }
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -5774,8 +5792,220 @@ function copyApiKeyToClipboard() {
 }
 
 // ═══════════════════════════════════════════════════
+// HITL (Validations)
+// ═══════════════════════════════════════════════════
+
+let hitlAutoInterval = null;
+
+async function loadHitl() {
+  try {
+    const status = document.getElementById('hitl-status-filter')?.value || 'pending';
+    const [requests, stats] = await Promise.all([
+      api(`/api/hitl?status=${status}&limit=50`),
+      api('/api/hitl/stats'),
+    ]);
+    renderHitlStats(stats);
+    renderHitlList(requests);
+    updateHitlBadge(stats.pending);
+  } catch (e) {
+    document.getElementById('hitl-list').innerHTML =
+      `<div class="card"><div class="card-header"><h3>Erreur</h3></div><p style="padding:1rem;color:var(--red)">${escHtml(e.message)}</p></div>`;
+    document.getElementById('hitl-stats').innerHTML = '';
+  }
+}
+
+function updateHitlBadge(count) {
+  const badge = document.getElementById('hitl-badge');
+  if (!badge) return;
+  if (count > 0) {
+    badge.textContent = count;
+    badge.style.display = 'inline-block';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function renderHitlStats(stats) {
+  const el = document.getElementById('hitl-stats');
+  el.innerHTML = `
+    <div class="stat-card" style="flex:1;min-width:120px">
+      <div class="stat-value" style="color:#fbbf24">${stats.pending}</div>
+      <div class="stat-label">En attente</div>
+    </div>
+    <div class="stat-card" style="flex:1;min-width:120px">
+      <div class="stat-value" style="color:#4ade80">${stats.answered}</div>
+      <div class="stat-label">Repondus</div>
+    </div>
+    <div class="stat-card" style="flex:1;min-width:120px">
+      <div class="stat-value" style="color:#f87171">${stats.timeout}</div>
+      <div class="stat-label">Timeout</div>
+    </div>
+    <div class="stat-card" style="flex:1;min-width:120px">
+      <div class="stat-value" style="color:var(--text-secondary)">${stats.total}</div>
+      <div class="stat-label">Total</div>
+    </div>`;
+}
+
+function renderHitlList(requests) {
+  const el = document.getElementById('hitl-list');
+  if (!requests.length) {
+    el.innerHTML = '<div class="card"><p style="padding:1.5rem;text-align:center;color:var(--text-secondary)">Aucune demande de validation.</p></div>';
+    return;
+  }
+
+  el.innerHTML = requests.map(r => {
+    const isExpired = r.expires_at && new Date(r.expires_at) < new Date();
+    const isPending = r.status === 'pending' && !isExpired;
+
+    const statusTag = {
+      pending: isExpired
+        ? '<span class="tag tag-red">expire</span>'
+        : '<span class="tag tag-yellow">en attente</span>',
+      answered: '<span class="tag tag-green">repondu</span>',
+      timeout: '<span class="tag tag-red">timeout</span>',
+      cancelled: '<span class="tag tag-gray">annule</span>',
+    }[r.status] || `<span class="tag tag-gray">${escHtml(r.status)}</span>`;
+
+    const typeIcon = r.request_type === 'approval' ? '&#x1f512;' : '&#x2753;';
+    const typeLabel = r.request_type === 'approval' ? 'Validation' : 'Question';
+
+    const createdAt = r.created_at ? new Date(r.created_at).toLocaleString('fr-FR') : '';
+    const expiresAt = r.expires_at ? new Date(r.expires_at).toLocaleString('fr-FR') : '';
+
+    const channelTag = `<span class="tag tag-blue">${escHtml(r.channel)}</span>`;
+    const teamTag = `<span class="tag tag-gray">${escHtml(r.team_id)}</span>`;
+
+    let responseHtml = '';
+    if (r.status === 'answered' && r.response) {
+      responseHtml = `<div style="margin-top:0.75rem;padding:0.75rem;background:var(--bg-secondary);border-radius:6px;border-left:3px solid #4ade80">
+        <div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:0.25rem">
+          Reponse de <strong>${escHtml(r.reviewer || '?')}</strong> via ${escHtml(r.response_channel || '?')}
+          ${r.answered_at ? ' — ' + new Date(r.answered_at).toLocaleString('fr-FR') : ''}
+        </div>
+        <div style="font-size:0.85rem">${escHtml(r.response)}</div>
+      </div>`;
+    }
+
+    let actionsHtml = '';
+    if (isPending) {
+      if (r.request_type === 'approval') {
+        actionsHtml = `<div style="display:flex;gap:0.5rem;margin-top:0.75rem">
+          <button class="btn btn-sm btn-primary" onclick="respondHitl('${r.id}', 'approve')">Approuver</button>
+          <button class="btn btn-sm btn-outline" onclick="showHitlReviseModal('${r.id}')">Reviser</button>
+          <button class="btn btn-sm" style="color:#f87171;border:1px solid #f87171" onclick="respondHitl('${r.id}', 'reject')">Rejeter</button>
+          <button class="btn btn-sm btn-outline" style="margin-left:auto" onclick="cancelHitl('${r.id}')">Annuler</button>
+        </div>`;
+      } else {
+        actionsHtml = `<div style="display:flex;gap:0.5rem;margin-top:0.75rem;align-items:center">
+          <input type="text" id="hitl-reply-${r.id}" placeholder="Votre reponse..." style="flex:1;padding:0.4rem 0.6rem;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:0.85rem">
+          <button class="btn btn-sm btn-primary" onclick="respondHitlText('${r.id}')">Repondre</button>
+          <button class="btn btn-sm btn-outline" onclick="cancelHitl('${r.id}')">Annuler</button>
+        </div>`;
+      }
+    }
+
+    let contextHtml = '';
+    const ctx = r.context || {};
+    const ctxText = ctx.details || ctx.context || '';
+    if (ctxText) {
+      contextHtml = `<div style="margin-top:0.5rem;font-size:0.8rem;color:var(--text-secondary);max-height:100px;overflow-y:auto">${escHtml(ctxText.substring(0, 500))}</div>`;
+    }
+
+    return `<div class="card" style="margin-bottom:0.75rem">
+      <div class="card-header">
+        <div style="display:flex;align-items:center;gap:0.5rem">
+          <span style="font-size:1.1rem">${typeIcon}</span>
+          <strong>${typeLabel}</strong>
+          <span class="tag tag-blue" style="font-size:0.75rem">${escHtml(r.agent_id)}</span>
+          ${teamTag}
+          ${channelTag}
+        </div>
+        <div style="display:flex;align-items:center;gap:0.5rem">
+          ${statusTag}
+        </div>
+      </div>
+      <div style="padding:0 1rem 1rem">
+        <div style="font-size:0.9rem;line-height:1.5">${escHtml(r.prompt)}</div>
+        ${contextHtml}
+        <div style="margin-top:0.5rem;font-size:0.7rem;color:var(--text-secondary)">
+          Cree le ${createdAt}${expiresAt ? ` — Expire le ${expiresAt}` : ''}
+          ${r.thread_id ? ` — Thread: ${escHtml(r.thread_id)}` : ''}
+        </div>
+        ${responseHtml}
+        ${actionsHtml}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function respondHitl(id, response) {
+  try {
+    await api(`/api/hitl/${id}/respond`, {
+      method: 'POST',
+      body: { response, reviewer: 'admin' },
+    });
+    toast('Reponse envoyee', 'success');
+    loadHitl();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function respondHitlText(id) {
+  const input = document.getElementById(`hitl-reply-${id}`);
+  const text = input?.value?.trim();
+  if (!text) { toast('Reponse vide', 'error'); return; }
+  await respondHitl(id, text);
+}
+
+function showHitlReviseModal(id) {
+  showModal(`
+    <div class="modal-header"><h3>Revision</h3></div>
+    <div class="modal-body">
+      <label>Commentaire de revision :</label>
+      <textarea id="hitl-revise-text" rows="4" style="width:100%;margin-top:0.5rem;padding:0.5rem;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;resize:vertical" placeholder="Decrivez les modifications demandees..."></textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="submitHitlRevise('${id}')">Envoyer</button>
+    </div>
+  `);
+}
+
+async function submitHitlRevise(id) {
+  const text = document.getElementById('hitl-revise-text')?.value?.trim();
+  if (!text) { toast('Commentaire vide', 'error'); return; }
+  closeModal();
+  await respondHitl(id, `revise ${text}`);
+}
+
+async function cancelHitl(id) {
+  try {
+    await api(`/api/hitl/${id}/cancel`, { method: 'POST' });
+    toast('Demande annulee', 'success');
+    loadHitl();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+function toggleHitlAutoRefresh() {
+  const btn = document.getElementById('hitl-auto-btn');
+  if (hitlAutoInterval) {
+    clearInterval(hitlAutoInterval);
+    hitlAutoInterval = null;
+    btn.textContent = 'Auto OFF';
+  } else {
+    hitlAutoInterval = setInterval(loadHitl, 10000);
+    btn.textContent = 'Auto ON';
+  }
+}
+
+// ═══════════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
   loadEnv();
+  // Check HITL badge on startup
+  api('/api/hitl/stats').then(s => updateHitlBadge(s.pending)).catch(() => {});
 });

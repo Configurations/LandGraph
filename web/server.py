@@ -1269,52 +1269,123 @@ async def gateway_health():
 # ── API: MCP API Keys (proxy to gateway) ──────────
 
 @app.get("/api/keys")
-async def proxy_list_keys():
-    """List all API keys via gateway."""
-    import requests as req
+async def list_api_keys():
+    """List all API keys directly from DB."""
+    import psycopg
+    env = _env_dict()
+    uri = env.get("DATABASE_URI", "")
+    if not uri:
+        raise HTTPException(500, "DATABASE_URI not configured")
     try:
-        r = req.get(f"{GATEWAY_URL}/api/keys", timeout=10)
-        return r.json()
+        conn = psycopg.connect(uri, autocommit=True)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT key_hash, name, preview, teams, agents, scopes,
+                       created_at, expires_at, revoked
+                FROM project.mcp_api_keys
+                ORDER BY created_at DESC
+            """)
+            rows = cur.fetchall()
+        conn.close()
+        keys = [{
+            "key_hash": r[0], "name": r[1], "preview": r[2],
+            "teams": r[3], "agents": r[4], "scopes": r[5],
+            "created_at": r[6].isoformat() if r[6] else None,
+            "expires_at": r[7].isoformat() if r[7] else None,
+            "revoked": r[8],
+        } for r in rows]
+        return {"keys": keys}
     except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        raise HTTPException(500, str(e))
+
+
+class CreateKeyRequest(BaseModel):
+    name: str
+    teams: list[str] = ["*"]
+    agents: list[str] = ["*"]
+    scopes: list[str] = ["call_agent"]
+    expires_at: str | None = None
 
 
 @app.post("/api/keys")
-async def proxy_create_key(request: Request):
-    """Create a new API key via gateway."""
-    import requests as req
+async def create_api_key(req: CreateKeyRequest):
+    """Generate a new MCP API key (HMAC-signed token, stored in DB)."""
+    import base64
+    import hmac as _hmac
+    import psycopg
+    env = _env_dict()
+    secret = env.get("MCP_SECRET", "")
+    uri = env.get("DATABASE_URI", "")
+    if not secret:
+        raise HTTPException(400, "MCP_SECRET not set in .env")
+    if not uri:
+        raise HTTPException(500, "DATABASE_URI not configured")
+
+    # Build token: lg-<base64url(payload)>.<hmac-sha256[:16]>
+    payload = {
+        "teams": req.teams, "agents": req.agents,
+        "scopes": req.scopes, "name": req.name,
+    }
+    if req.expires_at:
+        payload["exp"] = req.expires_at
+    payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    payload_b64 = base64.urlsafe_b64encode(payload_bytes).decode().rstrip("=")
+    sig = _hmac.new(secret.encode(), payload_bytes, hashlib.sha256).hexdigest()[:16]
+    token = f"lg-{payload_b64}.{sig}"
+
+    # Hash + preview
+    key_hash = hashlib.sha256(token.encode()).hexdigest()
+    preview = token[:6] + "..." + token[-4:] if len(token) > 12 else token[:4] + "..."
+
     try:
-        body = await request.json()
-        r = req.post(f"{GATEWAY_URL}/api/keys", json=body, timeout=10)
-        if r.status_code != 200:
-            raise HTTPException(status_code=r.status_code, detail=r.text)
-        return r.json()
-    except HTTPException:
-        raise
+        conn = psycopg.connect(uri, autocommit=True)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO project.mcp_api_keys
+                    (key_hash, name, preview, teams, agents, scopes, expires_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (key_hash) DO NOTHING
+            """, (key_hash, req.name, preview,
+                  json.dumps(req.teams), json.dumps(req.agents),
+                  json.dumps(req.scopes), req.expires_at))
+        conn.close()
+        return {"token": token, "preview": preview, "name": req.name}
     except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        raise HTTPException(500, str(e))
 
 
 @app.post("/api/keys/{key_hash}/revoke")
-async def proxy_revoke_key(key_hash: str):
-    """Revoke an API key via gateway."""
-    import requests as req
+async def revoke_api_key(key_hash: str):
+    """Revoke an API key."""
+    import psycopg
+    uri = _env_dict().get("DATABASE_URI", "")
+    if not uri:
+        raise HTTPException(500, "DATABASE_URI not configured")
     try:
-        r = req.post(f"{GATEWAY_URL}/api/keys/{key_hash}/revoke", timeout=10)
-        return r.json()
+        conn = psycopg.connect(uri, autocommit=True)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE project.mcp_api_keys SET revoked = true WHERE key_hash = %s", (key_hash,))
+        conn.close()
+        return {"status": "revoked"}
     except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        raise HTTPException(500, str(e))
 
 
 @app.delete("/api/keys/{key_hash}")
-async def proxy_delete_key(key_hash: str):
-    """Delete an API key via gateway."""
-    import requests as req
+async def delete_api_key(key_hash: str):
+    """Delete an API key permanently."""
+    import psycopg
+    uri = _env_dict().get("DATABASE_URI", "")
+    if not uri:
+        raise HTTPException(500, "DATABASE_URI not configured")
     try:
-        r = req.delete(f"{GATEWAY_URL}/api/keys/{key_hash}", timeout=10)
-        return r.json()
+        conn = psycopg.connect(uri, autocommit=True)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM project.mcp_api_keys WHERE key_hash = %s", (key_hash,))
+        conn.close()
+        return {"status": "deleted"}
     except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        raise HTTPException(500, str(e))
 
 
 # ── API: Chat LLM ─────────────────────────────────
@@ -2585,6 +2656,155 @@ async def run_script(req: ScriptRun):
         return {"stdout": "", "stderr": "Timeout (180s)", "code": -1}
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+# ── HITL (Human-In-The-Loop) ──────────────────────
+
+def _get_hitl_conn():
+    """Get a psycopg connection for HITL queries."""
+    import psycopg
+    uri = _env_dict().get("DATABASE_URI", "")
+    if not uri:
+        raise HTTPException(500, "DATABASE_URI not configured")
+    return psycopg.connect(uri, autocommit=True)
+
+
+def _env_dict() -> dict:
+    """Read .env as dict."""
+    return {e["key"]: e["value"] for e in _parse_env(ENV_FILE) if e.get("key")}
+
+
+@app.get("/api/hitl")
+async def list_hitl(status: str = "", team_id: str = "", limit: int = 50):
+    try:
+        conn = _get_hitl_conn()
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    try:
+        with conn.cursor() as cur:
+            clauses = []
+            params = []
+            if status:
+                clauses.append("status = %s")
+                params.append(status)
+            if team_id:
+                clauses.append("team_id = %s")
+                params.append(team_id)
+            where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+            cur.execute(f"""
+                SELECT id, thread_id, agent_id, team_id, request_type, prompt,
+                       context, channel, status, response, reviewer,
+                       response_channel, created_at, answered_at, expires_at
+                FROM project.hitl_requests
+                {where}
+                ORDER BY created_at DESC
+                LIMIT %s
+            """, (*params, limit))
+            rows = cur.fetchall()
+            return [_hitl_row(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@app.get("/api/hitl/stats")
+async def hitl_stats():
+    try:
+        conn = _get_hitl_conn()
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT status, COUNT(*)
+                FROM project.hitl_requests
+                GROUP BY status
+            """)
+            counts = {r[0]: r[1] for r in cur.fetchall()}
+            return {
+                "pending": counts.get("pending", 0),
+                "answered": counts.get("answered", 0),
+                "timeout": counts.get("timeout", 0),
+                "cancelled": counts.get("cancelled", 0),
+                "total": sum(counts.values()),
+            }
+    finally:
+        conn.close()
+
+
+class HitlResponse(BaseModel):
+    response: str
+    reviewer: str = "admin"
+
+
+@app.post("/api/hitl/{request_id}/respond")
+async def respond_hitl(request_id: str, req: HitlResponse):
+    try:
+        conn = _get_hitl_conn()
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE project.hitl_requests
+                SET status = 'answered',
+                    response = %s,
+                    reviewer = %s,
+                    response_channel = 'web',
+                    answered_at = NOW()
+                WHERE id = %s AND status = 'pending'
+            """, (req.response, req.reviewer, request_id))
+            if cur.rowcount == 0:
+                raise HTTPException(404, "Request not found or already answered")
+            return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.post("/api/hitl/{request_id}/cancel")
+async def cancel_hitl(request_id: str):
+    try:
+        conn = _get_hitl_conn()
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE project.hitl_requests
+                SET status = 'cancelled', answered_at = NOW()
+                WHERE id = %s AND status = 'pending'
+            """, (request_id,))
+            if cur.rowcount == 0:
+                raise HTTPException(404, "Request not found or already processed")
+            return {"ok": True}
+    finally:
+        conn.close()
+
+
+def _hitl_row(r) -> dict:
+    import json as _json
+    ctx = r[6]
+    if isinstance(ctx, str):
+        try:
+            ctx = _json.loads(ctx)
+        except Exception:
+            ctx = {}
+    return {
+        "id": str(r[0]),
+        "thread_id": r[1],
+        "agent_id": r[2],
+        "team_id": r[3],
+        "request_type": r[4],
+        "prompt": r[5],
+        "context": ctx or {},
+        "channel": r[7],
+        "status": r[8],
+        "response": r[9],
+        "reviewer": r[10],
+        "response_channel": r[11],
+        "created_at": r[12].isoformat() if r[12] else None,
+        "answered_at": r[13].isoformat() if r[13] else None,
+        "expires_at": r[14].isoformat() if r[14] else None,
+    }
 
 
 if __name__ == "__main__":
