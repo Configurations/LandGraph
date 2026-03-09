@@ -12,7 +12,7 @@ PROJECT_DIR="$HOME/langgraph-project"
 REPO_RAW="https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main"
 
 echo "=================================================================="
-echo "  Script 3 : Installation LangGraph v3     version 6 - 2026-03    "
+echo "  Script 3 : Installation LangGraph v3     version 7 - 2026-03    "
 echo "=================================================================="
 echo ""
 

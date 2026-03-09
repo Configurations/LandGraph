@@ -251,7 +251,7 @@ class BaseAgent:
     def _create_ask_human_tool(self):
         """Cree un tool LangChain pour poser des questions aux humains."""
         from langchain_core.tools import tool
-        agent_name = self.agent_name
+        agent_ref = self
 
         @tool
         def ask_human(question: str, context: str = "") -> str:
@@ -265,9 +265,13 @@ class BaseAgent:
                 La reponse de l'humain ou un message de timeout
             """
             from agents.shared.agent_conversation import ask_human_sync
-            # Recuperer le channel_id depuis les env vars
             channel_id = os.getenv("DISCORD_CHANNEL_COMMANDS", "")
-            result = ask_human_sync(agent_name, question, channel_id, context, timeout=1800)
+            current_state = getattr(agent_ref, '_current_state', {})
+            result = ask_human_sync(
+                agent_ref.agent_name, question, channel_id, context, timeout=1800,
+                thread_id=current_state.get("_thread_id", ""),
+                team_id=current_state.get("_team_id", "default"),
+            )
             if result["answered"]:
                 return f"Reponse de {result['author']}: {result['response']}"
             elif result["timed_out"]:
@@ -546,6 +550,7 @@ class BaseAgent:
 
     def __call__(self, state):
         try:
+            self._current_state = state
             logger.info(f"[{self.agent_id}] Start — pipeline={len(self.pipeline_steps)}, tools={self.use_tools}")
             self._evt("agent_start", state, pipeline_steps=len(self.pipeline_steps), use_tools=self.use_tools)
             output = self._run_pipeline(state) if self.pipeline_steps else self._run_single(state)
@@ -570,6 +575,8 @@ class BaseAgent:
                         summary=summary,
                         details=details,
                         timeout=1800,
+                        thread_id=state.get("_thread_id", ""),
+                        team_id=state.get("_team_id", "default"),
                     )
 
                     if approval["approved"]:

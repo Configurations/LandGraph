@@ -8,7 +8,7 @@ logger = logging.getLogger("team_resolver")
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.join(_HERE, "..", "..")
 
-# Chemins possibles pour trouver le dossier de config racine
+# Chemins possibles pour le dossier config/ racine
 CONFIGS_ROOTS = [
     os.path.join(_ROOT, "config"),        # dev local
     os.path.join(_HERE, "..", "config"),   # relatif au code
@@ -16,26 +16,39 @@ CONFIGS_ROOTS = [
 ]
 
 _configs_dir = None
+_teams_dir = None
 _teams_config = None
 
 
 def get_configs_dir() -> str:
-    """Trouve et cache le dossier de config racine (celui qui contient teams.json)."""
+    """Trouve et cache le dossier config/ racine."""
     global _configs_dir
     if _configs_dir:
         return _configs_dir
     for b in CONFIGS_ROOTS:
-        p = os.path.join(os.path.abspath(b), "teams.json")
-        if os.path.exists(p):
-            _configs_dir = os.path.abspath(b)
+        d = os.path.abspath(b)
+        if os.path.isdir(d):
+            _configs_dir = d
             logger.info(f"Configs dir: {_configs_dir}")
             return _configs_dir
-    # Fallback : premier qui existe
-    for b in CONFIGS_ROOTS:
-        if os.path.isdir(os.path.abspath(b)):
-            _configs_dir = os.path.abspath(b)
-            return _configs_dir
     return ""
+
+
+def get_teams_dir() -> str:
+    """Retourne le dossier config/Teams/."""
+    global _teams_dir
+    if _teams_dir:
+        return _teams_dir
+    configs = get_configs_dir()
+    if not configs:
+        return ""
+    d = os.path.join(configs, "Teams")
+    if os.path.isdir(d):
+        _teams_dir = d
+        return _teams_dir
+    # Fallback : config/ directement (ancienne structure)
+    _teams_dir = configs
+    return _teams_dir
 
 
 def get_teams_config() -> dict:
@@ -43,11 +56,11 @@ def get_teams_config() -> dict:
     global _teams_config
     if _teams_config is not None:
         return _teams_config
-    configs = get_configs_dir()
-    if not configs:
+    teams_dir = get_teams_dir()
+    if not teams_dir:
         _teams_config = {"teams": []}
         return _teams_config
-    path = os.path.join(configs, "teams.json")
+    path = os.path.join(teams_dir, "teams.json")
     if not os.path.exists(path):
         _teams_config = {"teams": []}
         return _teams_config
@@ -71,12 +84,12 @@ def get_team_info(team_id: str) -> dict:
 
 def get_team_dir(team_id: str) -> str:
     """Retourne le chemin absolu du dossier d'une equipe."""
-    configs = get_configs_dir()
-    if not configs:
+    teams_dir = get_teams_dir()
+    if not teams_dir:
         return ""
     info = get_team_info(team_id)
     directory = info.get("directory", team_id)
-    return os.path.join(configs, directory)
+    return os.path.join(teams_dir, directory)
 
 
 def find_team_file(team_id: str, filename: str) -> str:
@@ -93,12 +106,21 @@ def find_team_file(team_id: str, filename: str) -> str:
 
 
 def find_global_file(filename: str) -> str:
-    """Trouve un fichier dans le dossier de config racine."""
+    """Trouve un fichier global : d'abord config/, puis config/Teams/."""
     configs = get_configs_dir()
     if not configs:
         return ""
+    # config/ (discord.json, mail.json, webhooks.json...)
     p = os.path.join(configs, filename)
-    return p if os.path.exists(p) else ""
+    if os.path.exists(p):
+        return p
+    # config/Teams/ (llm_providers.json, mcp_servers.json...)
+    teams = get_teams_dir()
+    if teams and teams != configs:
+        p = os.path.join(teams, filename)
+        if os.path.exists(p):
+            return p
+    return ""
 
 
 def load_team_json(team_id: str, filename: str) -> dict:

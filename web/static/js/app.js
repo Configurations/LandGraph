@@ -338,10 +338,8 @@ function renderMCP() {
   const catalogEl = document.getElementById('mcp-catalog');
   catalogEl.innerHTML = noParams.map(c => {
     let statusBtn;
-    if (c.installed && c.enabled) {
-      statusBtn = '<span class="tag tag-green" style="padding:0.4rem 0.75rem;font-size:0.8rem">Active</span>';
-    } else if (c.installed && !c.enabled) {
-      statusBtn = '<span class="tag tag-yellow" style="padding:0.4rem 0.75rem;font-size:0.8rem">Desactive</span>';
+    if (c.installed) {
+      statusBtn = `<div class="toggle ${c.enabled ? 'active' : ''}" onclick="event.stopPropagation();toggleMCP('${escHtml(c.id)}', ${!c.enabled})" style="cursor:pointer"></div>`;
     } else {
       statusBtn = c.env_vars.length
         ? `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();showAddCatalogModal('${escHtml(c.id)}')">Installer</button>`
@@ -530,10 +528,23 @@ async function quickInstallMcp(id) {
   try {
     await api(`/api/mcp/install/${id}`, { method: 'POST', body: { env_values: {}, env_mapping: {} } });
     toast(`Service "${id}" installe`, 'success');
-    // Reload whichever MCP view is currently active
-    if (document.getElementById('cfg-mcp-catalog')) loadCfgMCP().catch(() => {});
-    if (document.getElementById('tpl-mcp-catalog')) loadTplMCP().catch(() => {});
-    if (document.getElementById('mcp-catalog')) loadMCP().catch(() => {});
+    loadMCP().catch(() => {});
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function quickInstallCfgMcp(id) {
+  try {
+    await api(`/api/mcp/install/${id}`, { method: 'POST', body: { env_values: {}, env_mapping: {} } });
+    toast(`Service "${id}" installe`, 'success');
+    loadCfgMCP().catch(() => {});
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function quickInstallTplMcp(id) {
+  try {
+    await api(`/api/templates/mcp/install/${id}`, { method: 'POST', body: { env_values: {}, env_mapping: {} } });
+    toast(`Service "${id}" installe`, 'success');
+    loadTplMCP().catch(() => {});
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -2681,12 +2692,10 @@ function renderCfgMCP() {
   const catalogEl = document.getElementById('cfg-mcp-catalog');
   catalogEl.innerHTML = noParams.map(c => {
     let statusBtn;
-    if (c.installed && c.enabled) {
-      statusBtn = '<span class="tag tag-green" style="padding:0.4rem 0.75rem;font-size:0.8rem">Active</span>';
-    } else if (c.installed && !c.enabled) {
-      statusBtn = '<span class="tag tag-yellow" style="padding:0.4rem 0.75rem;font-size:0.8rem">Desactive</span>';
+    if (c.installed) {
+      statusBtn = `<div class="toggle ${c.enabled ? 'active' : ''}" onclick="event.stopPropagation();toggleCfgMcp('${escHtml(c.id)}', ${!c.enabled})" style="cursor:pointer"></div>`;
     } else {
-      statusBtn = `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();quickInstallMcp('${escHtml(c.id)}')">Installer</button>`;
+      statusBtn = `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();quickInstallCfgMcp('${escHtml(c.id)}')">Installer</button>`;
     }
     return `<div class="mcp-card${c.deprecated ? ' deprecated' : ''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:0.5rem">
@@ -3453,12 +3462,10 @@ function renderTplMCP() {
   const catalogEl = document.getElementById('tpl-mcp-catalog');
   catalogEl.innerHTML = noParams.map(c => {
     let statusBtn;
-    if (c.installed && c.enabled) {
-      statusBtn = '<span class="tag tag-green" style="padding:0.4rem 0.75rem;font-size:0.8rem">Active</span>';
-    } else if (c.installed && !c.enabled) {
-      statusBtn = '<span class="tag tag-yellow" style="padding:0.4rem 0.75rem;font-size:0.8rem">Desactive</span>';
+    if (c.installed) {
+      statusBtn = `<div class="toggle ${c.enabled ? 'active' : ''}" onclick="event.stopPropagation();toggleTplMCP('${escHtml(c.id)}', ${!c.enabled})" style="cursor:pointer"></div>`;
     } else {
-      statusBtn = `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();quickInstallMcp('${escHtml(c.id)}')">Installer</button>`;
+      statusBtn = `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();quickInstallTplMcp('${escHtml(c.id)}')">Installer</button>`;
     }
     return `<div class="mcp-card${c.deprecated ? ' deprecated' : ''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:0.5rem">
