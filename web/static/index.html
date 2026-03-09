@@ -94,10 +94,12 @@
       <div class="section" id="section-teams">
         <div class="page-header">
           <h2>Equipes</h2>
-          <button class="btn btn-outline btn-sm" onclick="loadTeams()">Rafraichir</button>
-          <button class="btn btn-outline btn-sm" onclick="window.location='/api/export/configs'">Exporter</button>
-          <button class="btn btn-outline btn-sm" onclick="document.getElementById('import-configs-file').click()">Importer</button>
-          <input type="file" id="import-configs-file" accept=".zip" style="display:none" onchange="importArchive('configs', this)">
+          <div style="display:flex;gap:0.5rem;margin-left:auto">
+            <button class="btn btn-outline btn-sm" onclick="loadTeams()">Rafraichir</button>
+            <button class="btn btn-outline btn-sm" onclick="window.location='/api/export/configs'">Exporter</button>
+            <button class="btn btn-outline btn-sm" onclick="document.getElementById('import-configs-file').click()" title="Remplace tous les fichiers existants par le contenu de l'archive">Importer</button>
+            <input type="file" id="import-configs-file" accept=".zip" style="display:none" onchange="importArchive('configs', this)">
+          </div>
         </div>
         <p style="color:var(--text-secondary);margin-bottom:0.75rem;font-size:0.85rem">
           Configuration active (<code>config/Teams/</code>) — modeles LLM, serveurs MCP et equipes operationnelles.
@@ -108,6 +110,7 @@
           <div class="prompt-tab active" data-cfg-tab="cfg-llm" onclick="showConfigTab('cfg-llm')">Modeles LLM</div>
           <div class="prompt-tab" data-cfg-tab="cfg-mcp" onclick="showConfigTab('cfg-mcp')">Services MCP</div>
           <div class="prompt-tab" data-cfg-tab="cfg-teams" onclick="showConfigTab('cfg-teams')">Equipes</div>
+          <div class="prompt-tab" data-cfg-tab="cfg-security" onclick="showConfigTab('cfg-security')">Securite</div>
           <div class="prompt-tab" data-cfg-tab="cfg-git" onclick="showConfigTab('cfg-git')">Enregistrement</div>
         </div>
 
@@ -172,6 +175,98 @@
           <div id="teams-grid"></div>
         </div>
 
+        <!-- Sub-tab: Security -->
+        <div class="cfg-tab-content" id="cfg-tab-cfg-security">
+          <div class="card">
+            <div class="card-header">
+              <h3>Cles API (MCP)</h3>
+              <button class="btn btn-primary btn-sm" onclick="showAddApiKeyModal()">+ Nouvelle cle</button>
+            </div>
+            <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem">
+              Cles d'acces pour le serveur MCP SSE. Endpoint : <code>http://&lt;IP&gt;:8123/mcp/{team_id}/sse</code>
+            </p>
+            <div class="table-container" id="api-keys-table"></div>
+          </div>
+          <div class="card" style="margin-top:1rem">
+            <div class="card-header">
+              <h3>Configuration</h3>
+            </div>
+            <div class="form-group">
+              <label>MCP_SECRET</label>
+              <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.25rem">
+                Secret utilise pour signer les tokens. Defini dans <code>.env</code>. Changer le secret invalide toutes les cles existantes.
+              </p>
+              <div id="mcp-secret-status" style="font-size:0.85rem;margin-top:0.25rem">Verification...</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Modal: New API Key -->
+        <div class="modal-overlay" id="modal-add-apikey" style="display:none">
+          <div class="modal">
+            <div class="modal-header">
+              <h3>Nouvelle cle API</h3>
+              <button class="btn-close" onclick="closeModal('modal-add-apikey')">&times;</button>
+            </div>
+            <div class="form-group">
+              <label>Nom</label>
+              <input id="apikey-name" placeholder="Ex: Claude Desktop - Equipe Produit" />
+            </div>
+            <div class="form-group">
+              <label>Equipes autorisees</label>
+              <input id="apikey-teams" placeholder='* pour toutes, ou team1,team2' value="*" />
+              <span style="font-size:0.75rem;color:var(--text-secondary)">Separer par des virgules</span>
+            </div>
+            <div class="form-group">
+              <label>Agents autorises</label>
+              <input id="apikey-agents" placeholder='* pour tous, ou architect,lead_dev' value="*" />
+              <span style="font-size:0.75rem;color:var(--text-secondary)">Separer par des virgules</span>
+            </div>
+            <div class="form-group">
+              <label>Scopes</label>
+              <div id="apikey-scopes-list" style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:0.25rem">
+                <label style="display:flex;align-items:center;gap:0.3rem;font-size:0.85rem;cursor:pointer">
+                  <input type="checkbox" value="call_agent" checked /> call_agent
+                </label>
+              </div>
+              <span style="font-size:0.75rem;color:var(--text-secondary)">Permissions accordees a cette cle</span>
+            </div>
+            <div class="form-group">
+              <label>Expiration (optionnel)</label>
+              <input id="apikey-expires" type="datetime-local" />
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-outline" onclick="closeModal('modal-add-apikey')">Annuler</button>
+              <button class="btn btn-primary" onclick="createApiKey()">Generer</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Modal: Show generated key -->
+        <div class="modal-overlay" id="modal-show-apikey" style="display:none">
+          <div class="modal">
+            <div class="modal-header">
+              <h3>Cle generee</h3>
+              <button class="btn-close" onclick="closeModal('modal-show-apikey')">&times;</button>
+            </div>
+            <p style="color:var(--warning);font-weight:600;margin-bottom:0.5rem">
+              Copiez cette cle maintenant. Elle ne sera plus affichee.
+            </p>
+            <div class="form-group">
+              <label>Token</label>
+              <textarea id="apikey-generated-token" rows="3" readonly style="font-family:'JetBrains Mono',monospace;font-size:0.8rem;word-break:break-all"></textarea>
+            </div>
+            <div class="form-group">
+              <label>Exemple de configuration MCP</label>
+              <textarea id="apikey-mcp-config" rows="6" readonly style="font-family:'JetBrains Mono',monospace;font-size:0.75rem"></textarea>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-primary" onclick="copyApiKeyToClipboard()">Copier la cle</button>
+              <button class="btn btn-outline" onclick="closeModal('modal-show-apikey')">Fermer</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Sub-tab: Git (Enregistrement) -->
         <div class="cfg-tab-content" id="cfg-tab-cfg-git">
           <div class="card">
@@ -232,10 +327,12 @@
       <div class="section" id="section-templates">
         <div class="page-header">
           <h2>Templates</h2>
-          <button class="btn btn-outline btn-sm" onclick="loadTemplates()">Rafraichir</button>
-          <button class="btn btn-outline btn-sm" onclick="window.location='/api/export/shared'">Exporter</button>
-          <button class="btn btn-outline btn-sm" onclick="document.getElementById('import-shared-file').click()">Importer</button>
-          <input type="file" id="import-shared-file" accept=".zip" style="display:none" onchange="importArchive('shared', this)">
+          <div style="display:flex;gap:0.5rem;margin-left:auto">
+            <button class="btn btn-outline btn-sm" onclick="loadTemplates()">Rafraichir</button>
+            <button class="btn btn-outline btn-sm" onclick="window.location='/api/export/shared'">Exporter</button>
+            <button class="btn btn-outline btn-sm" onclick="document.getElementById('import-shared-file').click()" title="Remplace tous les fichiers existants par le contenu de l'archive">Importer</button>
+            <input type="file" id="import-shared-file" accept=".zip" style="display:none" onchange="importArchive('shared', this)">
+          </div>
         </div>
         <p style="color:var(--text-secondary);margin-bottom:0.75rem;font-size:0.85rem">
           Configuration des templates partages (<code>Shared/Teams/</code>) utilises comme base pour creer de nouvelles equipes.
@@ -378,6 +475,9 @@
 
         <!-- Sub-tab: Discord -->
         <div class="ch-tab-content active" id="ch-tab-ch-discord">
+          <div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">
+            <button class="btn btn-primary" onclick="saveDiscord()">Sauvegarder</button>
+          </div>
           <!-- General -->
           <div class="card">
             <div class="card-header"><h3>Configuration generale</h3></div>
@@ -459,14 +559,13 @@
             </div>
           </div>
 
-          <!-- Save -->
-          <div style="margin-top:1.5rem;display:flex;justify-content:flex-end">
-            <button class="btn btn-primary" onclick="saveDiscord()">Sauvegarder</button>
-          </div>
         </div>
 
         <!-- Sub-tab: Mail -->
         <div class="ch-tab-content" id="ch-tab-ch-mail">
+          <div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">
+            <button class="btn btn-primary" onclick="saveMail()">Sauvegarder</button>
+          </div>
           <!-- General -->
           <div class="card">
             <div class="card-header">
@@ -575,10 +674,6 @@
             </div>
           </div>
 
-          <!-- Save -->
-          <div style="margin-top:1.5rem;display:flex;justify-content:flex-end">
-            <button class="btn btn-primary" onclick="saveMail()">Sauvegarder</button>
-          </div>
         </div>
       </div>
 
@@ -616,12 +711,49 @@
 
         <!-- Sub-tabs -->
         <div class="prompt-tabs" style="margin-bottom:1rem">
-          <div class="prompt-tab active" data-mon-tab="mon-logs" onclick="showMonTab('mon-logs')">Logs</div>
+          <div class="prompt-tab active" data-mon-tab="mon-events" onclick="showMonTab('mon-events')">Events</div>
+          <div class="prompt-tab" data-mon-tab="mon-logs" onclick="showMonTab('mon-logs')">Logs</div>
           <div class="prompt-tab" data-mon-tab="mon-containers" onclick="showMonTab('mon-containers')">Containers</div>
         </div>
 
+        <!-- Sub-tab: Events -->
+        <div class="mon-tab-content active" id="mon-tab-mon-events">
+          <div class="card">
+            <div class="card-header">
+              <h3>Bus d'events</h3>
+              <div style="display:flex;gap:0.5rem;align-items:center">
+                <select id="evt-type-filter" onchange="loadEvents()" style="padding:0.3rem 0.5rem;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:0.8rem">
+                  <option value="">Tous</option>
+                  <option value="agent_start">agent_start</option>
+                  <option value="agent_complete">agent_complete</option>
+                  <option value="agent_error">agent_error</option>
+                  <option value="agent_dispatch">agent_dispatch</option>
+                  <option value="llm_call_start">llm_call_start</option>
+                  <option value="llm_call_end">llm_call_end</option>
+                  <option value="tool_call">tool_call</option>
+                  <option value="pipeline_step_start">pipeline_step_start</option>
+                  <option value="pipeline_step_end">pipeline_step_end</option>
+                  <option value="human_gate_requested">human_gate_requested</option>
+                  <option value="human_gate_responded">human_gate_responded</option>
+                  <option value="phase_transition">phase_transition</option>
+                </select>
+                <input type="text" id="evt-agent-filter" placeholder="Agent ID..." onkeyup="loadEvents()" style="padding:0.3rem 0.5rem;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:0.8rem;width:140px">
+                <button class="btn btn-outline btn-sm" onclick="loadEvents()">Rafraichir</button>
+                <button class="btn btn-sm" id="evt-auto-btn" onclick="toggleEventsAutoRefresh()" style="font-size:0.75rem">Auto OFF</button>
+              </div>
+            </div>
+            <div id="evt-gateway-status" style="font-size:0.75rem;margin-bottom:0.5rem;color:var(--text-secondary)"></div>
+            <div class="table-container" style="max-height:500px;overflow-y:auto">
+              <table class="env-table" style="width:100%">
+                <thead><tr><th style="width:160px">Timestamp</th><th style="width:140px">Event</th><th style="width:120px">Agent</th><th>Data</th></tr></thead>
+                <tbody id="evt-table-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
         <!-- Sub-tab: Logs -->
-        <div class="mon-tab-content active" id="mon-tab-mon-logs">
+        <div class="mon-tab-content" id="mon-tab-mon-logs">
           <div class="card">
             <div class="card-header">
               <h3>Logs des services</h3>

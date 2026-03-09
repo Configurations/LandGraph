@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(xargs ls -la)"
+      "Bash(xargs ls -la)",
+      "WebSearch",
+      "WebFetch(domain:docs.openlit.io)"
     ]
   }
 }

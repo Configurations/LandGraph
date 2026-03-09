@@ -3,6 +3,7 @@ import json, logging, os
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from langchain_core.messages import ToolMessage
+from agents.shared.event_bus import bus, Event
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -327,7 +328,7 @@ class BaseAgent:
 
     # ── Appels LLM ───────────────────────────────────────────────────────────
 
-    def _call_llm(self, instruction, context, previous_results=None):
+    def _call_llm(self, instruction, context, previous_results=None, _state=None):
         from agents.shared.rate_limiter import throttled_invoke
         llm = self.get_llm()
         uc = f"Contexte:\n```json\n{json.dumps(context, indent=2, default=str)}\n```\n\n"
@@ -341,19 +342,33 @@ class BaseAgent:
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": uc},
         ]
+        st = _state or {}
+        bus.emit(Event("llm_call_start", agent_id=self.agent_id,
+                        thread_id=st.get("_thread_id", ""), team_id=st.get("_team_id", ""),
+                        data={"provider": self.llm_provider, "model": self.model, "messages_count": len(msgs)}))
         r = throttled_invoke(llm, msgs, provider_name=self.llm_provider, model=self.model)
         raw = r.content if isinstance(r.content, str) else str(r.content)
+        tokens = {}
+        if hasattr(r, "usage_metadata") and r.usage_metadata:
+            tokens = {"input_tokens": getattr(r.usage_metadata, "input_tokens", 0),
+                      "output_tokens": getattr(r.usage_metadata, "output_tokens", 0),
+                      "total_tokens": getattr(r.usage_metadata, "total_tokens", 0)}
+        bus.emit(Event("llm_call_end", agent_id=self.agent_id,
+                        thread_id=st.get("_thread_id", ""), team_id=st.get("_team_id", ""),
+                        data={"provider": self.llm_provider, "model": self.model,
+                              "output_chars": len(raw), **tokens}))
         logger.info(f"[{self.agent_id}] LLM: {len(raw)}c")
         return raw
 
-    def _call_llm_with_tools(self, instruction, context, previous_results=None):
+    def _call_llm_with_tools(self, instruction, context, previous_results=None, _state=None):
         from agents.shared.rate_limiter import throttled_invoke
         tools = self.get_tools()
         if not tools:
-            return self._call_llm(instruction, context, previous_results)
+            return self._call_llm(instruction, context, previous_results, _state=_state)
 
         llm = self.get_llm()
         llm_t = llm.bind_tools(tools)
+        st = _state or {}
 
         uc = f"Contexte:\n```json\n{json.dumps(context, indent=2, default=str)}\n```\n\n"
         if previous_results:
@@ -369,7 +384,21 @@ class BaseAgent:
         ]
 
         for iteration in range(10):
+            bus.emit(Event("llm_call_start", agent_id=self.agent_id,
+                            thread_id=st.get("_thread_id", ""), team_id=st.get("_team_id", ""),
+                            data={"provider": self.llm_provider, "model": self.model,
+                                  "messages_count": len(msgs), "iteration": iteration + 1}))
             resp = throttled_invoke(llm_t, msgs, provider_name=self.llm_provider, model=self.model)
+            tokens = {}
+            if hasattr(resp, "usage_metadata") and resp.usage_metadata:
+                tokens = {"input_tokens": getattr(resp.usage_metadata, "input_tokens", 0),
+                          "output_tokens": getattr(resp.usage_metadata, "output_tokens", 0),
+                          "total_tokens": getattr(resp.usage_metadata, "total_tokens", 0)}
+            bus.emit(Event("llm_call_end", agent_id=self.agent_id,
+                            thread_id=st.get("_thread_id", ""), team_id=st.get("_team_id", ""),
+                            data={"provider": self.llm_provider, "model": self.model,
+                                  "output_chars": len(resp.content) if isinstance(resp.content, str) else 0,
+                                  "has_tool_calls": bool(resp.tool_calls), **tokens}))
             msgs.append(resp)
 
             if not resp.tool_calls:
@@ -407,6 +436,10 @@ class BaseAgent:
                             logger.error(f"[{self.agent_id}] Tool {tn}: {e}")
                         break
 
+                bus.emit(Event("tool_call", agent_id=self.agent_id,
+                                thread_id=st.get("_thread_id", ""), team_id=st.get("_team_id", ""),
+                                data={"tool_name": tn, "args": json.dumps(ta, default=str)[:300],
+                                      "result_length": len(result)}))
                 msgs.append(ToolMessage(content=result, tool_call_id=tc["id"]))
 
         last = msgs[-1]
@@ -423,12 +456,13 @@ class BaseAgent:
         for i, step in enumerate(self.pipeline_steps, 1):
             sn, ins, ok = step["name"], step["instruction"], step["output_key"]
             logger.info(f"[{self.agent_id}] Pipeline {i}/{len(self.pipeline_steps)}: {sn}")
+            self._evt("pipeline_step_start", state, step=i, total=len(self.pipeline_steps), step_name=sn)
             _post_to_discord_sync(ch, f"⏳ **{self.agent_name}** — etape {i}/{len(self.pipeline_steps)} : **{sn}**...")
 
             if self.use_tools:
-                raw = self._call_llm_with_tools(ins, ctx, dl if dl else None)
+                raw = self._call_llm_with_tools(ins, ctx, dl if dl else None, _state=state)
             else:
-                raw = self._call_llm(ins, ctx, dl if dl else None)
+                raw = self._call_llm(ins, ctx, dl if dl else None, _state=state)
 
             try:
                 parsed = self.parse_response(raw)
@@ -445,6 +479,7 @@ class BaseAgent:
                 logger.error(f"[{self.agent_id}] {sn} JSON fail: {e}")
                 dl[ok] = {"raw": raw[:8000], "parse_error": str(e)[:100]}
                 _post_to_discord_sync(ch, f"⚠️ **{self.agent_name}** — **{sn}** : output brut preserve.")
+            self._evt("pipeline_step_end", state, step=i, step_name=sn, success=ok in dl)
 
         _post_to_discord_sync(ch, f"📋 **{self.agent_name}** — {len(self.pipeline_steps)} etapes terminees ✅")
         return {
@@ -458,9 +493,9 @@ class BaseAgent:
         ch = self._get_channel_id(state)
 
         if self.use_tools:
-            raw = self._call_llm_with_tools(ctx.get("task", "Produis ton livrable."), ctx)
+            raw = self._call_llm_with_tools(ctx.get("task", "Produis ton livrable."), ctx, _state=state)
         else:
-            raw = self._call_llm(ctx.get("task", "Produis ton livrable."), ctx)
+            raw = self._call_llm(ctx.get("task", "Produis ton livrable."), ctx, _state=state)
 
         try:
             output = self.parse_response(raw)
@@ -503,15 +538,23 @@ class BaseAgent:
 
     # ── Point d'entree ───────────────────────────────────────────────────────
 
+    def _evt(self, event_type, state, **data):
+        """Emet un event sur le bus."""
+        bus.emit(Event(event_type, agent_id=self.agent_id,
+                       thread_id=state.get("_thread_id", ""),
+                       team_id=state.get("_team_id", ""), data=data))
+
     def __call__(self, state):
         try:
             logger.info(f"[{self.agent_id}] Start — pipeline={len(self.pipeline_steps)}, tools={self.use_tools}")
+            self._evt("agent_start", state, pipeline_steps=len(self.pipeline_steps), use_tools=self.use_tools)
             output = self._run_pipeline(state) if self.pipeline_steps else self._run_single(state)
 
             # Human gate — demander validation si configure
             if self.requires_approval and output.get("status") == "complete":
                 ch = self._get_channel_id(state)
                 logger.info(f"[{self.agent_id}] Requesting human approval...")
+                self._evt("human_gate_requested", state, summary=f"{self.agent_name} en attente de validation")
                 _post_to_discord_sync(ch, f"🔒 **{self.agent_name}** a termine. Validation en attente dans #human-review...")
 
                 try:
@@ -531,16 +574,19 @@ class BaseAgent:
 
                     if approval["approved"]:
                         output["human_approval"] = {"status": "approved", "reviewer": approval["reviewer"]}
+                        self._evt("human_gate_responded", state, decision="approved", reviewer=approval["reviewer"])
                         _post_to_discord_sync(ch, f"✅ **{self.agent_name}** approuve par {approval['reviewer']}")
                         logger.info(f"[{self.agent_id}] Approved by {approval['reviewer']}")
                     elif approval["timed_out"]:
                         output["human_approval"] = {"status": "timeout"}
                         output["status"] = "pending_review"
+                        self._evt("human_gate_responded", state, decision="timeout")
                         _post_to_discord_sync(ch, f"⏰ **{self.agent_name}** — timeout, en attente de review")
                         logger.warning(f"[{self.agent_id}] Approval timeout")
                     else:
                         output["human_approval"] = {"status": "revision", "feedback": approval["response"], "reviewer": approval["reviewer"]}
                         output["status"] = "revision_requested"
+                        self._evt("human_gate_responded", state, decision="revision", reviewer=approval["reviewer"])
                         _post_to_discord_sync(ch, f"🔄 **{self.agent_name}** — revision demandee par {approval['reviewer']}: {approval['response'][:200]}")
                         logger.info(f"[{self.agent_id}] Revision requested: {approval['response'][:100]}")
                 except Exception as e:
@@ -556,9 +602,13 @@ class BaseAgent:
             state["messages"] = msgs
 
             logger.info(f"[{self.agent_id}] Done — status={output.get('status')}")
+            self._evt("agent_complete", state,
+                      status=output.get("status", "complete"),
+                      deliverables=output.get("deliverables", {}))
             return state
         except Exception as e:
             logger.error(f"[{self.agent_id}] EXC: {e}", exc_info=True)
+            self._evt("agent_error", state, error=str(e))
             ch = self._get_channel_id(state)
             _post_to_discord_sync(ch, f"❌ **{self.agent_name}** erreur : {str(e)[:300]}")
 

@@ -747,6 +747,8 @@ tr:hover { background: rgba(255,255,255,0.02); }
 .cfg-tab-content.active { display: block; }
 .mon-tab-content { display: none; }
 .mon-tab-content.active { display: block; }
+.ch-tab-content { display: none; }
+.ch-tab-content.active { display: block; }
 
 .prompt-preview {
   background: var(--bg-input);

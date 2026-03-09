@@ -1421,19 +1421,94 @@ const SCRIPT_COLORS = {
 
 let monAutoInterval = null;
 let monAllLines = [];
+let evtAutoInterval = null;
+
+const EVT_COLORS = {
+  agent_start: '#3b82f6', agent_complete: '#22c55e', agent_error: '#ef4444',
+  agent_dispatch: '#8b5cf6', llm_call_start: '#6366f1', llm_call_end: '#6366f1',
+  tool_call: '#f59e0b', pipeline_step_start: '#06b6d4', pipeline_step_end: '#06b6d4',
+  human_gate_requested: '#ec4899', human_gate_responded: '#ec4899',
+  phase_transition: '#f97316',
+};
 
 function showMonTab(tab) {
   document.querySelectorAll('[data-mon-tab]').forEach(t => t.classList.toggle('active', t.dataset.monTab === tab));
   document.querySelectorAll('.mon-tab-content').forEach(c => c.classList.toggle('active', c.id === `mon-tab-${tab}`));
-  if (tab === 'mon-logs') loadLogs();
+  if (tab === 'mon-events') loadEvents();
+  else if (tab === 'mon-logs') loadLogs();
   else if (tab === 'mon-containers') loadContainers();
 }
 
 function loadMonitoring() {
   const active = document.querySelector('[data-mon-tab].active');
-  const tab = active ? active.dataset.monTab : 'mon-logs';
-  if (tab === 'mon-logs') loadLogs();
+  const tab = active ? active.dataset.monTab : 'mon-events';
+  if (tab === 'mon-events') loadEvents();
+  else if (tab === 'mon-logs') loadLogs();
   else loadContainers();
+}
+
+async function loadEvents() {
+  const evtType = document.getElementById('evt-type-filter').value;
+  const agentId = document.getElementById('evt-agent-filter').value.trim();
+  const statusEl = document.getElementById('evt-gateway-status');
+  const tbody = document.getElementById('evt-table-body');
+
+  // Gateway health check
+  try {
+    const health = await api('/api/monitoring/gateway');
+    statusEl.innerHTML = health.status === 'ok'
+      ? `<span style="color:var(--success,#22c55e)">\u25CF Gateway connecte (v${health.version || '?'})</span>`
+      : `<span style="color:var(--error)">\u25CF Gateway injoignable: ${health.error || '?'}</span>`;
+  } catch (e) {
+    statusEl.innerHTML = `<span style="color:var(--error)">\u25CF Gateway injoignable</span>`;
+  }
+
+  // Load events
+  try {
+    let url = '/api/monitoring/events?n=200';
+    if (evtType) url += `&event_type=${evtType}`;
+    if (agentId) url += `&agent_id=${agentId}`;
+    const data = await api(url);
+    const events = (data.events || []).reverse();
+
+    if (!events.length) {
+      tbody.innerHTML = '<tr><td colspan="4" style="color:var(--text-secondary);text-align:center">Aucun event</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = events.map(e => {
+      const color = EVT_COLORS[e.event] || 'var(--text-secondary)';
+      const ts = e.timestamp ? e.timestamp.replace('T', ' ').substring(0, 19) : '';
+      const dataStr = Object.entries(e.data || {})
+        .filter(([k, v]) => v !== '' && v !== 0 && v !== null)
+        .map(([k, v]) => `<span style="color:var(--text-secondary)">${escHtml(k)}=</span>${escHtml(String(v).substring(0, 80))}`)
+        .join(' ');
+      return `<tr>
+        <td style="font-size:0.7rem;font-family:monospace;white-space:nowrap">${escHtml(ts)}</td>
+        <td><span style="color:${color};font-weight:500;font-size:0.8rem">${escHtml(e.event)}</span></td>
+        <td style="font-size:0.8rem">${escHtml(e.agent_id || '-')}</td>
+        <td style="font-size:0.7rem;word-break:break-all">${dataStr || '-'}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="4" style="color:var(--error)">Erreur: ${escHtml(e.message)}</td></tr>`;
+  }
+}
+
+function toggleEventsAutoRefresh() {
+  const btn = document.getElementById('evt-auto-btn');
+  if (evtAutoInterval) {
+    clearInterval(evtAutoInterval);
+    evtAutoInterval = null;
+    btn.textContent = 'Auto OFF';
+    btn.style.background = '';
+    btn.style.color = '';
+  } else {
+    evtAutoInterval = setInterval(loadEvents, 3000);
+    btn.textContent = 'Auto 3s';
+    btn.style.background = 'var(--success, #22c55e)';
+    btn.style.color = '#fff';
+  }
 }
 
 async function loadLogs() {
@@ -2245,6 +2320,7 @@ function showConfigTab(tabId) {
   if (tabId === 'cfg-llm') loadCfgLLM();
   else if (tabId === 'cfg-mcp') loadCfgMCP();
   else if (tabId === 'cfg-teams') loadCfgTeams();
+  else if (tabId === 'cfg-security') loadApiKeys();
   else if (tabId === 'cfg-git') loadCfgGit();
 }
 
@@ -5494,6 +5570,132 @@ async function wfSave() {
     ]);
     toast('Workflow sauvegarde', 'success');
   } catch (e) { toast(e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════
+// API KEYS (Securite sub-tab)
+// ═══════════════════════════════════════════════════
+
+async function loadApiKeys() {
+  const container = document.getElementById('api-keys-table');
+  const statusEl = document.getElementById('mcp-secret-status');
+  try {
+    const data = await api('/api/keys');
+    const keys = data.keys || [];
+    if (keys.length === 0) {
+      container.innerHTML = '<p style="color:var(--text-secondary);padding:1rem">Aucune cle API. Cliquez sur "+ Nouvelle cle" pour en creer une.</p>';
+    } else {
+      let html = '<table><thead><tr><th>Nom</th><th>Preview</th><th>Equipes</th><th>Agents</th><th>Scopes</th><th>Creee le</th><th>Expiration</th><th>Statut</th><th>Actions</th></tr></thead><tbody>';
+      for (const k of keys) {
+        const teams = Array.isArray(k.teams) ? k.teams.join(', ') : k.teams;
+        const agents = Array.isArray(k.agents) ? k.agents.join(', ') : k.agents;
+        const scopes = Array.isArray(k.scopes) ? k.scopes.join(', ') : (k.scopes || 'call_agent');
+        const created = k.created_at ? new Date(k.created_at).toLocaleDateString('fr-FR') : '-';
+        const expires = k.expires_at ? new Date(k.expires_at).toLocaleDateString('fr-FR') : 'Jamais';
+        const status = k.revoked
+          ? '<span class="tag tag-red">Revoquee</span>'
+          : '<span class="tag tag-green">Active</span>';
+        const actions = k.revoked
+          ? `<button class="btn btn-outline btn-sm" onclick="deleteApiKey('${k.key_hash}')" style="color:var(--error)">Supprimer</button>`
+          : `<button class="btn btn-outline btn-sm" onclick="revokeApiKey('${k.key_hash}')" style="color:var(--warning)">Revoquer</button>`;
+        html += `<tr><td>${esc(k.name)}</td><td><code>${esc(k.preview)}</code></td><td>${esc(teams)}</td><td>${esc(agents)}</td><td>${esc(scopes)}</td><td>${created}</td><td>${expires}</td><td>${status}</td><td>${actions}</td></tr>`;
+      }
+      html += '</tbody></table>';
+      container.innerHTML = html;
+    }
+    // Check MCP_SECRET status
+    try {
+      const env = await api('/api/env');
+      const vars = env.variables || [];
+      const hasSecret = vars.some(v => v.key === 'MCP_SECRET');
+      statusEl.innerHTML = hasSecret
+        ? '<span class="tag tag-green">Configure</span>'
+        : '<span class="tag tag-red">Non defini</span> — Ajoutez <code>MCP_SECRET</code> dans l\'onglet Secrets (.env)';
+    } catch { statusEl.textContent = 'Erreur verification'; }
+  } catch (e) {
+    container.innerHTML = `<p style="color:var(--error)">Erreur : ${esc(e.message)}</p>`;
+  }
+}
+
+function showAddApiKeyModal() {
+  document.getElementById('apikey-name').value = '';
+  document.getElementById('apikey-teams').value = '*';
+  document.getElementById('apikey-agents').value = '*';
+  document.getElementById('apikey-expires').value = '';
+  // Reset scopes checkboxes
+  document.querySelectorAll('#apikey-scopes-list input[type=checkbox]').forEach(cb => { cb.checked = true; });
+  document.getElementById('modal-add-apikey').style.display = 'flex';
+}
+
+async function createApiKey() {
+  const name = document.getElementById('apikey-name').value.trim();
+  if (!name) { toast('Nom requis', 'error'); return; }
+  const teamsRaw = document.getElementById('apikey-teams').value.trim();
+  const agentsRaw = document.getElementById('apikey-agents').value.trim();
+  const expiresRaw = document.getElementById('apikey-expires').value;
+
+  const teams = teamsRaw === '*' ? ['*'] : teamsRaw.split(',').map(s => s.trim()).filter(Boolean);
+  const agents = agentsRaw === '*' ? ['*'] : agentsRaw.split(',').map(s => s.trim()).filter(Boolean);
+  const scopes = Array.from(document.querySelectorAll('#apikey-scopes-list input[type=checkbox]:checked')).map(cb => cb.value);
+  if (scopes.length === 0) { toast('Selectionnez au moins un scope', 'error'); return; }
+  const body = { name, teams, agents, scopes };
+  if (expiresRaw) body.expires_at = new Date(expiresRaw).toISOString();
+
+  try {
+    const r = await fetch('/api/keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || 'Erreur creation');
+
+    closeModal('modal-add-apikey');
+
+    // Show the generated token
+    document.getElementById('apikey-generated-token').value = data.token;
+    const teamExample = teams[0] === '*' ? 'team1' : teams[0];
+    const mcpConfig = JSON.stringify({
+      "mcpServers": {
+        "langgraph": {
+          "url": `http://<IP>:8123/mcp/${teamExample}/sse`,
+          "headers": { "Authorization": `Bearer ${data.token}` }
+        }
+      }
+    }, null, 2);
+    document.getElementById('apikey-mcp-config').value = mcpConfig;
+    document.getElementById('modal-show-apikey').style.display = 'flex';
+
+    loadApiKeys();
+    toast('Cle API creee', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function revokeApiKey(hash) {
+  if (!confirm('Revoquer cette cle ? Les clients utilisant cette cle seront bloques.')) return;
+  try {
+    await fetch(`/api/keys/${hash}/revoke`, { method: 'POST' });
+    toast('Cle revoquee', 'success');
+    loadApiKeys();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteApiKey(hash) {
+  if (!confirm('Supprimer definitivement cette cle ?')) return;
+  try {
+    await fetch(`/api/keys/${hash}`, { method: 'DELETE' });
+    toast('Cle supprimee', 'success');
+    loadApiKeys();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function copyApiKeyToClipboard() {
+  const el = document.getElementById('apikey-generated-token');
+  el.select();
+  navigator.clipboard.writeText(el.value).then(
+    () => toast('Cle copiee dans le presse-papier', 'success'),
+    () => toast('Erreur copie', 'error')
+  );
 }
 
 // ═══════════════════════════════════════════════════

@@ -1168,6 +1168,7 @@ async def import_configs(file: UploadFile):
 
 # ── API: Monitoring ────────────────────────────────
 
+GATEWAY_URL = os.getenv("LANGGRAPH_API_URL", "http://langgraph-api:8000")
 ALLOWED_CONTAINERS = {"langgraph-api", "langgraph-discord", "langgraph-mail", "langgraph-admin"}
 
 
@@ -1236,6 +1237,84 @@ async def container_action(name: str, action: str):
         return {"ok": True, "message": f"{name} {action} OK"}
     except subprocess.TimeoutExpired:
         raise HTTPException(504, "Timeout")
+
+
+@app.get("/api/monitoring/events")
+async def get_events(n: int = 100, event_type: str = "", agent_id: str = ""):
+    """Proxy vers le bus d'events du gateway."""
+    import requests as req
+    params = {"n": min(n, 500)}
+    if event_type:
+        params["event_type"] = event_type
+    if agent_id:
+        params["agent_id"] = agent_id
+    try:
+        r = req.get(f"{GATEWAY_URL}/events", params=params, timeout=5)
+        return r.json()
+    except Exception as e:
+        return {"events": [], "error": str(e)}
+
+
+@app.get("/api/monitoring/gateway")
+async def gateway_health():
+    """Health check du gateway."""
+    import requests as req
+    try:
+        r = req.get(f"{GATEWAY_URL}/health", timeout=5)
+        return r.json()
+    except Exception as e:
+        return {"status": "unreachable", "error": str(e)}
+
+
+# ── API: MCP API Keys (proxy to gateway) ──────────
+
+@app.get("/api/keys")
+async def proxy_list_keys():
+    """List all API keys via gateway."""
+    import requests as req
+    try:
+        r = req.get(f"{GATEWAY_URL}/api/keys", timeout=10)
+        return r.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.post("/api/keys")
+async def proxy_create_key(request: Request):
+    """Create a new API key via gateway."""
+    import requests as req
+    try:
+        body = await request.json()
+        r = req.post(f"{GATEWAY_URL}/api/keys", json=body, timeout=10)
+        if r.status_code != 200:
+            raise HTTPException(status_code=r.status_code, detail=r.text)
+        return r.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.post("/api/keys/{key_hash}/revoke")
+async def proxy_revoke_key(key_hash: str):
+    """Revoke an API key via gateway."""
+    import requests as req
+    try:
+        r = req.post(f"{GATEWAY_URL}/api/keys/{key_hash}/revoke", timeout=10)
+        return r.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.delete("/api/keys/{key_hash}")
+async def proxy_delete_key(key_hash: str):
+    """Delete an API key via gateway."""
+    import requests as req
+    try:
+        r = req.delete(f"{GATEWAY_URL}/api/keys/{key_hash}", timeout=10)
+        return r.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 # ── API: Chat LLM ─────────────────────────────────

@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # Script 3 : Installation de LangGraph + Infrastructure
-# VERSION v2 — Telecharge tout depuis GitHub, zero heredoc
+# VERSION v3 — Telecharge tout depuis GitHub, zero heredoc
 #
 # A executer depuis la VM Ubuntu (apres le script 02).
 # Usage : ./03-install-langgraph.sh
@@ -12,7 +12,7 @@ PROJECT_DIR="$HOME/langgraph-project"
 REPO_RAW="https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main"
 
 echo "=================================================================="
-echo "  Script 3 : Installation LangGraph v2     version 2 - 2024-06    "
+echo "  Script 3 : Installation LangGraph v3     version 4 - 2026-03    "
 echo "=================================================================="
 echo ""
 
@@ -29,7 +29,7 @@ fi
 # ── 1. Arborescence ──────────────────────────
 echo "[1/7] Arborescence..."
 mkdir -p "${PROJECT_DIR}"/{agents/shared,config/Teams,scripts,data/backups,Shared/Teams}
-mkdir -p /opt/langgraph-data/{postgres,redis}
+mkdir -p /opt/langgraph-data/{postgres,redis,openlit-clickhouse,openlit}
 cd "${PROJECT_DIR}"
 
 # ── 2. Fichiers de config depuis GitHub ──────
@@ -85,7 +85,7 @@ touch agents/__init__.py agents/shared/__init__.py
 echo "[4b/7] Code Python agents..."
 
 # Shared modules
-SHARED_FILES=(base_agent.py agent_loader.py llm_provider.py rate_limiter.py mcp_client.py team_resolver.py workflow_engine.py channels.py human_gate.py agent_conversation.py discord_tools.py state.py __init__.py)
+SHARED_FILES=(base_agent.py agent_loader.py llm_provider.py rate_limiter.py mcp_client.py mcp_auth.py mcp_server.py team_resolver.py workflow_engine.py channels.py human_gate.py agent_conversation.py discord_tools.py event_bus.py state.py __init__.py)
 for f in "${SHARED_FILES[@]}"; do
     wget -qO "agents/shared/${f}" "${REPO_RAW}/Agents/Shared/${f}" 2>/dev/null || true
 done
@@ -118,6 +118,7 @@ cp Shared/Teams/mcp_servers.json config/mcp_servers.json 2>/dev/null || true
 
 # config/ — fichiers par defaut si absents
 [ ! -f config/agent_mcp_access.json ] && echo '{}' > config/agent_mcp_access.json
+[ ! -f config/webhooks.json ] && echo '{"webhooks":[]}' > config/webhooks.json
 
 echo "  -> Config globale OK"
 
@@ -172,6 +173,11 @@ if curl -sf http://localhost:8080/ > /dev/null 2>&1; then
     echo "  Admin web  : OK"
 else
     echo "  Admin web  : EN ATTENTE"
+fi
+if curl -sf http://localhost:3000/ > /dev/null 2>&1; then
+    echo "  OpenLIT    : OK"
+else
+    echo "  OpenLIT    : EN ATTENTE"
 fi
 
 echo ""

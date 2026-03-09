@@ -19,10 +19,11 @@ Plateforme multi-agents IA auto-hebergee sur Proxmox (VM ou LXC). 13 agents spec
 │  │   ├── Discord Bot                                  │  │
 │  │   ├── Mail Bot                                     │  │
 │  │   ├── Admin Dashboard             (:8080)          │  │
-│  │   └── Langfuse (observabilite)    (:3000)          │  │
+│  │   ├── OpenLIT (observabilite)      (:3000)          │  │
+│  │   └── OpenLIT ClickHouse          (interne)        │  │
 │  └────────────────────────────────────────────────────┘  │
 │                                                          │
-│  Donnees : /opt/langgraph-data/{postgres,redis}/         │
+│  Donnees : /opt/langgraph-data/{postgres,redis,openlit*}/ │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -149,6 +150,9 @@ REDIS_PASSWORD=xxxxx
 DATABASE_URI=postgres://langgraph:xxxxx@langgraph-postgres:5432/langgraph?sslmode=disable
 REDIS_URI=redis://:xxxxx@langgraph-redis:6379/0
 
+# MCP Server (optionnel)
+MCP_SECRET=xxxxx
+
 # Admin
 WEB_ADMIN_USERNAME=admin
 WEB_ADMIN_PASSWORD=xxxxx
@@ -183,7 +187,10 @@ langgraph-project/
 │       ├── agent_loader.py         ← Chargement dynamique depuis registry JSON
 │       ├── llm_provider.py         ← Factory multi-provider (9 types)
 │       ├── rate_limiter.py         ← Throttling + retry exponentiel
-│       ├── mcp_client.py           ← Lazy install MCP + cache
+│       ├── mcp_client.py           ← Lazy install MCP + cache (client)
+│       ├── mcp_auth.py            ← Tokens HMAC signes + DB PostgreSQL
+│       ├── mcp_server.py          ← MCP SSE server (agents comme tools)
+│       ├── event_bus.py            ← Bus d'events + webhooks + observabilite
 │       ├── human_gate.py           ← Validation humaine
 │       ├── agent_conversation.py   ← Questions aux humains
 │       └── state.py                ← State LangGraph partage
@@ -194,6 +201,7 @@ langgraph-project/
 │   ├── mcp_servers.json            ← Serveurs MCP
 │   ├── discord.json                ← Config Discord
 │   ├── mail.json                   ← Config Email
+│   ├── webhooks.json               ← Webhooks externes (HMAC-SHA256)
 │   ├── langgraph.json              ← Config LangGraph
 │   └── Team1/                      ← Equipe (cree depuis le dashboard)
 │       ├── agents_registry.json
@@ -348,7 +356,9 @@ http://<IP-VM>:8080
 |---------|------|-------|
 | LangGraph API | 8123 | Reseau local |
 | Admin Dashboard | 8080 | Reseau local |
-| Langfuse | 3000 | Reseau local |
+| OpenLIT | 3000 | Reseau local |
+| OTel gRPC | 4317 | localhost uniquement |
+| OTel HTTP | 4318 | localhost uniquement |
 | PostgreSQL | 5432 | localhost uniquement |
 | Redis | 6379 | localhost uniquement |
 
@@ -360,6 +370,40 @@ http://<IP-VM>:8080
 ./restart.sh   # Arrete + demarre
 ./build.sh     # Rebuild les images + demarre
 ```
+
+## MCP Server — agents comme tools
+
+Chaque agent LandGraph est exposable comme tool MCP via SSE. Un client MCP externe (Claude Desktop, autre plateforme) peut appeler vos agents directement.
+
+```
+Endpoint:  GET http://<IP>:8123/mcp/{team_id}/sse
+Auth:      Authorization: Bearer lg-xxxxx.yyyy
+```
+
+**Gestion des cles API** : dashboard admin → Equipes → Securite. Les tokens sont signes HMAC-SHA256 (verification sans DB), puis valides en PostgreSQL (revocation, expiration).
+
+**Configuration client** (ex: Claude Desktop) :
+```json
+{
+  "mcpServers": {
+    "langgraph": {
+      "url": "http://<IP>:8123/mcp/team1/sse",
+      "headers": { "Authorization": "Bearer lg-xxxxx.yyyy" }
+    }
+  }
+}
+```
+
+Variable requise dans `.env` : `MCP_SECRET=<secret-pour-signer-les-tokens>`
+
+## Observabilite
+
+Deux couches complementaires :
+
+- **EventBus interne** (`event_bus.py`) — bus pub/sub avec ring buffer (2000 events). Alimente le dashboard monitoring, les webhooks externes (HMAC-SHA256), et Langfuse (si configure).
+- **OpenLIT** (port 3000) — observabilite LLM externe. Auto-instrumente tous les appels LangChain via OpenTelemetry. UI avec traces, couts, latences. Donnees stockees dans ClickHouse.
+
+Le dashboard admin (onglet Monitoring) affiche les events en temps reel, les logs Docker, et permet de gerer les containers.
 
 ## Documentation technique
 

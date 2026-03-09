@@ -22,12 +22,8 @@ LandGraph est une plateforme multi-agent basée sur **LangGraph** (Python) qui o
 | `langgraph-api` | Custom (Dockerfile) | **8123** | API FastAPI — gateway + agents |
 | `discord-bot` | Custom (Dockerfile.discord) | — | Bot Discord — interface utilisateur |
 | `langgraph-admin` | Custom (Dockerfile.admin) | **8080** | Dashboard web administration |
-| `langfuse-web` | langfuse/langfuse:3 | **3000** | Observabilité LLM (UI + API) |
-| `langfuse-worker` | langfuse/langfuse-worker:3 | — | Worker async Langfuse |
-| `langfuse-postgres` | postgres:16-alpine | — | BDD Langfuse (isolée) |
-| `langfuse-clickhouse` | clickhouse/clickhouse-server | — | OLAP traces |
-| `langfuse-redis` | redis:7-alpine | — | Cache Langfuse |
-| `langfuse-minio` | minio/minio | 9090 | Blob storage |
+| `openlit-clickhouse` | clickhouse/clickhouse-server:24.4.1 | — | OLAP traces OpenLIT |
+| `openlit` | ghcr.io/openlit/openlit:latest | **3000** | Observabilité LLM (UI + OTel collector) |
 
 ---
 
@@ -303,6 +299,18 @@ Claude Sonnet/Opus/Haiku, GPT-4o/Mini, Azure GPT-4o, Gemini Flash/Pro, Mistral L
 - Lock par package (thread-safe, pas deux installs simultanées)
 - Config : `mcp_servers.json` (global) + `agent_mcp_access.json` (par équipe)
 
+### MCP SSE Server (agents exposés)
+
+Chaque agent est exposable comme tool MCP via SSE :
+
+- **Endpoint** : `GET /mcp/{team_id}/sse` (port 8123)
+- **Auth** : `Authorization: Bearer lg-<payload>.<hmac>` — token HMAC-SHA256 auto-signé
+- **Validation** : HMAC check (zéro DB hit) → SHA-256 hash → lookup PostgreSQL (revoked? expired?) → team check
+- **Tools exposés** : intersection agents de l'équipe ∩ agents autorisés par la key
+- **Table** : `project.mcp_api_keys` (key_hash, name, preview, teams, agents, expires_at, revoked)
+- **Gestion** : dashboard admin → onglet Equipes → sous-onglet Sécurité
+- **Secret** : `MCP_SECRET` dans `.env` — signe tous les tokens
+
 ---
 
 ## Multi-équipes (teams.json)
@@ -364,11 +372,18 @@ Aliases : `analyste`, `designer`, `ux`, `architecte`, `archi`, `lead`, `frontend
 
 ---
 
-## Observabilité — Langfuse (port 3000)
+## Observabilité
 
-- Open-source, self-hosted
-- Containers dans le docker-compose
-- Callback handler à brancher dans `base_agent.py` (TODO)
+### EventBus interne (`agents/shared/event_bus.py`)
+- Bus pub/sub singleton avec ring buffer (2000 events)
+- 12 types d'events : agent_start/complete/error, llm_call_start/end, tool_call, pipeline_step_start/end, human_gate_requested/responded, agent_dispatch, phase_transition
+- Handlers : Langfuse (si env vars présentes), Webhooks (HMAC-SHA256), Dashboard (via `/events`)
+
+### OpenLIT (port 3000)
+- Open-source, self-hosted (2 containers : ClickHouse + OpenLIT)
+- Auto-instrumentation LangChain via `openlit.init()` dans le gateway startup
+- Collecteur OTel intégré (ports 4317 gRPC, 4318 HTTP)
+- UI sur port 3000, données persistées dans `/opt/langgraph-data/openlit*`
 
 ---
 
@@ -472,19 +487,19 @@ Le script 02 télécharge tout depuis GitHub : Dockerfiles, code agents (`Agents
 
 ### Équipes & Dashboard
 21. Multi-équipes (teams.json, isolation par channel Discord)
-22. Dashboard admin web (port 8080) — auth, git, gestion configs, channels, import/export
+22. Dashboard admin web (port 8080) — auth, git, gestion configs, channels, import/export, monitoring
 23. Publication GitHub via Documentaliste
+24. EventBus observabilité — bus d'events centralisé (`event_bus.py`) avec ring buffer, Langfuse handler, webhook dispatcher
+25. Monitoring dashboard — events temps réel, logs Docker, état containers (start/stop/restart)
+26. OpenLIT observabilité externe — auto-instrumentation LangChain, ClickHouse + UI (port 3000)
+27. MCP SSE Server — agents exposés comme tools MCP par équipe (`/mcp/{team_id}/sse`), auth HMAC signée + PostgreSQL, gestion API keys dans le dashboard admin
 
 ## À faire 🔧
 
-1. **Intégration Langfuse** — Brancher `LangfuseCallbackHandler` dans `base_agent.py`
-2. **Publication Notion** — Token MCP 401 à corriger
-3. **Dashboard web** — Logs agents temps réel, monitoring threads actifs
-4. **Tests end-to-end** — Cycle complet Discovery → Ship avec PerformanceTracker
-5. **Long-term memory (LangMem)** — Mémoire sémantique cross-thread (chaque thread est isolé actuellement)
-6. **Cron jobs** — Tâches planifiées sur le graph
-7. **Webhooks** — Notifications de fin de run
-8. **Concurrency control** — Gérer les messages qui arrivent avant la fin du précédent
-9. **MCP endpoint par agent** — Chaque agent exposé comme serveur MCP
-10. **Inter-team outbound** — Demander une analyse à une équipe étrangère au système (intégrable dans le graph)
-11. **Inter-team inbound** — Accepter un entrant de la part d'une équipe étrangère au système (intégrable dans le graph)
+1. **Publication Notion** — Token MCP 401 à corriger
+2. **Tests end-to-end** — Cycle complet Discovery → Ship avec PerformanceTracker
+3. **Long-term memory (LangMem)** — Mémoire sémantique cross-thread (chaque thread est isolé actuellement)
+4. **Cron jobs** — Tâches planifiées sur le graph
+5. **Concurrency control** — Gérer les messages qui arrivent avant la fin du précédent
+6. **Inter-team outbound** — Demander une analyse à une équipe étrangère au système (intégrable dans le graph)
+7. **Inter-team inbound** — Accepter un entrant de la part d'une équipe étrangère au système (intégrable dans le graph)

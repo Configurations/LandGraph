@@ -4,10 +4,11 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
+from agents.shared.event_bus import bus, Event
 
 import psycopg
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel
 
 load_dotenv()
@@ -219,6 +220,10 @@ async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="defau
                     logger.info(f"[workflow] Auto-dispatch: {aid} (group {na.get('parallel_group', '?')})")
 
             if next_to_run:
+                for a in next_to_run:
+                    bus.emit(Event("agent_dispatch", agent_id=a["agent_id"],
+                                   thread_id=thread_id, team_id=team_id,
+                                   data={"trigger": "workflow_auto", "depth": _depth + 1}))
                 await post_to_channel(channel_id,
                     f"⚡ Workflow : groupe suivant → {', '.join(a['agent_id'] for a in next_to_run)}")
                 await run_agents_parallel(next_to_run, state, channel_id, thread_id, _depth + 1)
@@ -242,6 +247,8 @@ async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="defau
                     logger.info(f"Auto-transition: {current_phase} → {next_phase}")
                 except Exception:
                     pass
+                bus.emit(Event("phase_transition", thread_id=thread_id, team_id=team_id,
+                               data={"from_phase": current_phase, "to_phase": next_phase, "auto": True}))
                 await post_to_channel(channel_id,
                     f"✅ Transition automatique : **{current_phase}** → **{next_phase}**")
 
@@ -378,6 +385,9 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
             # Trouver le nom lisible
             agent_display = getattr(agent_callable, "agent_name", canonical_id)
 
+            bus.emit(Event("agent_dispatch", agent_id=canonical_id,
+                           thread_id=request.thread_id, team_id=team_id,
+                           data={"trigger": "direct", "task": msgs[0][1][:200] if msgs else ""}))
             background_tasks.add_task(
                 run_agents_parallel,
                 [{"agent_id": canonical_id, "agent": agent_callable}],
@@ -437,10 +447,96 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/events")
+async def get_events(n: int = 100, event_type: str = "", agent_id: str = "", thread_id: str = ""):
+    """Retourne les derniers events du bus d'observabilite."""
+    return {"events": bus.recent(n=min(n, 500), event_type=event_type,
+                                 agent_id=agent_id, thread_id=thread_id)}
+
+
+# ── API Keys CRUD ─────────────────────────────
+class CreateKeyRequest(BaseModel):
+    name: str
+    teams: list[str] = ["*"]
+    agents: list[str] = ["*"]
+    scopes: list[str] = ["call_agent"]
+    expires_at: str | None = None
+
+
+@app.post("/api/keys")
+async def create_api_key(req: CreateKeyRequest):
+    """Generate a new MCP API key."""
+    from agents.shared.mcp_auth import generate_token, db_register_key, token_preview
+    try:
+        token = generate_token(req.name, req.teams, req.agents, req.scopes, req.expires_at)
+        db_register_key(token, req.name, req.teams, req.agents, req.scopes, req.expires_at)
+        return {"token": token, "preview": token_preview(token), "name": req.name}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Create key error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/keys")
+async def list_api_keys():
+    """List all API keys (admin)."""
+    from agents.shared.mcp_auth import db_list_keys
+    try:
+        return {"keys": db_list_keys()}
+    except Exception as e:
+        logger.error(f"List keys error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/keys/{key_hash}/revoke")
+async def revoke_api_key(key_hash: str):
+    """Revoke an API key."""
+    from agents.shared.mcp_auth import db_revoke_key
+    try:
+        db_revoke_key(key_hash)
+        return {"status": "revoked"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/keys/{key_hash}")
+async def delete_api_key(key_hash: str):
+    """Delete an API key permanently."""
+    from agents.shared.mcp_auth import db_delete_key
+    try:
+        db_delete_key(key_hash)
+        return {"status": "deleted"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── MCP SSE routes ────────────────────────────
+try:
+    from agents.shared.mcp_server import mount_mcp_routes
+    mount_mcp_routes(app)
+except Exception as e:
+    logger.warning(f"MCP server mount failed: {e}")
+
+
 @app.on_event("startup")
 async def startup():
+    # ── OpenLIT auto-instrumentation ──
+    try:
+        import openlit
+        openlit.init(
+            otlp_endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://openlit:4318"),
+            application_name="langgraph-api",
+            environment=os.getenv("OPENLIT_ENV", "production"),
+        )
+        logger.info("OpenLIT instrumentation active")
+    except ImportError:
+        logger.info("OpenLIT SDK not installed — skipping auto-instrumentation")
+    except Exception as e:
+        logger.warning(f"OpenLIT init failed: {e}")
+
     try:
         get_orchestrator_graph()
-        logger.info("Gateway v0.6.0 ready — persistence + direct + parallel")
+        logger.info("Gateway v0.6.0 ready — persistence + direct + parallel + MCP")
     except Exception as e:
         logger.error(f"Init error: {e}")
