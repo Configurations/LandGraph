@@ -468,19 +468,21 @@
         </p>
 
         <!-- Sub-tabs -->
-        <div class="prompt-tabs" style="margin-bottom:1rem">
+        <div class="prompt-tabs" style="margin-bottom:1rem;display:flex;align-items:center">
           <div class="prompt-tab active" data-ch-tab="ch-discord" onclick="showChannelTab('ch-discord')">Discord</div>
           <div class="prompt-tab" data-ch-tab="ch-mail" onclick="showChannelTab('ch-mail')">Mail</div>
+          <div style="margin-left:auto">
+            <button class="btn btn-primary btn-sm" id="ch-save-discord" onclick="saveDiscord()">Sauvegarder</button>
+            <button class="btn btn-primary btn-sm" id="ch-save-mail" onclick="saveMail()" style="display:none">Sauvegarder</button>
+          </div>
         </div>
 
         <!-- Sub-tab: Discord -->
         <div class="ch-tab-content active" id="ch-tab-ch-discord">
-          <div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">
-            <button class="btn btn-primary" onclick="saveDiscord()">Sauvegarder</button>
-          </div>
           <!-- General -->
-          <div class="card">
-            <div class="card-header"><h3>Configuration generale</h3></div>
+          <div class="card collapsible">
+            <div class="card-header" onclick="this.parentElement.classList.toggle('collapsed')"><h3>Configuration generale</h3><svg class="card-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></div>
+            <div class="card-body">
             <div class="form-row">
               <div class="form-group" style="max-width:120px">
                 <label>Active</label>
@@ -499,11 +501,13 @@
                 <input id="discord-bot-status" placeholder="LangGraph Multi-Agent" />
               </div>
             </div>
+            </div>
           </div>
 
           <!-- Channels -->
-          <div class="card" style="margin-top:1rem">
-            <div class="card-header"><h3>Channels Discord</h3></div>
+          <div class="card collapsible" style="margin-top:1rem">
+            <div class="card-header" onclick="this.parentElement.classList.toggle('collapsed')"><h3>Channels Discord</h3><svg class="card-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></div>
+            <div class="card-body">
             <div class="form-row">
               <div class="form-group"><label>Commands (ID)</label><input id="discord-ch-commands" placeholder="ID du channel commandes" /></div>
               <div class="form-group"><label>Review (ID)</label><input id="discord-ch-review" placeholder="ID du channel review" /></div>
@@ -516,14 +520,19 @@
               <label>Guild ID</label>
               <input id="discord-guild-id" placeholder="ID du serveur Discord" style="max-width:300px" />
             </div>
+            </div>
           </div>
 
           <!-- Aliases -->
-          <div class="card" style="margin-top:1rem">
-            <div class="card-header">
+          <div class="card collapsible" style="margin-top:1rem">
+            <div class="card-header" onclick="this.parentElement.classList.toggle('collapsed')">
               <h3>Aliases</h3>
-              <button class="btn btn-primary btn-sm" onclick="addDiscordAlias()">+ Ajouter</button>
+              <div style="display:flex;align-items:center;gap:0.5rem">
+                <button class="btn btn-primary btn-sm" onclick="event.stopPropagation();addDiscordAlias()">+ Ajouter</button>
+                <svg class="card-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
             </div>
+            <div class="card-body">
             <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.5rem">
               Raccourcis pour invoquer les agents (ex: <code>!a lead</code> au lieu de <code>!agent lead_dev</code>).
             </p>
@@ -533,22 +542,26 @@
                 <tbody id="discord-aliases-body"></tbody>
               </table>
             </div>
+            </div>
           </div>
 
           <!-- Formatting -->
-          <div class="card" style="margin-top:1rem">
-            <div class="card-header"><h3>Formatage</h3></div>
+          <div class="card collapsible" style="margin-top:1rem">
+            <div class="card-header" onclick="this.parentElement.classList.toggle('collapsed')"><h3>Formatage</h3><svg class="card-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></div>
+            <div class="card-body">
             <div class="form-row">
               <div class="form-group" style="max-width:180px"><label>Longueur max message</label><input id="discord-fmt-maxlen" type="number" placeholder="1900" /></div>
               <div class="form-group" style="max-width:120px"><label>Split newlines</label><div class="toggle" id="discord-fmt-split" onclick="this.classList.toggle('active')"></div></div>
               <div class="form-group" style="max-width:120px"><label>Reaction traitement</label><input id="discord-fmt-react-proc" style="max-width:60px" /></div>
               <div class="form-group" style="max-width:120px"><label>Reaction orchestrateur</label><input id="discord-fmt-react-orch" style="max-width:60px" /></div>
             </div>
+            </div>
           </div>
 
           <!-- Timeouts -->
-          <div class="card" style="margin-top:1rem">
-            <div class="card-header"><h3>Timeouts</h3></div>
+          <div class="card collapsible" style="margin-top:1rem">
+            <div class="card-header" onclick="this.parentElement.classList.toggle('collapsed')"><h3>Timeouts</h3><svg class="card-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></div>
+            <div class="card-body">
             <div class="form-row">
               <div class="form-group" style="max-width:160px"><label>API call (sec)</label><input id="discord-to-api" type="number" placeholder="30" /></div>
               <div class="form-group" style="max-width:160px"><label>Human gate (sec)</label><input id="discord-to-gate" type="number" placeholder="1800" /></div>
@@ -557,20 +570,17 @@
               <label>Intervalles rappels (sec, separes par virgule)</label>
               <input id="discord-to-reminders" placeholder="120, 240, 480, 960" />
             </div>
+            </div>
           </div>
 
         </div>
 
         <!-- Sub-tab: Mail -->
         <div class="ch-tab-content" id="ch-tab-ch-mail">
-          <div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">
-            <button class="btn btn-primary" onclick="saveMail()">Sauvegarder</button>
-          </div>
           <!-- General -->
-          <div class="card">
-            <div class="card-header">
-              <h3>Configuration generale</h3>
-            </div>
+          <div class="card collapsible">
+            <div class="card-header" onclick="this.parentElement.classList.toggle('collapsed')"><h3>Configuration generale</h3><svg class="card-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></div>
+            <div class="card-body">
             <div class="form-row">
               <div class="form-group">
                 <label>Email active</label>
@@ -584,19 +594,24 @@
                 </select>
               </div>
             </div>
+            </div>
           </div>
 
           <!-- SMTP -->
-          <div class="card" style="margin-top:1rem">
-            <div class="card-header">
+          <div class="card collapsible" style="margin-top:1rem">
+            <div class="card-header" onclick="this.parentElement.classList.toggle('collapsed')">
               <h3>SMTP (envoi)</h3>
-              <div style="display:flex;gap:0.5rem">
-                <select id="mail-preset-select" style="font-size:0.8rem">
+              <div style="display:flex;align-items:center;gap:0.5rem">
+                <select id="mail-preset-select" style="font-size:0.8rem" onclick="event.stopPropagation()">
                   <option value="">Preset...</option>
                 </select>
-                <button class="btn btn-outline btn-sm" onclick="applyMailPreset()">Appliquer</button>
+                <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();applyMailPreset()">Appliquer</button>
+                <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();showAddMailPresetModal()" title="Sauvegarder la config actuelle comme preset">+</button>
+                <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();deleteMailPreset()" title="Supprimer le preset selectionne" style="color:var(--error)">-</button>
+                <svg class="card-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
               </div>
             </div>
+            <div class="card-body">
             <div class="form-row">
               <div class="form-group"><label>Host</label><input id="mail-smtp-host" placeholder="smtp.gmail.com" /></div>
               <div class="form-group" style="max-width:100px"><label>Port</label><input id="mail-smtp-port" type="number" placeholder="587" /></div>
@@ -611,11 +626,13 @@
               <div class="form-group"><label>Adresse expediteur</label><input id="mail-smtp-from-address" placeholder="noreply@example.com" /></div>
               <div class="form-group"><label>Nom expediteur</label><input id="mail-smtp-from-name" placeholder="LangGraph Agent" /></div>
             </div>
+            </div>
           </div>
 
           <!-- IMAP -->
-          <div class="card" style="margin-top:1rem">
-            <div class="card-header"><h3>IMAP (reception)</h3></div>
+          <div class="card collapsible" style="margin-top:1rem">
+            <div class="card-header" onclick="this.parentElement.classList.toggle('collapsed')"><h3>IMAP (reception)</h3><svg class="card-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></div>
+            <div class="card-body">
             <div class="form-row">
               <div class="form-group"><label>Host</label><input id="mail-imap-host" placeholder="imap.gmail.com" /></div>
               <div class="form-group" style="max-width:100px"><label>Port</label><input id="mail-imap-port" type="number" placeholder="993" /></div>
@@ -625,11 +642,13 @@
               <div class="form-group"><label>Utilisateur</label><input id="mail-imap-user" placeholder="user@example.com" /></div>
               <div class="form-group"><label>Var env mot de passe</label><input id="mail-imap-password-env" placeholder="IMAP_PASSWORD" /></div>
             </div>
+            </div>
           </div>
 
           <!-- Listener -->
-          <div class="card" style="margin-top:1rem">
-            <div class="card-header"><h3>Listener (polling)</h3></div>
+          <div class="card collapsible" style="margin-top:1rem">
+            <div class="card-header" onclick="this.parentElement.classList.toggle('collapsed')"><h3>Listener (polling)</h3><svg class="card-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></div>
+            <div class="card-body">
             <div class="form-row">
               <div class="form-group" style="max-width:150px">
                 <label>Intervalle (sec)</label>
@@ -644,11 +663,13 @@
               <label>Patterns a ignorer (un par ligne)</label>
               <textarea id="mail-listener-ignore" rows="3" placeholder="noreply@&#10;no-reply@&#10;mailer-daemon@"></textarea>
             </div>
+            </div>
           </div>
 
           <!-- Templates -->
-          <div class="card" style="margin-top:1rem">
-            <div class="card-header"><h3>Templates email</h3></div>
+          <div class="card collapsible" style="margin-top:1rem">
+            <div class="card-header" onclick="this.parentElement.classList.toggle('collapsed')"><h3>Templates email</h3><svg class="card-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></div>
+            <div class="card-body">
             <div class="form-row">
               <div class="form-group"><label>Sujet notification</label><input id="mail-tpl-notification" /></div>
               <div class="form-group"><label>Sujet question</label><input id="mail-tpl-question" /></div>
@@ -662,18 +683,46 @@
               <label>Instructions approbation</label>
               <textarea id="mail-tpl-instructions" rows="4"></textarea>
             </div>
+            </div>
           </div>
 
           <!-- Security -->
-          <div class="card" style="margin-top:1rem">
-            <div class="card-header"><h3>Securite</h3></div>
+          <div class="card collapsible" style="margin-top:1rem">
+            <div class="card-header" onclick="this.parentElement.classList.toggle('collapsed')"><h3>Securite</h3><svg class="card-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></div>
+            <div class="card-body">
             <div class="form-row">
               <div class="form-group" style="max-width:120px"><label>Exiger TLS</label><div class="toggle" id="mail-sec-tls" onclick="this.classList.toggle('active')"></div></div>
               <div class="form-group" style="max-width:120px"><label>Verifier expediteur</label><div class="toggle" id="mail-sec-verify" onclick="this.classList.toggle('active')"></div></div>
               <div class="form-group" style="max-width:180px"><label>Taille max body</label><input id="mail-sec-maxsize" type="number" placeholder="50000" /></div>
             </div>
+            </div>
           </div>
 
+        </div>
+      </div>
+
+      <!-- Modal: New Mail Preset -->
+      <div class="modal-overlay" id="modal-add-mail-preset" style="display:none">
+        <div class="modal">
+          <div class="modal-header">
+            <h3>Sauvegarder comme preset</h3>
+            <button class="btn-close" onclick="closeModal('modal-add-mail-preset')">&times;</button>
+          </div>
+          <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem">
+            La configuration SMTP et IMAP actuelle sera sauvegardee comme preset reutilisable.
+          </p>
+          <div class="form-group">
+            <label>Nom du preset</label>
+            <input id="mail-preset-name" placeholder="Ex: ionos, gandi, sendgrid" />
+          </div>
+          <div class="form-group">
+            <label>Notes (optionnel)</label>
+            <input id="mail-preset-notes" placeholder="Ex: Utiliser un App Password" />
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-outline" onclick="closeModal('modal-add-mail-preset')">Annuler</button>
+            <button class="btn btn-primary" onclick="saveMailPreset()">Sauvegarder</button>
+          </div>
         </div>
       </div>
 

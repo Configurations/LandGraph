@@ -147,6 +147,29 @@ body {
   font-weight: 600;
 }
 
+/* Collapsible cards */
+.card.collapsible > .card-header {
+  cursor: pointer;
+  user-select: none;
+}
+.card.collapsible > .card-header .card-chevron {
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+  margin-left: 0.5rem;
+}
+.card.collapsible.collapsed > .card-header .card-chevron {
+  transform: rotate(-90deg);
+}
+.card.collapsible > .card-body {
+  transition: opacity 0.2s ease;
+}
+.card.collapsible.collapsed > .card-body {
+  display: none;
+}
+.card.collapsible.collapsed > .card-header {
+  margin-bottom: 0;
+}
+
 /* Buttons */
 .btn {
   display: inline-flex;

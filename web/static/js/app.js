@@ -5107,6 +5107,8 @@ function showChannelTab(tabId) {
   document.querySelectorAll('[data-ch-tab]').forEach(t => t.classList.remove('active'));
   document.getElementById('ch-tab-' + tabId).classList.add('active');
   document.querySelector(`[data-ch-tab="${tabId}"]`).classList.add('active');
+  document.getElementById('ch-save-discord').style.display = tabId === 'ch-discord' ? '' : 'none';
+  document.getElementById('ch-save-mail').style.display = tabId === 'ch-mail' ? '' : 'none';
   if (tabId === 'ch-discord') loadDiscord();
   else if (tabId === 'ch-mail') loadMail();
 }
@@ -5342,6 +5344,51 @@ function applyMailPreset() {
     if (preset.imap.use_ssl) ssl.classList.add('active'); else ssl.classList.remove('active');
   }
   toast(`Preset "${name}" applique${preset.notes ? ' — ' + preset.notes : ''}`, 'success');
+}
+
+function showAddMailPresetModal() {
+  document.getElementById('mail-preset-name').value = '';
+  document.getElementById('mail-preset-notes').value = '';
+  document.getElementById('modal-add-mail-preset').style.display = 'flex';
+}
+
+async function saveMailPreset() {
+  const name = document.getElementById('mail-preset-name').value.trim().toLowerCase().replace(/\s+/g, '_');
+  if (!name) { toast('Nom requis', 'error'); return; }
+  const notes = document.getElementById('mail-preset-notes').value.trim();
+  const _isActive = (id) => document.getElementById(id).classList.contains('active');
+
+  const preset = {
+    smtp: {
+      host: document.getElementById('mail-smtp-host').value.trim(),
+      port: parseInt(document.getElementById('mail-smtp-port').value) || 587,
+      use_tls: _isActive('mail-smtp-tls'),
+      use_ssl: _isActive('mail-smtp-ssl'),
+    },
+    imap: {
+      host: document.getElementById('mail-imap-host').value.trim(),
+      port: parseInt(document.getElementById('mail-imap-port').value) || 993,
+      use_ssl: _isActive('mail-imap-ssl'),
+    },
+  };
+  if (notes) preset.notes = notes;
+
+  if (!_mailData.presets) _mailData.presets = {};
+  _mailData.presets[name] = preset;
+
+  closeModal('modal-add-mail-preset');
+  await saveMail();
+  toast(`Preset "${name}" sauvegarde`, 'success');
+}
+
+function deleteMailPreset() {
+  const name = document.getElementById('mail-preset-select').value;
+  if (!name) { toast('Selectionnez un preset a supprimer', 'error'); return; }
+  if (!confirm(`Supprimer le preset "${name}" ?`)) return;
+  if (_mailData.presets) delete _mailData.presets[name];
+  saveMail().then(() => {
+    toast(`Preset "${name}" supprime`, 'success');
+  });
 }
 
 function _collectMailData() {
