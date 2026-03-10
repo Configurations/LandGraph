@@ -53,16 +53,15 @@
         <div id="reg-email-hint" style="font-size:9px;color:var(--text-muted);margin-top:4px"></div>
       </div>
       <div class="form-group">
-        <div class="form-label">NOM</div>
-        <input class="form-input" id="reg-name" placeholder="Prenom Nom" />
-      </div>
-      <div class="form-group">
-        <div class="form-label">MOT DE PASSE</div>
-        <input class="form-input" id="reg-password" type="password" placeholder="Minimum 6 caracteres" />
-      </div>
-      <div class="form-group">
-        <div class="form-label">CONFIRMER</div>
-        <input class="form-input" id="reg-password2" type="password" placeholder="Confirmer le mot de passe" />
+        <div class="form-label">CULTURE</div>
+        <select class="form-input" id="reg-culture">
+          <option value="fr">Francais</option>
+          <option value="en">English</option>
+          <option value="es">Espanol</option>
+          <option value="de">Deutsch</option>
+          <option value="it">Italiano</option>
+          <option value="pt">Portugues</option>
+        </select>
       </div>
       <button class="btn btn-primary" style="width:100%;letter-spacing:2px" onclick="doRegister()">CREER MON COMPTE</button>
       <div style="text-align:center;margin-top:14px">

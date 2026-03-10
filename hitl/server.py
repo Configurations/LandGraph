@@ -58,14 +58,131 @@ def get_conn():
     return psycopg.connect(DATABASE_URI, autocommit=True)
 
 
+# ── Config file helpers ────────────────────────────
+_CONFIG_DIR = None
+
+def _find_config_dir():
+    global _CONFIG_DIR
+    if _CONFIG_DIR:
+        return _CONFIG_DIR
+    for candidate in ["/app/config", "config", "../config"]:
+        if os.path.isdir(candidate) and os.path.isfile(os.path.join(candidate, "teams.json")):
+            _CONFIG_DIR = candidate
+            return _CONFIG_DIR
+    return "config"
+
+def _read_config(filename):
+    path = os.path.join(_find_config_dir(), filename)
+    if os.path.isfile(path):
+        with open(path) as f:
+            return json.load(f)
+    return {}
+
+
+def _send_reset_email(to_email: str, temp_password: str):
+    """Send reset email using others.json + mail.json config."""
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from urllib.parse import quote
+
+    others_cfg = _read_config("others.json")
+    reset_cfg = others_cfg.get("password_reset", {})
+    mail_cfg = _read_config("mail.json")
+
+    # Resolve SMTP
+    smtp_name = reset_cfg.get("smtp_name", "")
+    smtp_list = mail_cfg.get("smtp", [])
+    if isinstance(smtp_list, dict):
+        smtp_list = [smtp_list]
+    smtp_cfg = next((s for s in smtp_list if s.get("name") == smtp_name), smtp_list[0] if smtp_list else {})
+
+    smtp_host = smtp_cfg.get("host", "")
+    smtp_port = int(smtp_cfg.get("port", 587))
+    smtp_user = smtp_cfg.get("user", "")
+    use_ssl = smtp_cfg.get("use_ssl", False)
+    use_tls = smtp_cfg.get("use_tls", True)
+    from_address = smtp_cfg.get("from_address", "") or smtp_user
+    from_name = smtp_cfg.get("from_name", "LandGraph")
+
+    password_env = smtp_cfg.get("password_env", "SMTP_PASSWORD")
+    smtp_password = os.getenv(password_env, "")
+
+    if not all([smtp_host, smtp_user, smtp_password]):
+        logger.warning("SMTP not configured — reset email not sent")
+        return False
+
+    # Resolve template
+    tpl_name = reset_cfg.get("template_name", "")
+    tpl_list = mail_cfg.get("templates", [])
+    if isinstance(tpl_list, dict):
+        tpl_list = []
+    tpl = next((t for t in tpl_list if t.get("name") == tpl_name), None)
+
+    # Build reset URL
+    hitl_host = os.getenv("HITL_PUBLIC_URL", "http://localhost:8090").rstrip("/")
+    variables = {"${mail}": to_email, "${pwd}": temp_password, "${UrlService}": hitl_host}
+
+    def _replace_vars(text):
+        for k, v in variables.items():
+            text = text.replace(k, v)
+        return text
+
+    if tpl:
+        subject = _replace_vars(tpl.get("subject", "[LangGraph] Reinitialisation mot de passe"))
+        body_text = _replace_vars(tpl.get("body", ""))
+    else:
+        subject = "[LangGraph] Bienvenue — Activez votre compte"
+        body_text = ""
+
+    if body_text:
+        html = f'<html><body style="font-family:sans-serif;color:#333">{body_text.replace(chr(10), "<br/>")}</body></html>'
+    else:
+        default_link = f"{hitl_host}/reset-password?mail={quote(to_email)}&pwd={quote(temp_password)}"
+        html = f"""\
+<html><body style="font-family:sans-serif;color:#333">
+<h2>Bienvenue sur LandGraph</h2>
+<p>Un compte a ete cree pour vous (<code>{to_email}</code>).</p>
+<p>Votre mot de passe temporaire : <code style="background:#f0f0f0;padding:4px 8px;border-radius:4px;font-size:1.1em">{temp_password}</code></p>
+<p>Cliquez sur le lien ci-dessous pour definir votre mot de passe :</p>
+<p><a href="{default_link}" style="display:inline-block;padding:10px 24px;background:#3b82f6;color:white;text-decoration:none;border-radius:6px">Definir mon mot de passe</a></p>
+</body></html>"""
+
+    msg = MIMEMultipart("alternative")
+    msg["From"] = f"{from_name} <{from_address}>"
+    msg["To"] = to_email
+    msg["Subject"] = subject
+    msg.attach(MIMEText(html, "html"))
+    try:
+        if use_ssl:
+            with smtplib.SMTP_SSL(smtp_host, smtp_port) as server:
+                server.login(smtp_user, smtp_password)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(smtp_host, smtp_port) as server:
+                if use_tls:
+                    server.starttls()
+                server.login(smtp_user, smtp_password)
+                server.send_message(msg)
+        return True
+    except Exception as e:
+        logger.error("Failed to send reset email: %s", e)
+        return False
+
+
 # ── Startup: seed admin user if none ────────────
 def _seed_admin():
-    """Create default admin if no users exist."""
+    """Create default admin if no users exist. Also ensures schema is up-to-date."""
     email = os.getenv("HITL_ADMIN_EMAIL", "admin@langgraph.local")
     password = os.getenv("HITL_ADMIN_PASSWORD", "admin")
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            # Ensure culture column exists
+            cur.execute("""
+                ALTER TABLE project.hitl_users
+                ADD COLUMN IF NOT EXISTS culture TEXT DEFAULT 'fr'
+            """)
             cur.execute("SELECT COUNT(*) FROM project.hitl_users")
             if cur.fetchone()[0] == 0:
                 hashed = pwd_ctx.hash(_truncate_pw(password))
@@ -126,8 +243,7 @@ class LoginRequest(BaseModel):
 
 class RegisterRequest(BaseModel):
     email: str
-    password: str
-    display_name: str = ""
+    culture: str = "fr"
 
 
 class TokenData(BaseModel):
@@ -216,27 +332,30 @@ def login(req: LoginRequest):
 
 @app.post("/api/auth/register")
 def register(req: RegisterRequest):
-    import re
+    import re, secrets, string
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", req.email):
         raise HTTPException(400, "Email invalide")
-    if len(req.password) < 6:
-        raise HTTPException(400, "Mot de passe trop court (min 6 caracteres)")
+    # Generate temporary password
+    alphabet = string.ascii_letters + string.digits + "!@#$%"
+    temp_password = ''.join(secrets.choice(alphabet) for _ in range(12))
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            # Check if email exists
             cur.execute("SELECT id FROM project.hitl_users WHERE email = %s", (req.email,))
             if cur.fetchone():
                 raise HTTPException(409, "Cet email est deja utilise")
-            hashed = pwd_ctx.hash(_truncate_pw(req.password))
-            display_name = req.display_name or req.email.split("@")[0]
+            hashed = pwd_ctx.hash(_truncate_pw(temp_password))
+            display_name = req.email.split("@")[0]
+            culture = req.culture or "fr"
             cur.execute("""
-                INSERT INTO project.hitl_users (email, password_hash, display_name, role, auth_type)
-                VALUES (%s, %s, %s, 'undefined', 'local')
+                INSERT INTO project.hitl_users (email, password_hash, display_name, role, auth_type, culture)
+                VALUES (%s, %s, %s, 'undefined', 'local', %s)
                 RETURNING id
-            """, (req.email, hashed, display_name))
+            """, (req.email, hashed, display_name, culture))
             uid = str(cur.fetchone()[0])
-        return {"ok": True, "id": uid, "message": "Compte cree. Un administrateur doit valider votre acces."}
+        # Send reset email
+        _send_reset_email(req.email, temp_password)
+        return {"ok": True, "id": uid, "message": "Compte cree. Un email de reinitialisation vous sera envoye."}
     finally:
         conn.close()
 

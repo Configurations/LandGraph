@@ -116,26 +116,17 @@ function showLogin() {
 
 async function doRegister() {
   const email = document.getElementById('reg-email').value.trim();
-  const name = document.getElementById('reg-name').value.trim();
-  const pw = document.getElementById('reg-password').value;
-  const pw2 = document.getElementById('reg-password2').value;
+  const culture = document.getElementById('reg-culture').value;
   const errEl = document.getElementById('register-error');
   errEl.style.display = 'none';
 
-  // Validation
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     errEl.textContent = 'Email invalide'; errEl.style.display = 'block'; return;
   }
-  if (pw.length < 6) {
-    errEl.textContent = 'Mot de passe trop court (min 6 caracteres)'; errEl.style.display = 'block'; return;
-  }
-  if (pw !== pw2) {
-    errEl.textContent = 'Les mots de passe ne correspondent pas'; errEl.style.display = 'block'; return;
-  }
 
   try {
-    await api('/api/auth/register', { method: 'POST', body: { email, password: pw, display_name: name } });
-    toast('Compte cree ! Connectez-vous.', 'success');
+    await api('/api/auth/register', { method: 'POST', body: { email, culture } });
+    toast('Compte cree ! Un email de reinitialisation vous sera envoye.', 'success');
     showLogin();
     document.getElementById('login-email').value = email;
   } catch (e) {
