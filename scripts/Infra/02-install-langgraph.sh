@@ -42,7 +42,7 @@ if [ "$REMOTE_VERSION" != "unknown" ] && [ "$REMOTE_VERSION" = "$LOCAL_VERSION" 
     exit 0
 fi
 echo "  Download de la version en ligne : ${REMOTE_VERSION}."
-
+sleep 2
 
 # ── 2. Fichiers de config depuis GitHub ──────
 echo "[2/7] Telechargement des fichiers de config..."
