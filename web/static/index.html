@@ -813,29 +813,31 @@
             <h3 id="modal-user-title">Nouvel utilisateur</h3>
             <button class="btn-close" onclick="closeModal('modal-user')">&times;</button>
           </div>
-          <div style="display:flex;gap:1rem">
-            <div class="form-group" style="flex:1">
-              <label>Email</label>
-              <input id="user-email" placeholder="user@company.com" />
-            </div>
-            <div class="form-group" style="flex:1">
-              <label>Nom</label>
-              <input id="user-name" placeholder="Prenom Nom" />
+          <div class="form-group">
+            <label>Email</label>
+            <input id="user-email" placeholder="user@company.com" />
+          </div>
+          <div id="user-edit-fields" style="display:none">
+            <div style="display:flex;gap:1rem">
+              <div class="form-group" style="flex:1">
+                <label>Nom</label>
+                <input id="user-name" placeholder="Prenom Nom" />
+              </div>
+              <div class="form-group" style="flex:1">
+                <label>Mot de passe</label>
+                <input id="user-password" type="password" placeholder="Laisser vide pour ne pas changer" />
+              </div>
             </div>
           </div>
-          <div style="display:flex;gap:1rem">
-            <div class="form-group" style="flex:1">
-              <label>Mot de passe</label>
-              <input id="user-password" type="password" placeholder="Laisser vide pour ne pas changer" />
-            </div>
-            <div class="form-group" style="flex:1">
-              <label>Role global</label>
-              <select id="user-role">
-                <option value="member">member</option>
-                <option value="admin">admin</option>
-              </select>
-            </div>
+          <div class="form-group">
+            <label>Role global</label>
+            <select id="user-role">
+              <option value="undefined">undefined (en attente)</option>
+              <option value="member">member</option>
+              <option value="admin">admin</option>
+            </select>
           </div>
+          <p id="user-create-hint" style="display:none;font-size:0.8rem;color:var(--text-secondary);margin:0.25rem 0">Un email avec un mot de passe temporaire et un lien de reinitialisation sera envoye.</p>
           <div class="form-group">
             <label>Equipes</label>
             <div id="user-teams-checkboxes" style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:0.25rem;max-height:150px;overflow-y:auto"></div>

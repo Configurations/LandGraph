@@ -82,6 +82,7 @@ SHARED_MCP_FILE = SHARED_TEAMS_DIR / "mcp_servers.json"
 SHARED_TEAMS_FILE = SHARED_TEAMS_DIR / "teams.json"
 MAIL_FILE = CONFIGS / "mail.json"
 DISCORD_FILE = CONFIGS / "discord.json"
+HITL_FILE = CONFIGS / "hitl.json"
 
 logging.basicConfig(
     level=logging.DEBUG if os.environ.get("DEBUG") else logging.INFO,
@@ -1055,6 +1056,22 @@ async def save_discord(request: Request):
     """Write discord.json config."""
     data = await request.json()
     _write_json(DISCORD_FILE, data)
+    return {"ok": True}
+
+
+@app.get("/api/hitl-config")
+async def get_hitl_config():
+    """Read hitl.json config."""
+    if not HITL_FILE.exists():
+        return {"auth": {"jwt_expire_hours": 24, "allow_registration": True, "default_role": "undefined"}, "google_oauth": {"enabled": False, "client_id": "", "client_secret_env": "GOOGLE_CLIENT_SECRET", "allowed_domains": []}}
+    return _read_json(HITL_FILE)
+
+
+@app.put("/api/hitl-config")
+async def save_hitl_config(request: Request):
+    """Write hitl.json config."""
+    data = await request.json()
+    _write_json(HITL_FILE, data)
     return {"ok": True}
 
 
@@ -2821,7 +2838,8 @@ def hitl_list_users():
                        COALESCE(
                            json_agg(json_build_object('team_id', tm.team_id, 'role', tm.role))
                            FILTER (WHERE tm.team_id IS NOT NULL), '[]'
-                       ) as teams
+                       ) as teams,
+                       COALESCE(u.auth_type, 'local') as auth_type
                 FROM project.hitl_users u
                 LEFT JOIN project.hitl_team_members tm ON tm.user_id = u.id
                 GROUP BY u.id
@@ -2834,9 +2852,67 @@ def hitl_list_users():
                 "created_at": r[5].isoformat() if r[5] else None,
                 "last_login": r[6].isoformat() if r[6] else None,
                 "teams": r[7] if isinstance(r[7], list) else json.loads(r[7] or "[]"),
+                "auth_type": r[8],
             } for r in rows]
     finally:
         conn.close()
+
+
+def _generate_password(length: int = 12) -> str:
+    """Generate a strong random password."""
+    import string
+    alphabet = string.ascii_letters + string.digits + "!@#$%&*"
+    while True:
+        pw = ''.join(secrets.choice(alphabet) for _ in range(length))
+        # Ensure at least one of each category
+        if (any(c.islower() for c in pw) and any(c.isupper() for c in pw)
+                and any(c.isdigit() for c in pw) and any(c in "!@#$%&*" for c in pw)):
+            return pw
+
+
+def _send_welcome_email(to_email: str, temp_password: str, reset_url: str):
+    """Send welcome email with temporary password and reset link."""
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    env = _env_dict()
+    smtp_host = env.get("SMTP_HOST", "")
+    smtp_port = int(env.get("SMTP_PORT", "587"))
+    smtp_user = env.get("SMTP_USER", "")
+    smtp_password = env.get("SMTP_PASSWORD", "")
+    if not all([smtp_host, smtp_user, smtp_password]):
+        logging.warning("SMTP not configured — welcome email not sent")
+        return False
+    msg = MIMEMultipart("alternative")
+    msg["From"] = f"LandGraph <{smtp_user}>"
+    msg["To"] = to_email
+    msg["Subject"] = "[LandGraph] Bienvenue — Activez votre compte"
+    html = f"""\
+<html><body style="font-family:sans-serif;color:#333">
+<h2>Bienvenue sur LandGraph</h2>
+<p>Un compte a ete cree pour vous.</p>
+<p>Votre mot de passe temporaire : <code style="background:#f0f0f0;padding:4px 8px;border-radius:4px;font-size:1.1em">{temp_password}</code></p>
+<p>Cliquez sur le lien ci-dessous pour definir votre mot de passe :</p>
+<p><a href="{reset_url}" style="display:inline-block;padding:10px 24px;background:#3b82f6;color:white;text-decoration:none;border-radius:6px">Definir mon mot de passe</a></p>
+<p style="color:#888;font-size:0.85em">Ce lien expire dans 24 heures. Si vous n'etes pas a l'origine de cette demande, ignorez cet email.</p>
+<hr style="border:none;border-top:1px solid #eee;margin:2rem 0"/>
+<p style="color:#aaa;font-size:0.8em">LandGraph Multi-Agent Platform</p>
+</body></html>"""
+    msg.attach(MIMEText(html, "html"))
+    try:
+        if smtp_port == 465:
+            with smtplib.SMTP_SSL(smtp_host, smtp_port) as server:
+                server.login(smtp_user, smtp_password)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(smtp_host, smtp_port) as server:
+                server.starttls()
+                server.login(smtp_user, smtp_password)
+                server.send_message(msg)
+        return True
+    except Exception as e:
+        logging.error(f"Failed to send welcome email: {e}")
+        return False
 
 
 @app.post("/api/hitl/users")
@@ -2845,14 +2921,15 @@ def hitl_create_user(req: Request):
     from passlib.context import CryptContext
     body = asyncio.get_event_loop().run_until_complete(req.json())
     email = body.get("email", "").strip()
-    display_name = body.get("display_name", "").strip()
-    password = body.get("password", "").strip()
     role = body.get("role", "member")
     team_ids = body.get("teams", [])
-    if not email or not password:
-        raise HTTPException(400, "Email et mot de passe requis")
+    if not email:
+        raise HTTPException(400, "Email requis")
+    # Generate strong temporary password
+    temp_password = _generate_password(12)
     pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
-    hashed = pwd_ctx.hash(password)
+    hashed = pwd_ctx.hash(temp_password)
+    display_name = email.split("@")[0]
     uri = _env_dict().get("DATABASE_URI", "")
     if not uri:
         raise HTTPException(500, "DATABASE_URI not configured")
@@ -2860,10 +2937,10 @@ def hitl_create_user(req: Request):
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO project.hitl_users (email, password_hash, display_name, role)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO project.hitl_users (email, password_hash, display_name, role, auth_type)
+                VALUES (%s, %s, %s, %s, 'local')
                 RETURNING id
-            """, (email, hashed, display_name or email.split("@")[0], role))
+            """, (email, hashed, display_name, role))
             uid = cur.fetchone()[0]
             for tid in team_ids:
                 cur.execute("""
@@ -2871,7 +2948,24 @@ def hitl_create_user(req: Request):
                     VALUES (%s, %s, 'member')
                     ON CONFLICT DO NOTHING
                 """, (uid, tid))
-        return {"ok": True, "id": str(uid)}
+            # Generate reset token (JWT, 24h expiry)
+            from jose import jwt as jose_jwt
+            from datetime import datetime, timedelta, timezone
+            reset_secret = _env_dict().get("MCP_SECRET", "change-me-hitl-secret")
+            reset_token = jose_jwt.encode(
+                {"sub": str(uid), "email": email, "purpose": "reset",
+                 "exp": datetime.now(timezone.utc) + timedelta(hours=24)},
+                reset_secret, algorithm="HS256"
+            )
+            # Build reset URL (HITL console on port 8090)
+            hitl_host = _env_dict().get("HITL_PUBLIC_URL", "")
+            if not hitl_host:
+                # Fallback: same host as admin, port 8090
+                hitl_host = "http://localhost:8090"
+            reset_url = f"{hitl_host}/reset-password?token={reset_token}"
+            # Send welcome email
+            email_sent = _send_welcome_email(email, temp_password, reset_url)
+        return {"ok": True, "id": str(uid), "email_sent": email_sent}
     except psycopg.errors.UniqueViolation:
         raise HTTPException(409, "Email deja utilise")
     finally:

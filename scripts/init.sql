@@ -69,9 +69,10 @@ CREATE INDEX IF NOT EXISTS idx_hitl_created ON project.hitl_requests(created_at 
 CREATE TABLE IF NOT EXISTS project.hitl_users (
     id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     email         TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
+    password_hash TEXT,
     display_name  TEXT NOT NULL DEFAULT '',
-    role          TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('admin', 'member')),
+    role          TEXT NOT NULL DEFAULT 'undefined' CHECK (role IN ('admin', 'member', 'undefined')),
+    auth_type     TEXT NOT NULL DEFAULT 'local' CHECK (auth_type IN ('local', 'google')),
     is_active     BOOLEAN DEFAULT true,
     created_at    TIMESTAMPTZ DEFAULT NOW(),
     last_login    TIMESTAMPTZ
@@ -108,5 +109,22 @@ BEGIN
         WHERE table_schema = 'project' AND table_name = 'mcp_api_keys' AND column_name = 'scopes'
     ) THEN
         ALTER TABLE project.mcp_api_keys ADD COLUMN scopes JSONB NOT NULL DEFAULT '["call_agent"]';
+    END IF;
+END $$;
+
+-- Migration: add auth_type column + allow nullable password_hash + undefined role
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'project' AND table_name = 'hitl_users' AND column_name = 'auth_type'
+    ) THEN
+        ALTER TABLE project.hitl_users ADD COLUMN auth_type TEXT NOT NULL DEFAULT 'local';
+        ALTER TABLE project.hitl_users ALTER COLUMN password_hash DROP NOT NULL;
+        -- Update role constraint to include 'undefined'
+        ALTER TABLE project.hitl_users DROP CONSTRAINT IF EXISTS hitl_users_role_check;
+        ALTER TABLE project.hitl_users ADD CONSTRAINT hitl_users_role_check CHECK (role IN ('admin', 'member', 'undefined'));
+        -- Add auth_type constraint
+        ALTER TABLE project.hitl_users ADD CONSTRAINT hitl_users_auth_type_check CHECK (auth_type IN ('local', 'google'));
     END IF;
 END $$;

@@ -24,9 +24,27 @@ logger = logging.getLogger("hitl-console")
 
 # ── Config ──────────────────────────────────────
 DATABASE_URI = os.getenv("DATABASE_URI", "")
-JWT_SECRET = os.getenv("HITL_JWT_SECRET", os.getenv("MCP_SECRET", "change-me-hitl-secret"))
 JWT_ALGORITHM = "HS256"
-JWT_EXPIRE_HOURS = int(os.getenv("HITL_JWT_EXPIRE_HOURS", "24"))
+
+
+def _load_hitl_config() -> dict:
+    """Load hitl.json from config directory."""
+    for path in ["/app/config/hitl.json", "config/hitl.json"]:
+        if os.path.exists(path):
+            with open(path) as f:
+                return json.load(f)
+    return {}
+
+
+_hitl_cfg = _load_hitl_config()
+_auth_cfg = _hitl_cfg.get("auth", {})
+_google_cfg = _hitl_cfg.get("google_oauth", {})
+
+JWT_SECRET = os.getenv("HITL_JWT_SECRET", os.getenv("MCP_SECRET", "change-me-hitl-secret"))
+JWT_EXPIRE_HOURS = int(_auth_cfg.get("jwt_expire_hours", 24))
+GOOGLE_ENABLED = _google_cfg.get("enabled", False)
+GOOGLE_CLIENT_ID = _google_cfg.get("client_id", "")
+GOOGLE_ALLOWED_DOMAINS = _google_cfg.get("allowed_domains", [])
 
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -152,14 +170,22 @@ def login(req: LoginRequest):
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, email, password_hash, display_name, role, is_active
+                SELECT id, email, password_hash, display_name, role, is_active,
+                       COALESCE(auth_type, 'local') as auth_type
                 FROM project.hitl_users WHERE email = %s
             """, (req.email,))
             row = cur.fetchone()
-            if not row or not pwd_ctx.verify(req.password, row[2]):
+            if not row:
+                raise HTTPException(401, "Email ou mot de passe incorrect")
+            # Google users cannot login with password
+            if row[6] == 'google':
+                raise HTTPException(400, "Ce compte utilise Google. Connectez-vous avec Google.")
+            if not row[2] or not pwd_ctx.verify(req.password, row[2]):
                 raise HTTPException(401, "Email ou mot de passe incorrect")
             if not row[5]:
                 raise HTTPException(403, "Compte desactive")
+            if row[4] == 'undefined':
+                raise HTTPException(403, "Votre compte est en attente de validation par un administrateur")
             user_id = str(row[0])
             # Get teams
             cur.execute("""
@@ -200,14 +226,96 @@ def register(req: RegisterRequest):
             hashed = pwd_ctx.hash(req.password)
             display_name = req.display_name or req.email.split("@")[0]
             cur.execute("""
-                INSERT INTO project.hitl_users (email, password_hash, display_name, role)
-                VALUES (%s, %s, %s, 'member')
+                INSERT INTO project.hitl_users (email, password_hash, display_name, role, auth_type)
+                VALUES (%s, %s, %s, 'undefined', 'local')
                 RETURNING id
             """, (req.email, hashed, display_name))
             uid = str(cur.fetchone()[0])
-        return {"ok": True, "id": uid, "message": "Compte cree. Connectez-vous pour acceder a la console."}
+        return {"ok": True, "id": uid, "message": "Compte cree. Un administrateur doit valider votre acces."}
     finally:
         conn.close()
+
+
+class GoogleAuthRequest(BaseModel):
+    credential: str  # Google ID token
+
+
+@app.post("/api/auth/google")
+def google_login(req: GoogleAuthRequest):
+    """Authenticate via Google ID token."""
+    import httpx
+    if not GOOGLE_ENABLED or not GOOGLE_CLIENT_ID:
+        raise HTTPException(500, "Google OAuth non configure")
+    # Verify Google ID token via Google's tokeninfo endpoint
+    resp = httpx.get(f"https://oauth2.googleapis.com/tokeninfo?id_token={req.credential}", timeout=10)
+    if resp.status_code != 200:
+        raise HTTPException(401, "Token Google invalide")
+    google_data = resp.json()
+    # Verify audience matches our client ID
+    if google_data.get("aud") != GOOGLE_CLIENT_ID:
+        raise HTTPException(401, "Token Google invalide (audience)")
+    email = google_data.get("email", "")
+    if not email or str(google_data.get("email_verified", "")).lower() != "true":
+        raise HTTPException(401, "Email Google non verifie")
+    # Check allowed domains
+    if GOOGLE_ALLOWED_DOMAINS:
+        domain = email.split("@")[1] if "@" in email else ""
+        if domain not in GOOGLE_ALLOWED_DOMAINS:
+            raise HTTPException(403, f"Le domaine {domain} n'est pas autorise")
+    display_name = google_data.get("name", email.split("@")[0])
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            # Check if user exists
+            cur.execute("""
+                SELECT id, email, display_name, role, is_active,
+                       COALESCE(auth_type, 'local') as auth_type
+                FROM project.hitl_users WHERE email = %s
+            """, (email,))
+            row = cur.fetchone()
+            if row:
+                # Existing user
+                if not row[4]:
+                    raise HTTPException(403, "Compte desactive")
+                user_id = str(row[0])
+                role = row[3]
+                display_name = row[2]
+                cur.execute("UPDATE project.hitl_users SET last_login = NOW() WHERE id = %s", (row[0],))
+            else:
+                # New user — create with role 'undefined', no password
+                cur.execute("""
+                    INSERT INTO project.hitl_users (email, password_hash, display_name, role, auth_type)
+                    VALUES (%s, NULL, %s, 'undefined', 'google')
+                    RETURNING id
+                """, (email, display_name))
+                user_id = str(cur.fetchone()[0])
+                role = "undefined"
+            if role == 'undefined':
+                raise HTTPException(403, "Votre compte est en attente de validation par un administrateur")
+            # Get teams
+            cur.execute("SELECT team_id, role FROM project.hitl_team_members WHERE user_id = %s", (user_id,))
+            teams = [r[0] for r in cur.fetchall()]
+        token = create_token(user_id, email, role, teams)
+        return {
+            "token": token,
+            "user": {
+                "id": user_id,
+                "email": email,
+                "display_name": display_name,
+                "role": role,
+                "teams": teams,
+            },
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/api/auth/google/client-id")
+def google_client_id():
+    """Return Google Client ID for frontend (public, no auth needed)."""
+    if not GOOGLE_ENABLED:
+        return {"client_id": ""}
+    return {"client_id": GOOGLE_CLIENT_ID}
 
 
 @app.get("/api/auth/me")

@@ -3,7 +3,8 @@
     "allow": [
       "Bash(xargs ls -la)",
       "WebSearch",
-      "WebFetch(domain:docs.openlit.io)"
+      "WebFetch(domain:docs.openlit.io)",
+      "Bash(xargs wc:*)"
     ]
   }
 }

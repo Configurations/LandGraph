@@ -7,6 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/style.css?v=1">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
 
@@ -26,6 +27,12 @@
         <input class="form-input" id="login-password" type="password" placeholder="&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;" />
       </div>
       <button class="btn btn-primary" style="width:100%;letter-spacing:2px" onclick="doLogin()">CONNEXION</button>
+      <div style="display:flex;align-items:center;gap:10px;margin:14px 0 6px">
+        <hr style="flex:1;border:none;border-top:1px solid var(--border)"/>
+        <span style="font-size:9px;color:var(--text-muted);letter-spacing:1px">OU</span>
+        <hr style="flex:1;border:none;border-top:1px solid var(--border)"/>
+      </div>
+      <div id="google-signin-btn" style="display:flex;justify-content:center"></div>
       <div style="text-align:center;margin-top:14px">
         <span style="font-size:10px;color:var(--text-muted)">Pas encore de compte ?</span>
         <a style="font-size:10px;color:var(--accent-light);cursor:pointer;margin-left:4px" onclick="showRegister()">Inscription</a>

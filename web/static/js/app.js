@@ -6065,14 +6065,17 @@ function renderUsers() {
     return;
   }
   let html = `<table><thead><tr>
-    <th>Email</th><th>Nom</th><th>Role</th><th>Equipes</th><th>Actif</th><th>Derniere connexion</th><th>Actions</th>
+    <th>Email</th><th>Nom</th><th>Auth</th><th>Role</th><th>Equipes</th><th>Actif</th><th>Derniere connexion</th><th>Actions</th>
   </tr></thead><tbody>`;
   filtered.forEach(u => {
     const teamNames = (u.teams || []).map(t => `<span style="display:inline-block;font-size:0.7rem;padding:1px 5px;margin:1px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:3px">${escHtml(t.team_id)}</span>`).join('');
+    const authType = u.auth_type || 'local';
+    const roleClass = u.role === 'admin' ? 'tag-yellow' : u.role === 'undefined' ? 'tag-red' : 'tag-blue';
     html += `<tr>
       <td>${escHtml(u.email)}</td>
       <td>${escHtml(u.display_name)}</td>
-      <td><span class="tag ${u.role === 'admin' ? 'tag-yellow' : 'tag-blue'}">${escHtml(u.role)}</span></td>
+      <td><span class="tag" style="font-size:0.65rem">${escHtml(authType)}</span></td>
+      <td><span class="tag ${roleClass}">${escHtml(u.role)}</span></td>
       <td>${teamNames || '<span style="color:var(--text-secondary)">—</span>'}</td>
       <td>${u.is_active ? '<span style="color:#4ade80">Oui</span>' : '<span style="color:#f87171">Non</span>'}</td>
       <td style="font-size:0.75rem;color:var(--text-secondary)">${u.last_login ? new Date(u.last_login).toLocaleString('fr') : '—'}</td>
@@ -6094,8 +6097,9 @@ async function showAddUserModal() {
   document.getElementById('user-email').disabled = false;
   document.getElementById('user-name').value = '';
   document.getElementById('user-password').value = '';
-  document.getElementById('user-password').placeholder = 'Mot de passe';
   document.getElementById('user-role').value = 'member';
+  document.getElementById('user-edit-fields').style.display = 'none';
+  document.getElementById('user-create-hint').style.display = 'block';
   await populateTeamCheckboxes([]);
   document.getElementById('modal-user').style.display = 'flex';
 }
@@ -6112,6 +6116,8 @@ async function editUser(uid) {
   document.getElementById('user-password').value = '';
   document.getElementById('user-password').placeholder = 'Laisser vide pour ne pas changer';
   document.getElementById('user-role').value = u.role;
+  document.getElementById('user-edit-fields').style.display = 'block';
+  document.getElementById('user-create-hint').style.display = 'none';
   const userTeamIds = (u.teams || []).map(t => t.team_id);
   await populateTeamCheckboxes(userTeamIds);
   document.getElementById('modal-user').style.display = 'flex';
@@ -6145,7 +6151,6 @@ async function saveUser() {
   const teams = Array.from(document.querySelectorAll('#user-teams-checkboxes input:checked')).map(cb => cb.value);
 
   if (!editingUserId && !email) { toast('Email requis', 'error'); return; }
-  if (!editingUserId && !password) { toast('Mot de passe requis', 'error'); return; }
 
   try {
     if (editingUserId) {
@@ -6154,8 +6159,8 @@ async function saveUser() {
       await api(`/api/hitl/users/${editingUserId}`, { method: 'PUT', body });
       toast('Utilisateur mis a jour', 'success');
     } else {
-      await api('/api/hitl/users', { method: 'POST', body: { email, display_name, password, role, teams } });
-      toast('Utilisateur cree', 'success');
+      const res = await api('/api/hitl/users', { method: 'POST', body: { email, role, teams } });
+      toast(res.email_sent ? 'Utilisateur cree — email envoye' : 'Utilisateur cree — echec envoi email', res.email_sent ? 'success' : 'error');
     }
     closeModal('modal-user');
     loadUsers();

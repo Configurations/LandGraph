@@ -1,0 +1,14 @@
+{
+  "auth": {
+    "jwt_expire_hours": 24,
+    "allow_registration": true,
+    "default_role": "undefined"
+  },
+
+  "google_oauth": {
+    "enabled": false,
+    "client_id": "",
+    "client_secret_env": "GOOGLE_CLIENT_SECRET",
+    "allowed_domains": []
+  }
+}

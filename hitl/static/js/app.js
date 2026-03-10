@@ -63,6 +63,36 @@ async function doLogin() {
   }
 }
 
+async function handleGoogleCredential(response) {
+  const errEl = document.getElementById('login-error');
+  errEl.style.display = 'none';
+  try {
+    const data = await api('/api/auth/google', { method: 'POST', body: { credential: response.credential } });
+    token = data.token;
+    localStorage.setItem('hitl_token', token);
+    currentUser = data.user;
+    onLoggedIn();
+  } catch (e) {
+    errEl.textContent = e.message;
+    errEl.style.display = 'block';
+  }
+}
+
+async function initGoogleSignIn() {
+  try {
+    const data = await fetch('/api/auth/google/client-id').then(r => r.json());
+    if (!data.client_id) return;
+    google.accounts.id.initialize({
+      client_id: data.client_id,
+      callback: handleGoogleCredential,
+    });
+    google.accounts.id.renderButton(
+      document.getElementById('google-signin-btn'),
+      { theme: 'filled_black', size: 'large', width: 300, text: 'signin_with', shape: 'pill' }
+    );
+  } catch { /* Google auth not configured */ }
+}
+
 function doLogout() {
   token = '';
   currentUser = null;
@@ -427,5 +457,11 @@ document.addEventListener('DOMContentLoaded', () => {
 (async () => {
   if (await checkAuth()) {
     onLoggedIn();
+  }
+  // Init Google Sign-In when library is loaded
+  if (typeof google !== 'undefined') {
+    initGoogleSignIn();
+  } else {
+    window.addEventListener('load', () => { initGoogleSignIn(); });
   }
 })();
