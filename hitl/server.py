@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -76,7 +77,16 @@ def _load_teams() -> list[dict]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    _seed_admin()
+    # Retry DB connection (postgres may still be in recovery)
+    for attempt in range(1, 11):
+        try:
+            _seed_admin()
+            break
+        except psycopg.OperationalError as e:
+            logger.warning(f"DB not ready (attempt {attempt}/10): {e}")
+            if attempt == 10:
+                raise
+            time.sleep(3)
     logger.info("HITL Console started")
     yield
 
