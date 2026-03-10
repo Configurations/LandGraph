@@ -2,9 +2,14 @@
 PROJECT_DIR="/${HOME}/langgraph-project"
 cd "${PROJECT_DIR}"
 
-docker compose stop langgraph-admin 2>/dev/null || true
-docker compose rm -f langgraph-admin 2>/dev/null || true
-docker compose build --no-cache langgraph-admin langgraph-api discord-bot mail-bot hitl-console
+SERVICES="langgraph-admin langgraph-api discord-bot mail-bot hitl-console"
+
+echo "  Arret des services..."
+docker compose stop $SERVICES 2>/dev/null || true
+docker compose rm -f $SERVICES 2>/dev/null || true
+
+echo "  Build (--no-cache --pull)..."
+docker compose build --no-cache --pull $SERVICES
 
 docker compose up -d
 sleep 12
