@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HITL Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css?v=1">
+</head>
+<body>
+
+  <!-- Login overlay -->
+  <div class="login-overlay" id="login-screen">
+    <div class="login-box">
+      <div class="login-logo">&#x2B21;</div>
+      <div class="login-title">HITL Console</div>
+      <div class="login-sub">Connecte-toi a ton espace team</div>
+      <div class="login-error" id="login-error"></div>
+      <div class="form-group">
+        <div class="form-label">EMAIL</div>
+        <input class="form-input" id="login-email" placeholder="you@company.com" />
+      </div>
+      <div class="form-group">
+        <div class="form-label">PASSWORD</div>
+        <input class="form-input" id="login-password" type="password" placeholder="&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;" />
+      </div>
+      <button class="btn btn-primary" style="width:100%;letter-spacing:2px" onclick="doLogin()">CONNEXION</button>
+      <div style="text-align:center;margin-top:14px">
+        <span style="font-size:10px;color:var(--text-muted)">Pas encore de compte ?</span>
+        <a style="font-size:10px;color:var(--accent-light);cursor:pointer;margin-left:4px" onclick="showRegister()">Inscription</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Register overlay -->
+  <div class="login-overlay" id="register-screen" style="display:none">
+    <div class="login-box">
+      <div class="login-logo">&#x2B21;</div>
+      <div class="login-title">Inscription</div>
+      <div class="login-sub">Cree ton compte HITL</div>
+      <div class="login-error" id="register-error"></div>
+      <div class="form-group">
+        <div class="form-label">EMAIL</div>
+        <input class="form-input" id="reg-email" placeholder="you@company.com" />
+        <div id="reg-email-hint" style="font-size:9px;color:var(--text-muted);margin-top:4px"></div>
+      </div>
+      <div class="form-group">
+        <div class="form-label">NOM</div>
+        <input class="form-input" id="reg-name" placeholder="Prenom Nom" />
+      </div>
+      <div class="form-group">
+        <div class="form-label">MOT DE PASSE</div>
+        <input class="form-input" id="reg-password" type="password" placeholder="Minimum 6 caracteres" />
+      </div>
+      <div class="form-group">
+        <div class="form-label">CONFIRMER</div>
+        <input class="form-input" id="reg-password2" type="password" placeholder="Confirmer le mot de passe" />
+      </div>
+      <button class="btn btn-primary" style="width:100%;letter-spacing:2px" onclick="doRegister()">CREER MON COMPTE</button>
+      <div style="text-align:center;margin-top:14px">
+        <a style="font-size:10px;color:var(--accent-light);cursor:pointer" onclick="showLogin()">Retour a la connexion</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div class="toast-container" id="toasts"></div>
+
+  <!-- Main app (hidden until login) -->
+  <div class="app-layout" id="app" style="display:none">
+    <div class="top-bar">
+      <div class="top-bar-dot"></div>
+      <span class="top-bar-title">HITL CONSOLE</span>
+      <div class="top-bar-right">
+        <span class="top-bar-user" id="top-user"></span>
+        <button class="top-bar-logout" onclick="doLogout()">LOGOUT</button>
+      </div>
+    </div>
+    <div class="main-layout">
+      <div class="sidebar">
+        <div class="sidebar-section">FRONTEND</div>
+        <button class="sidebar-item active" data-view="inbox" onclick="switchView('inbox')">
+          Inbox <span class="sidebar-badge" id="badge-pending" style="display:none">0</span>
+        </button>
+        <button class="sidebar-item" data-view="agents" onclick="switchView('agents')">Agents</button>
+        <button class="sidebar-item" data-view="members" onclick="switchView('members')">Membres</button>
+      </div>
+      <div class="content" id="content">
+        <div class="loading">Chargement...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: invite member -->
+  <div class="modal-overlay" id="modal-invite">
+    <div class="modal">
+      <div class="modal-title">Inviter un membre</div>
+      <div class="form-group">
+        <div class="form-label">EMAIL</div>
+        <input class="form-input" id="invite-email" placeholder="membre@company.com" />
+      </div>
+      <div class="form-group">
+        <div class="form-label">NOM</div>
+        <input class="form-input" id="invite-name" placeholder="Prenom Nom" />
+      </div>
+      <div class="form-group">
+        <div class="form-label">MOT DE PASSE INITIAL</div>
+        <input class="form-input" id="invite-password" placeholder="changeme" />
+      </div>
+      <div class="form-group">
+        <div class="form-label">ROLE</div>
+        <select class="form-input" id="invite-role">
+          <option value="member">member</option>
+          <option value="admin">admin</option>
+        </select>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeModal('modal-invite')">Annuler</button>
+        <button class="btn btn-primary" onclick="doInvite()">Inviter</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js?v=1"></script>
+</body>
+</html>

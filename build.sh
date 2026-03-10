@@ -4,7 +4,7 @@ cd "${PROJECT_DIR}"
 
 docker compose stop langgraph-admin 2>/dev/null || true
 docker compose rm -f langgraph-admin 2>/dev/null || true
-docker compose build --no-cache langgraph-admin langgraph-api discord-bot mail-bot
+docker compose build --no-cache langgraph-admin langgraph-api discord-bot mail-bot hitl-console
 
 docker compose up -d
 sleep 12
@@ -15,6 +15,8 @@ docker exec -i langgraph-postgres psql -U "${POSTGRES_USER:-langgraph}" -d "${PO
 echo ""
 docker compose ps
 
+
+
 # Detecter l'IP locale (premiere interface non-loopback)
 LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 [ -z "$LOCAL_IP" ] && LOCAL_IP="localhost"
@@ -24,9 +26,12 @@ curl -s http://localhost:8123/health
 echo ""
 curl -s http://localhost:8123/status | python3 -m json.tool 2>/dev/null
 echo ""
-echo "═══════════════════════════════════════"
+echo "════════════════════════════════════════════════════════════════"
 echo "  Services disponibles :"
-echo "  API Gateway : http://${LOCAL_IP}:8123"
-echo "  Dashboard   : http://${LOCAL_IP}:8080"
-echo "  OpenLIT     : http://${LOCAL_IP}:3000"
-echo "═══════════════════════════════════════"
+echo "  API Gateway         : http://${LOCAL_IP}:8123"
+echo "  Dashboard Admin     : http://${LOCAL_IP}:8080"
+echo "  hitl web            : http://${LOCAL_IP}:8090"
+echo "  OpenLIT             : http://${LOCAL_IP}:3000"
+echo "════════════════════════════════════════════════════════════════"
+
+docker compose logs --tail 30

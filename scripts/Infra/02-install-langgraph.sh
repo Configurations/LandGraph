@@ -175,6 +175,11 @@ if curl -sf http://localhost:8080/ > /dev/null 2>&1; then
 else
     echo "  Admin web  : EN ATTENTE"
 fi
+if curl -sf http://localhost:8090/ > /dev/null 2>&1; then
+    echo "  hitl web  : OK"
+else
+    echo "  hitl web  : EN ATTENTE"
+fi
 if curl -sf http://localhost:3000/ > /dev/null 2>&1; then
     echo "  OpenLIT    : OK"
 else

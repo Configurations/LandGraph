@@ -60,7 +60,7 @@ function showSection(name) {
   document.querySelector(`.nav-item[data-section="${name}"]`).classList.add('active');
 
   // Load data on section switch
-  const loaders = { secrets: loadEnv, mcp: loadMCP, llm: loadLLM, teams: loadTeams, templates: loadTemplates, channels: loadChannels, chat: loadChat, monitoring: loadMonitoring, hitl: loadHitl, scripts: loadScripts, git: loadGit };
+  const loaders = { secrets: loadEnv, mcp: loadMCP, llm: loadLLM, teams: loadTeams, templates: loadTemplates, channels: loadChannels, chat: loadChat, monitoring: loadMonitoring, hitl: loadHitl, users: loadUsers, scripts: loadScripts, git: loadGit };
   if (loaders[name]) loaders[name]();
 }
 
@@ -6041,6 +6041,134 @@ function toggleHitlAutoRefresh() {
     hitlAutoInterval = setInterval(loadHitl, 10000);
     btn.textContent = 'Auto ON';
   }
+}
+
+// ═══════════════════════════════════════════════════
+// HITL USERS
+// ═══════════════════════════════════════════════════
+let usersData = [];
+let editingUserId = null;
+
+async function loadUsers() {
+  try {
+    usersData = await api('/api/hitl/users');
+    renderUsers();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function renderUsers() {
+  const filter = (document.getElementById('users-filter')?.value || '').toLowerCase();
+  const filtered = filter ? usersData.filter(u => u.email.toLowerCase().includes(filter)) : usersData;
+  const container = document.getElementById('users-table');
+  if (filtered.length === 0) {
+    container.innerHTML = '<p style="color:var(--text-secondary);padding:1rem">Aucun utilisateur.</p>';
+    return;
+  }
+  let html = `<table><thead><tr>
+    <th>Email</th><th>Nom</th><th>Role</th><th>Equipes</th><th>Actif</th><th>Derniere connexion</th><th>Actions</th>
+  </tr></thead><tbody>`;
+  filtered.forEach(u => {
+    const teamNames = (u.teams || []).map(t => `<span style="display:inline-block;font-size:0.7rem;padding:1px 5px;margin:1px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:3px">${escHtml(t.team_id)}</span>`).join('');
+    html += `<tr>
+      <td>${escHtml(u.email)}</td>
+      <td>${escHtml(u.display_name)}</td>
+      <td><span class="tag ${u.role === 'admin' ? 'tag-yellow' : 'tag-blue'}">${escHtml(u.role)}</span></td>
+      <td>${teamNames || '<span style="color:var(--text-secondary)">—</span>'}</td>
+      <td>${u.is_active ? '<span style="color:#4ade80">Oui</span>' : '<span style="color:#f87171">Non</span>'}</td>
+      <td style="font-size:0.75rem;color:var(--text-secondary)">${u.last_login ? new Date(u.last_login).toLocaleString('fr') : '—'}</td>
+      <td>
+        <button class="btn btn-outline btn-sm" onclick="editUser('${u.id}')">Editer</button>
+        <button class="btn btn-outline btn-sm" style="color:var(--danger)" onclick="deleteUser('${u.id}','${escHtml(u.email)}')">Suppr</button>
+      </td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
+async function showAddUserModal() {
+  editingUserId = null;
+  document.getElementById('modal-user-title').textContent = 'Nouvel utilisateur';
+  document.getElementById('user-save-btn').textContent = 'Creer';
+  document.getElementById('user-email').value = '';
+  document.getElementById('user-email').disabled = false;
+  document.getElementById('user-name').value = '';
+  document.getElementById('user-password').value = '';
+  document.getElementById('user-password').placeholder = 'Mot de passe';
+  document.getElementById('user-role').value = 'member';
+  await populateTeamCheckboxes([]);
+  document.getElementById('modal-user').style.display = 'flex';
+}
+
+async function editUser(uid) {
+  const u = usersData.find(x => x.id === uid);
+  if (!u) return;
+  editingUserId = uid;
+  document.getElementById('modal-user-title').textContent = 'Editer ' + u.email;
+  document.getElementById('user-save-btn').textContent = 'Enregistrer';
+  document.getElementById('user-email').value = u.email;
+  document.getElementById('user-email').disabled = true;
+  document.getElementById('user-name').value = u.display_name || '';
+  document.getElementById('user-password').value = '';
+  document.getElementById('user-password').placeholder = 'Laisser vide pour ne pas changer';
+  document.getElementById('user-role').value = u.role;
+  const userTeamIds = (u.teams || []).map(t => t.team_id);
+  await populateTeamCheckboxes(userTeamIds);
+  document.getElementById('modal-user').style.display = 'flex';
+}
+
+async function populateTeamCheckboxes(selectedIds) {
+  const container = document.getElementById('user-teams-checkboxes');
+  // Load teams from config
+  let allTeams = [];
+  try {
+    const data = await api('/api/teams');
+    allTeams = data.teams || [];
+  } catch { allTeams = []; }
+  if (allTeams.length === 0) {
+    container.innerHTML = '<span style="color:var(--text-secondary);font-size:0.8rem">Aucune equipe configuree</span>';
+    return;
+  }
+  container.innerHTML = allTeams.map(t => {
+    const checked = selectedIds.includes(t.id) ? 'checked' : '';
+    return `<label style="display:flex;align-items:center;gap:0.3rem;font-size:0.85rem;cursor:pointer;padding:3px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg-secondary)">
+      <input type="checkbox" value="${escHtml(t.id)}" ${checked} /> ${escHtml(t.name || t.id)}
+    </label>`;
+  }).join('');
+}
+
+async function saveUser() {
+  const email = document.getElementById('user-email').value.trim();
+  const display_name = document.getElementById('user-name').value.trim();
+  const password = document.getElementById('user-password').value;
+  const role = document.getElementById('user-role').value;
+  const teams = Array.from(document.querySelectorAll('#user-teams-checkboxes input:checked')).map(cb => cb.value);
+
+  if (!editingUserId && !email) { toast('Email requis', 'error'); return; }
+  if (!editingUserId && !password) { toast('Mot de passe requis', 'error'); return; }
+
+  try {
+    if (editingUserId) {
+      const body = { display_name, role, is_active: true, teams };
+      if (password) body.password = password;
+      await api(`/api/hitl/users/${editingUserId}`, { method: 'PUT', body });
+      toast('Utilisateur mis a jour', 'success');
+    } else {
+      await api('/api/hitl/users', { method: 'POST', body: { email, display_name, password, role, teams } });
+      toast('Utilisateur cree', 'success');
+    }
+    closeModal('modal-user');
+    loadUsers();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteUser(uid, email) {
+  if (!confirm(`Supprimer l'utilisateur ${email} ? Cette action est irreversible.`)) return;
+  try {
+    await api(`/api/hitl/users/${uid}`, { method: 'DELETE' });
+    toast('Utilisateur supprime', 'success');
+    loadUsers();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 // ═══════════════════════════════════════════════════

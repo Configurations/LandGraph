@@ -2804,6 +2804,139 @@ def _hitl_row(r) -> dict:
     }
 
 
+# ── HITL Users Management ────────────────────────────
+
+@app.get("/api/hitl/users")
+def hitl_list_users():
+    import psycopg
+    uri = _env_dict().get("DATABASE_URI", "")
+    if not uri:
+        raise HTTPException(500, "DATABASE_URI not configured")
+    conn = psycopg.connect(uri, autocommit=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT u.id, u.email, u.display_name, u.role, u.is_active,
+                       u.created_at, u.last_login,
+                       COALESCE(
+                           json_agg(json_build_object('team_id', tm.team_id, 'role', tm.role))
+                           FILTER (WHERE tm.team_id IS NOT NULL), '[]'
+                       ) as teams
+                FROM project.hitl_users u
+                LEFT JOIN project.hitl_team_members tm ON tm.user_id = u.id
+                GROUP BY u.id
+                ORDER BY u.created_at DESC
+            """)
+            rows = cur.fetchall()
+            return [{
+                "id": str(r[0]), "email": r[1], "display_name": r[2],
+                "role": r[3], "is_active": r[4],
+                "created_at": r[5].isoformat() if r[5] else None,
+                "last_login": r[6].isoformat() if r[6] else None,
+                "teams": r[7] if isinstance(r[7], list) else json.loads(r[7] or "[]"),
+            } for r in rows]
+    finally:
+        conn.close()
+
+
+@app.post("/api/hitl/users")
+def hitl_create_user(req: Request):
+    import psycopg
+    from passlib.context import CryptContext
+    body = asyncio.get_event_loop().run_until_complete(req.json())
+    email = body.get("email", "").strip()
+    display_name = body.get("display_name", "").strip()
+    password = body.get("password", "").strip()
+    role = body.get("role", "member")
+    team_ids = body.get("teams", [])
+    if not email or not password:
+        raise HTTPException(400, "Email et mot de passe requis")
+    pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    hashed = pwd_ctx.hash(password)
+    uri = _env_dict().get("DATABASE_URI", "")
+    if not uri:
+        raise HTTPException(500, "DATABASE_URI not configured")
+    conn = psycopg.connect(uri, autocommit=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO project.hitl_users (email, password_hash, display_name, role)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id
+            """, (email, hashed, display_name or email.split("@")[0], role))
+            uid = cur.fetchone()[0]
+            for tid in team_ids:
+                cur.execute("""
+                    INSERT INTO project.hitl_team_members (user_id, team_id, role)
+                    VALUES (%s, %s, 'member')
+                    ON CONFLICT DO NOTHING
+                """, (uid, tid))
+        return {"ok": True, "id": str(uid)}
+    except psycopg.errors.UniqueViolation:
+        raise HTTPException(409, "Email deja utilise")
+    finally:
+        conn.close()
+
+
+@app.put("/api/hitl/users/{user_id}")
+def hitl_update_user(user_id: str, req: Request):
+    import psycopg
+    from passlib.context import CryptContext
+    body = asyncio.get_event_loop().run_until_complete(req.json())
+    display_name = body.get("display_name", "").strip()
+    role = body.get("role", "")
+    password = body.get("password", "").strip()
+    is_active = body.get("is_active", True)
+    team_ids = body.get("teams", None)  # list or None (don't touch)
+    uri = _env_dict().get("DATABASE_URI", "")
+    if not uri:
+        raise HTTPException(500, "DATABASE_URI not configured")
+    conn = psycopg.connect(uri, autocommit=True)
+    try:
+        with conn.cursor() as cur:
+            sets = ["display_name = %s", "is_active = %s"]
+            params = [display_name, is_active]
+            if role:
+                sets.append("role = %s")
+                params.append(role)
+            if password:
+                pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+                sets.append("password_hash = %s")
+                params.append(pwd_ctx.hash(password))
+            params.append(user_id)
+            cur.execute(f"""
+                UPDATE project.hitl_users SET {', '.join(sets)}
+                WHERE id = %s
+            """, params)
+            # Update teams if provided
+            if team_ids is not None:
+                cur.execute("DELETE FROM project.hitl_team_members WHERE user_id = %s", (user_id,))
+                for tid in team_ids:
+                    cur.execute("""
+                        INSERT INTO project.hitl_team_members (user_id, team_id, role)
+                        VALUES (%s, %s, 'member')
+                        ON CONFLICT DO NOTHING
+                    """, (user_id, tid))
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/hitl/users/{user_id}")
+def hitl_delete_user(user_id: str):
+    import psycopg
+    uri = _env_dict().get("DATABASE_URI", "")
+    if not uri:
+        raise HTTPException(500, "DATABASE_URI not configured")
+    conn = psycopg.connect(uri, autocommit=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM project.hitl_users WHERE id = %s", (user_id,))
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8080)

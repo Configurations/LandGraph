@@ -144,6 +144,27 @@ services:
     networks:
       - langgraph-net
 
+  # ── HITL Console ─────────────────────────────
+  hitl-console:
+    build:
+      context: .
+      dockerfile: Dockerfile.hitl
+    container_name: langgraph-hitl
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:8090:8090"
+    depends_on:
+      langgraph-postgres:
+        condition: service_healthy
+    volumes:
+      - ./config/Teams:/app/config/Teams
+    env_file:
+      - .env
+    environment:
+      DATABASE_URI: ${DATABASE_URI}
+    networks:
+      - langgraph-net
+
   # ── OpenLIT Observability (2 containers) ──────
   openlit-clickhouse:
     image: clickhouse/clickhouse-server:24.4.1
