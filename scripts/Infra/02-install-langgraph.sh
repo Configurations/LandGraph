@@ -62,7 +62,7 @@ echo "  -> Fichiers telecharges"
 
 # Scripts utilitaires (start, stop, restart, build)
 for s in start.sh stop.sh restart.sh build.sh update.sh; do
-[ -f "${s}" ]   || wget -qO "${s}" "${REPO_RAW}/${s}" 2>/dev/null || true
+wget -qO "${s}" "${REPO_RAW}/${s}" 2>/dev/null || true
 done
 chmod +x start.sh stop.sh restart.sh build.sh  update.sh
 echo "  -> Scripts : start.sh, stop.sh, restart.sh, build.sh  update.sh"
