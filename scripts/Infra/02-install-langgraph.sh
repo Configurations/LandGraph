@@ -12,7 +12,7 @@ PROJECT_DIR="$HOME/langgraph-project"
 REPO_RAW="https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main"
 
 echo "=================================================================="
-echo "  Script 3 : Installation LangGraph v3     version 8 - 2026-03    "
+echo "  Script 3 : Installation LangGraph v3     version 1 - 2026-03-10    "
 echo "=================================================================="
 echo ""
 
@@ -31,6 +31,18 @@ echo "[1/7] Arborescence..."
 mkdir -p "${PROJECT_DIR}"/{agents/shared,config/Teams,scripts,data/backups,Shared/Teams}
 mkdir -p /opt/langgraph-data/{postgres,redis,openlit-clickhouse,openlit}
 cd "${PROJECT_DIR}"
+
+
+# ── Version check ──────────────────────────
+REMOTE_VERSION=$(wget -qO- "https://api.github.com/repos/Configurations/LandGraph/commits/main" 2>/dev/null | python3 -c "import sys,json;print(json.load(sys.stdin)['sha'][:8])" 2>/dev/null || echo "unknown")
+LOCAL_VERSION=""
+[ -f .version ] && LOCAL_VERSION=$(cat .version)
+if [ "$REMOTE_VERSION" != "unknown" ] && [ "$REMOTE_VERSION" = "$LOCAL_VERSION" ]; then
+    echo "  Version locale ${LOCAL_VERSION} identique a la version en ligne. Rien a faire."
+    exit 0
+fi
+echo "  Download de la version en ligne : ${REMOTE_VERSION}."
+
 
 # ── 2. Fichiers de config depuis GitHub ──────
 echo "[2/7] Telechargement des fichiers de config..."
@@ -134,6 +146,9 @@ cp Shared/Teams/mcp_servers.json config/mcp_servers.json 2>/dev/null || true
 
 echo "  -> Config globale OK"
 
+# ── 4e. Version ───────────────────────────
+echo "${REMOTE_VERSION}" > .version
+echo "  -> Version ${REMOTE_VERSION} downloaded"
 
 # ── 5. Environnement Python local ───────────
 echo "[5/7] Environnement Python local..."
@@ -166,13 +181,14 @@ else
     echo "  Redis      : EN ATTENTE"
 fi
 
+sleep 12
+
 # ── 7. Demarrage complet ────────────────────
 echo "[7/7] build..."
-./build.sh
+bash ./build.sh
 
 echo ""
 sleep 12
-docker compose ps
 echo ""
 
 # Verification
@@ -196,16 +212,6 @@ if curl -sf http://localhost:3000/ > /dev/null 2>&1; then
 else
     echo "  OpenLIT    : EN ATTENTE"
 fi
-
-PROJECT_DIR="/${HOME}/langgraph-project"
-cd "${PROJECT_DIR}"
-
-docker compose stop langgraph-admin 2>/dev/null || true
-docker compose rm -f langgraph-admin 2>/dev/null || true
-docker compose build --no-cache langgraph-admin langgraph-api discord-bot mail-bot hitl-console
-
-docker compose up -d
-sleep 12
 
 # Rejouer init.sql (idempotent — IF NOT EXISTS)
 echo "  -> Application du schema SQL..."
