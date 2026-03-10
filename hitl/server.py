@@ -46,7 +46,7 @@ GOOGLE_ENABLED = _google_cfg.get("enabled", False)
 GOOGLE_CLIENT_ID = _google_cfg.get("client_id", "")
 GOOGLE_ALLOWED_DOMAINS = _google_cfg.get("allowed_domains", [])
 
-pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__truncate_error=False)
 
 
 def get_conn():
@@ -63,7 +63,7 @@ def _seed_admin():
         with conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM project.hitl_users")
             if cur.fetchone()[0] == 0:
-                hashed = pwd_ctx.hash(password)
+                hashed = pwd_ctx.hash(password[:72])
                 cur.execute("""
                     INSERT INTO project.hitl_users (email, password_hash, display_name, role)
                     VALUES (%s, %s, %s, 'admin')
@@ -180,7 +180,7 @@ def login(req: LoginRequest):
             # Google users cannot login with password
             if row[6] == 'google':
                 raise HTTPException(400, "Ce compte utilise Google. Connectez-vous avec Google.")
-            if not row[2] or not pwd_ctx.verify(req.password, row[2]):
+            if not row[2] or not pwd_ctx.verify(req.password[:72], row[2]):
                 raise HTTPException(401, "Email ou mot de passe incorrect")
             if not row[5]:
                 raise HTTPException(403, "Compte desactive")
@@ -223,7 +223,7 @@ def register(req: RegisterRequest):
             cur.execute("SELECT id FROM project.hitl_users WHERE email = %s", (req.email,))
             if cur.fetchone():
                 raise HTTPException(409, "Cet email est deja utilise")
-            hashed = pwd_ctx.hash(req.password)
+            hashed = pwd_ctx.hash(req.password[:72])
             display_name = req.display_name or req.email.split("@")[0]
             cur.execute("""
                 INSERT INTO project.hitl_users (email, password_hash, display_name, role, auth_type)
@@ -577,7 +577,7 @@ def invite_member(team_id: str, req: InviteRequest, user: TokenData = Depends(ge
                 uid = row[0]
             else:
                 pw = req.password or "changeme"
-                hashed = pwd_ctx.hash(pw)
+                hashed = pwd_ctx.hash(pw[:72])
                 cur.execute("""
                     INSERT INTO project.hitl_users (email, password_hash, display_name, role)
                     VALUES (%s, %s, %s, 'member')

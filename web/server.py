@@ -2948,8 +2948,8 @@ async def hitl_create_user(req: Request):
         raise HTTPException(400, "Email requis")
     # Generate strong temporary password
     temp_password = _generate_password(12)
-    pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
-    hashed = pwd_ctx.hash(temp_password)
+    pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__truncate_error=False)
+    hashed = pwd_ctx.hash(temp_password[:72])
     display_name = email.split("@")[0]
     uri = _env_dict().get("DATABASE_URI", "")
     if not uri:
@@ -3015,9 +3015,9 @@ async def hitl_update_user(user_id: str, req: Request):
                 sets.append("role = %s")
                 params.append(role)
             if password:
-                pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+                pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__truncate_error=False)
                 sets.append("password_hash = %s")
-                params.append(pwd_ctx.hash(password))
+                params.append(pwd_ctx.hash(password[:72]))
             params.append(user_id)
             cur.execute(f"""
                 UPDATE project.hitl_users SET {', '.join(sets)}
