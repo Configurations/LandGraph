@@ -368,7 +368,13 @@ class GoogleAuthRequest(BaseModel):
 def google_login(req: GoogleAuthRequest):
     """Authenticate via Google ID token."""
     import httpx
-    if not GOOGLE_ENABLED or not GOOGLE_CLIENT_ID:
+    # Re-read config so admin dashboard changes take effect
+    cfg = _load_hitl_config()
+    g = cfg.get("google_oauth", {})
+    g_enabled = g.get("enabled", False)
+    g_client_id = g.get("client_id", "")
+    g_allowed_domains = g.get("allowed_domains", [])
+    if not g_enabled or not g_client_id:
         raise HTTPException(500, "Google OAuth non configure")
     # Verify Google ID token via Google's tokeninfo endpoint
     resp = httpx.get(f"https://oauth2.googleapis.com/tokeninfo?id_token={req.credential}", timeout=10)
@@ -376,15 +382,15 @@ def google_login(req: GoogleAuthRequest):
         raise HTTPException(401, "Token Google invalide")
     google_data = resp.json()
     # Verify audience matches our client ID
-    if google_data.get("aud") != GOOGLE_CLIENT_ID:
+    if google_data.get("aud") != g_client_id:
         raise HTTPException(401, "Token Google invalide (audience)")
     email = google_data.get("email", "")
     if not email or str(google_data.get("email_verified", "")).lower() != "true":
         raise HTTPException(401, "Email Google non verifie")
     # Check allowed domains
-    if GOOGLE_ALLOWED_DOMAINS:
+    if g_allowed_domains:
         domain = email.split("@")[1] if "@" in email else ""
-        if domain not in GOOGLE_ALLOWED_DOMAINS:
+        if domain not in g_allowed_domains:
             raise HTTPException(403, f"Le domaine {domain} n'est pas autorise")
     display_name = google_data.get("name", email.split("@")[0])
     conn = get_conn()
@@ -436,10 +442,13 @@ def google_login(req: GoogleAuthRequest):
 
 @app.get("/api/auth/google/client-id")
 def google_client_id():
-    """Return Google Client ID for frontend (public, no auth needed)."""
-    if not GOOGLE_ENABLED:
+    """Return Google Client ID for frontend (public, no auth needed).
+    Re-reads hitl.json each time so changes from the admin dashboard take effect."""
+    cfg = _load_hitl_config()
+    g = cfg.get("google_oauth", {})
+    if not g.get("enabled", False):
         return {"client_id": ""}
-    return {"client_id": GOOGLE_CLIENT_ID}
+    return {"client_id": g.get("client_id", "")}
 
 
 @app.get("/api/auth/me")
