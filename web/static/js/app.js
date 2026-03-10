@@ -2390,7 +2390,6 @@ async function loadCfgMisc() {
     const pr = _miscData.password_reset || {};
     smtpSel.value = pr.smtp_name || '';
     tplSel.value = pr.template_name || '';
-    document.getElementById('misc-reset-from').value = pr.from_address || '';
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -2401,7 +2400,6 @@ async function saveCfgMisc() {
       password_reset: {
         smtp_name: document.getElementById('misc-reset-smtp').value,
         template_name: document.getElementById('misc-reset-template').value,
-        from_address: document.getElementById('misc-reset-from').value.trim(),
       }
     };
     await api('/api/others', { method: 'PUT', body: data });
@@ -5874,7 +5872,7 @@ async function loadApiKeys() {
         const actions = k.revoked
           ? `<button class="btn btn-outline btn-sm" onclick="deleteApiKey('${k.key_hash}')" style="color:var(--error)">Supprimer</button>`
           : `<button class="btn btn-outline btn-sm" onclick="revokeApiKey('${k.key_hash}')" style="color:var(--warning)">Revoquer</button>`;
-        html += `<tr><td>${esc(k.name)}</td><td><code>${esc(k.preview)}</code></td><td>${esc(teams)}</td><td>${esc(agents)}</td><td>${esc(scopes)}</td><td>${created}</td><td>${expires}</td><td>${status}</td><td>${actions}</td></tr>`;
+        html += `<tr><td>${escHtml(k.name)}</td><td><code>${escHtml(k.preview)}</code></td><td>${escHtml(teams)}</td><td>${escHtml(agents)}</td><td>${escHtml(scopes)}</td><td>${created}</td><td>${expires}</td><td>${status}</td><td>${actions}</td></tr>`;
       }
       html += '</tbody></table>';
       container.innerHTML = html;
@@ -5889,7 +5887,7 @@ async function loadApiKeys() {
         : '<span class="tag tag-red">Non defini</span> — Ajoutez <code>MCP_SECRET</code> dans l\'onglet Secrets (.env)';
     } catch { statusEl.textContent = 'Erreur verification'; }
   } catch (e) {
-    container.innerHTML = `<p style="color:var(--error)">Erreur : ${esc(e.message)}</p>`;
+    container.innerHTML = `<p style="color:var(--error)">Erreur : ${escHtml(e.message)}</p>`;
   }
 }
 

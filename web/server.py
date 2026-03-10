@@ -2917,7 +2917,7 @@ def _send_welcome_email(to_email: str, temp_password: str, reset_url: str):
     smtp_user = smtp_cfg.get("user", "")
     use_ssl = smtp_cfg.get("use_ssl", False)
     use_tls = smtp_cfg.get("use_tls", True)
-    from_address = reset_cfg.get("from_address", "") or smtp_cfg.get("from_address", "") or smtp_user
+    from_address = smtp_cfg.get("from_address", "") or smtp_user
     from_name = smtp_cfg.get("from_name", "LandGraph")
 
     # Resolve password from env var
@@ -3000,10 +3000,17 @@ async def hitl_create_user(req: Request):
     team_ids = body.get("teams", [])
     if not email:
         raise HTTPException(400, "Email requis")
-    # Generate strong temporary password
+    # 1. Generate temporary password
     temp_password = _generate_password(12)
-    pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__truncate_error=False)
-    hashed = pwd_ctx.hash(temp_password[:72])
+    # 2. Send reset email (before saving — if email fails, don't create user)
+    hitl_host = _env_dict().get("HITL_PUBLIC_URL", "")
+    if not hitl_host:
+        hitl_host = "http://localhost:8090"
+    reset_url = hitl_host.rstrip("/")
+    email_sent = _send_welcome_email(email, temp_password, reset_url)
+    # 3. Hash password and save to DB
+    pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    hashed = pwd_ctx.hash(temp_password.encode("utf-8")[:72].decode("utf-8", errors="ignore"))
     display_name = email.split("@")[0]
     uri = _env_dict().get("DATABASE_URI", "")
     if not uri:
@@ -3023,14 +3030,6 @@ async def hitl_create_user(req: Request):
                     VALUES (%s, %s, 'member')
                     ON CONFLICT DO NOTHING
                 """, (uid, tid))
-            # Build reset URL (HITL console)
-            hitl_host = _env_dict().get("HITL_PUBLIC_URL", "")
-            if not hitl_host:
-                hitl_host = "http://localhost:8090"
-            # UrlService = base host (used in template variable ${UrlService})
-            reset_url = hitl_host.rstrip("/")
-            # Send welcome email — ${UrlService}, ${mail}, ${pwd} mapped in template
-            email_sent = _send_welcome_email(email, temp_password, reset_url)
         return {"ok": True, "id": str(uid), "email_sent": email_sent}
     except psycopg.errors.UniqueViolation:
         raise HTTPException(409, "Email deja utilise")
@@ -3060,9 +3059,9 @@ async def hitl_update_user(user_id: str, req: Request):
                 sets.append("role = %s")
                 params.append(role)
             if password:
-                pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__truncate_error=False)
+                pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
                 sets.append("password_hash = %s")
-                params.append(pwd_ctx.hash(password[:72]))
+                params.append(pwd_ctx.hash(password.encode("utf-8")[:72].decode("utf-8", errors="ignore")))
             params.append(user_id)
             cur.execute(f"""
                 UPDATE project.hitl_users SET {', '.join(sets)}
