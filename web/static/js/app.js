@@ -2356,8 +2356,58 @@ function showConfigTab(tabId) {
   if (tabId === 'cfg-llm') loadCfgLLM();
   else if (tabId === 'cfg-mcp') loadCfgMCP();
   else if (tabId === 'cfg-teams') loadCfgTeams();
+  else if (tabId === 'cfg-mail') loadMail();
   else if (tabId === 'cfg-security') { loadApiKeys(); loadAuthConfig(); }
+  else if (tabId === 'cfg-misc') loadCfgMisc();
   else if (tabId === 'cfg-git') loadCfgGit();
+}
+
+// ── Config Divers ─────────────────────────────────
+let _miscData = {};
+
+async function loadCfgMisc() {
+  try {
+    _miscData = await api('/api/others');
+    // Populate SMTP + Template dropdowns from mail config
+    const smtpSel = document.getElementById('misc-reset-smtp');
+    const tplSel = document.getElementById('misc-reset-template');
+    smtpSel.innerHTML = '<option value="">— aucun —</option>';
+    tplSel.innerHTML = '<option value="">— aucun —</option>';
+    try {
+      const mailCfg = await api('/api/mail');
+      const smtpList = Array.isArray(mailCfg.smtp) ? mailCfg.smtp : [];
+      smtpList.forEach(s => {
+        const label = `${s.name || 'sans nom'} (${s.host || '?'}:${s.port || '?'})`;
+        smtpSel.innerHTML += `<option value="${escHtml(s.name)}">${escHtml(label)}</option>`;
+      });
+      const tplList = Array.isArray(mailCfg.templates) ? mailCfg.templates : [];
+      tplList.forEach(t => {
+        const label = `${t.name || 'sans nom'}${t.subject ? ' — ' + t.subject.substring(0, 40) : ''}`;
+        tplSel.innerHTML += `<option value="${escHtml(t.name)}">${escHtml(label)}</option>`;
+      });
+    } catch (_) {}
+    // Set values
+    const pr = _miscData.password_reset || {};
+    smtpSel.value = pr.smtp_name || '';
+    tplSel.value = pr.template_name || '';
+    document.getElementById('misc-reset-from').value = pr.from_address || '';
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function saveCfgMisc() {
+  try {
+    const data = {
+      ..._miscData,
+      password_reset: {
+        smtp_name: document.getElementById('misc-reset-smtp').value,
+        template_name: document.getElementById('misc-reset-template').value,
+        from_address: document.getElementById('misc-reset-from').value.trim(),
+      }
+    };
+    await api('/api/others', { method: 'PUT', body: data });
+    _miscData = data;
+    toast('Configuration sauvegardee', 'success');
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 // ── Config LLM ────────────────────────────────────
@@ -5134,21 +5184,8 @@ function wfImportJSON() {
 let _mailData = {};
 let _discordData = {};
 
-function showChannelTab(tabId) {
-  document.querySelectorAll('.ch-tab-content').forEach(c => c.classList.remove('active'));
-  document.querySelectorAll('[data-ch-tab]').forEach(t => t.classList.remove('active'));
-  document.getElementById('ch-tab-' + tabId).classList.add('active');
-  document.querySelector(`[data-ch-tab="${tabId}"]`).classList.add('active');
-  document.getElementById('ch-save-discord').style.display = tabId === 'ch-discord' ? '' : 'none';
-  document.getElementById('ch-save-mail').style.display = tabId === 'ch-mail' ? '' : 'none';
-  if (tabId === 'ch-discord') loadDiscord();
-  else if (tabId === 'ch-mail') loadMail();
-}
-
-async function loadChannels() {
-  const active = document.querySelector('[data-ch-tab].active');
-  const tab = active ? active.getAttribute('data-ch-tab') : 'ch-discord';
-  showChannelTab(tab);
+function loadChannels() {
+  loadDiscord();
 }
 
 // ── Discord ──
@@ -5298,50 +5335,33 @@ async function loadMail() {
 
 function _renderMail() {
   const d = _mailData;
-  const smtp = d.smtp || {};
-  const imap = d.imap || {};
+  // Normalize smtp/imap/templates to arrays
+  if (!Array.isArray(d.smtp)) d.smtp = d.smtp && typeof d.smtp === 'object' ? [{ name: 'default', ...d.smtp }] : [];
+  if (!Array.isArray(d.imap)) d.imap = d.imap && typeof d.imap === 'object' ? [{ name: 'default', ...d.imap }] : [];
+  if (!Array.isArray(d.templates)) {
+    // Convert legacy dict to array
+    const t = d.templates || {};
+    d.templates = [];
+    if (t.notification_subject) d.templates.push({ name: 'notification', subject: t.notification_subject, body: '' });
+    if (t.question_subject) d.templates.push({ name: 'question', subject: t.question_subject, body: '' });
+    if (t.approval_subject) d.templates.push({ name: 'approval', subject: t.approval_subject, body: t.approval_instructions || '' });
+    if (t.reminder_prefix) d.templates.push({ name: 'reminder', subject: t.reminder_prefix, body: '' });
+    if (t.footer_text) d.templates.push({ name: 'footer', subject: '', body: t.footer_text });
+  }
   const listener = d.listener || {};
-  const tpl = d.templates || {};
   const sec = d.security || {};
 
-  // General
-  const toggle = document.getElementById('mail-enabled-toggle');
-  if (toggle) { if (d.enabled) toggle.classList.add('active'); else toggle.classList.remove('active'); }
-  const chSel = document.getElementById('mail-default-channel');
-  if (chSel) chSel.value = d.default_channel || 'discord';
-
-  // SMTP
-  document.getElementById('mail-smtp-host').value = smtp.host || '';
-  document.getElementById('mail-smtp-port').value = smtp.port || '';
-  document.getElementById('mail-smtp-user').value = smtp.user || '';
-  document.getElementById('mail-smtp-password-env').value = smtp.password_env || '';
-  document.getElementById('mail-smtp-from-address').value = smtp.from_address || '';
-  document.getElementById('mail-smtp-from-name').value = smtp.from_name || '';
-  const smtpTls = document.getElementById('mail-smtp-tls');
-  if (smtp.use_tls) smtpTls.classList.add('active'); else smtpTls.classList.remove('active');
-  const smtpSsl = document.getElementById('mail-smtp-ssl');
-  if (smtp.use_ssl) smtpSsl.classList.add('active'); else smtpSsl.classList.remove('active');
-
-  // IMAP
-  document.getElementById('mail-imap-host').value = imap.host || '';
-  document.getElementById('mail-imap-port').value = imap.port || '';
-  document.getElementById('mail-imap-user').value = imap.user || '';
-  document.getElementById('mail-imap-password-env').value = imap.password_env || '';
-  const imapSsl = document.getElementById('mail-imap-ssl');
-  if (imap.use_ssl) imapSsl.classList.add('active'); else imapSsl.classList.remove('active');
+  // SMTP + IMAP lists
+  _renderSmtpList();
+  _renderImapList();
 
   // Listener
   document.getElementById('mail-listener-interval').value = listener.poll_interval || '';
   document.getElementById('mail-listener-allowed').value = (listener.allowed_senders || []).join('\n');
   document.getElementById('mail-listener-ignore').value = (listener.ignore_patterns || []).join('\n');
 
-  // Templates
-  document.getElementById('mail-tpl-notification').value = tpl.notification_subject || '';
-  document.getElementById('mail-tpl-question').value = tpl.question_subject || '';
-  document.getElementById('mail-tpl-approval').value = tpl.approval_subject || '';
-  document.getElementById('mail-tpl-reminder').value = tpl.reminder_prefix || '';
-  document.getElementById('mail-tpl-footer').value = tpl.footer_text || '';
-  document.getElementById('mail-tpl-instructions').value = tpl.approval_instructions || '';
+  // Templates list
+  _renderTplMailList();
 
   // Security
   const secTls = document.getElementById('mail-sec-tls');
@@ -5350,86 +5370,272 @@ function _renderMail() {
   if (sec.verify_sender) secVerify.classList.add('active'); else secVerify.classList.remove('active');
   document.getElementById('mail-sec-maxsize').value = sec.max_body_size || '';
 
-  // Presets
-  const presetSel = document.getElementById('mail-preset-select');
-  presetSel.innerHTML = '<option value="">Preset...</option>';
-  for (const [name, preset] of Object.entries(d.presets || {})) {
-    const opt = document.createElement('option');
-    opt.value = name;
-    opt.textContent = name.charAt(0).toUpperCase() + name.slice(1) + (preset.notes ? ` — ${preset.notes.substring(0, 40)}` : '');
-    presetSel.appendChild(opt);
+}
+
+// ── SMTP list rendering ──
+function _renderSmtpList() {
+  const list = document.getElementById('mail-smtp-list');
+  const entries = _mailData.smtp || [];
+  if (entries.length === 0) {
+    list.innerHTML = '<p style="color:var(--text-secondary);padding:1rem;font-size:0.85rem">Aucune configuration SMTP. Cliquez sur "+ Ajouter".</p>';
+    return;
   }
-}
-
-function toggleMailEnabled() {
-  document.getElementById('mail-enabled-toggle').classList.toggle('active');
-}
-
-function applyMailPreset() {
-  const name = document.getElementById('mail-preset-select').value;
-  if (!name) { toast('Selectionnez un preset', 'error'); return; }
-  const preset = (_mailData.presets || {})[name];
-  if (!preset) return;
-  if (preset.smtp) {
-    if (preset.smtp.host) document.getElementById('mail-smtp-host').value = preset.smtp.host;
-    if (preset.smtp.port) document.getElementById('mail-smtp-port').value = preset.smtp.port;
-    const tls = document.getElementById('mail-smtp-tls');
-    if (preset.smtp.use_tls) tls.classList.add('active'); else tls.classList.remove('active');
-    const ssl = document.getElementById('mail-smtp-ssl');
-    if (preset.smtp.use_ssl) ssl.classList.add('active'); else ssl.classList.remove('active');
-  }
-  if (preset.imap) {
-    if (preset.imap.host) document.getElementById('mail-imap-host').value = preset.imap.host;
-    if (preset.imap.port) document.getElementById('mail-imap-port').value = preset.imap.port;
-    const ssl = document.getElementById('mail-imap-ssl');
-    if (preset.imap.use_ssl) ssl.classList.add('active'); else ssl.classList.remove('active');
-  }
-  toast(`Preset "${name}" applique${preset.notes ? ' — ' + preset.notes : ''}`, 'success');
-}
-
-function showAddMailPresetModal() {
-  document.getElementById('mail-preset-name').value = '';
-  document.getElementById('mail-preset-notes').value = '';
-  document.getElementById('modal-add-mail-preset').style.display = 'flex';
-}
-
-async function saveMailPreset() {
-  const name = document.getElementById('mail-preset-name').value.trim().toLowerCase().replace(/\s+/g, '_');
-  if (!name) { toast('Nom requis', 'error'); return; }
-  const notes = document.getElementById('mail-preset-notes').value.trim();
-  const _isActive = (id) => document.getElementById(id).classList.contains('active');
-
-  const preset = {
-    smtp: {
-      host: document.getElementById('mail-smtp-host').value.trim(),
-      port: parseInt(document.getElementById('mail-smtp-port').value) || 587,
-      use_tls: _isActive('mail-smtp-tls'),
-      use_ssl: _isActive('mail-smtp-ssl'),
-    },
-    imap: {
-      host: document.getElementById('mail-imap-host').value.trim(),
-      port: parseInt(document.getElementById('mail-imap-port').value) || 993,
-      use_ssl: _isActive('mail-imap-ssl'),
-    },
-  };
-  if (notes) preset.notes = notes;
-
-  if (!_mailData.presets) _mailData.presets = {};
-  _mailData.presets[name] = preset;
-
-  closeModal('modal-add-mail-preset');
-  await saveMail();
-  toast(`Preset "${name}" sauvegarde`, 'success');
-}
-
-function deleteMailPreset() {
-  const name = document.getElementById('mail-preset-select').value;
-  if (!name) { toast('Selectionnez un preset a supprimer', 'error'); return; }
-  if (!confirm(`Supprimer le preset "${name}" ?`)) return;
-  if (_mailData.presets) delete _mailData.presets[name];
-  saveMail().then(() => {
-    toast(`Preset "${name}" supprime`, 'success');
+  let html = '<table><thead><tr><th>Nom</th><th>Host</th><th>Port</th><th>TLS/SSL</th><th>Utilisateur</th><th>Expediteur</th><th>Actions</th></tr></thead><tbody>';
+  entries.forEach((s, i) => {
+    const flags = [s.use_tls ? 'TLS' : '', s.use_ssl ? 'SSL' : ''].filter(Boolean).join('+') || '—';
+    html += `<tr>
+      <td><strong>${escHtml(s.name || 'sans nom')}</strong></td>
+      <td>${escHtml(s.host || '')}</td>
+      <td>${s.port || ''}</td>
+      <td>${flags}</td>
+      <td>${escHtml(s.user || '')}</td>
+      <td>${escHtml(s.from_address || '')}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline btn-sm" onclick="showAddSmtpModal(${i})">Modifier</button>
+        <button class="btn btn-outline btn-sm" onclick="deleteSmtpEntry(${i})" style="color:var(--error)">Supprimer</button>
+      </td>
+    </tr>`;
   });
+  html += '</tbody></table>';
+  list.innerHTML = html;
+}
+
+function showAddSmtpModal(idx) {
+  const isNew = idx < 0;
+  document.getElementById('modal-smtp-title').textContent = isNew ? 'Nouvelle configuration SMTP' : 'Modifier la configuration SMTP';
+  document.getElementById('smtp-edit-idx').value = idx;
+
+  // Fill preset dropdown
+  const presetSel = document.getElementById('smtp-edit-preset');
+  presetSel.innerHTML = '<option value="">— aucun —</option>';
+  for (const [name, preset] of Object.entries(_mailData.presets || {})) {
+    if (preset.smtp) {
+      presetSel.innerHTML += `<option value="${escHtml(name)}">${name.charAt(0).toUpperCase() + name.slice(1)}${preset.notes ? ' — ' + escHtml(preset.notes.substring(0, 40)) : ''}</option>`;
+    }
+  }
+
+  const entry = isNew ? {} : (_mailData.smtp || [])[idx] || {};
+  document.getElementById('smtp-edit-name').value = entry.name || '';
+  document.getElementById('smtp-edit-host').value = entry.host || '';
+  document.getElementById('smtp-edit-port').value = entry.port || '';
+  document.getElementById('smtp-edit-user').value = entry.user || '';
+  document.getElementById('smtp-edit-password-env').value = entry.password_env || '';
+  document.getElementById('smtp-edit-from-address').value = entry.from_address || '';
+  document.getElementById('smtp-edit-from-name').value = entry.from_name || '';
+  const tls = document.getElementById('smtp-edit-tls');
+  if (entry.use_tls) tls.classList.add('active'); else tls.classList.remove('active');
+  const ssl = document.getElementById('smtp-edit-ssl');
+  if (entry.use_ssl) ssl.classList.add('active'); else ssl.classList.remove('active');
+
+  document.getElementById('modal-smtp-edit').style.display = 'flex';
+}
+
+function applySmtpPreset() {
+  const name = document.getElementById('smtp-edit-preset').value;
+  if (!name) return;
+  const preset = (_mailData.presets || {})[name];
+  if (!preset || !preset.smtp) return;
+  const s = preset.smtp;
+  if (s.host) document.getElementById('smtp-edit-host').value = s.host;
+  if (s.port) document.getElementById('smtp-edit-port').value = s.port;
+  const tls = document.getElementById('smtp-edit-tls');
+  if (s.use_tls) tls.classList.add('active'); else tls.classList.remove('active');
+  const ssl = document.getElementById('smtp-edit-ssl');
+  if (s.use_ssl) ssl.classList.add('active'); else ssl.classList.remove('active');
+  toast(`Preset "${name}" applique`, 'success');
+}
+
+async function saveSmtpEntry() {
+  const _isActive = (id) => document.getElementById(id).classList.contains('active');
+  const name = document.getElementById('smtp-edit-name').value.trim();
+  if (!name) { toast('Nom requis', 'error'); return; }
+  const entry = {
+    name,
+    host: document.getElementById('smtp-edit-host').value.trim(),
+    port: parseInt(document.getElementById('smtp-edit-port').value) || 587,
+    use_tls: _isActive('smtp-edit-tls'),
+    use_ssl: _isActive('smtp-edit-ssl'),
+    user: document.getElementById('smtp-edit-user').value.trim(),
+    password_env: document.getElementById('smtp-edit-password-env').value.trim(),
+    from_address: document.getElementById('smtp-edit-from-address').value.trim(),
+    from_name: document.getElementById('smtp-edit-from-name').value.trim(),
+  };
+  if (!Array.isArray(_mailData.smtp)) _mailData.smtp = [];
+  const idx = parseInt(document.getElementById('smtp-edit-idx').value);
+  if (idx >= 0 && idx < _mailData.smtp.length) {
+    _mailData.smtp[idx] = entry;
+  } else {
+    _mailData.smtp.push(entry);
+  }
+  closeModal('modal-smtp-edit');
+  await saveMail();
+}
+
+async function deleteSmtpEntry(idx) {
+  const entry = (_mailData.smtp || [])[idx];
+  if (!entry) return;
+  if (!confirm(`Supprimer la configuration SMTP "${entry.name || idx}" ?`)) return;
+  _mailData.smtp.splice(idx, 1);
+  await saveMail();
+}
+
+// ── IMAP list rendering ──
+function _renderImapList() {
+  const list = document.getElementById('mail-imap-list');
+  const entries = _mailData.imap || [];
+  if (entries.length === 0) {
+    list.innerHTML = '<p style="color:var(--text-secondary);padding:1rem;font-size:0.85rem">Aucune configuration IMAP. Cliquez sur "+ Ajouter".</p>';
+    return;
+  }
+  let html = '<table><thead><tr><th>Nom</th><th>Host</th><th>Port</th><th>SSL</th><th>Utilisateur</th><th>Actions</th></tr></thead><tbody>';
+  entries.forEach((s, i) => {
+    html += `<tr>
+      <td><strong>${escHtml(s.name || 'sans nom')}</strong></td>
+      <td>${escHtml(s.host || '')}</td>
+      <td>${s.port || ''}</td>
+      <td>${s.use_ssl ? 'Oui' : 'Non'}</td>
+      <td>${escHtml(s.user || '')}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline btn-sm" onclick="showAddImapModal(${i})">Modifier</button>
+        <button class="btn btn-outline btn-sm" onclick="deleteImapEntry(${i})" style="color:var(--error)">Supprimer</button>
+      </td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  list.innerHTML = html;
+}
+
+function showAddImapModal(idx) {
+  const isNew = idx < 0;
+  document.getElementById('modal-imap-title').textContent = isNew ? 'Nouvelle configuration IMAP' : 'Modifier la configuration IMAP';
+  document.getElementById('imap-edit-idx').value = idx;
+
+  // Fill preset dropdown
+  const presetSel = document.getElementById('imap-edit-preset');
+  presetSel.innerHTML = '<option value="">— aucun —</option>';
+  for (const [name, preset] of Object.entries(_mailData.presets || {})) {
+    if (preset.imap) {
+      presetSel.innerHTML += `<option value="${escHtml(name)}">${name.charAt(0).toUpperCase() + name.slice(1)}${preset.notes ? ' — ' + escHtml(preset.notes.substring(0, 40)) : ''}</option>`;
+    }
+  }
+
+  const entry = isNew ? {} : (_mailData.imap || [])[idx] || {};
+  document.getElementById('imap-edit-name').value = entry.name || '';
+  document.getElementById('imap-edit-host').value = entry.host || '';
+  document.getElementById('imap-edit-port').value = entry.port || '';
+  document.getElementById('imap-edit-user').value = entry.user || '';
+  document.getElementById('imap-edit-password-env').value = entry.password_env || '';
+  const ssl = document.getElementById('imap-edit-ssl');
+  if (entry.use_ssl) ssl.classList.add('active'); else ssl.classList.remove('active');
+
+  document.getElementById('modal-imap-edit').style.display = 'flex';
+}
+
+function applyImapPreset() {
+  const name = document.getElementById('imap-edit-preset').value;
+  if (!name) return;
+  const preset = (_mailData.presets || {})[name];
+  if (!preset || !preset.imap) return;
+  const s = preset.imap;
+  if (s.host) document.getElementById('imap-edit-host').value = s.host;
+  if (s.port) document.getElementById('imap-edit-port').value = s.port;
+  const ssl = document.getElementById('imap-edit-ssl');
+  if (s.use_ssl) ssl.classList.add('active'); else ssl.classList.remove('active');
+  toast(`Preset "${name}" applique`, 'success');
+}
+
+async function saveImapEntry() {
+  const _isActive = (id) => document.getElementById(id).classList.contains('active');
+  const name = document.getElementById('imap-edit-name').value.trim();
+  if (!name) { toast('Nom requis', 'error'); return; }
+  const entry = {
+    name,
+    host: document.getElementById('imap-edit-host').value.trim(),
+    port: parseInt(document.getElementById('imap-edit-port').value) || 993,
+    use_ssl: _isActive('imap-edit-ssl'),
+    user: document.getElementById('imap-edit-user').value.trim(),
+    password_env: document.getElementById('imap-edit-password-env').value.trim(),
+  };
+  if (!Array.isArray(_mailData.imap)) _mailData.imap = [];
+  const idx = parseInt(document.getElementById('imap-edit-idx').value);
+  if (idx >= 0 && idx < _mailData.imap.length) {
+    _mailData.imap[idx] = entry;
+  } else {
+    _mailData.imap.push(entry);
+  }
+  closeModal('modal-imap-edit');
+  await saveMail();
+}
+
+async function deleteImapEntry(idx) {
+  const entry = (_mailData.imap || [])[idx];
+  if (!entry) return;
+  if (!confirm(`Supprimer la configuration IMAP "${entry.name || idx}" ?`)) return;
+  _mailData.imap.splice(idx, 1);
+  await saveMail();
+}
+
+// ── Templates list rendering ──
+function _renderTplMailList() {
+  const list = document.getElementById('mail-tpl-list');
+  const entries = _mailData.templates || [];
+  if (entries.length === 0) {
+    list.innerHTML = '<p style="color:var(--text-secondary);padding:1rem;font-size:0.85rem">Aucun template. Cliquez sur "+ Ajouter".</p>';
+    return;
+  }
+  let html = '<table><thead><tr><th>Nom</th><th>Subject</th><th>Body</th><th>Actions</th></tr></thead><tbody>';
+  entries.forEach((t, i) => {
+    const bodyPreview = (t.body || '').substring(0, 60).replace(/\n/g, ' ');
+    html += `<tr>
+      <td><strong>${escHtml(t.name || '')}</strong></td>
+      <td>${escHtml(t.subject || '')}</td>
+      <td style="color:var(--text-secondary);font-size:0.8rem">${escHtml(bodyPreview)}${(t.body || '').length > 60 ? '...' : ''}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline btn-sm" onclick="showAddTplMailModal(${i})">Modifier</button>
+        <button class="btn btn-outline btn-sm" onclick="deleteTplMailEntry(${i})" style="color:var(--error)">Supprimer</button>
+      </td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  list.innerHTML = html;
+}
+
+function showAddTplMailModal(idx) {
+  const isNew = idx < 0;
+  document.getElementById('modal-tpl-mail-title').textContent = isNew ? 'Nouveau template' : 'Modifier le template';
+  document.getElementById('tpl-mail-edit-idx').value = idx;
+  const entry = isNew ? {} : (_mailData.templates || [])[idx] || {};
+  document.getElementById('tpl-mail-edit-name').value = entry.name || '';
+  document.getElementById('tpl-mail-edit-subject').value = entry.subject || '';
+  document.getElementById('tpl-mail-edit-body').value = entry.body || '';
+  document.getElementById('modal-tpl-mail-edit').style.display = 'flex';
+}
+
+async function saveTplMailEntry() {
+  const name = document.getElementById('tpl-mail-edit-name').value.trim();
+  if (!name) { toast('Nom requis', 'error'); return; }
+  const entry = {
+    name,
+    subject: document.getElementById('tpl-mail-edit-subject').value,
+    body: document.getElementById('tpl-mail-edit-body').value,
+  };
+  if (!Array.isArray(_mailData.templates)) _mailData.templates = [];
+  const idx = parseInt(document.getElementById('tpl-mail-edit-idx').value);
+  if (idx >= 0 && idx < _mailData.templates.length) {
+    _mailData.templates[idx] = entry;
+  } else {
+    _mailData.templates.push(entry);
+  }
+  closeModal('modal-tpl-mail-edit');
+  await saveMail();
+}
+
+async function deleteTplMailEntry(idx) {
+  const entry = (_mailData.templates || [])[idx];
+  if (!entry) return;
+  if (!confirm(`Supprimer le template "${entry.name || idx}" ?`)) return;
+  _mailData.templates.splice(idx, 1);
+  await saveMail();
 }
 
 function _collectMailData() {
@@ -5437,38 +5643,14 @@ function _collectMailData() {
   const _lines = (id) => document.getElementById(id).value.split('\n').map(l => l.trim()).filter(Boolean);
 
   return {
-    enabled: _isActive('mail-enabled-toggle'),
-    default_channel: document.getElementById('mail-default-channel').value,
-    smtp: {
-      host: document.getElementById('mail-smtp-host').value.trim(),
-      port: parseInt(document.getElementById('mail-smtp-port').value) || 587,
-      use_tls: _isActive('mail-smtp-tls'),
-      use_ssl: _isActive('mail-smtp-ssl'),
-      user: document.getElementById('mail-smtp-user').value.trim(),
-      password_env: document.getElementById('mail-smtp-password-env').value.trim(),
-      from_address: document.getElementById('mail-smtp-from-address').value.trim(),
-      from_name: document.getElementById('mail-smtp-from-name').value.trim(),
-    },
-    imap: {
-      host: document.getElementById('mail-imap-host').value.trim(),
-      port: parseInt(document.getElementById('mail-imap-port').value) || 993,
-      use_ssl: _isActive('mail-imap-ssl'),
-      user: document.getElementById('mail-imap-user').value.trim(),
-      password_env: document.getElementById('mail-imap-password-env').value.trim(),
-    },
+    smtp: _mailData.smtp || [],
+    imap: _mailData.imap || [],
     listener: {
       poll_interval: parseInt(document.getElementById('mail-listener-interval').value) || 15,
       allowed_senders: _lines('mail-listener-allowed'),
       ignore_patterns: _lines('mail-listener-ignore'),
     },
-    templates: {
-      notification_subject: document.getElementById('mail-tpl-notification').value,
-      question_subject: document.getElementById('mail-tpl-question').value,
-      approval_subject: document.getElementById('mail-tpl-approval').value,
-      reminder_prefix: document.getElementById('mail-tpl-reminder').value,
-      footer_text: document.getElementById('mail-tpl-footer').value,
-      approval_instructions: document.getElementById('mail-tpl-instructions').value,
-    },
+    templates: _mailData.templates || [],
     security: {
       require_tls: _isActive('mail-sec-tls'),
       verify_sender: _isActive('mail-sec-verify'),
@@ -5484,15 +5666,10 @@ async function saveMail() {
     await api('/api/mail', { method: 'PUT', body: data });
     _mailData = data;
     toast('Configuration mail sauvegardee', 'success');
-    // Restart mail-bot container if enabled
-    if (data.enabled) {
-      try {
-        await api('/api/monitoring/container/mail-bot/restart', { method: 'POST' });
-        toast('Container mail-bot redémarre', 'success');
-      } catch (e) {
-        toast('Config sauvegardee mais le container n\'a pas pu etre redémarre : ' + e.message, 'warning');
-      }
-    }
+    try {
+      await api('/api/monitoring/container/mail-bot/restart', { method: 'POST' });
+      toast('Container mail-bot redemarre', 'success');
+    } catch (_) { /* container may not exist */ }
   } catch (e) { toast(e.message, 'error'); }
 }
 

@@ -1,25 +1,28 @@
 {
-  "enabled": false,
-  "default_channel": "discord",
+  "smtp": [
+    {
+      "name": "default",
+      "host": "smtp.gmail.com",
+      "port": 587,
+      "use_tls": true,
+      "use_ssl": false,
+      "user": "",
+      "password_env": "SMTP_PASSWORD",
+      "from_address": "",
+      "from_name": "LangGraph Agent"
+    }
+  ],
 
-  "smtp": {
-    "host": "smtp.gmail.com",
-    "port": 587,
-    "use_tls": true,
-    "use_ssl": false,
-    "user": "",
-    "password_env": "SMTP_PASSWORD",
-    "from_address": "",
-    "from_name": "LangGraph Agent"
-  },
-
-  "imap": {
-    "host": "imap.gmail.com",
-    "port": 993,
-    "use_ssl": true,
-    "user": "",
-    "password_env": "IMAP_PASSWORD"
-  },
+  "imap": [
+    {
+      "name": "default",
+      "host": "imap.gmail.com",
+      "port": 993,
+      "use_ssl": true,
+      "user": "",
+      "password_env": "IMAP_PASSWORD"
+    }
+  ],
 
   "listener": {
     "poll_interval": 15,
@@ -31,14 +34,33 @@
     ]
   },
 
-  "templates": {
-    "notification_subject": "LangGraph — Notification",
-    "question_subject": "[LangGraph] {agent_name} — Question",
-    "approval_subject": "[LangGraph] {agent_name} — Validation requise",
-    "reminder_prefix": "Rappel : ",
-    "footer_text": "LangGraph Multi-Agent Platform",
-    "approval_instructions": "Repondez avec UN des mots suivants en debut de message :\n\n  approve  → valider et continuer\n  revise   → demander des modifications\n  reject   → rejeter"
-  },
+  "templates": [
+    {
+      "name": "notification",
+      "subject": "LangGraph — Notification",
+      "body": ""
+    },
+    {
+      "name": "question",
+      "subject": "[LangGraph] {agent_name} — Question",
+      "body": ""
+    },
+    {
+      "name": "approval",
+      "subject": "[LangGraph] {agent_name} — Validation requise",
+      "body": "Repondez avec UN des mots suivants en debut de message :\n\n  approve  → valider et continuer\n  revise   → demander des modifications\n  reject   → rejeter"
+    },
+    {
+      "name": "reminder",
+      "subject": "Rappel : {agent_name} — Validation requise",
+      "body": ""
+    },
+    {
+      "name": "footer",
+      "subject": "",
+      "body": "LangGraph Multi-Agent Platform"
+    }
+  ],
 
   "security": {
     "require_tls": true,

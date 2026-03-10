@@ -378,9 +378,17 @@ class EmailChannel(MessageChannel):
 
     def __init__(self):
         conf = self._load_config()
-        smtp = conf.get("smtp", {})
-        imap = conf.get("imap", {})
-        templates = conf.get("templates", {})
+        smtp_raw = conf.get("smtp", {})
+        # smtp can be a list (new format) or a dict (legacy)
+        smtp = smtp_raw[0] if isinstance(smtp_raw, list) and smtp_raw else smtp_raw if isinstance(smtp_raw, dict) else {}
+        imap_raw = conf.get("imap", {})
+        imap = imap_raw[0] if isinstance(imap_raw, list) and imap_raw else imap_raw if isinstance(imap_raw, dict) else {}
+        templates_raw = conf.get("templates", {})
+        # templates can be a list (new format) or a dict (legacy)
+        if isinstance(templates_raw, list):
+            tpl_map = {t["name"]: t for t in templates_raw if "name" in t}
+        else:
+            tpl_map = {}
         security = conf.get("security", {})
 
         # SMTP
@@ -400,15 +408,33 @@ class EmailChannel(MessageChannel):
         self.imap_user = imap.get("user", "") or self.smtp_user
         self.imap_password = os.getenv(imap.get("password_env", "IMAP_PASSWORD"), self.smtp_password)
 
-        # Templates
-        self.tpl_notification = templates.get("notification_subject", "LangGraph — Notification")
-        self.tpl_question = templates.get("question_subject", "[LangGraph] {agent_name} — Question")
-        self.tpl_approval = templates.get("approval_subject", "[LangGraph] {agent_name} — Validation requise")
-        self.tpl_reminder = templates.get("reminder_prefix", "Rappel : ")
-        self.tpl_footer = templates.get("footer_text", "LangGraph Multi-Agent Platform")
-        self.tpl_approval_instructions = templates.get("approval_instructions",
-            "Repondez avec UN des mots suivants en debut de message :\n\n"
-            "  approve  → valider et continuer\n  revise   → modifier\n  reject   → rejeter")
+        # Templates (new array format or legacy dict)
+        if tpl_map:
+            self.tpl_notification = tpl_map.get("notification", {}).get("subject", "LangGraph — Notification")
+            self.tpl_question = tpl_map.get("question", {}).get("subject", "[LangGraph] {agent_name} — Question")
+            self.tpl_approval = tpl_map.get("approval", {}).get("subject", "[LangGraph] {agent_name} — Validation requise")
+            self.tpl_reminder = tpl_map.get("reminder", {}).get("subject", "Rappel : ")
+            self.tpl_footer = tpl_map.get("footer", {}).get("body", "LangGraph Multi-Agent Platform")
+            self.tpl_approval_instructions = tpl_map.get("approval", {}).get("body",
+                "Repondez avec UN des mots suivants en debut de message :\n\n"
+                "  approve  → valider et continuer\n  revise   → modifier\n  reject   → rejeter")
+        elif isinstance(templates_raw, dict):
+            self.tpl_notification = templates_raw.get("notification_subject", "LangGraph — Notification")
+            self.tpl_question = templates_raw.get("question_subject", "[LangGraph] {agent_name} — Question")
+            self.tpl_approval = templates_raw.get("approval_subject", "[LangGraph] {agent_name} — Validation requise")
+            self.tpl_reminder = templates_raw.get("reminder_prefix", "Rappel : ")
+            self.tpl_footer = templates_raw.get("footer_text", "LangGraph Multi-Agent Platform")
+            self.tpl_approval_instructions = templates_raw.get("approval_instructions",
+                "Repondez avec UN des mots suivants en debut de message :\n\n"
+                "  approve  → valider et continuer\n  revise   → modifier\n  reject   → rejeter")
+        else:
+            self.tpl_notification = "LangGraph — Notification"
+            self.tpl_question = "[LangGraph] {agent_name} — Question"
+            self.tpl_approval = "[LangGraph] {agent_name} — Validation requise"
+            self.tpl_reminder = "Rappel : "
+            self.tpl_footer = "LangGraph Multi-Agent Platform"
+            self.tpl_approval_instructions = ("Repondez avec UN des mots suivants en debut de message :\n\n"
+                "  approve  → valider et continuer\n  revise   → modifier\n  reject   → rejeter")
 
         # Security
         self.require_tls = security.get("require_tls", True)

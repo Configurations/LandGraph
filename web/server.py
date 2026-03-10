@@ -83,6 +83,7 @@ SHARED_TEAMS_FILE = SHARED_TEAMS_DIR / "teams.json"
 MAIL_FILE = CONFIGS / "mail.json"
 DISCORD_FILE = CONFIGS / "discord.json"
 HITL_FILE = CONFIGS / "hitl.json"
+OTHERS_FILE = CONFIGS / "others.json"
 
 logging.basicConfig(
     level=logging.DEBUG if os.environ.get("DEBUG") else logging.INFO,
@@ -1031,7 +1032,7 @@ async def delete_throttling(env_key: str):
 async def get_mail():
     """Read mail.json config."""
     if not MAIL_FILE.exists():
-        return {"enabled": False, "default_channel": "discord", "smtp": {}, "imap": {}, "listener": {}, "templates": {}, "security": {}, "presets": {}}
+        return {"smtp": [], "imap": [], "listener": {}, "templates": {}, "security": {}, "presets": {}}
     return _read_json(MAIL_FILE)
 
 
@@ -1072,6 +1073,22 @@ async def save_hitl_config(request: Request):
     """Write hitl.json config."""
     data = await request.json()
     _write_json(HITL_FILE, data)
+    return {"ok": True}
+
+
+@app.get("/api/others")
+async def get_others():
+    """Read others.json config."""
+    if not OTHERS_FILE.exists():
+        return {"password_reset": {"smtp_name": "", "from_address": ""}}
+    return _read_json(OTHERS_FILE)
+
+
+@app.put("/api/others")
+async def save_others(request: Request):
+    """Write others.json config."""
+    data = await request.json()
+    _write_json(OTHERS_FILE, data)
     return {"ok": True}
 
 
@@ -1331,8 +1348,10 @@ async def create_api_key(req: CreateKeyRequest):
     secret = env.get("MCP_SECRET", "")
     uri = env.get("DATABASE_URI", "")
     if not secret:
-        raise HTTPException(400, "MCP_SECRET not set in .env")
+        log.warning("create_api_key: MCP_SECRET not set in .env")
+        raise HTTPException(400, "MCP_SECRET not set in .env — ajoutez MCP_SECRET=<votre-secret> dans le fichier .env")
     if not uri:
+        log.warning("create_api_key: DATABASE_URI not configured")
         raise HTTPException(500, "DATABASE_URI not configured")
 
     # Build token: lg-<base64url(payload)>.<hmac-sha256[:16]>
@@ -1365,6 +1384,7 @@ async def create_api_key(req: CreateKeyRequest):
         conn.close()
         return {"token": token, "preview": preview, "name": req.name}
     except Exception as e:
+        log.error("create_api_key failed: %s", e, exc_info=True)
         raise HTTPException(500, str(e))
 
 

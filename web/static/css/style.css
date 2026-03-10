@@ -236,6 +236,12 @@ input, select, textarea {
   font-family: inherit;
 }
 
+input[type=checkbox], input[type=radio] {
+  width: auto;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 input:focus, select:focus, textarea:focus {
   outline: none;
   border-color: var(--accent);

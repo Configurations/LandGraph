@@ -1,0 +1,7 @@
+{
+  "password_reset": {
+    "smtp_name": "",
+    "template_name": "",
+    "from_address": ""
+  }
+}
