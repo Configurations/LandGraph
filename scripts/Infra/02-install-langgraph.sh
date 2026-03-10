@@ -11,9 +11,9 @@ set -euo pipefail
 PROJECT_DIR="$HOME/langgraph-project"
 REPO_RAW="https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main"
 
-echo "=================================================================="
-echo "  Script 3 : Installation LangGraph v3     version 1 - 2026-03-10    "
-echo "=================================================================="
+echo "========================================"
+echo "  Script 3 : Installation LangGraph v3  "
+echo "========================================"
 echo ""
 
 # ── Verification pre-requis ──────────────────
