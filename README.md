@@ -19,6 +19,7 @@ Plateforme multi-agents IA auto-hebergee sur Proxmox (VM ou LXC). 13 agents spec
 │  │   ├── Discord Bot                                  │  │
 │  │   ├── Mail Bot                                     │  │
 │  │   ├── Admin Dashboard             (:8080)          │  │
+│  │   ├── HITL Console               (:8090)          │  │
 │  │   ├── OpenLIT (observabilite)      (:3000)          │  │
 │  │   └── OpenLIT ClickHouse          (interne)        │  │
 │  └────────────────────────────────────────────────────┘  │
@@ -81,7 +82,7 @@ Ce script deploie le socle complet :
 
 | Composant | Detail |
 |-----------|--------|
-| Dockerfiles | API, Discord Bot, Mail Bot, Admin |
+| Dockerfiles | API, Discord Bot, Mail Bot, Admin, HITL Console |
 | Code Python | 13 agents + orchestrateur + gateway + listeners |
 | Configs globales | `teams.json`, `llm_providers.json`, `mcp_servers.json`, `discord.json`, `mail.json` |
 | Infra | PostgreSQL 16 + pgvector, Redis 7 |
@@ -123,6 +124,7 @@ Tout est dans le dossier `config/`. Pas de config en dur dans le code.
 | `mcp_servers.json` | Serveurs MCP disponibles |
 | `discord.json` | Config Discord (prefix, aliases, channels, timeouts) |
 | `mail.json` | Config Email (SMTP, IMAP, templates, presets Gmail/Outlook/OVH) |
+| `hitl.json` | Config HITL Console (auth, Google OAuth, domaines autorises) |
 | `langgraph.json` | Config LangGraph |
 | `Team1/` | Dossier equipe : registry, workflow, prompts |
 
@@ -156,6 +158,13 @@ MCP_SECRET=xxxxx
 # Admin
 WEB_ADMIN_USERNAME=admin
 WEB_ADMIN_PASSWORD=xxxxx
+
+# HITL Console
+HITL_JWT_SECRET=xxxxx              # Secret JWT (fallback: MCP_SECRET)
+HITL_ADMIN_EMAIL=admin@company.com # Email admin initial (seed au 1er demarrage)
+HITL_ADMIN_PASSWORD=xxxxx          # Password admin initial (seed)
+HITL_PUBLIC_URL=https://hitl.company.com  # URL publique (pour les liens de reset password)
+GOOGLE_CLIENT_SECRET=xxxxx         # Secret Google OAuth (si google_oauth.enabled dans hitl.json)
 ```
 
 > Toute la config non-secrete (hosts, ports, channels, aliases, templates) est dans les fichiers JSON.
@@ -219,9 +228,14 @@ langgraph-project/
 │   ├── mcp_servers.json            ← MCP partages
 │   └── teams.json
 │
+├── hitl/                           ← Console HITL (validation humaine)
+│   ├── server.py                   ← FastAPI (auth locale + Google OAuth)
+│   ├── requirements.txt            ← Deps (fastapi, passlib, httpx, jose)
+│   └── static/                     ← Frontend (login, inbox, agents, membres)
+│
 ├── web/                            ← Dashboard admin
 ├── docker-compose.yml
-├── Dockerfile / Dockerfile.discord / Dockerfile.mail / Dockerfile.admin
+├── Dockerfile / Dockerfile.discord / Dockerfile.mail / Dockerfile.admin / Dockerfile.hitl
 ├── .env                            ← Secrets uniquement
 ├── start.sh / stop.sh / restart.sh / build.sh
 └── requirements.txt
@@ -307,7 +321,7 @@ Interface web pour gerer la plateforme sans toucher au code ni aux fichiers. Aut
 | **Secrets** | Gestion du `.env` — ajout, modification, suppression de variables. Valeurs masquees. |
 | **MCP** | Catalogue de 29 serveurs MCP. Installation en un clic, activation/desactivation par agent, variables d'environnement requises. |
 | **LLM** | Configuration des providers dans `llm_providers.json`. Ajout de providers, choix du modele, test de connexion. |
-| **Equipes** | CRUD complet des equipes. Pour chaque equipe : registry des agents, prompts (edition en ligne), workflow (editeur visuel avec validation), MCP access. |
+| **Configuration** | CRUD complet des equipes. Pour chaque equipe : registry des agents, prompts (edition en ligne), workflow (editeur visuel avec validation), MCP access. Sous-onglets : Modeles LLM, Services MCP, Equipes, Securite, Enregistrement. |
 | **Channels** | Configuration Discord (`discord.json`) et Email (`mail.json`) depuis l'interface. Sous-onglets Discord / Mail. |
 | **Chat** | Test en direct des providers LLM configures. Choix du modele, temperature, envoi de messages. |
 | **Scripts** | Boutons start / stop / restart / build avec sortie terminal en temps reel. |
@@ -333,7 +347,17 @@ Interface web pour gerer la plateforme sans toucher au code ni aux fichiers. Aut
 - Templates (sujets des mails, instructions de validation, footer)
 - Securite (require TLS, verification expediteur, taille max body)
 
-### Equipes — Workflow Editor
+### Configuration — Securite
+
+Trois blocs collapsibles :
+
+- **Cles API (MCP)** : CRUD des cles d'acces au serveur MCP SSE, statut MCP_SECRET
+- **Google OpenID Connect** : toggle enabled/disabled, Client ID, variable d'environnement du secret, domaines autorises. Badge de statut Active/Desactive
+- **Parametres generaux** : duree du JWT (heures), role par defaut des nouveaux comptes, toggle inscription ouverte
+
+Lecture/ecriture du fichier `config/hitl.json`.
+
+### Configuration — Workflow Editor
 
 - Editeur visuel des phases (drag & drop)
 - Configuration des agents par phase (parallel group, required, depends_on, delegated_by)
@@ -356,6 +380,7 @@ http://<IP-VM>:8080
 |---------|------|-------|
 | LangGraph API | 8123 | Reseau local |
 | Admin Dashboard | 8080 | Reseau local |
+| HITL Console | 8090 | Reseau local |
 | OpenLIT | 3000 | Reseau local |
 | OTel gRPC | 4317 | localhost uniquement |
 | OTel HTTP | 4318 | localhost uniquement |
@@ -371,6 +396,108 @@ http://<IP-VM>:8080
 ./build.sh     # Rebuild les images + demarre
 ```
 
+## HITL Console (port 8090)
+
+Console web pour la validation humaine (Human-In-The-Loop). Les utilisateurs repondent aux questions des agents, approuvent/rejettent les demandes, et suivent l'activite en temps reel via WebSocket.
+
+### Acces
+
+```
+http://<IP-VM>:8090
+```
+
+Au premier demarrage, un compte admin est cree automatiquement (`HITL_ADMIN_EMAIL` / `HITL_ADMIN_PASSWORD` dans `.env`).
+
+### Authentification
+
+Deux modes supportes. Dans les deux cas, les nouveaux comptes sont crees avec le role `undefined` (aucun acces) et doivent etre valides par un administrateur dans le dashboard admin (port 8080, onglet Utilisateurs).
+
+| Mode | Description |
+|------|-------------|
+| **Email/password** | Inscription classique. L'admin cree un utilisateur ou l'utilisateur s'inscrit lui-meme. |
+| **Google OAuth** | Connexion via compte Google. Pas de mot de passe stocke (`password_hash = NULL`). |
+
+### Roles
+
+| Role | Acces |
+|------|-------|
+| `undefined` | Aucun — en attente de validation par un administrateur |
+| `member` | Equipes assignees — repondre aux questions des agents |
+| `admin` | Toutes les equipes + gestion des membres |
+
+### Configurer Google OAuth
+
+**1. Creer les identifiants Google**
+
+1. Aller sur [Google Cloud Console](https://console.cloud.google.com/)
+2. Creer un projet (ou en selectionner un existant)
+3. Aller dans **API et services** → **Ecran de consentement OAuth**
+   - Type : Externe (ou Interne si Google Workspace)
+   - Remplir le nom de l'app, email de contact
+4. Aller dans **API et services** → **Identifiants** → **Creer des identifiants** → **ID client OAuth 2.0**
+   - Type d'application : **Application Web**
+   - Origines JavaScript autorisees : ajouter l'URL de votre HITL Console (ex: `https://hitl.company.com` ou `http://192.168.1.100:8090` pour le dev)
+   - URI de redirection : **aucun** (on utilise Google Identity Services, pas le flux OAuth classique)
+5. Copier le **Client ID** (format : `123456789-xxxxxxxx.apps.googleusercontent.com`)
+6. Copier le **Client Secret** dans `.env` : `GOOGLE_CLIENT_SECRET=GOCxxxxxxxx`
+
+**2. Configurer `config/hitl.json`**
+
+```json
+{
+  "auth": {
+    "jwt_expire_hours": 24,
+    "allow_registration": true,
+    "default_role": "undefined"
+  },
+  "google_oauth": {
+    "enabled": true,
+    "client_id": "123456789-xxxxxxxx.apps.googleusercontent.com",
+    "client_secret_env": "GOOGLE_CLIENT_SECRET",
+    "allowed_domains": ["company.com"]
+  }
+}
+```
+
+| Champ | Description |
+|-------|-------------|
+| `enabled` | `true` pour afficher le bouton "Sign in with Google" sur la page de login |
+| `client_id` | Identifiant public Google (non sensible, stocke en JSON) |
+| `client_secret_env` | Nom de la variable `.env` contenant le secret Google |
+| `allowed_domains` | Liste blanche de domaines email autorises. Vide `[]` = tous les domaines |
+
+**3. Redemarrer la console HITL**
+
+```bash
+docker compose restart hitl-console
+```
+
+### Flux de connexion Google
+
+```
+1. L'utilisateur clique "Sign in with Google" sur la page de login
+2. Google Identity Services affiche la fenetre de selection de compte
+3. Google renvoie un ID token (JWT signe par Google)
+4. Le frontend envoie le token au backend : POST /api/auth/google
+5. Le backend verifie le token via googleapis.com/tokeninfo
+   - Verifie l'audience (client_id)
+   - Verifie que l'email est verifie
+   - Verifie le domaine (si allowed_domains configure)
+6. Si l'utilisateur n'existe pas → creation avec role='undefined', auth_type='google'
+7. HTTP 403 : "Votre compte est en attente de validation par un administrateur"
+8. L'admin valide dans le dashboard admin (port 8080) : assigne un role + des equipes
+9. L'utilisateur peut se reconnecter avec Google et acceder a la console
+```
+
+### Validation des utilisateurs par l'admin
+
+Dans le dashboard admin (port 8080), onglet **Utilisateurs** :
+
+- Les utilisateurs en attente apparaissent avec le role `undefined` (badge rouge)
+- La colonne **Auth** indique le type : `local` ou `google`
+- Cliquer **Editer** pour assigner un role (`member` ou `admin`) et des equipes
+- L'utilisateur pourra se connecter des la prochaine tentative
+
 ## MCP Server — agents comme tools
 
 Chaque agent LandGraph est exposable comme tool MCP via SSE. Un client MCP externe (Claude Desktop, autre plateforme) peut appeler vos agents directement.
@@ -380,7 +507,7 @@ Endpoint:  GET http://<IP>:8123/mcp/{team_id}/sse
 Auth:      Authorization: Bearer lg-xxxxx.yyyy
 ```
 
-**Gestion des cles API** : dashboard admin → Equipes → Securite. Les tokens sont signes HMAC-SHA256 (verification sans DB), puis valides en PostgreSQL (revocation, expiration).
+**Gestion des cles API** : dashboard admin → Configuration → Securite. Les tokens sont signes HMAC-SHA256 (verification sans DB), puis valides en PostgreSQL (revocation, expiration).
 
 **Configuration client** (ex: Claude Desktop) :
 ```json

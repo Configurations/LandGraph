@@ -2871,20 +2871,40 @@ def _generate_password(length: int = 12) -> str:
 
 
 def _send_welcome_email(to_email: str, temp_password: str, reset_url: str):
-    """Send welcome email with temporary password and reset link."""
+    """Send welcome email with temporary password and reset link.
+
+    Reads SMTP settings from config/mail.json.  The password is resolved
+    from the env-var named in smtp.password_env (default SMTP_PASSWORD).
+    """
     import smtplib
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
+
+    mail_cfg = _read_json(MAIL_FILE) if MAIL_FILE.exists() else {}
+    smtp_cfg = mail_cfg.get("smtp", {})
+    templates_cfg = mail_cfg.get("templates", {})
+
+    smtp_host = smtp_cfg.get("host", "")
+    smtp_port = int(smtp_cfg.get("port", 587))
+    smtp_user = smtp_cfg.get("user", "")
+    use_ssl = smtp_cfg.get("use_ssl", False)
+    use_tls = smtp_cfg.get("use_tls", True)
+    from_address = smtp_cfg.get("from_address", "") or smtp_user
+    from_name = smtp_cfg.get("from_name", "LandGraph")
+
+    # Resolve password from env var referenced in config
+    password_env = smtp_cfg.get("password_env", "SMTP_PASSWORD")
     env = _env_dict()
-    smtp_host = env.get("SMTP_HOST", "")
-    smtp_port = int(env.get("SMTP_PORT", "587"))
-    smtp_user = env.get("SMTP_USER", "")
-    smtp_password = env.get("SMTP_PASSWORD", "")
+    smtp_password = env.get(password_env, "")
+
     if not all([smtp_host, smtp_user, smtp_password]):
-        logging.warning("SMTP not configured — welcome email not sent")
+        logging.warning("SMTP not configured in mail.json — welcome email not sent")
         return False
+
+    footer = templates_cfg.get("footer_text", "LandGraph Multi-Agent Platform")
+
     msg = MIMEMultipart("alternative")
-    msg["From"] = f"LandGraph <{smtp_user}>"
+    msg["From"] = f"{from_name} <{from_address}>"
     msg["To"] = to_email
     msg["Subject"] = "[LandGraph] Bienvenue — Activez votre compte"
     html = f"""\
@@ -2896,17 +2916,18 @@ def _send_welcome_email(to_email: str, temp_password: str, reset_url: str):
 <p><a href="{reset_url}" style="display:inline-block;padding:10px 24px;background:#3b82f6;color:white;text-decoration:none;border-radius:6px">Definir mon mot de passe</a></p>
 <p style="color:#888;font-size:0.85em">Ce lien expire dans 24 heures. Si vous n'etes pas a l'origine de cette demande, ignorez cet email.</p>
 <hr style="border:none;border-top:1px solid #eee;margin:2rem 0"/>
-<p style="color:#aaa;font-size:0.8em">LandGraph Multi-Agent Platform</p>
+<p style="color:#aaa;font-size:0.8em">{footer}</p>
 </body></html>"""
     msg.attach(MIMEText(html, "html"))
     try:
-        if smtp_port == 465:
+        if use_ssl:
             with smtplib.SMTP_SSL(smtp_host, smtp_port) as server:
                 server.login(smtp_user, smtp_password)
                 server.send_message(msg)
         else:
             with smtplib.SMTP(smtp_host, smtp_port) as server:
-                server.starttls()
+                if use_tls:
+                    server.starttls()
                 server.login(smtp_user, smtp_password)
                 server.send_message(msg)
         return True
@@ -2916,10 +2937,10 @@ def _send_welcome_email(to_email: str, temp_password: str, reset_url: str):
 
 
 @app.post("/api/hitl/users")
-def hitl_create_user(req: Request):
+async def hitl_create_user(req: Request):
     import psycopg
     from passlib.context import CryptContext
-    body = asyncio.get_event_loop().run_until_complete(req.json())
+    body = await req.json()
     email = body.get("email", "").strip()
     role = body.get("role", "member")
     team_ids = body.get("teams", [])
@@ -2973,10 +2994,10 @@ def hitl_create_user(req: Request):
 
 
 @app.put("/api/hitl/users/{user_id}")
-def hitl_update_user(user_id: str, req: Request):
+async def hitl_update_user(user_id: str, req: Request):
     import psycopg
     from passlib.context import CryptContext
-    body = asyncio.get_event_loop().run_until_complete(req.json())
+    body = await req.json()
     display_name = body.get("display_name", "").strip()
     role = body.get("role", "")
     password = body.get("password", "").strip()

@@ -23,6 +23,7 @@ LandGraph est une plateforme multi-agent basée sur **LangGraph** (Python) qui o
 | `discord-bot` | Custom (Dockerfile.discord) | — | Bot Discord — interface utilisateur |
 | `langgraph-admin` | Custom (Dockerfile.admin) | **8080** | Dashboard web administration |
 | `openlit-clickhouse` | clickhouse/clickhouse-server:24.4.1 | — | OLAP traces OpenLIT |
+| `hitl-console` | Custom (Dockerfile.hitl) | **8090** | Console HITL — validation humaine web |
 | `openlit` | ghcr.io/openlit/openlit:latest | **3000** | Observabilité LLM (UI + OTel collector) |
 
 ---
@@ -64,6 +65,13 @@ langgraph-project/
 │   │   └── ... (13 fichiers .md)
 │   └── Team2/                  ← Autre équipe (même structure)
 │
+├── hitl/
+│   ├── server.py               ← Console HITL FastAPI (port 8090)
+│   ├── requirements.txt        ← Deps HITL (fastapi, passlib, httpx, jose)
+│   └── static/                 ← Frontend HITL (login, inbox, agents, membres)
+│       ├── index.html
+│       ├── js/app.js
+│       └── css/style.css
 ├── web/
 │   ├── server.py               ← Dashboard admin FastAPI
 │   └── static/                 ← Frontend web
@@ -308,7 +316,7 @@ Chaque agent est exposable comme tool MCP via SSE :
 - **Validation** : HMAC check (zéro DB hit) → SHA-256 hash → lookup PostgreSQL (revoked? expired?) → team check
 - **Tools exposés** : intersection agents de l'équipe ∩ agents autorisés par la key
 - **Table** : `project.mcp_api_keys` (key_hash, name, preview, teams, agents, expires_at, revoked)
-- **Gestion** : dashboard admin → onglet Equipes → sous-onglet Sécurité
+- **Gestion** : dashboard admin → onglet Configuration → sous-onglet Sécurité
 - **Secret** : `MCP_SECRET` dans `.env` — signe tous les tokens
 
 ---
@@ -362,6 +370,97 @@ Aliases : `analyste`, `designer`, `ux`, `architecte`, `archi`, `lead`, `frontend
 
 ---
 
+## HITL Console (port 8090)
+
+Console web pour la validation humaine (Human-In-The-Loop). Les utilisateurs répondent aux questions des agents, approuvent/rejettent les demandes, et suivent l'activité en temps réel.
+
+### Authentification
+
+Deux modes d'authentification supportés :
+
+| Mode | `auth_type` | `password_hash` | Flux |
+|---|---|---|---|
+| **Local** (email/password) | `local` | bcrypt hash | Inscription → rôle `undefined` → validation admin → accès |
+| **Google OAuth** | `google` | `NULL` | Sign-in Google → rôle `undefined` → validation admin → accès |
+
+### Rôles utilisateur
+
+| Rôle | Accès |
+|---|---|
+| `undefined` | Aucun accès — en attente de validation par un administrateur |
+| `member` | Accès aux équipes assignées — répondre aux questions |
+| `admin` | Accès complet — toutes les équipes + gestion membres |
+
+### Configurer Google OAuth
+
+1. Créer un projet dans [Google Cloud Console](https://console.cloud.google.com/)
+2. Activer l'API "Google Identity" (OAuth consent screen)
+3. Créer un identifiant OAuth 2.0 (type: Application Web)
+   - Ajouter les origines JavaScript autorisées : `https://your-domain.com` (ou `http://localhost:8090` pour le dev)
+   - Pas besoin d'URI de redirection (on utilise Google Identity Services, pas le flux OAuth classique)
+4. Copier le **Client ID** dans `config/hitl.json` :
+
+```json
+{
+  "auth": {
+    "jwt_expire_hours": 24,
+    "allow_registration": true,
+    "default_role": "undefined"
+  },
+  "google_oauth": {
+    "enabled": true,
+    "client_id": "123456789-xxxxxxxx.apps.googleusercontent.com",
+    "client_secret_env": "GOOGLE_CLIENT_SECRET",
+    "allowed_domains": ["company.com"]
+  }
+}
+```
+
+- `enabled` : active/désactive le bouton Google sur la page de login
+- `client_id` : l'identifiant public Google (non sensible, stocké en JSON)
+- `client_secret_env` : nom de la variable d'environnement pour le secret (dans `.env`)
+- `allowed_domains` : liste blanche de domaines email autorisés (vide = tous les domaines)
+
+### Flux Google OAuth
+
+```
+Utilisateur clique "Sign in with Google"
+  → Google Identity Services renvoie un ID token (JWT)
+  → POST /api/auth/google {credential: <token>}
+  → Backend vérifie le token via googleapis.com/tokeninfo
+  → Vérifie audience (client_id) + email_verified + domaine autorisé
+  → Si nouvel utilisateur : INSERT avec role='undefined', auth_type='google', password_hash=NULL
+  → HTTP 403 "En attente de validation"
+  → Admin assigne un rôle (member/admin) + équipes dans le dashboard
+  → Utilisateur peut se reconnecter avec Google
+```
+
+### Endpoints HITL
+
+| Endpoint | Méthode | Auth | Rôle |
+|---|---|---|---|
+| `/api/auth/login` | POST | Non | Login email/password |
+| `/api/auth/register` | POST | Non | Inscription (rôle `undefined`) |
+| `/api/auth/google` | POST | Non | Login Google (ID token) |
+| `/api/auth/google/client-id` | GET | Non | Retourne le Client ID (pour le frontend) |
+| `/api/auth/me` | GET | JWT | Profil utilisateur courant |
+| `/api/teams` | GET | JWT | Équipes de l'utilisateur |
+| `/api/teams/{id}/questions` | GET | JWT | Questions HITL (inbox) |
+| `/api/questions/{id}/answer` | POST | JWT | Répondre / approuver / rejeter |
+| `/api/teams/{id}/members` | GET/POST | JWT | Gestion membres |
+| `/api/teams/{id}/ws` | WS | JWT (query) | Notifications temps réel |
+
+### Base de données
+
+```sql
+-- Table hitl_users (modifiée)
+password_hash TEXT           -- NULL pour les comptes Google
+role          TEXT DEFAULT 'undefined'  -- 'undefined' | 'member' | 'admin'
+auth_type     TEXT DEFAULT 'local'      -- 'local' | 'google'
+```
+
+---
+
 ## Dashboard Admin (port 8080)
 
 - FastAPI + HTML/JS statique
@@ -396,6 +495,7 @@ Aliases : `analyste`, `designer`, `ux`, `architecte`, `archi`, `lead`, `frontend
 | `llm_providers.json` | `config/` | 17 providers + throttling | Non |
 | `mcp_servers.json` | `config/` | Serveurs MCP (global) | Non |
 | `langgraph.json` | `config/` | Config LangGraph | Non |
+| `hitl.json` | `config/` | Auth HITL + Google OAuth (client_id, domaines) | Non |
 | `agents_registry.json` | `config/Team1/` | 13 agents + orchestrator | Non |
 | `agent_mcp_access.json` | `config/Team1/` | MCP par agent | Non |
 | `Workflow.json` | `config/Team1/` | Phases, transitions, rules | Non |
@@ -428,6 +528,13 @@ OPENAI_API_KEY=...
 # Base de données
 DATABASE_URI=postgresql://langgraph:...@langgraph-postgres:5432/langgraph
 REDIS_URI=redis://:...@langgraph-redis:6379/0
+
+# HITL Console
+HITL_JWT_SECRET=...           # Secret JWT (fallback: MCP_SECRET)
+HITL_ADMIN_EMAIL=admin@...    # Email admin initial (seed)
+HITL_ADMIN_PASSWORD=...       # Password admin initial (seed)
+HITL_PUBLIC_URL=https://...   # URL publique HITL (pour les liens de reset)
+GOOGLE_CLIENT_SECRET=...      # Secret Google OAuth (si google_oauth.enabled)
 ```
 
 ---
@@ -493,6 +600,12 @@ Le script 02 télécharge tout depuis GitHub : Dockerfiles, code agents (`Agents
 25. Monitoring dashboard — events temps réel, logs Docker, état containers (start/stop/restart)
 26. OpenLIT observabilité externe — auto-instrumentation LangChain, ClickHouse + UI (port 3000)
 27. MCP SSE Server — agents exposés comme tools MCP par équipe (`/mcp/{team_id}/sse`), auth HMAC signée + PostgreSQL, gestion API keys dans le dashboard admin
+
+### HITL Console
+28. Console HITL web (port 8090) — inbox, agents, membres, WebSocket temps réel
+29. Auth locale (email/password) avec inscription en rôle `undefined` (validation admin requise)
+30. Auth Google OAuth — Google Identity Services, config via `config/hitl.json`, restriction par domaine
+31. Gestion utilisateurs admin — colonne auth_type, rôle `undefined` visible en rouge, validation par l'admin
 
 ## À faire 🔧
 

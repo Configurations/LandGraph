@@ -24,7 +24,7 @@
       </div>
       <div class="nav-item" data-section="teams" onclick="showSection('teams')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-        Equipes
+        Configuration
       </div>
       <div class="nav-item" data-section="templates" onclick="showSection('templates')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
@@ -102,7 +102,7 @@
       <!-- TEAMS SECTION -->
       <div class="section" id="section-teams">
         <div class="page-header">
-          <h2>Equipes</h2>
+          <h2>Configuration</h2>
           <div style="display:flex;gap:0.5rem;margin-left:auto">
             <button class="btn btn-outline btn-sm" onclick="loadTeams()">Rafraichir</button>
             <button class="btn btn-outline btn-sm" onclick="window.location='/api/export/configs'">Exporter</button>
@@ -186,27 +186,105 @@
 
         <!-- Sub-tab: Security -->
         <div class="cfg-tab-content" id="cfg-tab-cfg-security">
-          <div class="card">
-            <div class="card-header">
+          <div class="card collapsible">
+            <div class="card-header" onclick="this.parentElement.classList.toggle('collapsed')">
               <h3>Cles API (MCP)</h3>
-              <button class="btn btn-primary btn-sm" onclick="showAddApiKeyModal()">+ Nouvelle cle</button>
+              <div style="display:flex;align-items:center;gap:0.5rem">
+                <button class="btn btn-primary btn-sm" onclick="event.stopPropagation();showAddApiKeyModal()">+ Nouvelle cle</button>
+                <svg class="card-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
             </div>
-            <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem">
-              Cles d'acces pour le serveur MCP SSE. Endpoint : <code>http://&lt;IP&gt;:8123/mcp/{team_id}/sse</code>
-            </p>
-            <div class="table-container" id="api-keys-table"></div>
-          </div>
-          <div class="card" style="margin-top:1rem">
-            <div class="card-header">
-              <h3>Configuration</h3>
-            </div>
-            <div class="form-group">
-              <label>MCP_SECRET</label>
-              <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.25rem">
-                Secret utilise pour signer les tokens. Defini dans <code>.env</code>. Changer le secret invalide toutes les cles existantes.
+            <div class="card-body">
+              <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem">
+                Cles d'acces pour le serveur MCP SSE. Endpoint : <code>http://&lt;IP&gt;:8123/mcp/{team_id}/sse</code>
               </p>
-              <div id="mcp-secret-status" style="font-size:0.85rem;margin-top:0.25rem">Verification...</div>
+              <div class="table-container" id="api-keys-table"></div>
+              <div class="form-group" style="margin-top:1rem">
+                <label>MCP_SECRET</label>
+                <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.25rem">
+                  Secret utilise pour signer les tokens. Defini dans <code>.env</code>. Changer le secret invalide toutes les cles existantes.
+                </p>
+                <div id="mcp-secret-status" style="font-size:0.85rem;margin-top:0.25rem">Verification...</div>
+              </div>
             </div>
+          </div>
+
+          <div class="card collapsible" style="margin-top:1rem">
+            <div class="card-header" onclick="this.parentElement.classList.toggle('collapsed')">
+              <h3>Google OpenID Connect</h3>
+              <div style="display:flex;align-items:center;gap:0.5rem">
+                <span class="tag" id="auth-google-status">Desactive</span>
+                <svg class="card-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+            </div>
+            <div class="card-body">
+              <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem">
+                Permet aux utilisateurs de la console HITL de se connecter avec leur compte Google.
+                Les nouveaux comptes sont crees avec le role <code>undefined</code> et doivent etre valides dans l'onglet <strong>Utilisateurs</strong>.
+              </p>
+              <div class="form-group">
+                <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
+                  <input type="checkbox" id="auth-google-enabled" onchange="toggleAuthGoogle()" />
+                  Activer Google Sign-In
+                </label>
+              </div>
+              <div id="auth-google-fields" style="display:none">
+                <div class="form-group">
+                  <label>Client ID</label>
+                  <input id="auth-google-client-id" placeholder="123456789-xxxxxxxx.apps.googleusercontent.com" />
+                  <p style="font-size:0.75rem;color:var(--text-secondary);margin-top:0.25rem">
+                    Identifiant public OAuth 2.0 depuis <a href="https://console.cloud.google.com/apis/credentials" target="_blank" style="color:var(--accent)">Google Cloud Console</a>
+                  </p>
+                </div>
+                <div class="form-group">
+                  <label>Client Secret (variable .env)</label>
+                  <input id="auth-google-secret-env" placeholder="GOOGLE_CLIENT_SECRET" />
+                  <p style="font-size:0.75rem;color:var(--text-secondary);margin-top:0.25rem">
+                    Nom de la variable dans <code>.env</code> contenant le secret Google
+                  </p>
+                </div>
+                <div class="form-group">
+                  <label>Domaines autorises</label>
+                  <input id="auth-google-domains" placeholder="company.com, other.org (vide = tous)" />
+                  <p style="font-size:0.75rem;color:var(--text-secondary);margin-top:0.25rem">
+                    Liste blanche de domaines email. Laisser vide pour autoriser tous les domaines.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card collapsible" style="margin-top:1rem">
+            <div class="card-header" onclick="this.parentElement.classList.toggle('collapsed')">
+              <h3>Parametres generaux</h3>
+              <svg class="card-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            </div>
+            <div class="card-body">
+              <div class="form-row">
+                <div class="form-group">
+                  <label>Expiration JWT (heures)</label>
+                  <input id="auth-jwt-expire" type="number" value="24" min="1" max="720" style="width:100px" />
+                </div>
+                <div class="form-group">
+                  <label>Role par defaut</label>
+                  <select id="auth-default-role" style="width:150px">
+                    <option value="undefined">undefined (validation admin)</option>
+                    <option value="member">member (acces direct)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-group">
+                <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
+                  <input type="checkbox" id="auth-allow-registration" checked />
+                  Autoriser l'inscription publique
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-top:1rem;display:flex;gap:0.5rem">
+            <button class="btn btn-primary" onclick="saveAuthConfig()">Enregistrer</button>
+            <button class="btn btn-outline" onclick="loadAuthConfig()">Annuler</button>
           </div>
         </div>
 
@@ -285,6 +363,8 @@
             </div>
           </div>
         </div>
+
+        <!-- cfg-auth removed: merged into cfg-security above -->
 
         <!-- Sub-tab: Git (Enregistrement) -->
         <div class="cfg-tab-content" id="cfg-tab-cfg-git">

@@ -2356,7 +2356,7 @@ function showConfigTab(tabId) {
   if (tabId === 'cfg-llm') loadCfgLLM();
   else if (tabId === 'cfg-mcp') loadCfgMCP();
   else if (tabId === 'cfg-teams') loadCfgTeams();
-  else if (tabId === 'cfg-security') loadApiKeys();
+  else if (tabId === 'cfg-security') { loadApiKeys(); loadAuthConfig(); }
   else if (tabId === 'cfg-git') loadCfgGit();
 }
 
@@ -6041,6 +6041,64 @@ function toggleHitlAutoRefresh() {
     hitlAutoInterval = setInterval(loadHitl, 10000);
     btn.textContent = 'Auto ON';
   }
+}
+
+// ═══════════════════════════════════════════════════
+// AUTH CONFIG (hitl.json)
+// ═══════════════════════════════════════════════════
+
+async function loadAuthConfig() {
+  try {
+    const data = await api('/api/hitl-config');
+    const auth = data.auth || {};
+    const google = data.google_oauth || {};
+    // Google fields
+    const enabled = google.enabled || false;
+    document.getElementById('auth-google-enabled').checked = enabled;
+    document.getElementById('auth-google-client-id').value = google.client_id || '';
+    document.getElementById('auth-google-secret-env').value = google.client_secret_env || 'GOOGLE_CLIENT_SECRET';
+    document.getElementById('auth-google-domains').value = (google.allowed_domains || []).join(', ');
+    document.getElementById('auth-google-fields').style.display = enabled ? 'block' : 'none';
+    // Status badge
+    const badge = document.getElementById('auth-google-status');
+    if (enabled && google.client_id) {
+      badge.textContent = 'Active'; badge.className = 'tag tag-green';
+    } else {
+      badge.textContent = 'Desactive'; badge.className = 'tag tag-red';
+    }
+    // General fields
+    document.getElementById('auth-jwt-expire').value = auth.jwt_expire_hours || 24;
+    document.getElementById('auth-default-role').value = auth.default_role || 'undefined';
+    document.getElementById('auth-allow-registration').checked = auth.allow_registration !== false;
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function toggleAuthGoogle() {
+  const enabled = document.getElementById('auth-google-enabled').checked;
+  document.getElementById('auth-google-fields').style.display = enabled ? 'block' : 'none';
+}
+
+async function saveAuthConfig() {
+  const domainsRaw = document.getElementById('auth-google-domains').value.trim();
+  const domains = domainsRaw ? domainsRaw.split(',').map(d => d.trim()).filter(Boolean) : [];
+  const config = {
+    auth: {
+      jwt_expire_hours: parseInt(document.getElementById('auth-jwt-expire').value) || 24,
+      allow_registration: document.getElementById('auth-allow-registration').checked,
+      default_role: document.getElementById('auth-default-role').value
+    },
+    google_oauth: {
+      enabled: document.getElementById('auth-google-enabled').checked,
+      client_id: document.getElementById('auth-google-client-id').value.trim(),
+      client_secret_env: document.getElementById('auth-google-secret-env').value.trim() || 'GOOGLE_CLIENT_SECRET',
+      allowed_domains: domains
+    }
+  };
+  try {
+    await api('/api/hitl-config', { method: 'PUT', body: config });
+    toast('Configuration enregistree. Redemarrer hitl-console pour appliquer.', 'success');
+    loadAuthConfig();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 // ═══════════════════════════════════════════════════
