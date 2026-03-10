@@ -14,6 +14,10 @@ docker compose rm -f $SERVICES 2>/dev/null || true
 echo "  Build (--no-cache --pull)..."
 docker compose build --no-cache --pull $SERVICES
 
+echo "  Nettoyage des anciennes images et du build cache..."
+docker image prune -f
+docker builder prune -f
+
 docker compose up -d
 sleep 12
 
@@ -22,7 +26,9 @@ echo "  -> Application du schema SQL..."
 docker exec -i langgraph-postgres psql -U "${POSTGRES_USER:-langgraph}" -d "${POSTGRES_DB:-langgraph}" < scripts/init.sql 2>/dev/null && echo "  -> Schema OK" || echo "  -> Schema: erreur (voir logs)"
 echo ""
 docker compose ps
+sleep 12
 
+docker compose logs --tail 30
 
 
 # Detecter l'IP locale (premiere interface non-loopback)
@@ -42,4 +48,3 @@ echo "  hitl web            : http://${LOCAL_IP}:8090"
 echo "  OpenLIT             : http://${LOCAL_IP}:3000"
 echo "════════════════════════════════════════════════════════════════"
 
-docker compose logs --tail 30
