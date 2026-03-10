@@ -82,6 +82,18 @@ async function initGoogleSignIn() {
   try {
     const data = await fetch('/api/auth/google/client-id').then(r => r.json());
     if (!data.client_id) return;
+    // Wait for Google Identity Services script to load
+    const waitForGoogle = () => new Promise((resolve) => {
+      if (typeof google !== 'undefined' && google.accounts) { resolve(); return; }
+      let attempts = 0;
+      const iv = setInterval(() => {
+        attempts++;
+        if (typeof google !== 'undefined' && google.accounts) { clearInterval(iv); resolve(); }
+        else if (attempts > 50) { clearInterval(iv); resolve(); } // 5s timeout
+      }, 100);
+    });
+    await waitForGoogle();
+    if (typeof google === 'undefined' || !google.accounts) return;
     google.accounts.id.initialize({
       client_id: data.client_id,
       callback: handleGoogleCredential,
@@ -90,7 +102,7 @@ async function initGoogleSignIn() {
       document.getElementById('google-signin-btn'),
       { theme: 'filled_black', size: 'large', width: 300, text: 'signin_with', shape: 'pill' }
     );
-  } catch { /* Google auth not configured */ }
+  } catch (e) { console.warn('Google Sign-In init failed:', e); }
 }
 
 function doLogout() {

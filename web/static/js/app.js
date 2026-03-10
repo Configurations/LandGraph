@@ -6273,7 +6273,7 @@ async function saveAuthConfig() {
   };
   try {
     await api('/api/hitl-config', { method: 'PUT', body: config });
-    toast('Configuration enregistree. Redemarrer hitl-console pour appliquer.', 'success');
+    toast('Configuration enregistree.', 'success');
     loadAuthConfig();
   } catch (e) { toast(e.message, 'error'); }
 }
