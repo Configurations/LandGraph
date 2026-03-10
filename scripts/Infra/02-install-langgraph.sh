@@ -61,11 +61,11 @@ echo "  -> Fichiers telecharges"
 
 
 # Scripts utilitaires (start, stop, restart, build)
-for s in start.sh stop.sh restart.sh build.sh; do
-    wget -qO "${s}" "${REPO_RAW}/${s}" 2>/dev/null || true
+for s in start.sh stop.sh restart.sh build.sh update.sh; do
+[ -f "${s}" ]   || wget -qO "${s}" "${REPO_RAW}/${s}" 2>/dev/null || true
 done
-chmod +x start.sh stop.sh restart.sh build.sh
-echo "  -> Scripts : start.sh, stop.sh, restart.sh, build.sh"
+chmod +x start.sh stop.sh restart.sh build.sh  update.sh
+echo "  -> Scripts : start.sh, stop.sh, restart.sh, build.sh  update.sh"
 
 # ── 3. Fichier .env ──────────────────────────
 echo "[3/7] Fichier .env..."

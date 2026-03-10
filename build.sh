@@ -1,5 +1,5 @@
 #!/bin/bash
-PROJECT_DIR="${HOME}/langgraph-project"
+PROJECT_DIR="/${HOME}/langgraph-project"
 cd "${PROJECT_DIR}"
 
 docker compose stop langgraph-admin 2>/dev/null || true
@@ -14,7 +14,19 @@ echo "  -> Application du schema SQL..."
 docker exec -i langgraph-postgres psql -U "${POSTGRES_USER:-langgraph}" -d "${POSTGRES_DB:-langgraph}" < scripts/init.sql 2>/dev/null && echo "  -> Schema OK" || echo "  -> Schema: erreur (voir logs)"
 echo ""
 docker compose ps
+
+# Detecter l'IP locale (premiere interface non-loopback)
+LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+[ -z "$LOCAL_IP" ] && LOCAL_IP="localhost"
+
 echo ""
 curl -s http://localhost:8123/health
 echo ""
 curl -s http://localhost:8123/status | python3 -m json.tool 2>/dev/null
+echo ""
+echo "═══════════════════════════════════════"
+echo "  Services disponibles :"
+echo "  API Gateway : http://${LOCAL_IP}:8123"
+echo "  Dashboard   : http://${LOCAL_IP}:8080"
+echo "  OpenLIT     : http://${LOCAL_IP}:3000"
+echo "═══════════════════════════════════════"
