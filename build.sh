@@ -2,6 +2,9 @@
 PROJECT_DIR="/${HOME}/langgraph-project"
 cd "${PROJECT_DIR}"
 
+docker compose stop
+sleep 12
+
 SERVICES="langgraph-admin langgraph-api discord-bot mail-bot hitl-console"
 
 echo "  Arret des services..."
