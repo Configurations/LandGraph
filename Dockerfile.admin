@@ -2,10 +2,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN for i in 1 2 3; do apt-get update && break || sleep 5; done \
-    && apt-get install -y --no-install-recommends \
-    git curl \
-    && rm -rf /var/lib/apt/lists/*
+# RUN for i in 1 2 3; do apt-get update && break || sleep 5; done \
+#     && apt-get install -y --no-install-recommends \
+#     git curl \
+#     && rm -rf /var/lib/apt/lists/*
 
 # Docker CLI only (no daemon) — needed for container monitoring
 RUN curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz \
