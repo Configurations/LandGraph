@@ -1,9 +1,10 @@
 FROM python:3.11-slim
 
-WORKDIR /apphttps://mail.google.com/mail/u/0/#inbox
+WORKDIR /app
 
 # System deps + Node.js (pour MCP servers npx)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN for i in 1 2 3; do apt-get update && break || sleep 5; done \
+    && apt-get install -y --no-install-recommends \
     build-essential libpq-dev curl git nodejs npm \
     && rm -rf /var/lib/apt/lists/*
 
