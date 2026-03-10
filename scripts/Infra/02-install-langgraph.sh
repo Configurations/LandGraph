@@ -41,6 +41,7 @@ wget -qO Dockerfile "${REPO_RAW}/Dockerfile" 2>/dev/null || { echo "ERREUR: Dock
 wget -qO Dockerfile.admin "${REPO_RAW}/Dockerfile.admin" 2>/dev/null || true
 wget -qO Dockerfile.discord "${REPO_RAW}/Dockerfile.discord" 2>/dev/null || true
 wget -qO Dockerfile.mail "${REPO_RAW}/Dockerfile.mail" 2>/dev/null || true
+wget -qO Dockerfile.hitl "${REPO_RAW}/Dockerfile.hitl" 2>/dev/null || true
 wget -qO requirements.txt "${REPO_RAW}/requirements.txt" 2>/dev/null || { echo "ERREUR: requirements.txt"; exit 1; }
 
 wget -qO scripts/init.sql "${REPO_RAW}/scripts/init.sql" 2>/dev/null || { echo "ERREUR: init.sql"; exit 1; }
@@ -108,6 +109,16 @@ wget -qO web/static/index.html "${REPO_RAW}/web/static/index.html" 2>/dev/null |
 wget -qO web/static/css/style.css "${REPO_RAW}/web/static/css/style.css" 2>/dev/null || true
 wget -qO web/static/js/app.js "${REPO_RAW}/web/static/js/app.js" 2>/dev/null || true
 echo "  -> Admin web telecharge"
+
+# ── 4c-bis. HITL Console ─────────────────────
+echo "[4c-bis/7] HITL Console..."
+mkdir -p hitl/static/css hitl/static/js
+wget -qO hitl/requirements.txt "${REPO_RAW}/hitl/requirements.txt" 2>/dev/null || true
+wget -qO hitl/server.py "${REPO_RAW}/hitl/server.py" 2>/dev/null || true
+wget -qO hitl/static/index.html "${REPO_RAW}/hitl/static/index.html" 2>/dev/null || true
+wget -qO hitl/static/css/style.css "${REPO_RAW}/hitl/static/css/style.css" 2>/dev/null || true
+wget -qO hitl/static/js/app.js "${REPO_RAW}/hitl/static/js/app.js" 2>/dev/null || true
+echo "  -> HITL Console telecharge"
 
 # ── 4d. Config globale ───────────────────────
 echo "[4d/7] Config globale..."
