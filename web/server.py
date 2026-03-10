@@ -2891,53 +2891,87 @@ def _generate_password(length: int = 12) -> str:
 
 
 def _send_welcome_email(to_email: str, temp_password: str, reset_url: str):
-    """Send welcome email with temporary password and reset link.
+    """Send welcome/reset email using others.json + mail.json config.
 
-    Reads SMTP settings from config/mail.json.  The password is resolved
-    from the env-var named in smtp.password_env (default SMTP_PASSWORD).
+    Reads password_reset config from others.json (smtp_name, template_name,
+    from_address) and resolves SMTP + template from mail.json.
+    Template variables: ${mail}, ${pwd}, ${UrlService}
     """
     import smtplib
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
 
+    others_cfg = _read_json(OTHERS_FILE) if OTHERS_FILE.exists() else {}
+    reset_cfg = others_cfg.get("password_reset", {})
     mail_cfg = _read_json(MAIL_FILE) if MAIL_FILE.exists() else {}
-    smtp_cfg = mail_cfg.get("smtp", {})
-    templates_cfg = mail_cfg.get("templates", {})
+
+    # Resolve SMTP by name from others.json
+    smtp_name = reset_cfg.get("smtp_name", "")
+    smtp_list = mail_cfg.get("smtp", [])
+    if isinstance(smtp_list, dict):
+        smtp_list = [smtp_list]
+    smtp_cfg = next((s for s in smtp_list if s.get("name") == smtp_name), smtp_list[0] if smtp_list else {})
 
     smtp_host = smtp_cfg.get("host", "")
     smtp_port = int(smtp_cfg.get("port", 587))
     smtp_user = smtp_cfg.get("user", "")
     use_ssl = smtp_cfg.get("use_ssl", False)
     use_tls = smtp_cfg.get("use_tls", True)
-    from_address = smtp_cfg.get("from_address", "") or smtp_user
+    from_address = reset_cfg.get("from_address", "") or smtp_cfg.get("from_address", "") or smtp_user
     from_name = smtp_cfg.get("from_name", "LandGraph")
 
-    # Resolve password from env var referenced in config
+    # Resolve password from env var
     password_env = smtp_cfg.get("password_env", "SMTP_PASSWORD")
     env = _env_dict()
     smtp_password = env.get(password_env, "")
 
     if not all([smtp_host, smtp_user, smtp_password]):
-        logging.warning("SMTP not configured in mail.json — welcome email not sent")
+        logging.warning("SMTP not configured — welcome email not sent (smtp_name=%s)", smtp_name)
         return False
 
-    footer = templates_cfg.get("footer_text", "LandGraph Multi-Agent Platform")
+    # Resolve template by name from others.json
+    tpl_name = reset_cfg.get("template_name", "")
+    tpl_list = mail_cfg.get("templates", [])
+    if isinstance(tpl_list, dict):
+        tpl_list = []
+    tpl = next((t for t in tpl_list if t.get("name") == tpl_name), None)
+
+    # Variable mapping
+    variables = {"${mail}": to_email, "${pwd}": temp_password, "${UrlService}": reset_url}
+
+    def _replace_vars(text: str) -> str:
+        for k, v in variables.items():
+            text = text.replace(k, v)
+        return text
+
+    if tpl:
+        subject = _replace_vars(tpl.get("subject", "[LangGraph] Reinitialisation mot de passe"))
+        body_text = _replace_vars(tpl.get("body", ""))
+    else:
+        subject = "[LangGraph] Bienvenue — Activez votre compte"
+        body_text = ""
+
+    # Build HTML (use template body if available, else default)
+    if body_text:
+        # Convert newlines to <br> for HTML
+        html_body = body_text.replace("\n", "<br/>")
+        html = f'<html><body style="font-family:sans-serif;color:#333">{html_body}</body></html>'
+    else:
+        from urllib.parse import quote
+        default_link = f"{reset_url}/reset-password?mail={quote(to_email)}&pwd={quote(temp_password)}"
+        html = f"""\
+<html><body style="font-family:sans-serif;color:#333">
+<h2>Bienvenue sur LandGraph</h2>
+<p>Un compte a ete cree pour vous (<code>{to_email}</code>).</p>
+<p>Votre mot de passe temporaire : <code style="background:#f0f0f0;padding:4px 8px;border-radius:4px;font-size:1.1em">{temp_password}</code></p>
+<p>Cliquez sur le lien ci-dessous pour definir votre mot de passe :</p>
+<p><a href="{default_link}" style="display:inline-block;padding:10px 24px;background:#3b82f6;color:white;text-decoration:none;border-radius:6px">Definir mon mot de passe</a></p>
+</body></html>"""
 
     msg = MIMEMultipart("alternative")
     msg["From"] = f"{from_name} <{from_address}>"
     msg["To"] = to_email
-    msg["Subject"] = "[LandGraph] Bienvenue — Activez votre compte"
-    html = f"""\
-<html><body style="font-family:sans-serif;color:#333">
-<h2>Bienvenue sur LandGraph</h2>
-<p>Un compte a ete cree pour vous.</p>
-<p>Votre mot de passe temporaire : <code style="background:#f0f0f0;padding:4px 8px;border-radius:4px;font-size:1.1em">{temp_password}</code></p>
-<p>Cliquez sur le lien ci-dessous pour definir votre mot de passe :</p>
-<p><a href="{reset_url}" style="display:inline-block;padding:10px 24px;background:#3b82f6;color:white;text-decoration:none;border-radius:6px">Definir mon mot de passe</a></p>
-<p style="color:#888;font-size:0.85em">Ce lien expire dans 24 heures. Si vous n'etes pas a l'origine de cette demande, ignorez cet email.</p>
-<hr style="border:none;border-top:1px solid #eee;margin:2rem 0"/>
-<p style="color:#aaa;font-size:0.8em">{footer}</p>
-</body></html>"""
+    msg["Subject"] = subject
     msg.attach(MIMEText(html, "html"))
     try:
         if use_ssl:
@@ -2952,7 +2986,7 @@ def _send_welcome_email(to_email: str, temp_password: str, reset_url: str):
                 server.send_message(msg)
         return True
     except Exception as e:
-        logging.error(f"Failed to send welcome email: {e}")
+        logging.error("Failed to send welcome email: %s", e)
         return False
 
 
@@ -2989,22 +3023,13 @@ async def hitl_create_user(req: Request):
                     VALUES (%s, %s, 'member')
                     ON CONFLICT DO NOTHING
                 """, (uid, tid))
-            # Generate reset token (JWT, 24h expiry)
-            from jose import jwt as jose_jwt
-            from datetime import datetime, timedelta, timezone
-            reset_secret = _env_dict().get("MCP_SECRET", "change-me-hitl-secret")
-            reset_token = jose_jwt.encode(
-                {"sub": str(uid), "email": email, "purpose": "reset",
-                 "exp": datetime.now(timezone.utc) + timedelta(hours=24)},
-                reset_secret, algorithm="HS256"
-            )
-            # Build reset URL (HITL console on port 8090)
+            # Build reset URL (HITL console)
             hitl_host = _env_dict().get("HITL_PUBLIC_URL", "")
             if not hitl_host:
-                # Fallback: same host as admin, port 8090
                 hitl_host = "http://localhost:8090"
-            reset_url = f"{hitl_host}/reset-password?token={reset_token}"
-            # Send welcome email
+            # UrlService = base host (used in template variable ${UrlService})
+            reset_url = hitl_host.rstrip("/")
+            # Send welcome email — ${UrlService}, ${mail}, ${pwd} mapped in template
             email_sent = _send_welcome_email(email, temp_password, reset_url)
         return {"ok": True, "id": str(uid), "email_sent": email_sent}
     except psycopg.errors.UniqueViolation:

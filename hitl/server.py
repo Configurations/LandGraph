@@ -675,7 +675,44 @@ def _question_row(r) -> dict:
     }
 
 
+# ── Password reset ────────────────────────────────
+class ResetPasswordRequest(BaseModel):
+    email: str
+    old_password: str
+    new_password: str
+
+
+@app.post("/api/auth/reset-password")
+def reset_password(req: ResetPasswordRequest):
+    if len(req.new_password) < 6:
+        raise HTTPException(400, "Le nouveau mot de passe doit faire au moins 6 caracteres")
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, password_hash, COALESCE(auth_type, 'local') as auth_type
+                FROM project.hitl_users WHERE email = %s
+            """, (req.email,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(401, "Email ou mot de passe incorrect")
+            if row[2] == 'google':
+                raise HTTPException(400, "Ce compte utilise Google. Le mot de passe ne peut pas etre modifie.")
+            if not row[1] or not pwd_ctx.verify(_truncate_pw(req.old_password), row[1]):
+                raise HTTPException(401, "Ancien mot de passe incorrect")
+            new_hash = pwd_ctx.hash(_truncate_pw(req.new_password))
+            cur.execute("UPDATE project.hitl_users SET password_hash = %s WHERE id = %s", (new_hash, row[0]))
+        return {"ok": True, "message": "Mot de passe mis a jour"}
+    finally:
+        conn.close()
+
+
 # ── SPA fallback ────────────────────────────────
+@app.get("/reset-password")
+def reset_password_page():
+    return HTMLResponse(open("static/reset-password.html").read())
+
+
 @app.get("/")
 def index():
     return HTMLResponse(open("static/index.html").read())

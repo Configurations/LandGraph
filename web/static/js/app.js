@@ -5614,6 +5614,7 @@ function showAddTplMailModal(idx) {
 async function saveTplMailEntry() {
   const name = document.getElementById('tpl-mail-edit-name').value.trim();
   if (!name) { toast('Nom requis', 'error'); return; }
+  if (!/^[a-zA-Z_]+$/.test(name)) { toast('Le nom ne doit contenir que des lettres et des _', 'error'); return; }
   const entry = {
     name,
     subject: document.getElementById('tpl-mail-edit-subject').value,
@@ -5635,6 +5636,7 @@ async function deleteTplMailEntry(idx) {
   if (!entry) return;
   if (!confirm(`Supprimer le template "${entry.name || idx}" ?`)) return;
   _mailData.templates.splice(idx, 1);
+  _renderTplMailList();
   await saveMail();
 }
 
