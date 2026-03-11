@@ -13,13 +13,20 @@ import zipfile
 from pathlib import Path
 import shutil
 
-# Log bcrypt version at startup
+# Log versions at startup
+logging.basicConfig(level=logging.INFO)
+_log = logging.getLogger(__name__)
 try:
     import bcrypt as _bcrypt_mod
-    logging.basicConfig(level=logging.INFO)
-    logging.getLogger(__name__).info("bcrypt version: %s", _bcrypt_mod.__version__)
+    _log.info("bcrypt version: %s", _bcrypt_mod.__version__)
 except ImportError:
     pass
+_version = "dev"
+for _vp in ["/project/.version", str(Path(__file__).resolve().parent.parent / ".version")]:
+    if os.path.isfile(_vp):
+        _version = open(_vp).read().strip()
+        break
+_log.info("LandGraph version: %s", _version)
 from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
@@ -3081,11 +3088,9 @@ async def hitl_resend_reset(user_id: str):
 @app.put("/api/hitl/users/{user_id}")
 async def hitl_update_user(user_id: str, req: Request):
     import psycopg
-    from passlib.context import CryptContext
     body = await req.json()
     display_name = body.get("display_name", "").strip()
     role = body.get("role", "")
-    password = body.get("password", "").strip()
     is_active = body.get("is_active", True)
     team_ids = body.get("teams", None)  # list or None (don't touch)
     uri = _env_dict().get("DATABASE_URI", "")
@@ -3099,10 +3104,6 @@ async def hitl_update_user(user_id: str, req: Request):
             if role:
                 sets.append("role = %s")
                 params.append(role)
-            if password:
-                pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
-                sets.append("password_hash = %s")
-                params.append(pwd_ctx.hash(password.encode("utf-8")[:72].decode("utf-8", errors="ignore")))
             params.append(user_id)
             cur.execute(f"""
                 UPDATE project.hitl_users SET {', '.join(sets)}

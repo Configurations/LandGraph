@@ -27,6 +27,13 @@ load_dotenv()
 logger = logging.getLogger("mail_listener")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
 
+for _vp in ["/project/.version", os.path.join(os.path.dirname(__file__), "..", ".version")]:
+    if os.path.isfile(_vp):
+        logger.info("LandGraph version: %s", open(_vp).read().strip())
+        break
+else:
+    logger.info("LandGraph version: dev")
+
 # ── Config ───────────────────────────────────
 def _load_mail_config() -> dict:
     try:

@@ -15,6 +15,14 @@ load_dotenv()
 logger = logging.getLogger("gateway")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
 
+# Log version at startup
+for _vp in ["/project/.version", os.path.join(os.path.dirname(__file__), "..", ".version")]:
+    if os.path.isfile(_vp):
+        logger.info("LandGraph version: %s", open(_vp).read().strip())
+        break
+else:
+    logger.info("LandGraph version: dev")
+
 app = FastAPI(title="LangGraph Multi-Agent API", version="0.6.0")
 
 from agents.shared.agent_loader import get_agents

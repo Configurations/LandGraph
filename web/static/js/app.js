@@ -6336,7 +6336,6 @@ async function showAddUserModal() {
   document.getElementById('user-email').value = '';
   document.getElementById('user-email').disabled = false;
   document.getElementById('user-name').value = '';
-  document.getElementById('user-password').value = '';
   document.getElementById('user-role').value = 'member';
   document.getElementById('user-edit-fields').style.display = 'none';
   document.getElementById('user-create-hint').style.display = 'block';
@@ -6353,8 +6352,6 @@ async function editUser(uid) {
   document.getElementById('user-email').value = u.email;
   document.getElementById('user-email').disabled = true;
   document.getElementById('user-name').value = u.display_name || '';
-  document.getElementById('user-password').value = '';
-  document.getElementById('user-password').placeholder = 'Laisser vide pour ne pas changer';
   document.getElementById('user-role').value = u.role;
   document.getElementById('user-edit-fields').style.display = 'block';
   document.getElementById('user-create-hint').style.display = 'none';
@@ -6386,7 +6383,6 @@ async function populateTeamCheckboxes(selectedIds) {
 async function saveUser() {
   const email = document.getElementById('user-email').value.trim();
   const display_name = document.getElementById('user-name').value.trim();
-  const password = document.getElementById('user-password').value;
   const role = document.getElementById('user-role').value;
   const teams = Array.from(document.querySelectorAll('#user-teams-checkboxes input:checked')).map(cb => cb.value);
 
@@ -6395,7 +6391,6 @@ async function saveUser() {
   try {
     if (editingUserId) {
       const body = { display_name, role, is_active: true, teams };
-      if (password) body.password = password;
       await api(`/api/hitl/users/${editingUserId}`, { method: 'PUT', body });
       toast('Utilisateur mis a jour', 'success');
     } else {

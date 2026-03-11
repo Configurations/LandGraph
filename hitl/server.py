@@ -3,6 +3,19 @@ import json
 import logging
 import os
 import time
+
+# Log version at startup
+logging.basicConfig(level=logging.INFO)
+_log = logging.getLogger(__name__)
+try:
+    for _vp in ["/project/.version", "/app/.version", os.path.join(os.path.dirname(__file__), "..", ".version")]:
+        if os.path.isfile(_vp):
+            _log.info("LandGraph version: %s", open(_vp).read().strip())
+            break
+    else:
+        _log.info("LandGraph version: dev (no .version file)")
+except Exception:
+    pass
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -301,7 +314,11 @@ def login(req: LoginRequest):
             # Google users cannot login with password
             if row[6] == 'google':
                 raise HTTPException(400, "Ce compte utilise Google. Connectez-vous avec Google.")
-            if not row[2] or not pwd_ctx.verify(_truncate_pw(req.password), row[2]):
+            truncated_input = _truncate_pw(req.password)
+            verify_ok = row[2] and pwd_ctx.verify(truncated_input, row[2])
+            logger.info("LOGIN email=%s verify=%s hash_prefix=%s",
+                        req.email, verify_ok, (row[2] or "")[:20])
+            if not verify_ok:
                 raise HTTPException(401, "Email ou mot de passe incorrect")
             if not row[5]:
                 raise HTTPException(403, "Compte desactive")
@@ -826,9 +843,18 @@ def reset_password(req: ResetPasswordRequest):
                 raise HTTPException(401, "Email ou mot de passe incorrect")
             if row[2] == 'google':
                 raise HTTPException(400, "Ce compte utilise Google. Le mot de passe ne peut pas etre modifie.")
-            if not row[1] or not pwd_ctx.verify(_truncate_pw(req.old_password), row[1]):
+            truncated_old = _truncate_pw(req.old_password)
+            verify_ok = row[1] and pwd_ctx.verify(truncated_old, row[1])
+            logger.info("RESET uid=%s old_verify=%s stored_hash_prefix=%s",
+                        row[0], verify_ok, (row[1] or "")[:20])
+            if not verify_ok:
                 raise HTTPException(401, "Ancien mot de passe incorrect")
-            new_hash = pwd_ctx.hash(_truncate_pw(req.new_password))
+            truncated_new = _truncate_pw(req.new_password)
+            new_hash = pwd_ctx.hash(truncated_new)
+            # Verify immediately that the new hash matches
+            verify_new = pwd_ctx.verify(truncated_new, new_hash)
+            logger.info("RESET uid=%s new_hash_prefix=%s verify_new=%s",
+                        row[0], new_hash[:20], verify_new)
             cur.execute("UPDATE project.hitl_users SET password_hash = %s WHERE id = %s", (new_hash, row[0]))
         return {"ok": True, "message": "Mot de passe mis a jour"}
     finally:

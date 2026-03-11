@@ -34,14 +34,18 @@ cd "${PROJECT_DIR}"
 
 
 # ── Version check ──────────────────────────
-REMOTE_VERSION=$(wget -qO- "https://api.github.com/repos/Configurations/LandGraph/commits/main" 2>/dev/null | python3 -c "import sys,json;print(json.load(sys.stdin)['sha'][:8])" 2>/dev/null || echo "unknown")
+# Try tag-based version first, fallback to commit SHA
+REMOTE_VERSION=$(wget -qO- "https://api.github.com/repos/Configurations/LandGraph/tags" 2>/dev/null | python3 -c "import sys,json;tags=json.load(sys.stdin);print(tags[0]['name'] if tags else 'unknown')" 2>/dev/null || echo "unknown")
+if [ "$REMOTE_VERSION" = "unknown" ]; then
+    REMOTE_VERSION=$(wget -qO- "https://api.github.com/repos/Configurations/LandGraph/commits/main" 2>/dev/null | python3 -c "import sys,json;print(json.load(sys.stdin)['sha'][:8])" 2>/dev/null || echo "unknown")
+fi
 LOCAL_VERSION=""
 [ -f .version ] && LOCAL_VERSION=$(cat .version)
 if [ "$REMOTE_VERSION" != "unknown" ] && [ "$REMOTE_VERSION" = "$LOCAL_VERSION" ]; then
     echo "  Version locale ${LOCAL_VERSION} identique a la version en ligne. Rien a faire."
     exit 0
 fi
-echo "  Download de la version en ligne : ${REMOTE_VERSION}."
+echo "  Download de la version en ligne : ${REMOTE_VERSION} (locale: ${LOCAL_VERSION:-aucune})."
 sleep 2
 
 # ── 2. Fichiers de config depuis GitHub ──────
