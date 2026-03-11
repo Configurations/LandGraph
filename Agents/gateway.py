@@ -72,8 +72,31 @@ def resolve_agents(channel_id: str = ""):
 
 
 # ── Canal de communication ────────────────────
-async def post_to_channel(channel_id, message):
-    """Envoie un message via le canal par defaut (Discord, Email, etc.)."""
+async def post_to_channel(channel_id, message, thread_id=""):
+    """Envoie un message via le canal par defaut (Discord, Email, etc.).
+    Si thread_id commence par 'hitl-chat-', ecrit dans hitl_chat_messages a la place."""
+    if not channel_id and not thread_id:
+        return
+    # HITL chat callback — store in DB instead of channel
+    if thread_id and thread_id.startswith("hitl-chat-"):
+        try:
+            parts = thread_id.split("-", 4)  # hitl-chat-{team_id}-{agent_id}
+            if len(parts) >= 4:
+                team_id_part = parts[2]
+                agent_id_part = "-".join(parts[3:])
+                conn = psycopg.connect(os.getenv("DATABASE_URI"), autocommit=True)
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                            INSERT INTO project.hitl_chat_messages (team_id, agent_id, thread_id, sender, content)
+                            VALUES (%s, %s, %s, %s, %s)
+                        """, (team_id_part, agent_id_part, thread_id, agent_id_part, str(message)[:4000]))
+                finally:
+                    conn.close()
+                logger.info(f"[hitl-chat] Saved message for {thread_id}")
+                return
+        except Exception as e:
+            logger.error(f"[hitl-chat] Failed to save message: {e}")
     if not channel_id:
         return
     from agents.shared.channels import get_default_channel
@@ -156,26 +179,33 @@ def load_or_create_state(thread_id, msgs, project_id, channel_id, team_id="defau
 
 
 # ── Background runners ───────────────────────
-async def run_single_agent(agent_id, agent_callable, state, channel_id):
+async def run_single_agent(agent_id, agent_callable, state, channel_id, thread_id=""):
     try:
         result = await asyncio.wait_for(
             asyncio.to_thread(agent_callable, dict(state)), timeout=2100)
         state["agent_outputs"] = result.get("agent_outputs", state.get("agent_outputs", {}))
         logger.info(f"[bg] {agent_id} done")
+        # Post agent output to channel/HITL
+        output = result.get("agent_outputs", {}).get(agent_id, {})
+        if output and isinstance(output, dict):
+            deliverable = output.get("deliverable", output.get("summary", ""))
+            if deliverable:
+                agent_name = output.get("agent_name", agent_id)
+                await post_to_channel(channel_id, f"**{agent_name}** :\n{deliverable[:3000]}", thread_id)
         return result
     except asyncio.TimeoutError:
         logger.error(f"[bg] {agent_id} timeout")
-        await post_to_channel(channel_id, f"⏰ **{agent_id}** timeout (35min)")
+        await post_to_channel(channel_id, f"⏰ **{agent_id}** timeout (35min)", thread_id)
         return state
     except Exception as e:
         logger.error(f"[bg] {agent_id} error: {e}")
-        await post_to_channel(channel_id, f"❌ **{agent_id}** erreur : {str(e)[:300]}")
+        await post_to_channel(channel_id, f"❌ **{agent_id}** erreur : {str(e)[:300]}", thread_id)
         return state
 
 
 async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="default", _depth=0):
     MAX_CHAIN_DEPTH = 5  # max groupes enchaines automatiquement
-    tasks = [run_single_agent(a["agent_id"], a["agent"], dict(state), channel_id) for a in agents_to_run]
+    tasks = [run_single_agent(a["agent_id"], a["agent"], dict(state), channel_id, thread_id) for a in agents_to_run]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     merged = dict(state.get("agent_outputs", {}))
     for r in results:
@@ -202,12 +232,12 @@ async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="defau
             status = output.get("status", "?")
             emoji = "✅" if status == "complete" else "❌" if status == "blocked" else "⏳"
             names.append(f"{emoji} {name}")
-        await post_to_channel(channel_id, f"📋 **Recap** : {' | '.join(names)}")
+        await post_to_channel(channel_id, f"📋 **Recap** : {' | '.join(names)}", thread_id)
 
     # ── Auto-dispatch : le workflow engine decide s'il y a un groupe suivant ──
     if _depth >= MAX_CHAIN_DEPTH:
         logger.warning(f"[workflow] Max chain depth ({MAX_CHAIN_DEPTH}) reached, stopping auto-dispatch")
-        await post_to_channel(channel_id, f"⚠️ Profondeur max atteinte ({MAX_CHAIN_DEPTH} groupes). Relancez si nécessaire.")
+        await post_to_channel(channel_id, f"⚠️ Profondeur max atteinte ({MAX_CHAIN_DEPTH} groupes). Relancez si nécessaire.", thread_id)
         return
 
     try:
@@ -233,7 +263,7 @@ async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="defau
                                    thread_id=thread_id, team_id=team_id,
                                    data={"trigger": "workflow_auto", "depth": _depth + 1}))
                 await post_to_channel(channel_id,
-                    f"⚡ Workflow : groupe suivant → {', '.join(a['agent_id'] for a in next_to_run)}")
+                    f"⚡ Workflow : groupe suivant → {', '.join(a['agent_id'] for a in next_to_run)}", thread_id)
                 await run_agents_parallel(next_to_run, state, channel_id, thread_id, _depth + 1)
                 return  # Le recursif gere la suite
 
@@ -246,7 +276,7 @@ async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="defau
                 await post_to_channel(channel_id,
                     f"🚦 **Phase {current_phase} complete !**\n"
                     f"Transition vers **{next_phase}** possible.\n"
-                    f"Repondez `approve` pour continuer ou `revise` pour corriger.")
+                    f"Repondez `approve` pour continuer ou `revise` pour corriger.", thread_id)
             else:
                 # Auto-transition
                 state["project_phase"] = next_phase
@@ -258,7 +288,7 @@ async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="defau
                 bus.emit(Event("phase_transition", thread_id=thread_id, team_id=team_id,
                                data={"from_phase": current_phase, "to_phase": next_phase, "auto": True}))
                 await post_to_channel(channel_id,
-                    f"✅ Transition automatique : **{current_phase}** → **{next_phase}**")
+                    f"✅ Transition automatique : **{current_phase}** → **{next_phase}**", thread_id)
 
     except Exception as e:
         logger.warning(f"Workflow auto-dispatch error: {e}")
@@ -287,12 +317,12 @@ async def run_orchestrated(state, decisions, channel_id, thread_id="default", ca
                     if to_phase:
                         await post_to_channel(channel_id,
                             f"🚦 **HUMAN GATE** — {from_phase} → {to_phase}\n"
-                            f"Repondez `approve` pour continuer ou `revise` pour corriger.")
+                            f"Repondez `approve` pour continuer ou `revise` pour corriger.", thread_id)
 
     if agents:
         await run_agents_parallel(agents, state, channel_id, thread_id)
     elif not any(d.get("decision_type") == "phase_transition" for d in decisions):
-        await post_to_channel(channel_id, "Aucun agent dispatche.")
+        await post_to_channel(channel_id, "Aucun agent dispatche.", thread_id)
 
 
 # ── Endpoints ────────────────────────────────

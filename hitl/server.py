@@ -196,6 +196,47 @@ def _seed_admin():
                 ALTER TABLE project.hitl_users
                 ADD COLUMN IF NOT EXISTS culture TEXT DEFAULT 'fr'
             """)
+            # Ensure chat messages table exists
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS project.hitl_chat_messages (
+                    id SERIAL PRIMARY KEY,
+                    team_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    thread_id TEXT NOT NULL,
+                    sender TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_hitl_chat_thread
+                ON project.hitl_chat_messages (team_id, agent_id, thread_id, created_at)
+            """)
+            # PG NOTIFY trigger for real-time chat updates
+            cur.execute("""
+                CREATE OR REPLACE FUNCTION notify_hitl_chat() RETURNS trigger AS $$
+                BEGIN
+                    PERFORM pg_notify('hitl_chat', json_build_object(
+                        'id', NEW.id,
+                        'team_id', NEW.team_id,
+                        'agent_id', NEW.agent_id,
+                        'thread_id', NEW.thread_id,
+                        'sender', NEW.sender,
+                        'content', LEFT(NEW.content, 4000),
+                        'created_at', NEW.created_at
+                    )::text);
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+            """)
+            cur.execute("""
+                DROP TRIGGER IF EXISTS hitl_chat_notify ON project.hitl_chat_messages
+            """)
+            cur.execute("""
+                CREATE TRIGGER hitl_chat_notify
+                AFTER INSERT ON project.hitl_chat_messages
+                FOR EACH ROW EXECUTE FUNCTION notify_hitl_chat()
+            """)
             cur.execute("SELECT COUNT(*) FROM project.hitl_users")
             if cur.fetchone()[0] == 0:
                 hashed = pwd_ctx.hash(_truncate_pw(password))
@@ -228,8 +269,73 @@ def _load_teams() -> list[dict]:
     return []
 
 
+import asyncio
+import threading
+
+_pg_listener_stop = threading.Event()
+
+
+def _pg_listen_loop():
+    """Background thread: LISTEN on 'hitl_chat' channel and dispatch to WebSocket clients."""
+    while not _pg_listener_stop.is_set():
+        try:
+            conn = psycopg.connect(DATABASE_URI, autocommit=True)
+            conn.execute("LISTEN hitl_chat")
+            logger.info("[pg-listen] Listening on 'hitl_chat' channel")
+            while not _pg_listener_stop.is_set():
+                # poll with timeout so we can check the stop flag
+                for notify in conn.notifies(timeout=2):
+                    try:
+                        payload = json.loads(notify.payload)
+                        team_id = payload.get("team_id", "")
+                        agent_id = payload.get("agent_id", "")
+                        thread_id = payload.get("thread_id", "")
+                        # Dispatch to WebSocket subscribers
+                        _dispatch_chat_event(team_id, agent_id, payload)
+                    except Exception as e:
+                        logger.warning(f"[pg-listen] Bad payload: {e}")
+            conn.close()
+        except Exception as e:
+            logger.warning(f"[pg-listen] Connection error: {e}")
+            if not _pg_listener_stop.is_set():
+                time.sleep(3)  # reconnect after delay
+
+
+# Chat WS subscriptions: {team_id: {websocket: agent_id_or_None}}
+_ws_chat_subs: dict[str, dict] = {}
+_event_loop = None
+
+
+def _dispatch_chat_event(team_id: str, agent_id: str, payload: dict):
+    """Called from PG listener thread — schedule async dispatch on the event loop."""
+    loop = _event_loop
+    if loop and loop.is_running():
+        asyncio.run_coroutine_threadsafe(_async_dispatch_chat(team_id, agent_id, payload), loop)
+
+
+async def _async_dispatch_chat(team_id: str, agent_id: str, payload: dict):
+    """Send chat_message event to all WS clients watching this agent in this team."""
+    event = {"type": "chat_message", "data": payload}
+    subs = _ws_chat_subs.get(team_id, {})
+    for ws, sub_agent_id in list(subs.items()):
+        if sub_agent_id == agent_id:
+            try:
+                await ws.send_json(event)
+            except Exception:
+                pass
+    # Also notify ALL team connections (for inbox badge refresh etc.)
+    for ws in list(_ws_connections.get(team_id, [])):
+        try:
+            await ws.send_json({"type": "chat_activity", "agent_id": agent_id})
+        except Exception:
+            pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _event_loop
+    _event_loop = asyncio.get_running_loop()
+
     # Retry DB connection (postgres may still be in recovery)
     for attempt in range(1, 11):
         try:
@@ -240,8 +346,18 @@ async def lifespan(app: FastAPI):
             if attempt == 10:
                 raise
             time.sleep(3)
-    logger.info("HITL Console started")
+
+    # Start PG LISTEN background thread
+    _pg_listener_stop.clear()
+    listener_thread = threading.Thread(target=_pg_listen_loop, daemon=True, name="pg-listen")
+    listener_thread.start()
+    logger.info("HITL Console started (with PG LISTEN)")
+
     yield
+
+    # Shutdown
+    _pg_listener_stop.set()
+    _event_loop = None
 
 
 app = FastAPI(title="HITL Console", lifespan=lifespan)
@@ -779,11 +895,23 @@ async def ws_team(websocket: WebSocket, team_id: str):
         return
     await websocket.accept()
     _ws_connections.setdefault(team_id, []).append(websocket)
+    _ws_chat_subs.setdefault(team_id, {})[websocket] = None
     try:
         while True:
-            await websocket.receive_text()  # Keep alive
+            raw = await websocket.receive_text()
+            # Handle client commands
+            try:
+                msg = json.loads(raw)
+                if msg.get("type") == "watch_chat":
+                    # Subscribe to a specific agent's chat
+                    _ws_chat_subs[team_id][websocket] = msg.get("agent_id")
+                elif msg.get("type") == "unwatch_chat":
+                    _ws_chat_subs[team_id][websocket] = None
+            except (json.JSONDecodeError, KeyError):
+                pass
     except WebSocketDisconnect:
         _ws_connections[team_id].remove(websocket)
+        _ws_chat_subs.get(team_id, {}).pop(websocket, None)
 
 
 async def notify_team(team_id: str, event: dict):
@@ -857,6 +985,107 @@ def reset_password(req: ResetPasswordRequest):
                         row[0], new_hash[:20], verify_new)
             cur.execute("UPDATE project.hitl_users SET password_hash = %s WHERE id = %s", (new_hash, row[0]))
         return {"ok": True, "message": "Mot de passe mis a jour"}
+    finally:
+        conn.close()
+
+
+# ── Agent Chat ─────────────────────────────────
+GATEWAY_URL = os.getenv("LANGGRAPH_API_URL", "http://langgraph-api:8123")
+
+
+class ChatRequest(BaseModel):
+    message: str
+
+
+@app.get("/api/teams/{team_id}/agents/{agent_id}/chat")
+def get_chat_history(team_id: str, agent_id: str, user: TokenData = Depends(get_current_user)):
+    """Get chat history for an agent in a team."""
+    if team_id not in user.teams and user.role != "admin":
+        raise HTTPException(403)
+    thread_id = f"hitl-chat-{team_id}-{agent_id}"
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, sender, content, created_at
+                FROM project.hitl_chat_messages
+                WHERE team_id = %s AND agent_id = %s AND thread_id = %s
+                ORDER BY created_at ASC
+                LIMIT 200
+            """, (team_id, agent_id, thread_id))
+            return [{
+                "id": r[0], "sender": r[1], "content": r[2],
+                "created_at": r[3].isoformat() if r[3] else None,
+            } for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+@app.post("/api/teams/{team_id}/agents/{agent_id}/chat")
+def send_chat_message(team_id: str, agent_id: str, req: ChatRequest, user: TokenData = Depends(get_current_user)):
+    """Send a message to an agent and get a response via gateway."""
+    if team_id not in user.teams and user.role != "admin":
+        raise HTTPException(403)
+    import httpx
+
+    thread_id = f"hitl-chat-{team_id}-{agent_id}"
+    conn = get_conn()
+    try:
+        # Save user message
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO project.hitl_chat_messages (team_id, agent_id, thread_id, sender, content)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (team_id, agent_id, thread_id, user.email, req.message))
+
+        # Call gateway /invoke
+        # orchestrator = mode orchestre (pas de direct_agent), autres = mode direct
+        invoke_payload = {
+            "messages": [{"role": "user", "content": req.message}],
+            "thread_id": thread_id,
+            "project_id": f"hitl-{team_id}",
+            "channel_id": "",
+        }
+        if agent_id != "orchestrator":
+            invoke_payload["direct_agent"] = agent_id
+        try:
+            resp = httpx.post(f"{GATEWAY_URL}/invoke", json=invoke_payload, timeout=120)
+            if resp.status_code == 200:
+                data = resp.json()
+                agent_reply = data.get("output", "")
+            else:
+                agent_reply = f"Erreur gateway ({resp.status_code}): {resp.text[:200]}"
+        except httpx.ConnectError:
+            agent_reply = "Le service LangGraph API n'est pas accessible."
+        except Exception as e:
+            agent_reply = f"Erreur: {str(e)[:200]}"
+
+        # Save agent response
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO project.hitl_chat_messages (team_id, agent_id, thread_id, sender, content)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (team_id, agent_id, thread_id, agent_id, agent_reply))
+
+        return {"ok": True, "reply": agent_reply}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/teams/{team_id}/agents/{agent_id}/chat")
+def clear_chat(team_id: str, agent_id: str, user: TokenData = Depends(get_current_user)):
+    """Clear chat history for an agent."""
+    if team_id not in user.teams and user.role != "admin":
+        raise HTTPException(403)
+    thread_id = f"hitl-chat-{team_id}-{agent_id}"
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                DELETE FROM project.hitl_chat_messages
+                WHERE team_id = %s AND agent_id = %s AND thread_id = %s
+            """, (team_id, agent_id, thread_id))
+        return {"ok": True}
     finally:
         conn.close()
 

@@ -45,7 +45,11 @@ if [ "$REMOTE_VERSION" != "unknown" ] && [ "$REMOTE_VERSION" = "$LOCAL_VERSION" 
     echo "  Version locale ${LOCAL_VERSION} identique a la version en ligne. Rien a faire."
     exit 0
 fi
-echo "  Download de la version en ligne : ${REMOTE_VERSION} (locale: ${LOCAL_VERSION:-aucune})."
+echo ""
+echo "  Version en ligne  : ${REMOTE_VERSION}"
+echo "  Version locale    : ${LOCAL_VERSION:-aucune}"
+echo ""
+echo "  Mise a jour en cours..."
 sleep 2
 
 # ── 2. Fichiers de config depuis GitHub ──────
