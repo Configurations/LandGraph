@@ -1,9 +1,9 @@
 #!/bin/bash
 ###############################################################################
-# Script 3 : Installation de LangGraph + Infrastructure
-# VERSION v3 — Telecharge tout depuis GitHub, zero heredoc
+# Script 02 : Installation de LangGraph + Infrastructure
+# Telecharge tout depuis GitHub, zero heredoc
 #
-# A executer depuis la VM Ubuntu (apres le script 02).
+# A executer depuis la VM Ubuntu (apres le script 01).
 # Usage : ./02-install-langgraph.sh [branche]
 #   branche : dev | uat | main (defaut: main)
 ###############################################################################
@@ -19,7 +19,7 @@ PROJECT_DIR="$HOME/langgraph-project"
 REPO_RAW="https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/${BRANCH}"
 
 echo "========================================"
-echo "  Script 3 : Installation LangGraph v3  "
+echo "  Script 02 : Installation LangGraph     "
 echo "  Branche : ${BRANCH}"
 echo "========================================"
 echo ""
@@ -61,7 +61,7 @@ echo "  Mise a jour en cours..."
 sleep 2
 
 # ── 2. Fichiers de config depuis GitHub ──────
-echo "[2/7] Telechargement des fichiers de config..."
+echo "[2/8] Telechargement des fichiers de config..."
 
 wget -qO docker-compose.yml "${REPO_RAW}/docker-compose.yml" 2>/dev/null || { echo "ERREUR: docker-compose.yml"; exit 1; }
 wget -qO env.example "${REPO_RAW}/env.example" 2>/dev/null || { echo "ERREUR: env.example"; exit 1; }
@@ -99,7 +99,7 @@ chmod +x start.sh stop.sh restart.sh build.sh  update.sh
 echo "  -> Scripts : start.sh, stop.sh, restart.sh, build.sh  update.sh"
 
 # ── 3. Fichier .env ──────────────────────────
-echo "[3/7] Fichier .env..."
+echo "[3/8] Fichier .env..."
 if [ ! -f .env ]; then
     cp env.example .env
     chmod 600 .env
@@ -109,12 +109,12 @@ else
 fi
 
 # ── 4. Init Python ───────────────────────────
-echo "[4/7] Touches Python..."
+echo "[4/8] Init Python..."
 touch agents/__init__.py agents/shared/__init__.py
 
 
 # ── 4b. Code Python agents ──────────────────
-echo "[4b/7] Code Python agents..."
+echo "[5/8] Code Python agents..."
 
 # Shared modules
 SHARED_FILES=(base_agent.py agent_loader.py llm_provider.py rate_limiter.py mcp_client.py mcp_auth.py mcp_server.py team_resolver.py workflow_engine.py channels.py human_gate.py agent_conversation.py discord_tools.py event_bus.py state.py __init__.py)
@@ -131,7 +131,7 @@ done
 echo "  -> Code agents telecharge"
 
 # ── 4c. Admin web ────────────────────────────
-echo "[4c/7] Admin web..."
+echo "[5b/8] Admin web..."
 mkdir -p web/static/css web/static/js
 wget -qO web/requirements.txt "${REPO_RAW}/web/requirements.txt" 2>/dev/null || true
 wget -qO web/server.py "${REPO_RAW}/web/server.py" 2>/dev/null || true
@@ -141,7 +141,7 @@ wget -qO web/static/js/app.js "${REPO_RAW}/web/static/js/app.js" 2>/dev/null || 
 echo "  -> Admin web telecharge"
 
 # ── 4c-bis. HITL Console ─────────────────────
-echo "[4c-bis/7] HITL Console..."
+echo "[5c/8] HITL Console..."
 mkdir -p hitl/static/css hitl/static/js
 wget -qO hitl/requirements.txt "${REPO_RAW}/hitl/requirements.txt" 2>/dev/null || true
 wget -qO hitl/server.py "${REPO_RAW}/hitl/server.py" 2>/dev/null || true
@@ -152,7 +152,7 @@ wget -qO hitl/static/js/app.js "${REPO_RAW}/hitl/static/js/app.js" 2>/dev/null |
 echo "  -> HITL Console telecharge"
 
 # ── 4d. Config globale ───────────────────────
-echo "[4d/7] Config globale..."
+echo "[6/8] Config globale..."
 
 # Copier les fichiers globaux dans config/ (team_resolver les cherche ici)
 cp Shared/Teams/teams.json config/teams.json 2>/dev/null || true
@@ -170,7 +170,7 @@ echo "${REMOTE_VERSION}" > .version
 echo "  -> Version ${REMOTE_VERSION} downloaded"
 
 # ── 5. Environnement Python local ───────────
-echo "[5/7] Environnement Python local..."
+echo "[7/8] Environnement Python local..."
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip -q
@@ -178,7 +178,7 @@ pip install -q -r requirements.txt
 
 
 # ── 6. Demarrage complet ────────────────────
-echo "[7/7] build..."
+echo "[8/8] Build..."
 bash ./build.sh
 sleep 1
 

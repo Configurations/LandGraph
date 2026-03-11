@@ -26,13 +26,13 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # ── 1. Mise a jour systeme ───────────────────────────────────────────────────
-echo "[1/5] Mise a jour du systeme..."
+echo "[1/6] Mise a jour du systeme..."
 apt-get update -qq
 apt-get upgrade -y -qq
 echo "  -> OK"
 
 # ── 2. Outils de base ───────────────────────────────────────────────────────
-echo "[2/5] Installation des outils de base..."
+echo "[2/6] Installation des outils de base..."
 apt-get install -y -qq \
   curl wget git vim htop tmux \
   ca-certificates gnupg lsb-release \
@@ -41,7 +41,7 @@ apt-get install -y -qq \
 echo "  -> OK"
 
 # ── 3. Ajout du repo Docker ─────────────────────────────────────────────────
-echo "[3/5] Ajout du depot Docker officiel..."
+echo "[3/6] Ajout du depot Docker officiel..."
 install -m 0755 -d /etc/apt/keyrings
 
 if [ ! -f /etc/apt/keyrings/docker.gpg ]; then
@@ -59,7 +59,7 @@ echo "deb [arch=$(dpkg --print-architecture) \
 echo "  -> OK"
 
 # ── 4. Installation Docker ──────────────────────────────────────────────────
-echo "[4/5] Installation de Docker Engine..."
+echo "[4/6] Installation de Docker Engine..."
 apt-get update -qq
 apt-get install -y -qq \
   docker-ce docker-ce-cli containerd.io \
@@ -67,7 +67,7 @@ apt-get install -y -qq \
 echo "  -> OK"
 
 # ── 5. Configuration Docker production ──────────────────────────────────────
-echo "[5/5] Configuration Docker pour la production..."
+echo "[5/6] Configuration Docker pour la production..."
 mkdir -p /etc/docker
 
 tee /etc/docker/daemon.json > /dev/null << 'EOF'
@@ -90,7 +90,7 @@ systemctl restart docker
 echo "  -> OK"
 
 # ── 6. Caddy reverse proxy (TLS interne) ─────────────────────────────────────
-echo "[6] Installation de Caddy (reverse proxy)..."
+echo "[6/6] Installation de Caddy (reverse proxy)..."
 apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list > /dev/null

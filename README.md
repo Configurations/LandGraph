@@ -50,7 +50,7 @@ Trois scripts sequentiels. Chaque script se telecharge et s'execute en une comma
 bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/00-create-lxc.sh)"
 
 # Option B — Configurer un LXC existant pour Docker
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/00-configure-lxc.sh)" _ <CTID>
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/00-prepare-existing-lxc4Docker.sh)" _ <CTID>
 ```
 
 | Parametre | Valeur par defaut  |

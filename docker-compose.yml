@@ -80,7 +80,6 @@ services:
     volumes:
       - ./agents:/app/agents
       - ./config:/app/config
-      - ./config/Teams:/app/config/Teams
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
