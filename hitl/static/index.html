@@ -37,6 +37,7 @@
         <span style="font-size:10px;color:var(--text-muted)">Pas encore de compte ?</span>
         <a style="font-size:10px;color:var(--accent-light);cursor:pointer;margin-left:4px" onclick="showRegister()">Inscription</a>
       </div>
+      <div class="version-tag" id="login-version"></div>
     </div>
   </div>
 
@@ -67,6 +68,7 @@
       <div style="text-align:center;margin-top:14px">
         <a style="font-size:10px;color:var(--accent-light);cursor:pointer" onclick="showLogin()">Retour a la connexion</a>
       </div>
+      <div class="version-tag" id="register-version"></div>
     </div>
   </div>
 
@@ -91,6 +93,7 @@
         </button>
         <button class="sidebar-item" data-view="agents" onclick="switchView('agents')">Agents</button>
         <button class="sidebar-item" data-view="members" onclick="switchView('members')">Membres</button>
+        <div class="version-tag sidebar-version" id="app-version"></div>
       </div>
       <div class="content" id="content">
         <div class="loading">Chargement...</div>

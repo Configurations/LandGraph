@@ -1629,6 +1629,16 @@ tr:hover { background: rgba(255,255,255,0.02); }
   margin-top: 0.25rem;
 }
 
+/* Version tag */
+.admin-version-tag {
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+  text-align: center;
+  padding: 0.5rem 1rem;
+  opacity: 0.5;
+  letter-spacing: 0.03em;
+}
+
 /* Responsive sidebar collapse */
 @media (max-width: 900px) {
   .wf-sidebar { width: 260px; }

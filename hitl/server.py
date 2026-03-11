@@ -1106,6 +1106,18 @@ def health():
     return {"status": "ok", "service": "hitl-console"}
 
 
+def _read_version() -> str:
+    for vp in ["/project/.version", "/app/.version", os.path.join(os.path.dirname(__file__), "..", ".version")]:
+        if os.path.isfile(vp):
+            return open(vp).read().strip()
+    return "dev"
+
+
+@app.get("/api/version")
+def get_version():
+    return {"version": _read_version()}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8090)

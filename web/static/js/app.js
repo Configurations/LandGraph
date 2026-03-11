@@ -6443,4 +6443,9 @@ document.addEventListener('DOMContentLoaded', () => {
   loadEnv();
   // Check HITL badge on startup
   api('/api/hitl/stats').then(s => updateHitlBadge(s.pending)).catch(() => {});
+  // Load version tag
+  fetch('/api/version').then(r => r.json()).then(d => {
+    const el = document.getElementById('admin-version');
+    if (el && d.version) el.textContent = d.version;
+  }).catch(() => {});
 });

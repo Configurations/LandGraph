@@ -461,5 +461,14 @@ body {
   border-radius: 8px; flex-shrink: 0;
 }
 
+/* ── Version tag ──────────────────────────── */
+.version-tag {
+  font-size: 9px; color: var(--text-dark); text-align: center;
+  margin-top: 12px; letter-spacing: 0.5px;
+}
+.sidebar-version {
+  margin-top: auto; padding: 12px 14px 8px; text-align: left;
+}
+
 /* ── Loading ──────────────────────────────── */
 .loading { color: var(--text-muted); font-size: 11px; padding: 20px; text-align: center; }

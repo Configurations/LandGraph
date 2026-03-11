@@ -749,8 +749,18 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
+// ── Version ──────────────────────────────────────
+async function loadVersion() {
+  try {
+    const data = await fetch('/api/version').then(r => r.json());
+    const v = data.version || 'dev';
+    document.querySelectorAll('.version-tag').forEach(el => { el.textContent = v; });
+  } catch (e) { /* ignore */ }
+}
+
 // ── Init ─────────────────────────────────────────
 (async () => {
+  loadVersion();
   if (await checkAuth()) {
     onLoggedIn();
   }

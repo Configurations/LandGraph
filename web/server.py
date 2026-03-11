@@ -192,6 +192,7 @@ _LOGIN_PAGE = """<!DOCTYPE html>
     .btn-login{width:100%;padding:0.65rem;background:linear-gradient(135deg,#6366f1,#818cf8);color:#fff;border:none;border-radius:8px;font-size:0.9rem;font-weight:600;font-family:inherit;cursor:pointer;transition:opacity 0.2s}
     .btn-login:hover{opacity:0.9}
     .error-msg{background:#371520;border:1px solid #5c1d33;color:#f87171;padding:0.5rem 0.75rem;border-radius:8px;font-size:0.8rem;margin-bottom:1rem;display:none}
+    .login-version{text-align:center;margin-top:1.25rem;font-size:0.65rem;color:#52525b;letter-spacing:0.03em}
   </style>
 </head>
 <body>
@@ -212,6 +213,7 @@ _LOGIN_PAGE = """<!DOCTYPE html>
       </div>
       <button type="submit" class="btn-login">Se connecter</button>
     </form>
+    <div class="login-version" id="login-version"></div>
   </div>
   <script>
     async function doLogin(e) {
@@ -228,6 +230,9 @@ _LOGIN_PAGE = """<!DOCTYPE html>
       if (res.ok) { window.location.href = '/'; }
       else { document.getElementById('error-msg').style.display = 'block'; }
     }
+    fetch('/api/version').then(r=>r.json()).then(d=>{
+      if(d.version) document.getElementById('login-version').textContent=d.version;
+    }).catch(()=>{});
   </script>
 </body>
 </html>"""
@@ -245,7 +250,7 @@ async def auth_middleware(request: Request, call_next):
     if creds is not None:
         path = request.url.path
         # Allow login routes and static assets for login page (fonts)
-        if path in ("/auth/login", "/auth/logout"):
+        if path in ("/auth/login", "/auth/logout", "/api/version"):
             return await call_next(request)
         token = request.cookies.get("lg_session", "")
         if not _verify_session_token(token):
@@ -291,6 +296,11 @@ async def auth_logout():
 @app.get("/")
 async def index():
     return FileResponse(Path(__file__).parent / "static" / "index.html")
+
+
+@app.get("/api/version")
+async def get_version():
+    return {"version": _version}
 
 
 # ── Helpers ─────────────────────────────────────────
