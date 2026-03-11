@@ -6314,9 +6314,14 @@ function renderUsers() {
       <td>${teamNames || '<span style="color:var(--text-secondary)">—</span>'}</td>
       <td>${u.is_active ? '<span style="color:#4ade80">Oui</span>' : '<span style="color:#f87171">Non</span>'}</td>
       <td style="font-size:0.75rem;color:var(--text-secondary)">${u.last_login ? new Date(u.last_login).toLocaleString('fr') : '—'}</td>
-      <td>
-        <button class="btn btn-outline btn-sm" onclick="editUser('${u.id}')">Editer</button>
-        <button class="btn btn-outline btn-sm" style="color:var(--danger)" onclick="deleteUser('${u.id}','${escHtml(u.email)}')">Suppr</button>
+      <td style="position:relative">
+        <button class="btn btn-outline btn-sm" onclick="toggleUserMenu('${u.id}')">Actions ▾</button>
+        <div id="user-menu-${u.id}" class="dropdown-menu" style="display:none;position:absolute;right:0;top:100%;z-index:50;min-width:220px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.3);padding:4px 0">
+          <div class="dropdown-item" onclick="editUser('${u.id}');closeUserMenus()" style="padding:6px 12px;cursor:pointer;font-size:0.8rem">Editer</div>
+          <div class="dropdown-item" onclick="resendResetEmail('${u.id}','${escHtml(u.email)}');closeUserMenus()" style="padding:6px 12px;cursor:pointer;font-size:0.8rem">Renvoyer le mail de reset</div>
+          <div style="border-top:1px solid var(--border);margin:4px 0"></div>
+          <div class="dropdown-item" onclick="deleteUser('${u.id}','${escHtml(u.email)}');closeUserMenus()" style="padding:6px 12px;cursor:pointer;font-size:0.8rem;color:var(--red)">Supprimer</div>
+        </div>
       </td>
     </tr>`;
   });
@@ -6399,6 +6404,31 @@ async function saveUser() {
     }
     closeModal('modal-user');
     loadUsers();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function toggleUserMenu(uid) {
+  closeUserMenus();
+  const menu = document.getElementById('user-menu-' + uid);
+  if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+}
+
+function closeUserMenus() {
+  document.querySelectorAll('[id^="user-menu-"]').forEach(m => m.style.display = 'none');
+}
+
+// Close menus on click outside
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('[id^="user-menu-"]') && !e.target.matches('[onclick*="toggleUserMenu"]')) {
+    closeUserMenus();
+  }
+});
+
+async function resendResetEmail(uid, email) {
+  if (!confirm(`Renvoyer le mail de reinitialisation a ${email} ?`)) return;
+  try {
+    const res = await api(`/api/hitl/users/${uid}/resend-reset`, { method: 'POST' });
+    toast(res.email_sent ? 'Email de reset envoye' : 'Echec envoi email', res.email_sent ? 'success' : 'error');
   } catch (e) { toast(e.message, 'error'); }
 }
 

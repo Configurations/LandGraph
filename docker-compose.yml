@@ -157,7 +157,7 @@ services:
       langgraph-postgres:
         condition: service_healthy
     volumes:
-      - ./config/Teams:/app/config/Teams
+      - ./config:/app/config
     env_file:
       - .env
     environment:

@@ -69,6 +69,8 @@ wget -qO config/Teams/.gitignore "${REPO_RAW}/gitignore" 2>/dev/null || { echo "
 [ -f config/langgraph.json ] || wget -qO config/langgraph.json "${REPO_RAW}/config/langgraph.json" 2>/dev/null || { echo "ERREUR: langgraph.json"; exit 1; }
 [ -f config/mail.json ]      || wget -qO config/mail.json "${REPO_RAW}/config/mail.json" 2>/dev/null || { echo "ERREUR: mail.json"; exit 1; }
 [ -f config/discord.json ]   || wget -qO config/discord.json "${REPO_RAW}/config/discord.json" 2>/dev/null || { echo "ERREUR: discord.json"; exit 1; }
+[ -f config/hitl.json ]      || wget -qO config/hitl.json "${REPO_RAW}/config/hitl.json" 2>/dev/null || { echo "ERREUR: hitl.json"; exit 1; }
+[ -f config/others.json ]    || wget -qO config/others.json "${REPO_RAW}/config/others.json" 2>/dev/null || { echo "ERREUR: others.json"; exit 1; }
 
 echo "  -> Fichiers telecharges"
 
@@ -128,6 +130,7 @@ mkdir -p hitl/static/css hitl/static/js
 wget -qO hitl/requirements.txt "${REPO_RAW}/hitl/requirements.txt" 2>/dev/null || true
 wget -qO hitl/server.py "${REPO_RAW}/hitl/server.py" 2>/dev/null || true
 wget -qO hitl/static/index.html "${REPO_RAW}/hitl/static/index.html" 2>/dev/null || true
+wget -qO hitl/static/reset-password.html "${REPO_RAW}/hitl/static/reset-password.html" 2>/dev/null || true
 wget -qO hitl/static/css/style.css "${REPO_RAW}/hitl/static/css/style.css" 2>/dev/null || true
 wget -qO hitl/static/js/app.js "${REPO_RAW}/hitl/static/js/app.js" 2>/dev/null || true
 echo "  -> HITL Console telecharge"

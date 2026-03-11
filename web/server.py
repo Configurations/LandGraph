@@ -3037,6 +3037,39 @@ async def hitl_create_user(req: Request):
         conn.close()
 
 
+@app.post("/api/hitl/users/{user_id}/resend-reset")
+async def hitl_resend_reset(user_id: str):
+    """Regenerate temp password and resend reset email."""
+    import psycopg
+    from passlib.context import CryptContext
+    uri = _env_dict().get("DATABASE_URI", "")
+    if not uri:
+        raise HTTPException(500, "DATABASE_URI not configured")
+    conn = psycopg.connect(uri, autocommit=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT email FROM project.hitl_users WHERE id = %s", (user_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "Utilisateur non trouve")
+            email = row[0]
+            # Generate new temp password
+            temp_password = _generate_password(12)
+            # Send reset email first
+            hitl_host = _env_dict().get("HITL_PUBLIC_URL", "")
+            if not hitl_host:
+                hitl_host = "http://localhost:8090"
+            reset_url = hitl_host.rstrip("/")
+            email_sent = _send_welcome_email(email, temp_password, reset_url)
+            # Then hash and update password
+            pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+            hashed = pwd_ctx.hash(temp_password.encode("utf-8")[:72].decode("utf-8", errors="ignore"))
+            cur.execute("UPDATE project.hitl_users SET password_hash = %s WHERE id = %s", (hashed, user_id))
+        return {"ok": True, "email_sent": email_sent}
+    finally:
+        conn.close()
+
+
 @app.put("/api/hitl/users/{user_id}")
 async def hitl_update_user(user_id: str, req: Request):
     import psycopg

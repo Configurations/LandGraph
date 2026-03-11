@@ -150,9 +150,20 @@ async function doRegister() {
 async function checkAuth() {
   if (!token) return false;
   try {
-    currentUser = await api('/api/auth/me');
+    const res = await fetch('/api/auth/me', { headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' } });
+    if (!res.ok) {
+      // Token invalid/expired — silent cleanup, no error message
+      token = '';
+      localStorage.removeItem('hitl_token');
+      return false;
+    }
+    currentUser = await res.json();
     return true;
-  } catch { return false; }
+  } catch {
+    token = '';
+    localStorage.removeItem('hitl_token');
+    return false;
+  }
 }
 
 async function onLoggedIn() {
