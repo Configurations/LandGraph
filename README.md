@@ -68,14 +68,29 @@ bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGrap
 bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/01-install-docker.sh)"
 ```
 
-Installe Docker Engine + Compose, configure les logs, active UFW (ports 8123, 8080, 3000 en reseau local). **Se reconnecter apres execution** (groupe docker).
+Installe Docker Engine + Compose, configure les logs, active UFW (ports 8123, 8080, 3000 en reseau local), et installe **Caddy** comme reverse proxy HTTP (port 80). **Se reconnecter apres execution** (groupe docker).
+
+Caddy est configure pour router les sous-domaines vers les services locaux (SSL gere par Cloudflare Tunnel en front) :
+
+| Domaine | Service |
+|---------|---------|
+| `admin.langgraph.yoops.org` | Dashboard Admin (:8080) |
+| `hitl.langgraph.yoops.org` | HITL Console (:8090) |
+| `api.langgraph.yoops.org` | API Gateway (:8123) |
+| `openlit.langgraph.yoops.org` | OpenLIT (:3000) |
+
+La config Caddy est dans `/etc/caddy/Caddyfile`. Pour ajouter un domaine, dupliquer un bloc et relancer `systemctl reload caddy`.
 
 ### Etape 2 — Installer LangGraph
 
 **Ou** : SSH sur la VM/LXC, apres reconnexion.
 
 ```bash
+# Depuis main (defaut)
 bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/02-install-langgraph.sh)"
+
+# Depuis une branche specifique (dev, uat, main)
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/dev/scripts/Infra/02-install-langgraph.sh)" _ dev
 ```
 
 Ce script deploie le socle complet :
@@ -237,7 +252,7 @@ langgraph-project/
 ├── docker-compose.yml
 ├── Dockerfile / Dockerfile.discord / Dockerfile.mail / Dockerfile.admin / Dockerfile.hitl
 ├── .env                            ← Secrets uniquement
-├── start.sh / stop.sh / restart.sh / build.sh
+├── start.sh / stop.sh / restart.sh / build.sh / update.sh
 └── requirements.txt
 ```
 
@@ -378,6 +393,7 @@ http://<IP-VM>:8080
 
 | Service | Port | Acces |
 |---------|------|-------|
+| Caddy (reverse proxy) | 80 | Public (via Cloudflare Tunnel) |
 | LangGraph API | 8123 | Reseau local |
 | Admin Dashboard | 8080 | Reseau local |
 | HITL Console | 8090 | Reseau local |
@@ -387,6 +403,30 @@ http://<IP-VM>:8080
 | PostgreSQL | 5432 | localhost uniquement |
 | Redis | 6379 | localhost uniquement |
 
+## Branches
+
+Le projet suit une strategie a trois branches :
+
+| Branche | Role | Stabilite |
+|---------|------|-----------|
+| `main` | Production — deploiement stable | Haute |
+| `uat` | Pre-production — tests d'acceptation | Moyenne |
+| `dev` | Developpement — nouvelles features | Basse |
+
+Flux : `dev` → `uat` → `main`. Les scripts d'installation et de mise a jour acceptent la branche en parametre.
+
+## Mise a jour
+
+Le script `update.sh` telecharge et execute le script d'installation depuis GitHub. Il accepte une branche en parametre :
+
+```bash
+./update.sh          # Mise a jour depuis main (defaut)
+./update.sh dev      # Mise a jour depuis la branche dev
+./update.sh uat      # Mise a jour depuis la branche uat
+```
+
+Branches acceptees : `dev`, `uat`, `main`. Le script verifie la version avant de telecharger — si la version locale est identique, rien n'est fait.
+
 ## Scripts utilitaires
 
 ```bash
@@ -394,6 +434,7 @@ http://<IP-VM>:8080
 ./stop.sh      # Arrete tous les containers
 ./restart.sh   # Arrete + demarre
 ./build.sh     # Rebuild les images + demarre
+./update.sh [branche]  # Mise a jour depuis GitHub (dev|uat|main, defaut: main)
 ```
 
 ## HITL Console (port 8090)
