@@ -2390,6 +2390,14 @@ async function loadCfgMisc() {
     const pr = _miscData.password_reset || {};
     smtpSel.value = pr.smtp_name || '';
     tplSel.value = pr.template_name || '';
+    // Domain / hosts
+    const hosts = _miscData.hosts || {};
+    document.getElementById('misc-host-admin').value = hosts.admin || '';
+    document.getElementById('misc-host-hitl').value = hosts.hitl || '';
+    document.getElementById('misc-host-api').value = hosts.api || '';
+    document.getElementById('misc-host-openlit').value = hosts.openlit || '';
+    document.getElementById('misc-host-postgres').value = hosts.postgres || '';
+    document.getElementById('misc-host-redis').value = hosts.redis || '';
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -2397,6 +2405,14 @@ async function saveCfgMisc() {
   try {
     const data = {
       ..._miscData,
+      hosts: {
+        admin: document.getElementById('misc-host-admin').value.trim(),
+        hitl: document.getElementById('misc-host-hitl').value.trim(),
+        api: document.getElementById('misc-host-api').value.trim(),
+        openlit: document.getElementById('misc-host-openlit').value.trim(),
+        postgres: document.getElementById('misc-host-postgres').value.trim(),
+        redis: document.getElementById('misc-host-redis').value.trim(),
+      },
       password_reset: {
         smtp_name: document.getElementById('misc-reset-smtp').value,
         template_name: document.getElementById('misc-reset-template').value,

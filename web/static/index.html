@@ -6,7 +6,7 @@
   <title>LandGraph Admin</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/style.css?v=20260310b">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260311a">
 </head>
 <body>
   <div class="app-layout">
@@ -541,6 +541,46 @@
               Parametres divers de la plateforme.
             </p>
             <button class="btn btn-primary btn-sm" onclick="saveCfgMisc()">Sauvegarder</button>
+          </div>
+
+          <!-- Domain / Hosts -->
+          <div class="card">
+            <div class="card-header"><h3>Domaines et adresses</h3></div>
+            <div class="card-body">
+              <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem">
+                URLs des services de la plateforme. Utilisees pour les liens dans les emails, les redirections, et la communication inter-services.
+              </p>
+              <div class="form-row">
+                <div class="form-group">
+                  <label>Administration (port 8080)</label>
+                  <input id="misc-host-admin" placeholder="https://admin.example.com" />
+                </div>
+                <div class="form-group">
+                  <label>Console HITL (port 8090)</label>
+                  <input id="misc-host-hitl" placeholder="https://hitl.example.com" />
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label>API Gateway (port 8123)</label>
+                  <input id="misc-host-api" placeholder="https://api.example.com" />
+                </div>
+                <div class="form-group">
+                  <label>OpenLIT Observabilite (port 3000)</label>
+                  <input id="misc-host-openlit" placeholder="https://openlit.example.com" />
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label>PostgreSQL</label>
+                  <input id="misc-host-postgres" placeholder="langgraph-postgres:5432" />
+                </div>
+                <div class="form-group">
+                  <label>Redis</label>
+                  <input id="misc-host-redis" placeholder="langgraph-redis:6379" />
+                </div>
+              </div>
+            </div>
           </div>
 
           <!-- Password reset emails -->
@@ -1081,6 +1121,6 @@
   <div id="modal-container"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="/static/js/app.js?v=20260310b"></script>
+  <script src="/static/js/app.js?v=20260311a"></script>
 </body>
 </html>
