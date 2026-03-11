@@ -50,7 +50,7 @@ echo "  Version en ligne  : ${REMOTE_VERSION}"
 echo "  Version locale    : ${LOCAL_VERSION:-aucune}"
 echo ""
 echo "  Mise a jour en cours..."
-sleep 2
+sleep 2pa
 
 # ── 2. Fichiers de config depuis GitHub ──────
 echo "[2/7] Telechargement des fichiers de config..."
@@ -172,7 +172,7 @@ pip install -q -r requirements.txt
 # ── 6. Demarrage complet ────────────────────
 echo "[7/7] build..."
 bash ./build.sh
-sleep 12
+sleep 1
 
 
 if docker exec langgraph-postgres pg_isready -U langgraph -d langgraph &> /dev/null; then
