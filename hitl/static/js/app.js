@@ -540,10 +540,10 @@ async function openAgentChat(agentId, agentName) {
         <div class="loading">Chargement...</div>
       </div>
       <div class="chat-input-area">
-        <div class="chat-input-wrapper">
-          <textarea class="chat-input" id="chat-input" placeholder="Ecris ton message... (Entree pour envoyer, Shift+Entree pour sauter une ligne)" rows="3"></textarea>
-        </div>
-        <button class="btn btn-primary chat-send-btn" id="chat-send-btn" onclick="sendChatMessage()">ENVOYER</button>
+        <textarea class="chat-input" id="chat-input" placeholder="Ecris ton message..." rows="1"></textarea>
+        <button class="chat-send-btn" id="chat-send-btn" onclick="sendChatMessage()" title="Envoyer">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
       </div>
     </div>`;
 
@@ -608,7 +608,7 @@ async function sendChatMessage() {
   chatLoading = true;
   const sendBtn = document.getElementById('chat-send-btn');
   sendBtn.disabled = true;
-  sendBtn.textContent = '...';
+  sendBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity:0.4"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>';
   input.value = '';
   input.style.height = 'auto';
 
@@ -639,7 +639,7 @@ async function sendChatMessage() {
   } finally {
     chatLoading = false;
     sendBtn.disabled = false;
-    sendBtn.textContent = 'ENVOYER';
+    sendBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>';
     input.focus();
   }
 }

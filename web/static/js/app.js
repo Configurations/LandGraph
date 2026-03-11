@@ -6454,5 +6454,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     const el = document.getElementById('admin-version');
     if (el && txt) el.textContent = txt;
+    const sv = document.getElementById('sidebar-version');
+    if (sv && d.version) sv.textContent = '(' + d.version + ')';
   }).catch(() => {});
 });
