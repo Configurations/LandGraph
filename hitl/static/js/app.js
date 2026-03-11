@@ -753,8 +753,14 @@ document.addEventListener('DOMContentLoaded', () => {
 async function loadVersion() {
   try {
     const data = await fetch('/api/version').then(r => r.json());
-    const v = data.version || 'dev';
-    document.querySelectorAll('.version-tag').forEach(el => { el.textContent = v; });
+    let txt = data.version || 'dev';
+    if (data.last_update) {
+      try {
+        const dt = new Date(data.last_update);
+        txt += ' \u2014 ' + dt.toLocaleDateString('fr-FR') + ' ' + dt.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
+      } catch(e) {}
+    }
+    document.querySelectorAll('.version-tag').forEach(el => { el.textContent = txt; });
   } catch (e) { /* ignore */ }
 }
 

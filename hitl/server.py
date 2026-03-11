@@ -1113,9 +1113,25 @@ def _read_version() -> str:
     return "dev"
 
 
+def _git_last_update() -> str:
+    import subprocess
+    for base in ["/project", "/app", os.path.join(os.path.dirname(__file__), "..")]:
+        if os.path.isdir(os.path.join(base, ".git")):
+            try:
+                result = subprocess.run(
+                    ["git", "log", "-1", "--format=%ci"],
+                    cwd=base, capture_output=True, text=True, timeout=5,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    return result.stdout.strip()
+            except Exception:
+                pass
+    return ""
+
+
 @app.get("/api/version")
 def get_version():
-    return {"version": _read_version()}
+    return {"version": _read_version(), "last_update": _git_last_update()}
 
 
 if __name__ == "__main__":

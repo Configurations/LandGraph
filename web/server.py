@@ -231,7 +231,9 @@ _LOGIN_PAGE = """<!DOCTYPE html>
       else { document.getElementById('error-msg').style.display = 'block'; }
     }
     fetch('/api/version').then(r=>r.json()).then(d=>{
-      if(d.version) document.getElementById('login-version').textContent=d.version;
+      let txt=d.version||'';
+      if(d.last_update){try{const dt=new Date(d.last_update);txt+=' — '+dt.toLocaleDateString('fr-FR')+' '+dt.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})}catch(e){}}
+      if(txt) document.getElementById('login-version').textContent=txt;
     }).catch(()=>{});
   </script>
 </body>
@@ -298,9 +300,25 @@ async def index():
     return FileResponse(Path(__file__).parent / "static" / "index.html")
 
 
+def _git_last_update() -> str:
+    import subprocess
+    for base in ["/project", str(Path(__file__).resolve().parent.parent)]:
+        if os.path.isdir(os.path.join(base, ".git")):
+            try:
+                result = subprocess.run(
+                    ["git", "log", "-1", "--format=%ci"],
+                    cwd=base, capture_output=True, text=True, timeout=5,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    return result.stdout.strip()
+            except Exception:
+                pass
+    return ""
+
+
 @app.get("/api/version")
 async def get_version():
-    return {"version": _version}
+    return {"version": _version, "last_update": _git_last_update()}
 
 
 # ── Helpers ─────────────────────────────────────────

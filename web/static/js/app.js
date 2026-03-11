@@ -6445,7 +6445,14 @@ document.addEventListener('DOMContentLoaded', () => {
   api('/api/hitl/stats').then(s => updateHitlBadge(s.pending)).catch(() => {});
   // Load version tag
   fetch('/api/version').then(r => r.json()).then(d => {
+    let txt = d.version || '';
+    if (d.last_update) {
+      try {
+        const dt = new Date(d.last_update);
+        txt += ' \u2014 ' + dt.toLocaleDateString('fr-FR') + ' ' + dt.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
+      } catch(e) {}
+    }
     const el = document.getElementById('admin-version');
-    if (el && d.version) el.textContent = d.version;
+    if (el && txt) el.textContent = txt;
   }).catch(() => {});
 });
