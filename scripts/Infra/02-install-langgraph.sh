@@ -160,17 +160,12 @@ source .venv/bin/activate
 pip install --upgrade pip -q
 pip install -q -r requirements.txt
 
-# ── 6. Demarrage infra ──────────────────────
-echo "[6/7] Demarrage PostgreSQL + Redis..."
-docker compose up -d langgraph-postgres langgraph-redis
 
-echo ""
-echo "Attente des services..."
-sleep 10
+# ── 6. Demarrage complet ────────────────────
+echo "[7/7] build..."
+bash ./build.sh
+sleep 12
 
-echo ""
-docker compose ps
-echo ""
 
 if docker exec langgraph-postgres pg_isready -U langgraph -d langgraph &> /dev/null; then
     echo "  PostgreSQL : OK"
@@ -184,14 +179,6 @@ else
     echo "  Redis      : EN ATTENTE"
 fi
 
-sleep 12
-
-# ── 7. Demarrage complet ────────────────────
-echo "[7/7] build..."
-bash ./build.sh
-
-echo ""
-sleep 12
 echo ""
 
 # Verification

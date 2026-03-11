@@ -12,6 +12,14 @@ import asyncio
 import zipfile
 from pathlib import Path
 import shutil
+
+# Log bcrypt version at startup
+try:
+    import bcrypt as _bcrypt_mod
+    logging.basicConfig(level=logging.INFO)
+    logging.getLogger(__name__).info("bcrypt version: %s", _bcrypt_mod.__version__)
+except ImportError:
+    pass
 from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
