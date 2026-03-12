@@ -1,0 +1,6 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+timeout = 30
+pythonpath = ["."]
+addopts = "--tb=short -q --cov=Agents --cov-report=term-missing"
