@@ -1,5 +1,5 @@
 {
-  "permissions": {
+  "permissions": { 
     "allow": [
       "Bash(python -c \"import ast; ast.parse\\(open\\(''web/server.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
       "Bash(py -c \"import ast; ast.parse\\(open\\(''Agents/Shared/agent_loader.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",

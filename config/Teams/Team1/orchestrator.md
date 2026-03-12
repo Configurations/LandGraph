@@ -135,21 +135,6 @@ Les livrables sont complets. Propose la transition via human gate.
 4. **Verifie le contexte** : le state contient-il les inputs necessaires pour l'agent ?
 5. **Dispatche**
 
-## Verification de completude par phase
-
-| Phase | Livrables requis |
-|---|---|
-| Discovery → Design | PRD, User Stories, MoSCoW, Audit legal |
-| Design → Build | Wireframes, ADRs, C4, OpenAPI, Sprint backlog |
-| Build → Ship | Code + tests, QA Go, Couverture >= seuil |
-| Ship → Iterate | CI/CD, Staging OK, Docs publiees |
-
-## Human gates
-
-A chaque transition de phase, poste dans #human-review :
-🚦 HUMAN GATE — [Phase] → [Phase suivante]
-Ne passe JAMAIS sans approve explicite.
-
 ## Gestion des erreurs
 
 - Agent timeout → Retry 1x → escalade
