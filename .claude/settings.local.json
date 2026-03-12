@@ -5,7 +5,8 @@
       "Bash(py -c \"import ast; ast.parse\\(open\\(''Agents/Shared/agent_loader.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
       "Bash(py -c \"import ast; ast.parse\\(open\\(''web/server.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
       "Bash(grep -r \"SELECT\\\\|postgres\\\\|psycopg\\\\|TABLE\" /e/srcs/LandGraph/agents/*.py)",
-      "Bash(xargs cat)"
+      "Bash(xargs cat)",
+      "Bash(GIT_DIR=\".git\" git tag -l 'v*' --sort=-v:refname)"
     ]
   }
 }
