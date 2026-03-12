@@ -1600,6 +1600,56 @@ async def chat(req: ChatRequest):
         raise HTTPException(500, f"Erreur: {str(e)}")
 
 
+# ── API: Prompt Templates & Generation ───────────
+
+
+PROMPTS_DIR = (PROJECT_DIR if DOCKER_MODE else ROOT) / "Agents" / "Prompts"
+
+
+@app.get("/api/prompts/templates/{name}")
+async def get_prompt_template(name: str):
+    """Return content of a prompt template from Agents/Prompts/{name}.md."""
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(400, "Nom de template invalide")
+    path = PROMPTS_DIR / f"{name}.md"
+    if not path.exists():
+        raise HTTPException(404, f"Template '{name}' introuvable")
+    return {"content": path.read_text(encoding="utf-8")}
+
+
+class GeneratePromptRequest(BaseModel):
+    agent_info: str
+    agent_id: str = ""
+    agent_name: str = ""
+
+
+@app.post("/api/agents/generate-prompt")
+async def generate_prompt(req: GeneratePromptRequest):
+    """Use the default LLM to generate a structured agent prompt from user input."""
+    # Load the createAgent meta-prompt as system instruction
+    meta_path = PROMPTS_DIR / "createAgent.md"
+    if not meta_path.exists():
+        raise HTTPException(500, "Meta-prompt createAgent.md introuvable")
+    system_prompt = meta_path.read_text(encoding="utf-8")
+
+    # Build user message with context
+    user_msg = ""
+    if req.agent_id:
+        user_msg += f"Identifiant de l'agent : {req.agent_id}\n"
+    if req.agent_name:
+        user_msg += f"Nom affiche : {req.agent_name}\n"
+    user_msg += f"\nVoici les informations fournies par l'utilisateur :\n\n{req.agent_info}"
+    user_msg += "\n\nGenere le prompt complet de l'agent en suivant la structure definie. Reponds uniquement avec le contenu du prompt Markdown, sans bloc de code, sans explication."
+
+    # Reuse the /api/chat logic
+    chat_req = ChatRequest(messages=[
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_msg},
+    ])
+    result = await chat(chat_req)
+    return {"prompt": result["content"]}
+
+
 # ── API: Teams (Configs) ──────────────────────────
 
 

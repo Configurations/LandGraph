@@ -836,6 +836,8 @@ function editAgent(id) {
         <div class="prompt-tabs">
           <div class="prompt-tab active" id="prompt-tab-preview" onclick="switchPromptTab('preview')">Apercu</div>
           <div class="prompt-tab" id="prompt-tab-edit" onclick="switchPromptTab('edit')">Editer</div>
+          <div class="prompt-tabs-spacer"></div>
+          <button class="btn btn-sm btn-generate" id="btn-generate-prompt" onclick="generatePrompt('agent-edit-prompt','${escHtml(id)}',document.getElementById('agent-edit-name').value)">Generer avec l&apos;IA</button>
         </div>
         <div class="prompt-preview" id="agent-prompt-preview">${promptHtml}</div>
         <textarea id="agent-edit-prompt" style="min-height:500px;display:none;border-radius:0 0.5rem 0.5rem 0.5rem">${escHtml(promptRaw)}</textarea>
@@ -875,6 +877,34 @@ function switchAgentTab(tab) {
   document.querySelectorAll('.agent-tab-content').forEach(c => c.classList.remove('active'));
   document.querySelector(`.agent-tab[onclick*="'${tab}'"]`).classList.add('active');
   document.getElementById(`agent-tab-${tab}`).classList.add('active');
+}
+
+async function generatePrompt(textareaId, agentId, agentName) {
+  const textarea = document.getElementById(textareaId);
+  const btn = document.getElementById('btn-generate-prompt');
+  if (!textarea || !btn) return;
+  const info = textarea.value.trim();
+  if (!info) { toast('Remplissez le prompt avant de generer', 'error'); return; }
+
+  const prevText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Generation...';
+
+  try {
+    const result = await api('/api/agents/generate-prompt', {
+      method: 'POST',
+      body: { agent_info: info, agent_id: agentId || '', agent_name: agentName || '' }
+    });
+    textarea.value = result.prompt;
+    // Switch to edit sub-tab to show the result
+    switchPromptTab('edit');
+    toast('Prompt genere', 'success');
+  } catch (e) {
+    toast('Erreur generation: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prevText;
+  }
 }
 
 async function saveAgent(id) {
@@ -962,8 +992,11 @@ function showAddAgentModal() {
       <div class="mcp-check-tags">${mcpTags}</div>
     </div>
     <div class="form-group">
-      <label>Prompt initial</label>
-      <textarea id="agent-new-prompt" style="min-height:150px" placeholder="# Mon Agent\n\nDescription du role..."></textarea>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.25rem">
+        <label style="margin-bottom:0">Prompt initial</label>
+        <button class="btn btn-sm btn-generate" id="btn-generate-prompt" onclick="generatePrompt('agent-new-prompt',document.getElementById('agent-new-id').value,document.getElementById('agent-new-name').value)">Generer avec l&apos;IA</button>
+      </div>
+      <textarea id="agent-new-prompt" style="min-height:200px" placeholder="Chargement du template..."></textarea>
     </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
@@ -971,6 +1004,11 @@ function showAddAgentModal() {
     </div>
   `);
   renderPipelineSteps('agent-new-pipeline-steps', []);
+  // Load default prompt template
+  api('/api/prompts/templates/New').then(r => {
+    const ta = document.getElementById('agent-new-prompt');
+    if (ta && !ta.value) ta.value = r.content;
+  }).catch(() => {});
 }
 
 async function addAgent() {
