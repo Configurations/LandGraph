@@ -806,6 +806,34 @@ tr:hover { background: rgba(255,255,255,0.02); }
 .ch-tab-content { display: none; }
 .ch-tab-content.active { display: block; }
 
+/* Agent editor tabs */
+.agent-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.agent-tab {
+  padding: 0.5rem 1.25rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 0.5rem 0.5rem 0 0;
+  margin-bottom: -1px;
+}
+.agent-tab:hover { color: var(--text-primary); }
+.agent-tab.active {
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+.agent-tab-content { display: none; }
+.agent-tab-content.active { display: block; }
+
 .prompt-preview {
   background: var(--bg-input);
   border: 1px solid var(--border);
