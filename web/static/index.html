@@ -116,7 +116,7 @@
         </p>
 
         <!-- Sub-tabs -->
-        <div class="prompt-tabs" style="margin-bottom:1rem">
+        <div class="prompt-tabs" style="margin-bottom:1rem;align-items:center">
           <div class="prompt-tab active" data-cfg-tab="cfg-llm" onclick="showConfigTab('cfg-llm')">Modeles LLM</div>
           <div class="prompt-tab" data-cfg-tab="cfg-mcp" onclick="showConfigTab('cfg-mcp')">Services MCP</div>
           <div class="prompt-tab" data-cfg-tab="cfg-teams" onclick="showConfigTab('cfg-teams')">Equipes</div>
@@ -124,6 +124,9 @@
           <div class="prompt-tab" data-cfg-tab="cfg-security" onclick="showConfigTab('cfg-security')">Securite</div>
           <div class="prompt-tab" data-cfg-tab="cfg-misc" onclick="showConfigTab('cfg-misc')">Divers</div>
           <div class="prompt-tab" data-cfg-tab="cfg-git" onclick="showConfigTab('cfg-git')">Enregistrement</div>
+          <div id="cfg-tab-save-btn" style="margin-left:auto;display:none">
+            <button class="btn btn-primary btn-sm" id="cfg-tab-save-action">Sauvegarder</button>
+          </div>
         </div>
 
         <!-- Sub-tab: LLM -->
@@ -189,9 +192,6 @@
 
         <!-- Sub-tab: Mail -->
         <div class="cfg-tab-content" id="cfg-tab-cfg-mail">
-          <div style="display:flex;justify-content:flex-end;margin-bottom:0.5rem">
-            <button class="btn btn-primary" onclick="saveMail()">Sauvegarder</button>
-          </div>
           <!-- SMTP -->
           <div class="card" style="margin-top:1rem">
             <div class="card-header">
@@ -536,12 +536,9 @@
 
         <!-- Sub-tab: Divers -->
         <div class="cfg-tab-content" id="cfg-tab-cfg-misc">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
-            <p style="color:var(--text-secondary);font-size:0.85rem;margin:0">
-              Parametres divers de la plateforme.
-            </p>
-            <button class="btn btn-primary btn-sm" onclick="saveCfgMisc()">Sauvegarder</button>
-          </div>
+          <p style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:1rem">
+            Parametres divers de la plateforme.
+          </p>
 
           <!-- Domain / Hosts -->
           <div class="card">
@@ -562,7 +559,7 @@
               </div>
               <div class="form-row">
                 <div class="form-group">
-                  <label>API Gateway (port 8123)</label>
+                  <label>API Gateway</label>
                   <input id="misc-host-api" placeholder="https://api.example.com" />
                 </div>
                 <div class="form-group">
@@ -635,12 +632,12 @@
                 <div id="cfg-git-branch" style="font-size:1.1rem;font-weight:600;margin-top:0.25rem">-</div>
               </div>
               <div style="display:flex;gap:0.5rem;align-items:flex-end">
-                <button class="btn btn-primary btn-sm" onclick="saveCfgGitConfig()">Enregistrer</button>
-                <button class="btn btn-outline btn-sm" id="btn-cfg-git-init" onclick="cfgGitInit()" disabled>Init</button>
-                <button class="btn btn-primary btn-sm" id="btn-cfg-git-pull" onclick="cfgGitPull()" disabled>Pull</button>
-                <button class="btn btn-success btn-sm" id="btn-cfg-git-commit" onclick="showGitCommitModal('configs')" disabled>Commit &amp; Push</button>
-                <button class="btn btn-outline btn-sm" id="btn-cfg-git-push" onclick="cfgGitPushOnly()" disabled>Push seul</button>
-                <button class="btn btn-outline btn-sm" id="btn-cfg-git-reset" onclick="cfgGitResetLocal()" disabled style="color:var(--error)">Reset local</button>
+                <button class="btn btn-primary btn-sm" onclick="saveRepoGitConfig('cfg-git')">Enregistrer</button>
+                <button class="btn btn-outline btn-sm" id="btn-cfg-git-init" onclick="repoGitInit('cfg-git')" disabled>Init</button>
+                <button class="btn btn-primary btn-sm" id="btn-cfg-git-pull" onclick="repoGitPull('cfg-git')" disabled>Pull</button>
+                <button class="btn btn-success btn-sm" id="btn-cfg-git-commit" onclick="showGitCommitModal('cfg-git')" disabled>Commit &amp; Push</button>
+                <button class="btn btn-outline btn-sm" id="btn-cfg-git-push" onclick="repoGitPushOnly('cfg-git')" disabled>Push seul</button>
+                <button class="btn btn-outline btn-sm" id="btn-cfg-git-reset" onclick="repoGitResetLocal('cfg-git')" disabled style="color:var(--error)">Reset local</button>
               </div>
             </div>
             <div style="margin-top:0.75rem">
@@ -769,12 +766,12 @@
                 <div id="tpl-git-branch" style="font-size:1.1rem;font-weight:600;margin-top:0.25rem">-</div>
               </div>
               <div style="display:flex;gap:0.5rem;align-items:flex-end">
-                <button class="btn btn-primary btn-sm" onclick="saveTplGitConfig()">Enregistrer</button>
-                <button class="btn btn-outline btn-sm" id="btn-tpl-git-init" onclick="tplGitInit()" disabled>Init</button>
-                <button class="btn btn-primary btn-sm" id="btn-tpl-git-pull" onclick="tplGitPull()" disabled>Pull</button>
-                <button class="btn btn-success btn-sm" id="btn-tpl-git-commit" onclick="showGitCommitModal('shared')" disabled>Commit &amp; Push</button>
-                <button class="btn btn-outline btn-sm" id="btn-tpl-git-push" onclick="tplGitPushOnly()" disabled>Push seul</button>
-                <button class="btn btn-outline btn-sm" id="btn-tpl-git-reset" onclick="tplGitResetLocal()" disabled style="color:var(--error)">Reset local</button>
+                <button class="btn btn-primary btn-sm" onclick="saveRepoGitConfig('tpl-git')">Enregistrer</button>
+                <button class="btn btn-outline btn-sm" id="btn-tpl-git-init" onclick="repoGitInit('tpl-git')" disabled>Init</button>
+                <button class="btn btn-primary btn-sm" id="btn-tpl-git-pull" onclick="repoGitPull('tpl-git')" disabled>Pull</button>
+                <button class="btn btn-success btn-sm" id="btn-tpl-git-commit" onclick="showGitCommitModal('tpl-git')" disabled>Commit &amp; Push</button>
+                <button class="btn btn-outline btn-sm" id="btn-tpl-git-push" onclick="repoGitPushOnly('tpl-git')" disabled>Push seul</button>
+                <button class="btn btn-outline btn-sm" id="btn-tpl-git-reset" onclick="repoGitResetLocal('tpl-git')" disabled style="color:var(--error)">Reset local</button>
               </div>
             </div>
             <div style="margin-top:0.75rem">
