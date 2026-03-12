@@ -6,3 +6,7 @@ __pycache__/
 data/backups/
 git.json
 .claude/worktrees/
+.claude/settings.local.json
+.claude/plans/
+.coverage
+*.egg-info/
