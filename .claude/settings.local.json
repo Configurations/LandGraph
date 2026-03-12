@@ -5,7 +5,14 @@
       "Bash(py -c \"import ast; ast.parse\\(open\\(''Agents/Shared/agent_loader.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
       "Bash(py -c \"import ast; ast.parse\\(open\\(''web/server.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
       "Bash(grep -r \"SELECT\\\\|postgres\\\\|psycopg\\\\|TABLE\" /e/srcs/LandGraph/agents/*.py)",
-      "Bash(xargs cat)"
+      "Bash(xargs cat)",
+      "Bash(find E:srcsLandGraph.claudeworktreesgallant-montalcini -name *.sh -type f)",
+      "Bash(ls -la E:srcsLandGraph.claudeworktreesgallant-montalciniconfigTeamsTeam1*.md)",
+      "Bash(grep \"\\\\.md$\")",
+      "Bash(GIT_DIR=\".git\" git add Agents/orchestrator.py)",
+      "Bash(GIT_DIR=\".git\" git commit -m \"$\\(cat <<''EOF'':*)",
+      "Read(//e/srcs/LandGraph/.claude/worktrees/gallant-montalcini/$APPDATA/Claude/**)",
+      "Read(//e/srcs/LandGraph/.claude/worktrees/gallant-montalcini/$HOME/AppData/Roaming/Claude/**)"
     ]
   }
 }
