@@ -5,7 +5,25 @@
       "Bash(py -c \"import ast; ast.parse\\(open\\(''Agents/Shared/agent_loader.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
       "Bash(py -c \"import ast; ast.parse\\(open\\(''web/server.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
       "Bash(grep -r \"SELECT\\\\|postgres\\\\|psycopg\\\\|TABLE\" /e/srcs/LandGraph/agents/*.py)",
-      "Bash(xargs cat)"
+      "Bash(xargs cat)",
+      "Bash(GIT_DIR=\".git\" GIT_WORK_TREE=\".\" git -c safe.directory=\"*\" fetch origin main)",
+      "Bash(GIT_DIR=\".git\" GIT_WORK_TREE=\".\" git -c safe.directory=\"*\" rebase origin/main)",
+      "Bash(GIT_DIR=\".git\" GIT_WORK_TREE=\".\" git -c safe.directory=\"*\" status --short)",
+      "Bash(GIT_DIR=\".git\" GIT_WORK_TREE=\".\" git -c safe.directory=\"*\" stash)",
+      "Bash(GIT_DIR=\".git\" GIT_WORK_TREE=\".\" git -c safe.directory=\"*\" stash pop)",
+      "Bash(GIT_DIR=\".git\" GIT_WORK_TREE=\".\" git -c safe.directory=\"*\" log --oneline -10)",
+      "Bash(find E:srcsLandGraph.claudeworktreesadoring-darwin -name .env* -type f)",
+      "Bash(GIT_DIR=\".git\" GIT_WORK_TREE=\".\" git -c safe.directory=\"*\" status)",
+      "Bash(GIT_DIR=\".git\" GIT_WORK_TREE=\".\" git -c safe.directory=\"*\" diff)",
+      "Bash(GIT_DIR=\".git\" GIT_WORK_TREE=\".\" git -c safe.directory=\"*\" log --oneline -5)",
+      "Bash(GIT_DIR=\".git\" GIT_WORK_TREE=\".\" git -c safe.directory=\"*\" add docker-compose.yml hitl/server.py)",
+      "Bash(GIT_DIR=\".git\" GIT_WORK_TREE=\".\" git -c safe.directory=\"*\" commit -m \"$\\(cat <<''EOF'':*)",
+      "Bash(GIT_DIR=\".git\" GIT_WORK_TREE=\".\" git -c safe.directory=\"*\" push -u origin claude/adoring-darwin)",
+      "Bash(GIT_DIR=\".git\" GIT_WORK_TREE=\".\" git -c safe.directory=\"*\" checkout main)",
+      "Bash(GIT_DIR=\".git\" GIT_WORK_TREE=\".\" git -c safe.directory=\"*\" merge claude/adoring-darwin)",
+      "Bash(GIT_DIR=\".git\" GIT_WORK_TREE=\".\" git -c safe.directory=\"*\" push origin main)",
+      "Bash(GIT_DIR=\".git\" GIT_WORK_TREE=\".\" git -c safe.directory=\"*\" diff --stat)",
+      "Bash(GIT_DIR=\".git\" GIT_WORK_TREE=\".\" git -c safe.directory=\"*\" add config/Teams/Team1/*.md Agents/Prompts/createAgent.md)"
     ]
   }
 }
