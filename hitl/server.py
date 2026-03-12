@@ -990,7 +990,13 @@ def reset_password(req: ResetPasswordRequest):
 
 
 # ── Agent Chat ─────────────────────────────────
-GATEWAY_URL = os.getenv("LANGGRAPH_API_URL", "http://langgraph-api:8123")
+def _get_gateway_url() -> str:
+    """Read gateway URL from others.json (hosts.api), env var, or default."""
+    others = _read_config("others.json")
+    url = (others.get("hosts", {}).get("api") or "").strip()
+    if url:
+        return url.rstrip("/")
+    return os.getenv("LANGGRAPH_API_URL", "http://langgraph-api:8000")
 
 
 class ChatRequest(BaseModel):
@@ -1049,7 +1055,7 @@ def send_chat_message(team_id: str, agent_id: str, req: ChatRequest, user: Token
         if agent_id != "orchestrator":
             invoke_payload["direct_agent"] = agent_id
         try:
-            resp = httpx.post(f"{GATEWAY_URL}/invoke", json=invoke_payload, timeout=120)
+            resp = httpx.post(f"{_get_gateway_url()}/invoke", json=invoke_payload, timeout=120)
             if resp.status_code == 200:
                 data = resp.json()
                 agent_reply = data.get("output", "")

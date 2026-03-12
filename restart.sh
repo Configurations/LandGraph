@@ -1,6 +1,6 @@
 #!/bin/bash
 PROJECT_DIR="${HOME}/langgraph-project"
-cd "/${PROJECT_DIR}"
+cd "${PROJECT_DIR}"
 docker compose down
 docker compose up -d
 echo ""

@@ -779,56 +779,71 @@ function editAgent(id) {
       <h3>Agent: ${escHtml(a.name)} (${escHtml(id)})</h3>
       <button class="btn-icon" onclick="closeModal()">&times;</button>
     </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Nom</label>
-        <input id="agent-edit-name" value="${escHtml(a.name)}" />
+    <div class="agent-tabs">
+      <div class="agent-tab active" onclick="switchAgentTab('divers')">Divers</div>
+      <div class="agent-tab" onclick="switchAgentTab('prompt')">Prompt</div>
+    </div>
+
+    <!-- Tab: Divers -->
+    <div id="agent-tab-divers" class="agent-tab-content active">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Nom</label>
+          <input id="agent-edit-name" value="${escHtml(a.name)}" />
+        </div>
+        <div class="form-group">
+          <label>Modele LLM</label>
+          <select id="agent-edit-model">
+            <option value="">-- Defaut (${escHtml(llmProviders.default || '')}) --</option>
+            ${providerNames.map(p => `<option value="${p}" ${a.model === p ? 'selected' : ''}>${escHtml(p)} — ${escHtml(llmProviders.providers[p]?.description || '')}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Temperature</label>
+          <input id="agent-edit-temp" type="number" step="0.1" min="0" max="2" value="${a.temperature}" />
+        </div>
+        <div class="form-group">
+          <label>Max tokens</label>
+          <input id="agent-edit-tokens" type="number" value="${a.max_tokens}" />
+        </div>
       </div>
       <div class="form-group">
-        <label>Modele LLM</label>
-        <select id="agent-edit-model">
-          <option value="">-- Defaut (${escHtml(llmProviders.default || '')}) --</option>
-          ${providerNames.map(p => `<option value="${p}" ${a.model === p ? 'selected' : ''}>${escHtml(p)} — ${escHtml(llmProviders.providers[p]?.description || '')}</option>`).join('')}
+        <label>Type</label>
+        <select id="agent-edit-type" onchange="document.getElementById('agent-edit-pipeline-wrap').style.display=this.value==='pipeline'?'':'none'">
+          <option value="single" ${curType==='single'?'selected':''}>Single</option>
+          <option value="pipeline" ${curType==='pipeline'?'selected':''}>Pipeline</option>
+          <option value="orchestrator" ${curType==='orchestrator'?'selected':''} ${hasOtherOrch && curType!=='orchestrator'?'disabled':''}>Orchestrator</option>
         </select>
       </div>
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Temperature</label>
-        <input id="agent-edit-temp" type="number" step="0.1" min="0" max="2" value="${a.temperature}" />
+      <div id="agent-edit-pipeline-wrap" class="form-group" style="${hasPipeline ? '' : 'display:none'}">
+        <label>Pipeline Steps</label>
+        <div id="agent-edit-pipeline-steps" class="pipeline-steps-container"></div>
       </div>
       <div class="form-group">
-        <label>Max tokens</label>
-        <input id="agent-edit-tokens" type="number" value="${a.max_tokens}" />
+        <label>Services MCP autorises</label>
+        <div class="mcp-chips">
+          ${mcpChips}
+        </div>
       </div>
     </div>
-    <div class="form-group">
-      <label>Type</label>
-      <select id="agent-edit-type" onchange="document.getElementById('agent-edit-pipeline-wrap').style.display=this.value==='pipeline'?'':'none'">
-        <option value="single" ${curType==='single'?'selected':''}>Single</option>
-        <option value="pipeline" ${curType==='pipeline'?'selected':''}>Pipeline</option>
-        <option value="orchestrator" ${curType==='orchestrator'?'selected':''} ${hasOtherOrch && curType!=='orchestrator'?'disabled':''}>Orchestrator</option>
-      </select>
-    </div>
-    <div id="agent-edit-pipeline-wrap" class="form-group" style="${hasPipeline ? '' : 'display:none'}">
-      <label>Pipeline Steps</label>
-      <div id="agent-edit-pipeline-steps" class="pipeline-steps-container"></div>
-    </div>
-    <div class="form-group">
-      <label>Prompt (${escHtml(a.prompt)})</label>
-      <div class="prompt-tabs">
-        <div class="prompt-tab active" id="prompt-tab-preview" onclick="switchPromptTab('preview')">Apercu</div>
-        <div class="prompt-tab" id="prompt-tab-edit" onclick="switchPromptTab('edit')">Editer</div>
-      </div>
-      <div class="prompt-preview" id="agent-prompt-preview">${promptHtml}</div>
-      <textarea id="agent-edit-prompt" style="min-height:300px;display:none;border-radius:0 0.5rem 0.5rem 0.5rem">${escHtml(promptRaw)}</textarea>
-    </div>
-    <div class="form-group">
-      <label>Services MCP autorises</label>
-      <div class="mcp-chips">
-        ${mcpChips}
+
+    <!-- Tab: Prompt -->
+    <div id="agent-tab-prompt" class="agent-tab-content">
+      <div class="form-group">
+        <label>Prompt (${escHtml(a.prompt)})</label>
+        <div class="prompt-tabs">
+          <div class="prompt-tab active" id="prompt-tab-preview" onclick="switchPromptTab('preview')">Apercu</div>
+          <div class="prompt-tab" id="prompt-tab-edit" onclick="switchPromptTab('edit')">Editer</div>
+          <div class="prompt-tabs-spacer"></div>
+          <button class="btn btn-sm btn-generate" id="btn-generate-prompt" onclick="generatePrompt('agent-edit-prompt','${escHtml(id)}',document.getElementById('agent-edit-name').value)">Generer avec l&apos;IA</button>
+        </div>
+        <div class="prompt-preview" id="agent-prompt-preview">${promptHtml}</div>
+        <textarea id="agent-edit-prompt" style="min-height:500px;display:none;border-radius:0 0.5rem 0.5rem 0.5rem">${escHtml(promptRaw)}</textarea>
       </div>
     </div>
+
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
       <button class="btn btn-primary" onclick="saveAgent('${escHtml(id)}')">Sauvegarder</button>
@@ -854,6 +869,41 @@ function switchPromptTab(tab) {
     editor.style.display = 'none';
     tabPreview.classList.add('active');
     tabEdit.classList.remove('active');
+  }
+}
+
+function switchAgentTab(tab) {
+  document.querySelectorAll('.agent-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.agent-tab-content').forEach(c => c.classList.remove('active'));
+  document.querySelector(`.agent-tab[onclick*="'${tab}'"]`).classList.add('active');
+  document.getElementById(`agent-tab-${tab}`).classList.add('active');
+}
+
+async function generatePrompt(textareaId, agentId, agentName) {
+  const textarea = document.getElementById(textareaId);
+  const btn = document.getElementById('btn-generate-prompt');
+  if (!textarea || !btn) return;
+  const info = textarea.value.trim();
+  if (!info) { toast('Remplissez le prompt avant de generer', 'error'); return; }
+
+  const prevText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Generation...';
+
+  try {
+    const result = await api('/api/agents/generate-prompt', {
+      method: 'POST',
+      body: { agent_info: info, agent_id: agentId || '', agent_name: agentName || '' }
+    });
+    textarea.value = result.prompt;
+    // Switch to edit sub-tab to show the result
+    switchPromptTab('edit');
+    toast('Prompt genere', 'success');
+  } catch (e) {
+    toast('Erreur generation: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prevText;
   }
 }
 
@@ -942,8 +992,11 @@ function showAddAgentModal() {
       <div class="mcp-check-tags">${mcpTags}</div>
     </div>
     <div class="form-group">
-      <label>Prompt initial</label>
-      <textarea id="agent-new-prompt" style="min-height:150px" placeholder="# Mon Agent\n\nDescription du role..."></textarea>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.25rem">
+        <label style="margin-bottom:0">Prompt initial</label>
+        <button class="btn btn-sm btn-generate" id="btn-generate-prompt" onclick="generatePrompt('agent-new-prompt',document.getElementById('agent-new-id').value,document.getElementById('agent-new-name').value)">Generer avec l&apos;IA</button>
+      </div>
+      <textarea id="agent-new-prompt" style="min-height:200px" placeholder="Chargement du template..."></textarea>
     </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
@@ -951,6 +1004,11 @@ function showAddAgentModal() {
     </div>
   `);
   renderPipelineSteps('agent-new-pipeline-steps', []);
+  // Load default prompt template
+  api('/api/prompts/templates/New').then(r => {
+    const ta = document.getElementById('agent-new-prompt');
+    if (ta && !ta.value) ta.value = r.content;
+  }).catch(() => {});
 }
 
 async function addAgent() {
@@ -1662,87 +1720,82 @@ async function runScript(name) {
 }
 
 // ═══════════════════════════════════════════════════
-// GIT (dual repo: configs + shared)
+// GIT (factorized: works for both configs + shared)
 // ═══════════════════════════════════════════════════
-async function loadGit() {
-  try {
-    const [cfgStatus, sharedStatus, cfgCfg, sharedCfg] = await Promise.all([
-      api('/api/git/configs/status'),
-      api('/api/git/shared/status'),
-      api('/api/git/repo-config/configs'),
-      api('/api/git/repo-config/shared'),
-    ]);
 
-    // Configs repo
-    _fillGitRepoUI('configs', cfgStatus, cfgCfg);
-    // Shared repo
-    _fillGitRepoUI('shared', sharedStatus, sharedCfg);
+// Mapping: prefix → repoKey. HTML elements use prefix (cfg-git-*, tpl-git-*)
+const GIT_REPOS = {
+  'cfg-git': 'configs',
+  'tpl-git': 'shared',
+};
+const GIT_LABELS = { configs: 'Configs', shared: 'Shared (Templates)' };
+
+async function loadRepoGit(prefix) {
+  const repoKey = GIT_REPOS[prefix];
+  try {
+    const [status, cfg] = await Promise.all([
+      api(`/api/git/${repoKey}/status`),
+      api(`/api/git/repo-config/${repoKey}`),
+    ]);
+    document.getElementById(`${prefix}-path`).value = cfg.path || '';
+    document.getElementById(`${prefix}-login`).value = cfg.login || '';
+    document.getElementById(`${prefix}-password`).value = cfg.password || '';
+    const inited = status.initialized;
+    document.getElementById(`${prefix}-branch`).textContent = inited ? (status.branch || 'inconnu') : 'Non initialise';
+    document.getElementById(`${prefix}-status`).textContent = inited ? (status.status || '(aucun changement)') : 'Git non initialise. Enregistrez la configuration puis cliquez Init.';
+    document.getElementById(`${prefix}-log`).textContent = inited ? (status.log || '(vide)') : '';
+    document.getElementById(`btn-${prefix}-init`).disabled = inited;
+    document.getElementById(`btn-${prefix}-pull`).disabled = !inited;
+    document.getElementById(`btn-${prefix}-commit`).disabled = !inited;
+    document.getElementById(`btn-${prefix}-push`).disabled = !inited;
+    document.getElementById(`btn-${prefix}-reset`).disabled = !inited;
+    if (inited) loadRepoGitCommits(prefix);
   } catch (e) { toast(e.message, 'error'); }
 }
 
-function _fillGitRepoUI(key, status, cfg) {
-  const inited = status.initialized;
-  document.getElementById(`git-${key}-branch`).textContent = inited ? (status.branch || 'inconnu') : 'Non initialise';
-  document.getElementById(`git-${key}-status`).textContent = inited ? (status.status || '(aucun changement)') : 'Git non initialise. Enregistrez la configuration puis cliquez Init.';
-  document.getElementById(`git-${key}-log`).textContent = inited ? (status.log || '(vide)') : '';
-  document.getElementById(`btn-git-${key}-init`).disabled = inited;
-  document.getElementById(`btn-git-${key}-pull`).disabled = !inited;
-  document.getElementById(`btn-git-${key}-commit`).disabled = !inited;
-  document.getElementById(`git-cfg-${key}-path`).value = cfg.path || '';
-  document.getElementById(`git-cfg-${key}-login`).value = cfg.login || '';
-  document.getElementById(`git-cfg-${key}-password`).value = cfg.password || '';
-}
+function loadCfgGit() { loadRepoGit('cfg-git'); }
+function loadTplGit() { loadRepoGit('tpl-git'); }
 
-async function saveGitConfig() {
+async function saveRepoGitConfig(prefix) {
+  const repoKey = GIT_REPOS[prefix];
   try {
-    await Promise.all([
-      api('/api/git/repo-config/configs', {
-        method: 'PUT',
-        body: {
-          path: document.getElementById('git-cfg-configs-path').value.trim(),
-          login: document.getElementById('git-cfg-configs-login').value.trim(),
-          password: document.getElementById('git-cfg-configs-password').value.trim(),
-        },
-      }),
-      api('/api/git/repo-config/shared', {
-        method: 'PUT',
-        body: {
-          path: document.getElementById('git-cfg-shared-path').value.trim(),
-          login: document.getElementById('git-cfg-shared-login').value.trim(),
-          password: document.getElementById('git-cfg-shared-password').value.trim(),
-        },
-      }),
-    ]);
-    toast('Configuration Git enregistree', 'success');
-    loadGit();
+    await api(`/api/git/repo-config/${repoKey}`, {
+      method: 'PUT',
+      body: {
+        path: document.getElementById(`${prefix}-path`).value.trim(),
+        login: document.getElementById(`${prefix}-login`).value.trim(),
+        password: document.getElementById(`${prefix}-password`).value.trim(),
+      },
+    });
+    toast(`Configuration Git ${GIT_LABELS[repoKey]} enregistree`, 'success');
+    loadRepoGit(prefix);
   } catch (e) { toast(e.message, 'error'); }
 }
 
-async function gitInit(repoKey) {
+async function repoGitInit(prefix) {
+  const repoKey = GIT_REPOS[prefix];
   try {
     const data = await api(`/api/git/${repoKey}/init`, { method: 'POST' });
-    toast(data.ok ? `Repository ${repoKey} initialise` : (data.message || 'Erreur'), data.ok ? 'success' : 'error');
-    loadGit();
+    toast(data.message || (data.ok ? 'Initialise' : 'Erreur'), data.ok ? 'success' : 'error');
+    loadRepoGit(prefix);
   } catch (e) { toast(e.message, 'error'); }
 }
 
-async function gitPull(repoKey) {
+async function repoGitPull(prefix) {
+  const repoKey = GIT_REPOS[prefix];
   try {
     const data = await api(`/api/git/${repoKey}/pull`, { method: 'POST' });
-    if (data.code === 0) {
-      toast(`Pull ${repoKey} reussi`, 'success');
-    } else {
-      const detail = (data.stderr || data.stdout || 'erreur inconnue').substring(0, 200);
-      toast(`Pull ${repoKey} erreur: ${detail}`, 'error');
-    }
-    loadGit();
+    toast(data.message || 'Pull effectue', data.ok ? 'success' : 'error');
+    loadRepoGit(prefix);
   } catch (e) { toast(e.message, 'error'); }
 }
 
 let _gitCommitRepoKey = '';
-function showGitCommitModal(repoKey) {
-  _gitCommitRepoKey = repoKey;
-  const label = repoKey === 'configs' ? 'Configs' : 'Shared (Templates)';
+let _gitCommitPrefix = '';
+function showGitCommitModal(prefix) {
+  _gitCommitPrefix = prefix;
+  _gitCommitRepoKey = GIT_REPOS[prefix];
+  const label = GIT_LABELS[_gitCommitRepoKey];
   showModal(`
     <div class="modal-header">
       <h3>Commit — ${label}</h3>
@@ -1765,16 +1818,69 @@ async function gitCommit() {
   if (!msg) { toast('Message requis', 'error'); return; }
   try {
     const data = await api(`/api/git/${_gitCommitRepoKey}/commit`, { method: 'POST', body: { message: msg } });
-    if (data.code === 0) {
-      toast('Commit & push effectue', 'success');
-    } else {
-      const errMsg = (data.stderr || 'Erreur commit/push').substring(0, 300);
-      toast(errMsg, 'error');
-    }
+    toast(data.message || 'Erreur', data.ok ? 'success' : 'error');
     closeModal();
-    // Refresh the relevant git tab
-    if (_gitCommitRepoKey === 'shared') loadTplGit();
-    else if (_gitCommitRepoKey === 'configs') loadCfgGit();
+    loadRepoGit(_gitCommitPrefix);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function repoGitPushOnly(prefix) {
+  const repoKey = GIT_REPOS[prefix];
+  try {
+    const data = await api(`/api/git/${repoKey}/push`, { method: 'POST' });
+    toast(data.message || 'Erreur', data.ok ? 'success' : 'error');
+    loadRepoGit(prefix);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function repoGitResetLocal(prefix) {
+  if (!(await confirmModal('Supprimer tous les commits locaux non pushes ?\nLe depot local sera resynchronise avec le remote.'))) return;
+  const repoKey = GIT_REPOS[prefix];
+  try {
+    const data = await api(`/api/git/${repoKey}/reset-to-remote`, { method: 'POST' });
+    toast(data.message || 'Reset effectue', data.ok ? 'success' : 'error');
+    loadRepoGit(prefix);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function loadRepoGitCommits(prefix) {
+  const repoKey = GIT_REPOS[prefix];
+  const wrap = document.getElementById(`${prefix}-commits`);
+  if (!wrap) return;
+  try {
+    const data = await api(`/api/git/${repoKey}/commits`);
+    const commits = data.commits || [];
+    if (!commits.length) {
+      wrap.innerHTML = '<p style="color:var(--text-secondary);font-size:0.8rem;padding:0.5rem">Aucun commit.</p>';
+      return;
+    }
+    const rows = commits.map(c => {
+      const tags = c.tags.map(t => `<span class="commit-tag">${escHtml(t)}</span>`).join('');
+      const dateStr = c.date ? c.date.substring(0, 16).replace('T', ' ') : '';
+      return `<tr>
+        <td class="commit-date">${escHtml(dateStr)}</td>
+        <td class="commit-hash">${escHtml(c.short)}</td>
+        <td>${tags}</td>
+        <td>${escHtml(c.subject)}</td>
+        <td><button class="btn-revert" onclick="repoGitCheckout('${prefix}','${c.hash}')" title="Revenir a cette version">&#8634;</button></td>
+      </tr>`;
+    }).join('');
+    wrap.innerHTML = `<table class="commits-table">
+      <thead><tr><th>Date</th><th>ID</th><th>Tag</th><th>Message</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  } catch (e) {
+    wrap.innerHTML = `<p style="color:#ef4444;font-size:0.8rem;padding:0.5rem">${escHtml(e.message)}</p>`;
+  }
+}
+
+async function repoGitCheckout(prefix, hash) {
+  if (!(await confirmModal('Revenir a cette version ?\nLes modifications non commitees seront verifiees avant.'))) return;
+  const repoKey = GIT_REPOS[prefix];
+  try {
+    const data = await api(`/api/git/${repoKey}/checkout/${hash}`, { method: 'POST' });
+    toast(data.message || 'Version restauree', 'success');
+    loadRepoGit(prefix);
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -2353,6 +2459,16 @@ function showConfigTab(tabId) {
   document.querySelectorAll('[data-cfg-tab]').forEach(t => t.classList.remove('active'));
   document.getElementById('cfg-tab-' + tabId).classList.add('active');
   document.querySelector(`[data-cfg-tab="${tabId}"]`).classList.add('active');
+  // Show/hide save button depending on tab
+  const saveWrap = document.getElementById('cfg-tab-save-btn');
+  const saveBtn = document.getElementById('cfg-tab-save-action');
+  const saveTabs = { 'cfg-mail': saveMail, 'cfg-misc': saveCfgMisc };
+  if (saveTabs[tabId]) {
+    saveWrap.style.display = '';
+    saveBtn.onclick = saveTabs[tabId];
+  } else {
+    saveWrap.style.display = 'none';
+  }
   if (tabId === 'cfg-llm') loadCfgLLM();
   else if (tabId === 'cfg-mcp') loadCfgMCP();
   else if (tabId === 'cfg-teams') loadCfgTeams();
@@ -2946,126 +3062,7 @@ async function loadCfgTeams() {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-// ── Config Git (Enregistrement) ───────────────────
-async function loadCfgGit() {
-  try {
-    const [status, cfg] = await Promise.all([
-      api('/api/git/configs/status'),
-      api('/api/git/repo-config/configs'),
-    ]);
-    document.getElementById('cfg-git-path').value = cfg.path || '';
-    document.getElementById('cfg-git-login').value = cfg.login || '';
-    document.getElementById('cfg-git-password').value = cfg.password || '';
-    const inited = status.initialized;
-    document.getElementById('cfg-git-branch').textContent = inited ? (status.branch || 'inconnu') : 'Non initialise';
-    document.getElementById('cfg-git-status').textContent = inited ? (status.status || '(aucun changement)') : 'Git non initialise. Enregistrez la configuration puis cliquez Init.';
-    document.getElementById('cfg-git-log').textContent = inited ? (status.log || '(vide)') : '';
-    document.getElementById('btn-cfg-git-init').disabled = inited;
-    document.getElementById('btn-cfg-git-pull').disabled = !inited;
-    document.getElementById('btn-cfg-git-commit').disabled = !inited;
-    document.getElementById('btn-cfg-git-push').disabled = !inited;
-    document.getElementById('btn-cfg-git-reset').disabled = !inited;
-    if (inited) loadCfgGitCommits();
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-async function saveCfgGitConfig() {
-  try {
-    await api('/api/git/repo-config/configs', {
-      method: 'PUT',
-      body: {
-        path: document.getElementById('cfg-git-path').value.trim(),
-        login: document.getElementById('cfg-git-login').value.trim(),
-        password: document.getElementById('cfg-git-password').value.trim(),
-      },
-    });
-    toast('Configuration Git Configs enregistree', 'success');
-    loadCfgGit();
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-async function cfgGitInit() {
-  try {
-    const data = await api('/api/git/configs/init', { method: 'POST' });
-    toast(data.ok ? 'Repository Configs initialise' : (data.message || 'Erreur'), data.ok ? 'success' : 'error');
-    loadCfgGit();
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-async function cfgGitPull() {
-  try {
-    const data = await api('/api/git/configs/pull', { method: 'POST' });
-    if (data.code === 0) {
-      toast('Pull Configs reussi', 'success');
-    } else {
-      const detail = (data.stderr || data.stdout || 'erreur inconnue').substring(0, 200);
-      toast(`Pull Configs erreur: ${detail}`, 'error');
-    }
-    loadCfgGit();
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-async function loadCfgGitCommits() {
-  const wrap = document.getElementById('cfg-git-commits');
-  if (!wrap) return;
-  try {
-    const data = await api('/api/git/configs/commits');
-    const commits = data.commits || [];
-    if (!commits.length) {
-      wrap.innerHTML = '<p style="color:var(--text-secondary);font-size:0.8rem;padding:0.5rem">Aucun commit.</p>';
-      return;
-    }
-    const rows = commits.map(c => {
-      const tags = c.tags.map(t => `<span class="commit-tag">${escHtml(t)}</span>`).join('');
-      const dateStr = c.date ? c.date.substring(0, 16).replace('T', ' ') : '';
-      return `<tr>
-        <td class="commit-date">${escHtml(dateStr)}</td>
-        <td class="commit-hash">${escHtml(c.short)}</td>
-        <td>${tags}</td>
-        <td>${escHtml(c.subject)}</td>
-        <td><button class="btn-revert" onclick="cfgGitCheckout('${c.hash}')" title="Revenir a cette version">&#8634;</button></td>
-      </tr>`;
-    }).join('');
-    wrap.innerHTML = `<table class="commits-table">
-      <thead><tr><th>Date</th><th>ID</th><th>Tag</th><th>Message</th><th></th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
-  } catch (e) {
-    wrap.innerHTML = `<p style="color:#ef4444;font-size:0.8rem;padding:0.5rem">${escHtml(e.message)}</p>`;
-  }
-}
-
-async function cfgGitCheckout(hash) {
-  if (!(await confirmModal('Revenir a cette version ?\nLes modifications non commitees seront verifiees avant.'))) return;
-  try {
-    const data = await api(`/api/git/configs/checkout/${hash}`, { method: 'POST' });
-    toast(data.message || 'Version restauree', 'success');
-    loadCfgGit();
-  } catch (e) {
-    toast(e.message, 'error');
-  }
-}
-
-async function cfgGitPushOnly() {
-  try {
-    const data = await api('/api/git/configs/push', { method: 'POST' });
-    if (data.code === 0) {
-      toast('Push effectue', 'success');
-    } else {
-      toast((data.stderr || 'Erreur push').substring(0, 300), 'error');
-    }
-    loadCfgGit();
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-async function cfgGitResetLocal() {
-  if (!(await confirmModal('Supprimer tous les commits locaux non pushes ?\nLe depot local sera resynchronise avec le remote.'))) return;
-  try {
-    const data = await api('/api/git/configs/reset-to-remote', { method: 'POST' });
-    toast(data.message || 'Reset effectue', data.ok ? 'success' : 'error');
-    loadCfgGit();
-  } catch (e) { toast(e.message, 'error'); }
-}
+// ── Config Git (Enregistrement) — delegates to factorized functions ──
 
 // ═══════════════════════════════════════════════════
 // TEMPLATES (sub-tabs: LLM, MCP, Teams)
@@ -3092,126 +3089,7 @@ async function loadTemplates() {
   showTemplateTab(tab);
 }
 
-// ── Template Git (Enregistrement) ─────────────────
-async function loadTplGit() {
-  try {
-    const [status, cfg] = await Promise.all([
-      api('/api/git/shared/status'),
-      api('/api/git/repo-config/shared'),
-    ]);
-    document.getElementById('tpl-git-path').value = cfg.path || '';
-    document.getElementById('tpl-git-login').value = cfg.login || '';
-    document.getElementById('tpl-git-password').value = cfg.password || '';
-    const inited = status.initialized;
-    document.getElementById('tpl-git-branch').textContent = inited ? (status.branch || 'inconnu') : 'Non initialise';
-    document.getElementById('tpl-git-status').textContent = inited ? (status.status || '(aucun changement)') : 'Git non initialise. Enregistrez la configuration puis cliquez Init.';
-    document.getElementById('tpl-git-log').textContent = inited ? (status.log || '(vide)') : '';
-    document.getElementById('btn-tpl-git-init').disabled = inited;
-    document.getElementById('btn-tpl-git-pull').disabled = !inited;
-    document.getElementById('btn-tpl-git-commit').disabled = !inited;
-    document.getElementById('btn-tpl-git-push').disabled = !inited;
-    document.getElementById('btn-tpl-git-reset').disabled = !inited;
-    if (inited) loadTplGitCommits();
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-async function saveTplGitConfig() {
-  try {
-    await api('/api/git/repo-config/shared', {
-      method: 'PUT',
-      body: {
-        path: document.getElementById('tpl-git-path').value.trim(),
-        login: document.getElementById('tpl-git-login').value.trim(),
-        password: document.getElementById('tpl-git-password').value.trim(),
-      },
-    });
-    toast('Configuration Git Shared enregistree', 'success');
-    loadTplGit();
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-async function tplGitInit() {
-  try {
-    const data = await api('/api/git/shared/init', { method: 'POST' });
-    toast(data.ok ? 'Repository Shared initialise' : (data.message || 'Erreur'), data.ok ? 'success' : 'error');
-    loadTplGit();
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-async function tplGitPull() {
-  try {
-    const data = await api('/api/git/shared/pull', { method: 'POST' });
-    if (data.code === 0) {
-      toast('Pull Shared reussi', 'success');
-    } else {
-      const detail = (data.stderr || data.stdout || 'erreur inconnue').substring(0, 200);
-      toast(`Pull Shared erreur: ${detail}`, 'error');
-    }
-    loadTplGit();
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-async function loadTplGitCommits() {
-  const wrap = document.getElementById('tpl-git-commits');
-  if (!wrap) return;
-  try {
-    const data = await api('/api/git/shared/commits');
-    const commits = data.commits || [];
-    if (!commits.length) {
-      wrap.innerHTML = '<p style="color:var(--text-secondary);font-size:0.8rem;padding:0.5rem">Aucun commit.</p>';
-      return;
-    }
-    const rows = commits.map(c => {
-      const tags = c.tags.map(t => `<span class="commit-tag">${escHtml(t)}</span>`).join('');
-      const dateStr = c.date ? c.date.substring(0, 16).replace('T', ' ') : '';
-      return `<tr>
-        <td class="commit-date">${escHtml(dateStr)}</td>
-        <td class="commit-hash">${escHtml(c.short)}</td>
-        <td>${tags}</td>
-        <td>${escHtml(c.subject)}</td>
-        <td><button class="btn-revert" onclick="tplGitCheckout('${c.hash}')" title="Revenir a cette version">&#8634;</button></td>
-      </tr>`;
-    }).join('');
-    wrap.innerHTML = `<table class="commits-table">
-      <thead><tr><th>Date</th><th>ID</th><th>Tag</th><th>Message</th><th></th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
-  } catch (e) {
-    wrap.innerHTML = `<p style="color:#ef4444;font-size:0.8rem;padding:0.5rem">${escHtml(e.message)}</p>`;
-  }
-}
-
-async function tplGitCheckout(hash) {
-  if (!(await confirmModal('Revenir a cette version ?\nLes modifications non commitees seront verifiees avant.'))) return;
-  try {
-    const data = await api(`/api/git/shared/checkout/${hash}`, { method: 'POST' });
-    toast(data.message || 'Version restauree', 'success');
-    loadTplGit();
-  } catch (e) {
-    toast(e.message, 'error');
-  }
-}
-
-async function tplGitPushOnly() {
-  try {
-    const data = await api('/api/git/shared/push', { method: 'POST' });
-    if (data.code === 0) {
-      toast('Push effectue', 'success');
-    } else {
-      toast((data.stderr || 'Erreur push').substring(0, 300), 'error');
-    }
-    loadTplGit();
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-async function tplGitResetLocal() {
-  if (!(await confirmModal('Supprimer tous les commits locaux non pushes ?\nLe depot local sera resynchronise avec le remote.'))) return;
-  try {
-    const data = await api('/api/git/shared/reset-to-remote', { method: 'POST' });
-    toast(data.message || 'Reset effectue', data.ok ? 'success' : 'error');
-    loadTplGit();
-  } catch (e) { toast(e.message, 'error'); }
-}
+// ── Template Git (Enregistrement) — delegates to factorized functions ──
 
 // ── Template LLM ──────────────────────────────────
 async function loadTplLLM() {
