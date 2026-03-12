@@ -5,7 +5,15 @@
       "Bash(py -c \"import ast; ast.parse\\(open\\(''Agents/Shared/agent_loader.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
       "Bash(py -c \"import ast; ast.parse\\(open\\(''web/server.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
       "Bash(grep -r \"SELECT\\\\|postgres\\\\|psycopg\\\\|TABLE\" /e/srcs/LandGraph/agents/*.py)",
-      "Bash(xargs cat)"
+      "Bash(xargs cat)",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''web/server.py'', doraise=True\\)\")",
+      "Bash(py -3 -c \"import py_compile; py_compile.compile\\(''web/server.py'', doraise=True\\)\")",
+      "Bash(GIT_DIR=\".git\" GIT_WORK_TREE=\".\" git -c safe.directory=\"E:/srcs/LandGraph/.claude/worktrees/strange-carson\" status)",
+      "Bash(GIT_DIR=\".git\" GIT_WORK_TREE=\".\" git -c safe.directory=\"E:/srcs/LandGraph/.claude/worktrees/strange-carson\" diff -- web/server.py web/static/js/app.js web/static/index.html)",
+      "Bash(GIT_DIR=\".git\" GIT_WORK_TREE=\".\" git -c safe.directory=\"E:/srcs/LandGraph/.claude/worktrees/strange-carson\" log --oneline -5)",
+      "Bash(GIT_DIR=\".git\" GIT_WORK_TREE=\".\" git -c safe.directory=\"E:/srcs/LandGraph/.claude/worktrees/strange-carson\" add web/server.py web/static/js/app.js web/static/index.html)",
+      "Bash(GIT_DIR=\".git\" GIT_WORK_TREE=\".\" git -c safe.directory=\"E:/srcs/LandGraph/.claude/worktrees/strange-carson\" commit -m \"$\\(cat <<''EOF'':*)",
+      "Bash(GIT_DIR=\".git\" GIT_WORK_TREE=\".\" git -c safe.directory=\"E:/srcs/LandGraph/.claude/worktrees/strange-carson\" push origin claude/strange-carson)"
     ]
   }
 }

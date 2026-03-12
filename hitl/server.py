@@ -990,7 +990,7 @@ def reset_password(req: ResetPasswordRequest):
 
 
 # ── Agent Chat ─────────────────────────────────
-GATEWAY_URL = os.getenv("LANGGRAPH_API_URL", "http://langgraph-api:8123")
+GATEWAY_URL = os.getenv("LANGGRAPH_API_URL", "http://langgraph-api:8000")
 
 
 class ChatRequest(BaseModel):
