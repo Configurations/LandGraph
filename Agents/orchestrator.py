@@ -507,18 +507,58 @@ def route_after_orchestrator(state: dict) -> str:
 
 def human_gate_node(state: dict) -> dict:
     """
-    Human gate — attend la validation humaine via Discord.
-    Pour l'instant : simule un 'approve' automatique pour les tests.
-    TODO: integrer discord_tools.request_human_approval()
+    Human gate — attend la validation humaine via le canal configure (Discord, Email, etc.).
+    Envoie une demande d'approbation et attend la reponse (timeout 30 min).
     """
-    logger.info("🚦 Human gate — simulation approve (a integrer Discord)")
+    from agents.shared.human_gate import request_approval_sync
+
+    phase = state.get("project_phase", "inconnue")
+    team_id = state.get("_team_id", "default")
+    channel_id = state.get("_discord_channel_id", "")
+
+    # Construire le resume a partir de la derniere decision
+    summary = f"Validation requise — phase « {phase} »"
+    details = ""
+    decisions = state.get("decision_history", [])
+    if decisions:
+        last = decisions[-1]
+        reasoning = last.get("reasoning", "")
+        if reasoning:
+            details = reasoning
+
+    logger.info(f"🚦 Human gate — demande approbation (team={team_id}, phase={phase})")
+
+    result = request_approval_sync(
+        agent_name="Orchestrateur",
+        summary=summary,
+        details=details,
+        channel_id=channel_id,
+        team_id=team_id,
+    )
+
+    approved = result.get("approved", False)
+    reviewer = result.get("reviewer", "unknown")
+    response_text = result.get("response", "")
+    timed_out = result.get("timed_out", False)
+
     feedback = list(state.get("human_feedback_log", []))
     feedback.append({
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "response": "approve",
-        "source": "auto-test",
+        "response": "approve" if approved else "reject",
+        "reviewer": reviewer,
+        "comment": response_text,
+        "timed_out": timed_out,
+        "source": "human_gate",
     })
     state["human_feedback_log"] = feedback
+
+    if timed_out:
+        logger.warning("🚦 Human gate — timeout, aucune reponse")
+    elif approved:
+        logger.info(f"🚦 Human gate — approuve par {reviewer}")
+    else:
+        logger.info(f"🚦 Human gate — rejete par {reviewer} : {response_text}")
+
     return state
 
 

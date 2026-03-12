@@ -4,12 +4,13 @@
 # VERSION v3 — Telecharge tout depuis GitHub, zero heredoc
 #
 # A executer depuis la VM Ubuntu (apres le script 02).
-# Usage : ./03-install-langgraph.sh
+# Usage : ./02-install-langgraph.sh [branch]   (default: main)
 ###############################################################################
 set -euo pipefail
 
+BRANCH="${1:-main}"
 PROJECT_DIR="$HOME/langgraph-project"
-REPO_RAW="https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main"
+REPO_RAW="https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/${BRANCH}"
 
 echo "========================================"
 echo "  Script 3 : Installation LangGraph v3  "
@@ -37,7 +38,7 @@ cd "${PROJECT_DIR}"
 # Try tag-based version first, fallback to commit SHA
 REMOTE_VERSION=$(wget -qO- "https://api.github.com/repos/Configurations/LandGraph/tags" 2>/dev/null | python3 -c "import sys,json;tags=json.load(sys.stdin);print(tags[0]['name'] if tags else 'unknown')" 2>/dev/null || echo "unknown")
 if [ "$REMOTE_VERSION" = "unknown" ]; then
-    REMOTE_VERSION=$(wget -qO- "https://api.github.com/repos/Configurations/LandGraph/commits/main" 2>/dev/null | python3 -c "import sys,json;print(json.load(sys.stdin)['sha'][:8])" 2>/dev/null || echo "unknown")
+    REMOTE_VERSION=$(wget -qO- "https://api.github.com/repos/Configurations/LandGraph/commits/${BRANCH}" 2>/dev/null | python3 -c "import sys,json;print(json.load(sys.stdin)['sha'][:8])" 2>/dev/null || echo "unknown")
 fi
 LOCAL_VERSION=""
 [ -f .version ] && LOCAL_VERSION=$(cat .version)

@@ -5,4 +5,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY hitl/server.py .
 COPY hitl/static/ ./static/
 COPY config/Teams/ ./config/Teams/
+EXPOSE 8090
 CMD ["python", "server.py"]
