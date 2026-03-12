@@ -12,14 +12,24 @@ jobs:
     outputs:
       new_version: ${{ steps.bump.outputs.new_version }}
       branch: ${{ steps.branch.outputs.branch }}
+      tag_prefix: ${{ steps.branch.outputs.tag_prefix }}
+      tag_latest: ${{ steps.branch.outputs.tag_latest }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Get branch name
+      - name: Get branch name and compute tags
         id: branch
-        run: echo "branch=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+        run: |
+          echo "branch=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+          if [ "${GITHUB_REF_NAME}" = "main" ]; then
+            echo "tag_prefix=" >> $GITHUB_OUTPUT
+            echo "tag_latest=latest" >> $GITHUB_OUTPUT
+          else
+            echo "tag_prefix=${GITHUB_REF_NAME}-" >> $GITHUB_OUTPUT
+            echo "tag_latest=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Get latest tag
         id: tag
@@ -50,34 +60,44 @@ jobs:
   build-api:
     needs: version
     uses: ./.github/workflows/build-langgraph-api.yml
+    secrets: inherit
     with:
       version: ${{ needs.version.outputs.new_version }}
-      branch: ${{ needs.version.outputs.branch }}
+      tag_prefix: ${{ needs.version.outputs.tag_prefix }}
+      tag_latest: ${{ needs.version.outputs.tag_latest }}
 
   build-admin:
     needs: version
     uses: ./.github/workflows/build-langgraph-admin.yml
+    secrets: inherit
     with:
       version: ${{ needs.version.outputs.new_version }}
-      branch: ${{ needs.version.outputs.branch }}
+      tag_prefix: ${{ needs.version.outputs.tag_prefix }}
+      tag_latest: ${{ needs.version.outputs.tag_latest }}
 
   build-discord:
     needs: version
     uses: ./.github/workflows/build-discord-bot.yml
+    secrets: inherit
     with:
       version: ${{ needs.version.outputs.new_version }}
-      branch: ${{ needs.version.outputs.branch }}
+      tag_prefix: ${{ needs.version.outputs.tag_prefix }}
+      tag_latest: ${{ needs.version.outputs.tag_latest }}
 
   build-mail:
     needs: version
     uses: ./.github/workflows/build-mail-bot.yml
+    secrets: inherit
     with:
       version: ${{ needs.version.outputs.new_version }}
-      branch: ${{ needs.version.outputs.branch }}
+      tag_prefix: ${{ needs.version.outputs.tag_prefix }}
+      tag_latest: ${{ needs.version.outputs.tag_latest }}
 
   build-hitl:
     needs: version
     uses: ./.github/workflows/build-hitl-console.yml
+    secrets: inherit
     with:
       version: ${{ needs.version.outputs.new_version }}
-      branch: ${{ needs.version.outputs.branch }}
+      tag_prefix: ${{ needs.version.outputs.tag_prefix }}
+      tag_latest: ${{ needs.version.outputs.tag_latest }}

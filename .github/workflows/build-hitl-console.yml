@@ -6,7 +6,10 @@ on:
       version:
         required: true
         type: string
-      branch:
+      tag_prefix:
+        required: true
+        type: string
+      tag_latest:
         required: true
         type: string
   workflow_dispatch:
@@ -15,11 +18,16 @@ on:
         required: true
         type: string
         description: "Version tag (e.g., v0.0.19)"
-      branch:
-        required: true
+      tag_prefix:
+        required: false
+        type: string
+        default: "dev-"
+        description: "Tag prefix (empty for main, 'dev-' for dev)"
+      tag_latest:
+        required: false
         type: string
         default: dev
-        description: "Branch name for image tag"
+        description: "Latest tag (latest for main, branch name for others)"
 
 jobs:
   build-and-push:
@@ -36,6 +44,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USER }}
+          password: ${{ secrets.DOCKER_PASS }}
+
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/build-push-action@v6
@@ -44,8 +57,10 @@ jobs:
           file: ./Dockerfile.hitl
           push: true
           tags: |
-            ghcr.io/configurations/langgraph-hitl:${{ inputs.branch }}-${{ inputs.version }}
-            ghcr.io/configurations/langgraph-hitl:${{ inputs.branch }}-latest
+            ghcr.io/configurations/langgraph-hitl:${{ inputs.tag_prefix }}${{ inputs.version }}
+            ghcr.io/configurations/langgraph-hitl:${{ inputs.tag_latest }}
+            ${{ secrets.DOCKER_USER }}/langgraph-hitl:${{ inputs.tag_prefix }}${{ inputs.version }}
+            ${{ secrets.DOCKER_USER }}/langgraph-hitl:${{ inputs.tag_latest }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64
