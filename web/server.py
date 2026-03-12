@@ -88,7 +88,6 @@ MCP_ACCESS_FILE = TEAMS_DIR / "agent_mcp_access.json"
 MCP_CATALOG_FILE = SCRIPTS / "Infra" / "mcp_catalog.csv" if not DOCKER_MODE else SHARED_DIR / "Teams" / "mcp_catalog.csv"
 LLM_PROVIDERS_FILE = TEAMS_DIR / "llm_providers.json"
 TEAMS_FILE = TEAMS_DIR / "teams.json"
-GIT_CONFIG_FILE = TEAMS_DIR / "git.json"  # legacy dual-repo
 SHARED_GIT_FILE = SHARED_DIR / "git.json"
 CONFIGS_GIT_FILE = CONFIGS / "git.json"
 SHARED_TEAMS_DIR = SHARED_DIR / "Teams"
@@ -673,7 +672,16 @@ async def update_mcp_access(data: MCPAccessUpdate):
 # ── API: Agents ────────────────────────────────────
 
 def _team_dir(team_id: str) -> Path:
-    """Return the team folder path: Configs/Teams/<team_id>/."""
+    """Return the team folder path: Configs/Teams/<directory>/.
+
+    Accepts either a team id (e.g. 'team1') or a directory name (e.g. 'Team1').
+    Resolves the id to the directory name via teams.json when possible.
+    """
+    teams = _read_teams_list()
+    for t in teams:
+        if t.get("id") == team_id:
+            return TEAMS_DIR / t.get("directory", team_id)
+    # Fallback: assume team_id is already a directory name
     return TEAMS_DIR / team_id
 
 
@@ -1911,6 +1919,11 @@ async def save_template_teams(request: Request):
 
 
 def _shared_team_dir(directory: str) -> Path:
+    """Resolve team id or directory name to Shared/Teams/<directory>/."""
+    teams = _read_teams_list()
+    for t in teams:
+        if t.get("id") == directory:
+            return SHARED_TEAMS_DIR / t.get("directory", directory)
     return SHARED_TEAMS_DIR / directory
 
 
@@ -1990,10 +2003,38 @@ async def delete_template_agent(agent_id: str, team_id: str = ""):
     return {"ok": True}
 
 
+# ── Git helpers ───────────────────────────────────
+
+def _get_repo_dir(repo_key: str) -> Path:
+    """Return the directory for a repo key."""
+    dirs = {"configs": CONFIGS, "shared": SHARED_DIR}
+    d = dirs.get(repo_key)
+    if not d:
+        raise HTTPException(400, f"Repo inconnu: {repo_key}. Utiliser 'configs' ou 'shared'.")
+    return d
+
+
+def _git_file_for(repo_key: str) -> Path:
+    """Return the git.json file path for a repo key."""
+    files = {"configs": CONFIGS_GIT_FILE, "shared": SHARED_GIT_FILE}
+    f = files.get(repo_key)
+    if not f:
+        raise HTTPException(400, f"Repo inconnu: {repo_key}. Utiliser 'configs' ou 'shared'.")
+    return f
+
+
+def _get_repo_cfg(repo_key: str) -> dict:
+    """Return git config for a specific repo."""
+    cfg_file = _git_file_for(repo_key)
+    if cfg_file.exists():
+        return _read_json(cfg_file)
+    return {}
+
+
 def _ensure_gitignore(target_dir: Path):
     """Create or update .gitignore with required patterns."""
     gitignore = target_dir / ".gitignore"
-    required = ["*.sh", "git.json", "**/git.json"]
+    required = ["*.sh", "git.json", "**/git.json", "__pycache__/", "*.pyc"]
     if gitignore.exists():
         content = gitignore.read_text(encoding="utf-8")
         lines = [l.strip() for l in content.splitlines()]
@@ -2004,9 +2045,7 @@ def _ensure_gitignore(target_dir: Path):
                 added = True
         if added:
             gitignore.write_text(content, encoding="utf-8")
-            log.info("Updated .gitignore in %s (added git.json)", target_dir)
     else:
-        log.info("Creating .gitignore in %s", target_dir)
         gitignore.write_text("\n".join(required) + "\n", encoding="utf-8")
 
 
@@ -2023,89 +2062,37 @@ def _build_remote_url(repo_path: str, login: str, password: str) -> str:
 def _git_configure_remote(target_dir: Path, repo_path: str, login: str, password: str):
     """Set origin remote on a git repo."""
     remote_url = _build_remote_url(repo_path, login, password)
-    subprocess.run(["git", "remote", "remove", "origin"], cwd=str(target_dir), capture_output=True, text=True, timeout=5)
-    subprocess.run(["git", "remote", "add", "origin", remote_url], cwd=str(target_dir), capture_output=True, text=True, timeout=5)
-    log.info("Git remote origin set to %s in %s", repo_path, target_dir)
+    subprocess.run(["git", "remote", "remove", "origin"], cwd=str(target_dir),
+                   capture_output=True, text=True, timeout=5)
+    subprocess.run(["git", "remote", "add", "origin", remote_url], cwd=str(target_dir),
+                   capture_output=True, text=True, timeout=5)
 
 
-# ── API: Git config (dual repo: configs + shared) ─
-
-@app.get("/api/git/config")
-async def get_git_config():
-    data = _read_json(GIT_CONFIG_FILE)
-    # Migrate old single-repo format to dual-repo
-    if "repos" not in data:
-        old = {k: data.get(k, "") for k in ("path", "login", "password")}
-        data = {
-            "repos": {
-                "configs": old,
-                "shared": {"path": "", "login": "", "password": ""},
-            }
-        }
-        _write_json(GIT_CONFIG_FILE, data)
-    return data
+def _git_detect_branch(target_dir: Path) -> str:
+    """Detect the current branch name with robust fallbacks."""
+    # Try current branch
+    r = subprocess.run(["git", "branch", "--show-current"], cwd=str(target_dir),
+                       capture_output=True, text=True, timeout=10)
+    branch = r.stdout.strip()
+    if branch:
+        return branch
+    # Check remote branches for main/master
+    r = subprocess.run(["git", "branch", "-r"], cwd=str(target_dir),
+                       capture_output=True, text=True, timeout=10)
+    if "origin/main" in r.stdout:
+        return "main"
+    return "master"
 
 
-class GitRepoConfig(BaseModel):
-    path: str = ""
-    login: str = ""
-    password: str = ""
+def _git_sanitize(text: str, login: str, password: str) -> str:
+    """Remove credentials from git output."""
+    if login and password:
+        text = text.replace(f"{login}:{password}@", "***:***@")
+        text = text.replace(password, "***")
+    return text
 
 
-class GitConfigDual(BaseModel):
-    repos: dict  # {"configs": {path, login, password}, "shared": {path, login, password}}
-
-
-@app.put("/api/git/config")
-async def update_git_config(cfg: GitConfigDual):
-    _write_json(GIT_CONFIG_FILE, cfg.model_dump())
-    # Configure each repo
-    repo_dirs = {"configs": CONFIGS, "shared": SHARED_DIR}
-    for repo_key, target_dir in repo_dirs.items():
-        repo_cfg = cfg.repos.get(repo_key, {})
-        repo_path = repo_cfg.get("path", "").strip()
-        if not repo_path:
-            continue
-        target_dir.mkdir(parents=True, exist_ok=True)
-        login = repo_cfg.get("login", "").strip()
-        password = repo_cfg.get("password", "").strip()
-        if not (target_dir / ".git").exists():
-            log.info("Initializing git repo in %s", target_dir)
-            subprocess.run(
-                ["git", "config", "--global", "--add", "safe.directory", str(target_dir)],
-                capture_output=True, text=True, timeout=5,
-            )
-            subprocess.run(["git", "init"], cwd=str(target_dir), capture_output=True, text=True, timeout=10)
-            _ensure_gitignore(target_dir)
-        _git_configure_remote(target_dir, repo_path, login, password)
-    return {"ok": True}
-
-
-# ── API: Git config per-repo (separate files) ────
-
-def _git_file_for(repo_key: str) -> Path:
-    """Return the git.json file path for a repo key."""
-    files = {"configs": CONFIGS_GIT_FILE, "shared": SHARED_GIT_FILE}
-    f = files.get(repo_key)
-    if not f:
-        raise HTTPException(400, f"Repo inconnu: {repo_key}. Utiliser 'configs' ou 'shared'.")
-    return f
-
-
-def _migrate_git_config():
-    """Migrate old dual-repo git.json to per-repo files if needed."""
-    old = _read_json(GIT_CONFIG_FILE)
-    repos = old.get("repos", {})
-    if not repos:
-        return
-    for key, cfg_file in [("shared", SHARED_GIT_FILE), ("configs", CONFIGS_GIT_FILE)]:
-        if not cfg_file.exists() and repos.get(key):
-            cfg_file.parent.mkdir(parents=True, exist_ok=True)
-            _write_json(cfg_file, repos[key])
-
-
-_migrate_git_config()
-
+# ── API: Git config per-repo ─────────────────────
 
 @app.get("/api/git/repo-config/{repo_key}")
 async def get_repo_git_config(repo_key: str):
@@ -2116,69 +2103,43 @@ async def get_repo_git_config(repo_key: str):
 
 @app.put("/api/git/repo-config/{repo_key}")
 async def save_repo_git_config(repo_key: str, request: Request):
+    """Save git config and configure remote (only place where remote is set)."""
     body = await request.json()
     cfg_file = _git_file_for(repo_key)
     cfg_file.parent.mkdir(parents=True, exist_ok=True)
-    _write_json(cfg_file, {"path": body.get("path", ""), "login": body.get("login", ""), "password": body.get("password", "")})
-    # Configure git repo
+    _write_json(cfg_file, {
+        "path": body.get("path", ""),
+        "login": body.get("login", ""),
+        "password": body.get("password", ""),
+    })
+    # Configure remote if repo already initialized
     target_dir = _get_repo_dir(repo_key)
     repo_path = body.get("path", "").strip()
-    if repo_path:
-        target_dir.mkdir(parents=True, exist_ok=True)
+    if repo_path and (target_dir / ".git").exists():
         login = body.get("login", "").strip()
         password = body.get("password", "").strip()
-        if not (target_dir / ".git").exists():
-            subprocess.run(["git", "config", "--global", "--add", "safe.directory", str(target_dir)], capture_output=True, text=True, timeout=5)
-            subprocess.run(["git", "init"], cwd=str(target_dir), capture_output=True, text=True, timeout=10)
-            _ensure_gitignore(target_dir)
         _git_configure_remote(target_dir, repo_path, login, password)
     return {"ok": True}
 
 
-# ── API: Git operations (per-repo) ───────────────
-
-def _get_repo_dir(repo_key: str) -> Path:
-    """Return the directory for a repo key."""
-    dirs = {"configs": CONFIGS, "shared": SHARED_DIR}
-    d = dirs.get(repo_key)
-    if not d:
-        raise HTTPException(400, f"Repo inconnu: {repo_key}. Utiliser 'configs' ou 'shared'.")
-    return d
-
-
-def _get_repo_cfg(repo_key: str) -> dict:
-    """Return git config for a specific repo."""
-    cfg_file = _git_file_for(repo_key)
-    if cfg_file.exists():
-        return _read_json(cfg_file)
-    # Fallback to legacy dual-repo file
-    data = _read_json(GIT_CONFIG_FILE)
-    repos = data.get("repos", {})
-    return repos.get(repo_key, {})
-
+# ── API: Git operations ──────────────────────────
 
 @app.get("/api/git/{repo_key}/status")
 async def git_status(repo_key: str):
     target_dir = _get_repo_dir(repo_key)
+    initialized = (target_dir / ".git").exists()
+    if not initialized:
+        return {"initialized": False, "status": "", "branch": "", "log": ""}
     try:
-        initialized = (target_dir / ".git").exists()
-        if not initialized:
-            return {"initialized": False, "status": "", "branch": "", "log": ""}
-        result = subprocess.run(
-            ["git", "status", "--short"],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=10
-        )
-        branch = subprocess.run(
-            ["git", "branch", "--show-current"],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=10
-        )
-        git_log = subprocess.run(
-            ["git", "log", "--oneline", "-10"],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=10
-        )
+        status = subprocess.run(["git", "status", "--short"], cwd=str(target_dir),
+                                capture_output=True, text=True, timeout=10)
+        branch = subprocess.run(["git", "branch", "--show-current"], cwd=str(target_dir),
+                                capture_output=True, text=True, timeout=10)
+        git_log = subprocess.run(["git", "log", "--oneline", "-10"], cwd=str(target_dir),
+                                 capture_output=True, text=True, timeout=10)
         return {
             "initialized": True,
-            "status": result.stdout,
+            "status": status.stdout,
             "branch": branch.stdout.strip(),
             "log": git_log.stdout,
         }
@@ -2188,280 +2149,90 @@ async def git_status(repo_key: str):
 
 @app.post("/api/git/{repo_key}/init")
 async def git_init(repo_key: str):
-    """Initialize a git repo."""
+    """Initialize git repo, configure remote, create initial commit."""
     target_dir = _get_repo_dir(repo_key)
-    log.info("Button pressed: Init Repository (%s)", repo_key)
+    log.info("Git init (%s) in %s", repo_key, target_dir)
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
         if (target_dir / ".git").exists():
             return {"ok": True, "message": "Depot deja initialise"}
-        log.info("git init in %s", target_dir)
-        subprocess.run(
-            ["git", "config", "--global", "--add", "safe.directory", str(target_dir)],
-            capture_output=True, text=True, timeout=5,
-        )
-        result = subprocess.run(
-            ["git", "init"],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=10,
-        )
+        # Init
+        subprocess.run(["git", "config", "--global", "--add", "safe.directory", str(target_dir)],
+                       capture_output=True, text=True, timeout=5)
+        result = subprocess.run(["git", "init"], cwd=str(target_dir),
+                                capture_output=True, text=True, timeout=10)
         if result.returncode != 0:
-            log.error("git init failed (code %d): %s", result.returncode, result.stderr)
             raise HTTPException(500, result.stderr)
         _ensure_gitignore(target_dir)
-        # Configure remote origin if config exists
+        # Configure remote
         cfg = _get_repo_cfg(repo_key)
         repo_path = cfg.get("path", "").strip()
         if repo_path:
-            login = cfg.get("login", "").strip()
-            password = cfg.get("password", "").strip()
-            _git_configure_remote(target_dir, repo_path, login, password)
-        log.info("git init success for %s", repo_key)
+            _git_configure_remote(target_dir, repo_path, cfg.get("login", ""), cfg.get("password", ""))
+        # Initial commit so HEAD exists
+        subprocess.run(["git", "add", "-A"], cwd=str(target_dir),
+                       capture_output=True, text=True, timeout=10)
+        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=str(target_dir),
+                       capture_output=True, text=True, timeout=10)
+        log.info("Git init success for %s", repo_key)
         return {"ok": True, "message": "Depot initialise avec succes"}
     except HTTPException:
         raise
     except Exception as e:
-        log.exception("git init exception")
+        log.exception("Git init exception")
         raise HTTPException(500, str(e))
 
 
 @app.post("/api/git/{repo_key}/pull")
 async def git_pull(repo_key: str):
+    """Pull from remote. If not initialized, does init + fetch + reset."""
     target_dir = _get_repo_dir(repo_key)
-    log.info("Button pressed: Pull (%s)", repo_key)
+    log.info("Git pull (%s)", repo_key)
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
+        git_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
         cfg = _get_repo_cfg(repo_key)
         repo_path = cfg.get("path", "").strip()
         login = cfg.get("login", "").strip()
         password = cfg.get("password", "").strip()
+
+        if not repo_path:
+            raise HTTPException(400, "Chemin du depot non configure")
 
         if not (target_dir / ".git").exists():
-            # Clone
-            if not repo_path:
-                raise HTTPException(400, "Chemin du depot non configure")
-            clone_url = _build_remote_url(repo_path, login, password)
-            log.info("git clone %s into %s", repo_path, target_dir)
-            result = subprocess.run(
-                ["git", "clone", clone_url, "."],
-                cwd=str(target_dir), capture_output=True, text=True, timeout=120,
-                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
-            )
+            # Init + fetch + checkout (works with non-empty dir unlike clone)
+            subprocess.run(["git", "config", "--global", "--add", "safe.directory", str(target_dir)],
+                           capture_output=True, text=True, timeout=5)
+            subprocess.run(["git", "init"], cwd=str(target_dir),
+                           capture_output=True, text=True, timeout=10)
+            _git_configure_remote(target_dir, repo_path, login, password)
+            fetch_r = subprocess.run(["git", "fetch", "origin"], cwd=str(target_dir),
+                                     capture_output=True, text=True, timeout=120, env=git_env)
+            if fetch_r.returncode != 0:
+                stderr = _git_sanitize(fetch_r.stderr, login, password)
+                return {"ok": False, "message": f"Fetch echoue: {stderr[:300]}"}
+            # Detect default branch from remote
+            branch = _git_detect_branch(target_dir)
+            subprocess.run(["git", "checkout", "-B", branch, f"origin/{branch}"], cwd=str(target_dir),
+                           capture_output=True, text=True, timeout=30)
             _ensure_gitignore(target_dir)
-            if result.returncode != 0:
-                log.error("git clone failed (code %d): %s", result.returncode, result.stderr)
-            else:
-                log.info("git clone success for %s", repo_key)
-            return {"stdout": result.stdout, "stderr": result.stderr, "code": result.returncode}
+            return {"ok": True, "message": f"Pull initial reussi (branche {branch})"}
         else:
-            # Pull
-            log.info("git pull in %s", target_dir)
-            if repo_path:
-                _git_configure_remote(target_dir, repo_path, login, password)
-            branch_result = subprocess.run(
-                ["git", "branch", "--show-current"],
-                cwd=str(target_dir), capture_output=True, text=True, timeout=10
-            )
-            branch = branch_result.stdout.strip() or "master"
-            subprocess.run(
-                ["git", "branch", "--set-upstream-to", f"origin/{branch}", branch],
-                cwd=str(target_dir), capture_output=True, text=True, timeout=10
-            )
-            result = subprocess.run(
-                ["git", "pull", "origin", branch],
-                cwd=str(target_dir), capture_output=True, text=True, timeout=60,
-                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
-            )
+            # Normal pull
+            branch = _git_detect_branch(target_dir)
+            result = subprocess.run(["git", "pull", "origin", branch], cwd=str(target_dir),
+                                    capture_output=True, text=True, timeout=60, env=git_env)
+            stdout = _git_sanitize(result.stdout, login, password)
+            stderr = _git_sanitize(result.stderr, login, password)
             if result.returncode != 0:
-                log.error("git pull failed (code %d): %s %s", result.returncode, result.stdout, result.stderr)
-            else:
-                log.info("git pull success for %s: %s", repo_key, result.stdout.strip())
-            return {"stdout": result.stdout, "stderr": result.stderr, "code": result.returncode}
+                log.error("Git pull failed (%s): %s", repo_key, stderr[:300])
+                return {"ok": False, "message": f"Pull echoue: {stderr[:300]}"}
+            log.info("Git pull success (%s)", repo_key)
+            return {"ok": True, "message": f"Pull reussi"}
     except HTTPException:
         raise
     except Exception as e:
-        log.exception("git pull exception")
-        raise HTTPException(500, str(e))
-
-
-# ── API: Git Push only + Reset to remote ──────────
-
-@app.post("/api/git/{repo_key}/push")
-async def git_push_only(repo_key: str):
-    """Push local commits to remote without committing."""
-    target_dir = _get_repo_dir(repo_key)
-    log.info("Button pressed: Push only (%s)", repo_key)
-    try:
-        git_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-        cfg = _get_repo_cfg(repo_key)
-        repo_path = cfg.get("path", "").strip()
-        login = cfg.get("login", "").strip()
-        password = cfg.get("password", "").strip()
-
-        if repo_path:
-            _git_configure_remote(target_dir, repo_path, login, password)
-
-        branch_result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=10
-        )
-        branch = branch_result.stdout.strip()
-        if not branch or branch == "HEAD":
-            branch = "master"
-
-        push_result = subprocess.run(
-            ["git", "push", "origin", branch],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=60,
-            env=git_env,
-        )
-        # Retry with --force if rejected (stale info from prior filter-branch, or non-fast-forward)
-        if push_result.returncode != 0 and ("non-fast-forward" in push_result.stderr or "stale info" in push_result.stderr or "secret" in push_result.stderr.lower()):
-            log.warning("git push rejected (%s), retrying with --force", repo_key)
-            push_result = subprocess.run(
-                ["git", "push", "--force", "origin", branch],
-                cwd=str(target_dir), capture_output=True, text=True, timeout=60,
-                env=git_env,
-            )
-
-        def _sanitize(text: str) -> str:
-            if login and password:
-                text = text.replace(f"{login}:{password}@", "***:***@")
-                text = text.replace(password, "***")
-            return text
-
-        stdout = _sanitize(push_result.stdout)
-        stderr = _sanitize(push_result.stderr)
-        if push_result.returncode != 0:
-            log.error("git push failed (%s, code %d): %s", repo_key, push_result.returncode, stderr[:500])
-        else:
-            log.info("git push success (%s): %s", repo_key, stdout[:200])
-        return {"stdout": stdout, "stderr": stderr, "code": push_result.returncode}
-    except Exception as e:
-        log.exception("git push exception for %s", repo_key)
-        raise HTTPException(500, str(e))
-
-
-@app.post("/api/git/{repo_key}/reset-to-remote")
-async def git_reset_to_remote(repo_key: str):
-    """Reset local branch to match remote, discarding all local commits."""
-    target_dir = _get_repo_dir(repo_key)
-    log.info("Button pressed: Reset to remote (%s)", repo_key)
-    try:
-        git_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-        cfg = _get_repo_cfg(repo_key)
-        repo_path = cfg.get("path", "").strip()
-        login = cfg.get("login", "").strip()
-        password = cfg.get("password", "").strip()
-
-        if repo_path:
-            _git_configure_remote(target_dir, repo_path, login, password)
-
-        # Fetch latest from remote
-        subprocess.run(
-            ["git", "fetch", "origin"],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=60,
-            env=git_env,
-        )
-
-        branch_result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=10
-        )
-        branch = branch_result.stdout.strip()
-        if not branch or branch == "HEAD":
-            branch = "master"
-
-        # Hard reset to remote branch
-        result = subprocess.run(
-            ["git", "reset", "--hard", f"origin/{branch}"],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=30,
-        )
-        log.info("git reset --hard origin/%s (%s): code=%d stdout=%s",
-                 branch, repo_key, result.returncode, result.stdout[:200])
-        if result.returncode == 0:
-            return {"ok": True, "message": f"Reset effectue sur origin/{branch}"}
-        else:
-            return {"ok": False, "message": result.stderr[:300]}
-    except Exception as e:
-        log.exception("git reset exception for %s", repo_key)
-        raise HTTPException(500, str(e))
-
-
-# ── API: Git Commits history + checkout ───────────
-
-@app.get("/api/git/{repo_key}/commits")
-async def git_commits(repo_key: str):
-    """Return last 10 commits with date, hash, tags."""
-    target_dir = _get_repo_dir(repo_key)
-    if not (target_dir / ".git").exists():
-        return {"commits": []}
-    try:
-        # format: hash|date|tags|subject
-        result = subprocess.run(
-            ["git", "log", "--pretty=format:%H|%ai|%D|%s", "-10"],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=10,
-        )
-        commits = []
-        for line in result.stdout.strip().splitlines():
-            if not line:
-                continue
-            parts = line.split("|", 3)
-            full_hash = parts[0]
-            date = parts[1] if len(parts) > 1 else ""
-            refs = parts[2] if len(parts) > 2 else ""
-            subject = parts[3] if len(parts) > 3 else ""
-            # Extract tags from refs (e.g. "HEAD -> main, tag: v1.0")
-            tags = [r.strip().replace("tag: ", "") for r in refs.split(",") if "tag:" in r]
-            commits.append({
-                "hash": full_hash,
-                "short": full_hash[:7],
-                "date": date.strip(),
-                "tags": tags,
-                "subject": subject.strip(),
-            })
-        return {"commits": commits}
-    except Exception as e:
-        raise HTTPException(500, str(e))
-
-
-@app.post("/api/git/{repo_key}/checkout/{commit_hash}")
-async def git_checkout(repo_key: str, commit_hash: str):
-    """Checkout a specific commit. Refuses if there are uncommitted changes."""
-    import re
-    if not re.match(r'^[0-9a-f]{7,40}$', commit_hash):
-        raise HTTPException(400, "Hash de commit invalide")
-    target_dir = _get_repo_dir(repo_key)
-    if not (target_dir / ".git").exists():
-        raise HTTPException(400, "Repository non initialise")
-    try:
-        # Check for uncommitted changes
-        status = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=10,
-        )
-        if status.stdout.strip():
-            raise HTTPException(
-                409,
-                "Des modifications non commitees sont en attente. Commitez ou annulez-les avant de changer de version."
-            )
-        # Get current branch
-        branch_result = subprocess.run(
-            ["git", "branch", "--show-current"],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=10,
-        )
-        branch = branch_result.stdout.strip()
-        # Reset branch to the target commit
-        result = subprocess.run(
-            ["git", "reset", "--hard", commit_hash],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=30,
-        )
-        if result.returncode != 0:
-            raise HTTPException(500, f"git reset failed: {result.stderr}")
-        log.info("git checkout %s to %s in %s", repo_key, commit_hash, target_dir)
-        return {"ok": True, "message": f"Version restauree: {commit_hash[:7]}"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        log.exception("git checkout exception")
+        log.exception("Git pull exception")
         raise HTTPException(500, str(e))
 
 
@@ -2471,9 +2242,9 @@ class GitCommitRequest(BaseModel):
 
 @app.post("/api/git/{repo_key}/commit")
 async def git_commit(repo_key: str, req: GitCommitRequest):
-    """Stage all, commit and push."""
+    """Stage all, commit and push. No filter-branch, no force push."""
     target_dir = _get_repo_dir(repo_key)
-    log.info("Button pressed: Commit & Push (%s)", repo_key)
+    log.info("Git commit & push (%s)", repo_key)
     try:
         git_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
         cfg = _get_repo_cfg(repo_key)
@@ -2481,211 +2252,140 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
         login = cfg.get("login", "").strip()
         password = cfg.get("password", "").strip()
 
-        # Sanitize helper (defined early for use in all log outputs)
-        def _sanitize(text: str) -> str:
-            if login and password:
-                text = text.replace(f"{login}:{password}@", "***:***@")
-                text = text.replace(password, "***")
-            return text
-
-        # 1. Ensure .gitignore
         _ensure_gitignore(target_dir)
+        branch = _git_detect_branch(target_dir)
 
-        # 2. Configure remote origin with credentials
+        # 1. Stage all, then unstage git.json
+        subprocess.run(["git", "add", "-A"], cwd=str(target_dir),
+                       capture_output=True, text=True, timeout=10)
+        subprocess.run(["git", "rm", "-r", "--cached", "--ignore-unmatch", "git.json"],
+                       cwd=str(target_dir), capture_output=True, text=True, timeout=10)
+
+        # 2. Commit
+        commit_r = subprocess.run(["git", "commit", "-m", req.message], cwd=str(target_dir),
+                                  capture_output=True, text=True, timeout=30)
+        nothing = "nothing to commit" in commit_r.stdout
+        if commit_r.returncode != 0 and not nothing:
+            return {"ok": False, "message": commit_r.stderr[:300] or commit_r.stdout[:300]}
+
+        # 3. Push (never --force)
         if repo_path:
-            _git_configure_remote(target_dir, repo_path, login, password)
-            log.info("git remote configured (%s): %s", repo_key, repo_path)
-        else:
-            log.warning("git commit (%s): no repo_path configured, push will use default remote", repo_key)
+            push_r = subprocess.run(["git", "push", "origin", branch], cwd=str(target_dir),
+                                    capture_output=True, text=True, timeout=60, env=git_env)
+            stderr = _git_sanitize(push_r.stderr, login, password)
+            if push_r.returncode != 0:
+                if "non-fast-forward" in stderr:
+                    return {"ok": False, "message": "Push rejete: le depot distant a des commits plus recents. Faites un Pull d'abord."}
+                return {"ok": False, "message": f"Push echoue: {stderr[:300]}"}
 
-        # 3. Get current branch name
-        branch_result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=10
-        )
-        branch = branch_result.stdout.strip()
-        # If detached HEAD or empty, try symbolic-ref, then fall back to master/main
-        if not branch or branch == "HEAD":
-            sym_result = subprocess.run(
-                ["git", "symbolic-ref", "--short", "HEAD"],
-                cwd=str(target_dir), capture_output=True, text=True, timeout=10
-            )
-            branch = sym_result.stdout.strip()
-        if not branch or branch == "HEAD":
-            # Check if remote has main or master
-            remote_result = subprocess.run(
-                ["git", "branch", "-r"],
-                cwd=str(target_dir), capture_output=True, text=True, timeout=10
-            )
-            if "origin/main" in remote_result.stdout:
-                branch = "main"
-            else:
-                branch = "master"
-        log.info("git commit flow (%s): branch=%s, dir=%s", repo_key, branch, target_dir)
-
-        # 3b. Fix detached HEAD — checkout the branch
-        head_check = subprocess.run(
-            ["git", "symbolic-ref", "-q", "HEAD"],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=10
-        )
-        if head_check.returncode != 0:
-            log.warning("Detached HEAD detected (%s), checking out %s", repo_key, branch)
-            checkout_result = subprocess.run(
-                ["git", "checkout", "-B", branch],
-                cwd=str(target_dir), capture_output=True, text=True, timeout=10
-            )
-            log.info("git checkout -B %s (%s): code=%d stderr=%s",
-                     branch, repo_key, checkout_result.returncode, checkout_result.stderr.strip()[:200])
-
-        # 4. Set upstream tracking
-        subprocess.run(
-            ["git", "branch", "--set-upstream-to", f"origin/{branch}", branch],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=10
-        )
-
-        # 5. Clean up stuck rebase, stash, pull --rebase, restore
-        rebase_merge = target_dir / ".git" / "rebase-merge"
-        rebase_apply = target_dir / ".git" / "rebase-apply"
-        if rebase_merge.exists() or rebase_apply.exists():
-            log.warning("Stuck rebase detected (%s), aborting", repo_key)
-            subprocess.run(
-                ["git", "rebase", "--abort"],
-                cwd=str(target_dir), capture_output=True, text=True, timeout=10
-            )
-        subprocess.run(
-            ["git", "stash", "--include-untracked"],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=10
-        )
-        pull_result = subprocess.run(
-            ["git", "pull", "--rebase", "origin", branch],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=60,
-            env=git_env,
-        )
-        if pull_result.returncode != 0:
-            log.warning("git pull --rebase failed (%s, code %d): stdout=%s stderr=%s",
-                        repo_key, pull_result.returncode,
-                        _sanitize(pull_result.stdout[:300]),
-                        _sanitize(pull_result.stderr[:500]))
-        else:
-            log.info("git pull --rebase OK (%s): %s", repo_key, pull_result.stdout.strip()[:200])
-        subprocess.run(
-            ["git", "stash", "pop"],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=10
-        )
-
-        # 6. Stage all
-        add_result = subprocess.run(
-            ["git", "add", "-A"],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=10
-        )
-        log.info("git add -A (%s): code=%d", repo_key, add_result.returncode)
-
-        # 7. Remove git.json from staging (root + subdirs)
-        subprocess.run(
-            ["git", "rm", "-r", "--cached", "--ignore-unmatch", "git.json"],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=10
-        )
-        find_result = subprocess.run(
-            ["git", "ls-files", "--cached", "*/git.json"],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=10
-        )
-        for tracked_file in find_result.stdout.strip().splitlines():
-            if tracked_file:
-                subprocess.run(
-                    ["git", "rm", "--cached", "--ignore-unmatch", tracked_file],
-                    cwd=str(target_dir), capture_output=True, text=True, timeout=10
-                )
-
-        # 8. Commit
-        commit_result = subprocess.run(
-            ["git", "commit", "-m", req.message],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=30
-        )
-        nothing_to_commit = "nothing to commit" in commit_result.stdout
-        log.info("git commit (%s): code=%d nothing_to_commit=%s stdout=%s stderr=%s",
-                 repo_key, commit_result.returncode, nothing_to_commit,
-                 commit_result.stdout[:200], commit_result.stderr[:200])
-        # If commit failed for a real error (not just "nothing to commit"), check
-        # if there are local commits ahead of remote before giving up
-        if commit_result.returncode != 0 and not nothing_to_commit:
-            return {"stdout": commit_result.stdout, "stderr": commit_result.stderr, "code": commit_result.returncode}
-        # Always attempt push — there may be previous local commits not yet pushed
-
-        # 9. Purge sensitive files from history ONLY if they actually exist
-        history_rewritten = False
-        diag_result = subprocess.run(
-            ["git", "log", "--all", "--diff-filter=A", "--name-only", "--pretty=format:"],
-            cwd=str(target_dir), capture_output=True, text=True, timeout=30
-        )
-        all_files = set(f.strip() for f in diag_result.stdout.splitlines() if f.strip())
-        sensitive_patterns = ['git.json', '.env', '.key', '.pem']
-        sensitive_in_history = [f for f in all_files if any(f.lower().endswith(p) or f.lower() == p for p in sensitive_patterns)]
-        if sensitive_in_history:
-            log.warning("Sensitive files in history (%s): %s — running filter-branch", repo_key, sensitive_in_history)
-            sensitive_files = "git rm -r --cached --ignore-unmatch git.json .env *.key *.pem"
-            purge_result = subprocess.run(
-                ["git", "filter-branch", "--force", "--index-filter",
-                 sensitive_files,
-                 "--prune-empty", "--", "--all"],
-                cwd=str(target_dir), capture_output=True, text=True, timeout=120,
-                env={**git_env, "FILTER_BRANCH_SQUELCH_WARNING": "1"},
-            )
-            log.info("git filter-branch (%s): code=%d stdout=%s stderr=%s",
-                     repo_key, purge_result.returncode,
-                     purge_result.stdout[:300], purge_result.stderr[:300])
-            # Check if history was actually changed (not just "unchanged")
-            history_rewritten = purge_result.returncode == 0 and "is unchanged" not in purge_result.stderr
-            if purge_result.returncode == 0:
-                subprocess.run(
-                    ["git", "update-ref", "-d", "refs/original/refs/heads/" + branch],
-                    cwd=str(target_dir), capture_output=True, text=True, timeout=10
-                )
-                subprocess.run(
-                    ["git", "reflog", "expire", "--expire=now", "--all"],
-                    cwd=str(target_dir), capture_output=True, text=True, timeout=10
-                )
-                subprocess.run(
-                    ["git", "gc", "--prune=now"],
-                    cwd=str(target_dir), capture_output=True, text=True, timeout=30
-                )
-                log.info("git filter-branch cleanup done (%s)", repo_key)
-        else:
-            log.info("No sensitive files in history (%s), skipping filter-branch", repo_key)
-
-        # 10. Push (use --force only if history was actually rewritten)
-        if history_rewritten:
-            log.info("History was rewritten, using --force for push (%s)", repo_key)
-            push_cmd = ["git", "push", "--force", "origin", branch]
-        elif repo_path:
-            push_cmd = ["git", "push", "origin", branch]
-        else:
-            push_cmd = ["git", "push"]
-        push_result = subprocess.run(
-            push_cmd,
-            cwd=str(target_dir), capture_output=True, text=True, timeout=60,
-            env=git_env,
-        )
-        if push_result.returncode != 0 and "non-fast-forward" in push_result.stderr:
-            log.warning("git push rejected non-fast-forward (%s), retrying with --force", repo_key)
-            push_cmd_force = ["git", "push", "--force", "origin", branch]
-            push_result = subprocess.run(
-                push_cmd_force,
-                cwd=str(target_dir), capture_output=True, text=True, timeout=60,
-                env=git_env,
-            )
-
-        push_stdout = _sanitize(push_result.stdout)
-        push_stderr = _sanitize(push_result.stderr)
-
-        if push_result.returncode != 0:
-            log.error("git push failed (%s, code %d): %s", repo_key, push_result.returncode, push_stderr[:500])
-        else:
-            log.info("git push success for %s", repo_key)
-
-        return {"stdout": commit_result.stdout + "\n" + push_stdout,
-                "stderr": push_stderr, "code": push_result.returncode}
+        if nothing:
+            return {"ok": True, "message": "Rien a commiter, depot a jour"}
+        log.info("Git commit & push success (%s)", repo_key)
+        return {"ok": True, "message": "Commit et push effectues"}
     except Exception as e:
-        log.exception("git commit/push exception for %s", repo_key)
+        log.exception("Git commit exception for %s", repo_key)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/git/{repo_key}/push")
+async def git_push_only(repo_key: str):
+    """Push local commits to remote. Never force push."""
+    target_dir = _get_repo_dir(repo_key)
+    log.info("Git push (%s)", repo_key)
+    try:
+        git_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        cfg = _get_repo_cfg(repo_key)
+        login = cfg.get("login", "").strip()
+        password = cfg.get("password", "").strip()
+        branch = _git_detect_branch(target_dir)
+
+        result = subprocess.run(["git", "push", "origin", branch], cwd=str(target_dir),
+                                capture_output=True, text=True, timeout=60, env=git_env)
+        stderr = _git_sanitize(result.stderr, login, password)
+        if result.returncode != 0:
+            if "non-fast-forward" in stderr:
+                return {"ok": False, "message": "Push rejete: le depot distant a des commits plus recents. Faites un Pull d'abord."}
+            return {"ok": False, "message": f"Push echoue: {stderr[:300]}"}
+        return {"ok": True, "message": "Push effectue"}
+    except Exception as e:
+        log.exception("Git push exception for %s", repo_key)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/git/{repo_key}/reset-to-remote")
+async def git_reset_to_remote(repo_key: str):
+    """Reset local to match remote, discarding all local changes."""
+    target_dir = _get_repo_dir(repo_key)
+    log.info("Git reset to remote (%s)", repo_key)
+    try:
+        git_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        subprocess.run(["git", "fetch", "origin"], cwd=str(target_dir),
+                       capture_output=True, text=True, timeout=60, env=git_env)
+        branch = _git_detect_branch(target_dir)
+        result = subprocess.run(["git", "reset", "--hard", f"origin/{branch}"], cwd=str(target_dir),
+                                capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            return {"ok": True, "message": f"Reset effectue sur origin/{branch}"}
+        return {"ok": False, "message": result.stderr[:300]}
+    except Exception as e:
+        log.exception("Git reset exception for %s", repo_key)
+        raise HTTPException(500, str(e))
+
+
+# ── API: Git Commits history + checkout ───────────
+
+@app.get("/api/git/{repo_key}/commits")
+async def git_commits(repo_key: str):
+    """Return last 10 commits."""
+    target_dir = _get_repo_dir(repo_key)
+    if not (target_dir / ".git").exists():
+        return {"commits": []}
+    try:
+        result = subprocess.run(
+            ["git", "log", "--pretty=format:%H|%ai|%D|%s", "-10"],
+            cwd=str(target_dir), capture_output=True, text=True, timeout=10)
+        commits = []
+        for line in result.stdout.strip().splitlines():
+            if not line:
+                continue
+            parts = line.split("|", 3)
+            full_hash = parts[0]
+            date = parts[1] if len(parts) > 1 else ""
+            refs = parts[2] if len(parts) > 2 else ""
+            subject = parts[3] if len(parts) > 3 else ""
+            tags = [r.strip().replace("tag: ", "") for r in refs.split(",") if "tag:" in r]
+            commits.append({
+                "hash": full_hash, "short": full_hash[:7],
+                "date": date.strip(), "tags": tags, "subject": subject.strip(),
+            })
+        return {"commits": commits}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/git/{repo_key}/checkout/{commit_hash}")
+async def git_checkout(repo_key: str, commit_hash: str):
+    """Checkout a specific commit. Refuses if uncommitted changes."""
+    import re
+    if not re.match(r'^[0-9a-f]{7,40}$', commit_hash):
+        raise HTTPException(400, "Hash de commit invalide")
+    target_dir = _get_repo_dir(repo_key)
+    if not (target_dir / ".git").exists():
+        raise HTTPException(400, "Repository non initialise")
+    try:
+        status = subprocess.run(["git", "status", "--porcelain"], cwd=str(target_dir),
+                                capture_output=True, text=True, timeout=10)
+        if status.stdout.strip():
+            raise HTTPException(409, "Des modifications non commitees sont en attente. Commitez ou annulez-les avant.")
+        result = subprocess.run(["git", "reset", "--hard", commit_hash], cwd=str(target_dir),
+                                capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            raise HTTPException(500, f"Reset echoue: {result.stderr}")
+        return {"ok": True, "message": f"Version restauree: {commit_hash[:7]}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("Git checkout exception")
         raise HTTPException(500, str(e))
 
 
