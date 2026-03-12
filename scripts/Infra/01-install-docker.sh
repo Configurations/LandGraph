@@ -26,13 +26,13 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # ── 1. Mise a jour systeme ───────────────────────────────────────────────────
-echo "[1/5] Mise a jour du systeme..."
+echo "[1/6] Mise a jour du systeme..."
 apt-get update -qq
 apt-get upgrade -y -qq
 echo "  -> OK"
 
 # ── 2. Outils de base ───────────────────────────────────────────────────────
-echo "[2/5] Installation des outils de base..."
+echo "[2/6] Installation des outils de base..."
 apt-get install -y -qq \
   curl wget git vim htop tmux \
   ca-certificates gnupg lsb-release \
@@ -41,7 +41,7 @@ apt-get install -y -qq \
 echo "  -> OK"
 
 # ── 3. Ajout du repo Docker ─────────────────────────────────────────────────
-echo "[3/5] Ajout du depot Docker officiel..."
+echo "[3/6] Ajout du depot Docker officiel..."
 install -m 0755 -d /etc/apt/keyrings
 
 if [ ! -f /etc/apt/keyrings/docker.gpg ]; then
@@ -59,7 +59,7 @@ echo "deb [arch=$(dpkg --print-architecture) \
 echo "  -> OK"
 
 # ── 4. Installation Docker ──────────────────────────────────────────────────
-echo "[4/5] Installation de Docker Engine..."
+echo "[4/6] Installation de Docker Engine..."
 apt-get update -qq
 apt-get install -y -qq \
   docker-ce docker-ce-cli containerd.io \
@@ -67,7 +67,7 @@ apt-get install -y -qq \
 echo "  -> OK"
 
 # ── 5. Configuration Docker production ──────────────────────────────────────
-echo "[5/5] Configuration Docker pour la production..."
+echo "[5/6] Configuration Docker pour la production..."
 mkdir -p /etc/docker
 
 tee /etc/docker/daemon.json > /dev/null << 'EOF'
@@ -88,6 +88,55 @@ EOF
 systemctl enable docker
 systemctl restart docker
 echo "  -> OK"
+
+# ── 6. Caddy reverse proxy (TLS interne) ─────────────────────────────────────
+echo "[6/6] Installation de Caddy (reverse proxy)..."
+apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list > /dev/null
+apt-get update -qq
+apt-get install -y -qq caddy
+
+# Generate Caddyfile — multi-host reverse proxy (HTTP)
+# Le SSL est gere par Cloudflare Tunnel en front — pas besoin de TLS ici.
+cat > /etc/caddy/Caddyfile << 'CADDYEOF'
+# ── LandGraph Reverse Proxy ──────────────────────────
+# Caddy ecoute en HTTP sur le port 80.
+# Cloudflare Tunnel gere le SSL cote navigateur.
+#
+# Pour ajouter un domaine : dupliquer un bloc @xxx / handle @xxx
+# et relancer : systemctl reload caddy
+
+:80 {
+    @admin host admin.langgraph.yoops.org
+    handle @admin {
+        reverse_proxy localhost:8080
+    }
+
+    @hitl host hitl.langgraph.yoops.org
+    handle @hitl {
+        reverse_proxy localhost:8090
+    }
+
+    @api host api.langgraph.yoops.org
+    handle @api {
+        reverse_proxy localhost:8123
+    }
+
+    @openlit host openlit.langgraph.yoops.org
+    handle @openlit {
+        reverse_proxy localhost:3000
+    }
+
+    handle {
+        respond "Not found" 404
+    }
+}
+CADDYEOF
+
+systemctl enable caddy
+systemctl restart caddy
+echo "  -> Caddy installe et configure"
 
 # ── Verification ─────────────────────────────────────────────────────────────
 echo ""
@@ -113,8 +162,16 @@ fi
 
 echo ""
 echo "==========================================="
-echo "  Docker installe avec succes dans le LXC."
+echo "  Docker + Caddy installes dans le LXC."
+echo ""
+echo "  Caddy ecoute sur :80 (HTTP — SSL gere par Cloudflare Tunnel)."
+echo "  Domaines configures :"
+echo "    admin.langgraph.yoops.org  -> localhost:8080"
+echo "    hitl.langgraph.yoops.org   -> localhost:8090"
+echo "    api.langgraph.yoops.org    -> localhost:8123"
+echo "    openlit.langgraph.yoops.org -> localhost:3000"
 echo ""
 echo "  Prochaine etape :"
-echo "  Executer le script 02-install-langgraph.sh"
+echo "  1. Executer le script 02-install-langgraph.sh"
+echo "  2. Configurer le tunnel Cloudflare (service: http://<IP>:80)"
 echo "==========================================="

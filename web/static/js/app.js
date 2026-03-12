@@ -779,56 +779,71 @@ function editAgent(id) {
       <h3>Agent: ${escHtml(a.name)} (${escHtml(id)})</h3>
       <button class="btn-icon" onclick="closeModal()">&times;</button>
     </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Nom</label>
-        <input id="agent-edit-name" value="${escHtml(a.name)}" />
+    <div class="agent-tabs">
+      <div class="agent-tab active" onclick="switchAgentTab('divers')">Divers</div>
+      <div class="agent-tab" onclick="switchAgentTab('prompt')">Prompt</div>
+    </div>
+
+    <!-- Tab: Divers -->
+    <div id="agent-tab-divers" class="agent-tab-content active">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Nom</label>
+          <input id="agent-edit-name" value="${escHtml(a.name)}" />
+        </div>
+        <div class="form-group">
+          <label>Modele LLM</label>
+          <select id="agent-edit-model">
+            <option value="">-- Defaut (${escHtml(llmProviders.default || '')}) --</option>
+            ${providerNames.map(p => `<option value="${p}" ${a.model === p ? 'selected' : ''}>${escHtml(p)} — ${escHtml(llmProviders.providers[p]?.description || '')}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Temperature</label>
+          <input id="agent-edit-temp" type="number" step="0.1" min="0" max="2" value="${a.temperature}" />
+        </div>
+        <div class="form-group">
+          <label>Max tokens</label>
+          <input id="agent-edit-tokens" type="number" value="${a.max_tokens}" />
+        </div>
       </div>
       <div class="form-group">
-        <label>Modele LLM</label>
-        <select id="agent-edit-model">
-          <option value="">-- Defaut (${escHtml(llmProviders.default || '')}) --</option>
-          ${providerNames.map(p => `<option value="${p}" ${a.model === p ? 'selected' : ''}>${escHtml(p)} — ${escHtml(llmProviders.providers[p]?.description || '')}</option>`).join('')}
+        <label>Type</label>
+        <select id="agent-edit-type" onchange="document.getElementById('agent-edit-pipeline-wrap').style.display=this.value==='pipeline'?'':'none'">
+          <option value="single" ${curType==='single'?'selected':''}>Single</option>
+          <option value="pipeline" ${curType==='pipeline'?'selected':''}>Pipeline</option>
+          <option value="orchestrator" ${curType==='orchestrator'?'selected':''} ${hasOtherOrch && curType!=='orchestrator'?'disabled':''}>Orchestrator</option>
         </select>
       </div>
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Temperature</label>
-        <input id="agent-edit-temp" type="number" step="0.1" min="0" max="2" value="${a.temperature}" />
+      <div id="agent-edit-pipeline-wrap" class="form-group" style="${hasPipeline ? '' : 'display:none'}">
+        <label>Pipeline Steps</label>
+        <div id="agent-edit-pipeline-steps" class="pipeline-steps-container"></div>
       </div>
       <div class="form-group">
-        <label>Max tokens</label>
-        <input id="agent-edit-tokens" type="number" value="${a.max_tokens}" />
+        <label>Services MCP autorises</label>
+        <div class="mcp-chips">
+          ${mcpChips}
+        </div>
       </div>
     </div>
-    <div class="form-group">
-      <label>Type</label>
-      <select id="agent-edit-type" onchange="document.getElementById('agent-edit-pipeline-wrap').style.display=this.value==='pipeline'?'':'none'">
-        <option value="single" ${curType==='single'?'selected':''}>Single</option>
-        <option value="pipeline" ${curType==='pipeline'?'selected':''}>Pipeline</option>
-        <option value="orchestrator" ${curType==='orchestrator'?'selected':''} ${hasOtherOrch && curType!=='orchestrator'?'disabled':''}>Orchestrator</option>
-      </select>
-    </div>
-    <div id="agent-edit-pipeline-wrap" class="form-group" style="${hasPipeline ? '' : 'display:none'}">
-      <label>Pipeline Steps</label>
-      <div id="agent-edit-pipeline-steps" class="pipeline-steps-container"></div>
-    </div>
-    <div class="form-group">
-      <label>Prompt (${escHtml(a.prompt)})</label>
-      <div class="prompt-tabs">
-        <div class="prompt-tab active" id="prompt-tab-preview" onclick="switchPromptTab('preview')">Apercu</div>
-        <div class="prompt-tab" id="prompt-tab-edit" onclick="switchPromptTab('edit')">Editer</div>
-      </div>
-      <div class="prompt-preview" id="agent-prompt-preview">${promptHtml}</div>
-      <textarea id="agent-edit-prompt" style="min-height:300px;display:none;border-radius:0 0.5rem 0.5rem 0.5rem">${escHtml(promptRaw)}</textarea>
-    </div>
-    <div class="form-group">
-      <label>Services MCP autorises</label>
-      <div class="mcp-chips">
-        ${mcpChips}
+
+    <!-- Tab: Prompt -->
+    <div id="agent-tab-prompt" class="agent-tab-content">
+      <div class="form-group">
+        <label>Prompt (${escHtml(a.prompt)})</label>
+        <div class="prompt-tabs">
+          <div class="prompt-tab active" id="prompt-tab-preview" onclick="switchPromptTab('preview')">Apercu</div>
+          <div class="prompt-tab" id="prompt-tab-edit" onclick="switchPromptTab('edit')">Editer</div>
+          <div class="prompt-tabs-spacer"></div>
+          <button class="btn btn-sm btn-generate" id="btn-generate-prompt" onclick="generatePrompt('agent-edit-prompt','${escHtml(id)}',document.getElementById('agent-edit-name').value)">Generer avec l&apos;IA</button>
+        </div>
+        <div class="prompt-preview" id="agent-prompt-preview">${promptHtml}</div>
+        <textarea id="agent-edit-prompt" style="min-height:500px;display:none;border-radius:0 0.5rem 0.5rem 0.5rem">${escHtml(promptRaw)}</textarea>
       </div>
     </div>
+
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
       <button class="btn btn-primary" onclick="saveAgent('${escHtml(id)}')">Sauvegarder</button>
@@ -854,6 +869,41 @@ function switchPromptTab(tab) {
     editor.style.display = 'none';
     tabPreview.classList.add('active');
     tabEdit.classList.remove('active');
+  }
+}
+
+function switchAgentTab(tab) {
+  document.querySelectorAll('.agent-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.agent-tab-content').forEach(c => c.classList.remove('active'));
+  document.querySelector(`.agent-tab[onclick*="'${tab}'"]`).classList.add('active');
+  document.getElementById(`agent-tab-${tab}`).classList.add('active');
+}
+
+async function generatePrompt(textareaId, agentId, agentName) {
+  const textarea = document.getElementById(textareaId);
+  const btn = document.getElementById('btn-generate-prompt');
+  if (!textarea || !btn) return;
+  const info = textarea.value.trim();
+  if (!info) { toast('Remplissez le prompt avant de generer', 'error'); return; }
+
+  const prevText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Generation...';
+
+  try {
+    const result = await api('/api/agents/generate-prompt', {
+      method: 'POST',
+      body: { agent_info: info, agent_id: agentId || '', agent_name: agentName || '' }
+    });
+    textarea.value = result.prompt;
+    // Switch to edit sub-tab to show the result
+    switchPromptTab('edit');
+    toast('Prompt genere', 'success');
+  } catch (e) {
+    toast('Erreur generation: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prevText;
   }
 }
 
@@ -942,8 +992,11 @@ function showAddAgentModal() {
       <div class="mcp-check-tags">${mcpTags}</div>
     </div>
     <div class="form-group">
-      <label>Prompt initial</label>
-      <textarea id="agent-new-prompt" style="min-height:150px" placeholder="# Mon Agent\n\nDescription du role..."></textarea>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.25rem">
+        <label style="margin-bottom:0">Prompt initial</label>
+        <button class="btn btn-sm btn-generate" id="btn-generate-prompt" onclick="generatePrompt('agent-new-prompt',document.getElementById('agent-new-id').value,document.getElementById('agent-new-name').value)">Generer avec l&apos;IA</button>
+      </div>
+      <textarea id="agent-new-prompt" style="min-height:200px" placeholder="Chargement du template..."></textarea>
     </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
@@ -951,6 +1004,11 @@ function showAddAgentModal() {
     </div>
   `);
   renderPipelineSteps('agent-new-pipeline-steps', []);
+  // Load default prompt template
+  api('/api/prompts/templates/New').then(r => {
+    const ta = document.getElementById('agent-new-prompt');
+    if (ta && !ta.value) ta.value = r.content;
+  }).catch(() => {});
 }
 
 async function addAgent() {

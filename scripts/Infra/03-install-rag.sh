@@ -1,18 +1,18 @@
 #!/bin/bash
 ###############################################################################
-# Script 5 : Installation de la couche RAG (pgvector + embeddings)
+# Script 03 : Installation de la couche RAG (pgvector + embeddings)
 #
-# A executer depuis la VM Ubuntu (apres le script 03).
+# A executer depuis la VM Ubuntu (apres le script 02).
 # Prerequis : PostgreSQL + pgvector deja en fonctionnement (docker compose up)
 #
-# Usage : ./05-install-rag.sh
+# Usage : ./03-install-rag.sh
 ###############################################################################
 set -euo pipefail
 
 PROJECT_DIR="$HOME/langgraph-project"
 
 echo "==========================================="
-echo "  Script 5 : Installation couche RAG"
+echo "  Script 03 : Installation couche RAG"
 echo "  (pgvector + embeddings)"
 echo "==========================================="
 echo ""
@@ -21,7 +21,7 @@ echo ""
 cd "${PROJECT_DIR}"
 
 if [ ! -f .env ]; then
-    echo "ERREUR : .env introuvable. Executez d'abord 03-install-langgraph.sh"
+    echo "ERREUR : .env introuvable. Executez d'abord 02-install-langgraph.sh"
     exit 1
 fi
 

@@ -1,0 +1,8 @@
+.env
+*.key
+.venv/
+__pycache__/
+*.pyc
+data/backups/
+git.json
+.claude/worktrees/

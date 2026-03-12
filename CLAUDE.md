@@ -543,10 +543,12 @@ GOOGLE_CLIENT_SECRET=...      # Secret Google OAuth (si google_oauth.enabled)
 
 | Script | Rôle |
 |---|---|
-| `00-configure-lxc.sh` | Config LXC Proxmox |
-| `01-proxmox-create-vm.sh` | Création VM |
-| `02-install-langgraph.sh` | Docker + infra + code agents + configs équipe |
-| `start.sh / restart.sh / build.sh` | Gestion des containers |
+| `00-create-lxc.sh` | Création LXC Proxmox + installation complète |
+| `00-prepare-existing-lxc4Docker.sh` | Prépare un LXC existant pour Docker |
+| `01-install-docker.sh` | Docker Engine + Compose + Caddy reverse proxy |
+| `02-install-langgraph.sh` | Infra + code agents + configs équipe (paramètre branche) |
+| `03-install-rag.sh` | Couche RAG (pgvector + Voyage AI) |
+| `start.sh / stop.sh / restart.sh / build.sh / update.sh` | Gestion des containers + mise à jour |
 
 Le script 02 télécharge tout depuis GitHub : Dockerfiles, code agents (`Agents/Shared/*.py`, `Agents/*.py`), configs globales, et structure d'équipe. Les prompts sont gérés via git pull depuis le dashboard admin.
 
@@ -567,7 +569,7 @@ Le script 02 télécharge tout depuis GitHub : Dockerfiles, code agents (`Agents
 ### Infrastructure
 1. Infrastructure LXC + Docker (5 containers opérationnels)
 2. Volumes mappés sur l'hôte
-3. Langfuse dans docker-compose (port 3000)
+3. OpenLIT observabilité dans docker-compose (port 3000)
 4. Scripts utilitaires + script d'installation unifié (02)
 
 ### Agents & Orchestration

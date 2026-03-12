@@ -34,7 +34,8 @@ async function api(url, opts = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
   const res = await fetch(url, { headers, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
-  if (res.status === 401) { doLogout(); throw new Error('Session expiree'); }
+  const isAuthRoute = url.startsWith('/api/auth/');
+  if (res.status === 401 && !isAuthRoute) { doLogout(); throw new Error('Session expiree'); }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || 'Erreur serveur');

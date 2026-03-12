@@ -1049,7 +1049,7 @@ def send_chat_message(team_id: str, agent_id: str, req: ChatRequest, user: Token
         if agent_id != "orchestrator":
             invoke_payload["direct_agent"] = agent_id
         try:
-            resp = httpx.post(f"{GATEWAY_URL}/invoke", json=invoke_payload, timeout=120)
+            resp = httpx.post(f"{_get_gateway_url()}/invoke", json=invoke_payload, timeout=120)
             if resp.status_code == 200:
                 data = resp.json()
                 agent_reply = data.get("output", "")
