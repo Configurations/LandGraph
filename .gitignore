@@ -10,3 +10,7 @@ git.json
 .claude/plans/
 .coverage
 *.egg-info/
+.deploy.*.env
+.version
+config/
+Shared/

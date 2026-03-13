@@ -16,6 +16,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY Agents/ ./agents/
+# Linux is case-sensitive: rename Shared → shared to match Python imports
+RUN if [ -d /app/agents/Shared ]; then mv /app/agents/Shared /app/agents/shared; fi
 COPY config/ ./config/
 COPY config/langgraph.json .
 

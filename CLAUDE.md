@@ -214,24 +214,6 @@ Définis dans `config/Team1/agents_registry.json`. Pas de fichiers Python indivi
 }
 ```
 
-### Liste des agents
-
-| Agent | Rôle | Type | Phase |
-|---|---|---|---|
-| `orchestrator` | Routing intelligent, guidé par workflow engine | orchestrator | Système |
-| `requirements_analyst` | PRD, User Stories, MoSCoW | pipeline (3 étapes) | Discovery |
-| `legal_advisor` | Audit RGPD, conformité, CGU | pipeline (2 étapes) | Transversal |
-| `ux_designer` | Wireframes, mockups, design system | single | Design |
-| `architect` | ADRs, C4, OpenAPI specs | single | Design |
-| `planner` | Sprint backlog, roadmap, risques | single | Design |
-| `lead_dev` | Review, repo, coordination, fait ou délègue | single + tools | Build |
-| `dev_frontend_web` | Code React/Next.js/TypeScript | single | Build |
-| `dev_backend_api` | Code Python/FastAPI/SQLAlchemy | single | Build |
-| `dev_mobile` | Code Flutter/React Native | single | Build |
-| `qa_engineer` | Tests E2E, unitaires, validation | single | Build |
-| `devops_engineer` | CI/CD, Docker, déploiement | single | Ship |
-| `docs_writer` | Documentation, rapports, README | single + tools | Ship |
-
 ### Hiérarchie de routing
 
 L'Orchestrateur reçoit le contexte enrichi par le workflow engine :
@@ -618,3 +600,6 @@ Le script 02 télécharge tout depuis GitHub : Dockerfiles, code agents (`Agents
 5. **Concurrency control** — Gérer les messages qui arrivent avant la fin du précédent
 6. **Inter-team outbound** — Demander une analyse à une équipe étrangère au système (intégrable dans le graph)
 7. **Inter-team inbound** — Accepter un entrant de la part d'une équipe étrangère au système (intégrable dans le graph)
+
+
+Ne livre jamais le code ni en test ni sur git sans une demande explicite de ma part.

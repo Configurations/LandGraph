@@ -1,1 +1,7 @@
-{}
+{
+  "docs_writer": ["outline"],
+  "requirements_analyst": ["outline"],
+  "architect": ["outline"],
+  "planner": ["outline"],
+  "lead_dev": ["outline"]
+}

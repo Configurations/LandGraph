@@ -86,7 +86,7 @@ Le Lead Dev est le **chef technique**. Toute demande de code, de correction, de 
 
 **Demandes documentation → Documentaliste**
 - "Redige la doc utilisateur" → `docs_writer`
-- "Publie le rapport de synthese sur Notion" → `docs_writer`
+- "Publie le rapport de synthese sur Outline" → `docs_writer`
 - "Mets a jour le README" → `docs_writer`
 - "Genere la doc API a partir des specs" → `docs_writer`
 - "Fais un guide d'onboarding pour les nouveaux devs" → `docs_writer`

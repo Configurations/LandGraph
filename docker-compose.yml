@@ -77,9 +77,8 @@ services:
     environment:
       DATABASE_URI: ${DATABASE_URI}
       REDIS_URI: ${REDIS_URI}
-    volumes:
-      - ./agents:/app/agents
-      - ./config:/app/config
+    # No volumes for code/config — baked into image (COPY in Dockerfile)
+    # Mounting local dirs breaks case-sensitive renames (Shared → shared)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -162,6 +161,83 @@ services:
     environment:
       DATABASE_URI: ${DATABASE_URI}
       LANGGRAPH_API_URL: http://langgraph-api:8000
+    networks:
+      - langgraph-net
+
+  # ── MinIO (S3-compatible storage for Outline) ──
+  minio:
+    image: minio/minio:latest
+    container_name: langgraph-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - /opt/langgraph-data/minio:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - langgraph-net
+
+  # ── Outline DB init (one-shot) ──────────────────
+  outline-db-init:
+    image: pgvector/pgvector:pg16
+    container_name: outline-db-init
+    depends_on:
+      langgraph-postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: langgraph-postgres
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    entrypoint: >
+      sh -c "psql -tc \"SELECT 1 FROM pg_database WHERE datname='outline'\" | grep -q 1 || psql -c 'CREATE DATABASE outline;'"
+    restart: "no"
+    networks:
+      - langgraph-net
+
+  # ── Outline Wiki ────────────────────────────────
+  outline:
+    image: outlinewiki/outline:latest
+    container_name: langgraph-outline
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:3200:3000"
+    depends_on:
+      langgraph-postgres:
+        condition: service_healthy
+      langgraph-redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      outline-db-init:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      SECRET_KEY: ${OUTLINE_SECRET_KEY}
+      UTILS_SECRET: ${OUTLINE_UTILS_SECRET}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@langgraph-postgres:5432/outline
+      REDIS_URL: redis://:${REDIS_PASSWORD}@langgraph-redis:6379/1
+      URL: ${OUTLINE_URL:-http://localhost:3200}
+      PORT: 3000
+      FILE_STORAGE: s3
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      AWS_REGION: us-east-1
+      AWS_S3_UPLOAD_BUCKET_NAME: ${AWS_S3_UPLOAD_BUCKET_NAME:-outline}
+      AWS_S3_UPLOAD_BUCKET_URL: ${AWS_S3_UPLOAD_BUCKET_URL:-http://minio:9000}
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      AWS_S3_ACL: private
+      PGSSLMODE: disable
+      FORCE_HTTPS: "false"
     networks:
       - langgraph-net
 

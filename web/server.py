@@ -33,6 +33,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Resp
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import httpx
+import psycopg
 
 # In Docker: /project is the host's langgraph-project dir
 # Local dev: use parent of web/
@@ -90,7 +91,10 @@ LLM_PROVIDERS_FILE = TEAMS_DIR / "llm_providers.json"
 TEAMS_FILE = TEAMS_DIR / "teams.json"
 SHARED_GIT_FILE = SHARED_DIR / "git.json"
 CONFIGS_GIT_FILE = CONFIGS / "git.json"
+GIT_SERVICE_FILE = CONFIGS / "git_service.json"        # Templates scope
+CFG_GIT_SERVICE_FILE = CONFIGS / "cfg_git_service.json"  # Config scope
 SHARED_TEAMS_DIR = SHARED_DIR / "Teams"
+SHARED_AGENTS_DIR = SHARED_DIR / "Agents"
 SHARED_LLM_FILE = SHARED_TEAMS_DIR / "llm_providers.json"
 SHARED_MCP_FILE = SHARED_TEAMS_DIR / "mcp_servers.json"
 SHARED_TEAMS_FILE = SHARED_TEAMS_DIR / "teams.json"
@@ -98,6 +102,7 @@ MAIL_FILE = CONFIGS / "mail.json"
 DISCORD_FILE = CONFIGS / "discord.json"
 HITL_FILE = CONFIGS / "hitl.json"
 OTHERS_FILE = CONFIGS / "others.json"
+OUTLINE_FILE = CONFIGS / "outline.json"
 
 logging.basicConfig(
     level=logging.DEBUG if os.environ.get("DEBUG") else logging.INFO,
@@ -175,7 +180,7 @@ _LOGIN_PAGE = """<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LandGraph — Connexion</title>
+  <title>Ag flow — Connexion</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
@@ -197,7 +202,7 @@ _LOGIN_PAGE = """<!DOCTYPE html>
 <body>
   <div class="login-card">
     <div class="login-logo">
-      <h1>LandGraph</h1>
+      <h1>Ag flow</h1>
       <span>Administration</span>
     </div>
     <div class="error-msg" id="error-msg">Identifiants incorrects</div>
@@ -296,7 +301,8 @@ async def auth_logout():
 
 @app.get("/")
 async def index():
-    return FileResponse(Path(__file__).parent / "static" / "index.html")
+    html = (Path(__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
 
 def _git_last_update() -> str:
@@ -652,8 +658,36 @@ async def get_mcp_access():
 
 @app.get("/api/mcp/servers")
 async def get_mcp_servers():
+    merged = {}
+    for f in (MCP_SERVERS_FILE, SHARED_MCP_FILE):
+        merged.update(_read_json(f).get("servers", {}))
+    return {"servers": merged}
+
+
+@app.get("/api/mcp/cfg-servers")
+async def get_mcp_cfg_servers():
+    """Return only config-scope MCP servers (not merged with templates)."""
     data = _read_json(MCP_SERVERS_FILE)
     return {"servers": data.get("servers", {})}
+
+
+@app.post("/api/mcp/copy-from-template")
+async def copy_mcp_from_template(request: Request):
+    """Copy server configs directly from template to config (preserves args/params)."""
+    body = await request.json()
+    server_ids = body.get("server_ids", [])
+    tpl_data = _read_json(SHARED_MCP_FILE)
+    tpl_servers = tpl_data.get("servers", {})
+    cfg_data = _read_json(MCP_SERVERS_FILE)
+    if "servers" not in cfg_data:
+        cfg_data["servers"] = {}
+    added = 0
+    for sid in server_ids:
+        if sid in tpl_servers:
+            cfg_data["servers"][sid] = tpl_servers[sid]
+            added += 1
+    _write_json(MCP_SERVERS_FILE, cfg_data)
+    return {"ok": True, "added": added}
 
 
 class MCPAccessUpdate(BaseModel):
@@ -730,77 +764,60 @@ class AgentConfig(BaseModel):
     type: str = ""
     pipeline_steps: list = []
     team_id: str = "default"
+    delivers_docs: bool | None = None
+    delivers_code: bool | None = None
 
 
 @app.post("/api/agents")
 async def add_agent(cfg: AgentConfig):
+    """Add an agent reference to a config team directory.
+
+    Only stores type (+ pipeline_steps if applicable).
+    Agent properties come from Shared/Agents/{id}/agent.json.
+    """
     tdir = _team_dir(cfg.team_id)
     tdir.mkdir(parents=True, exist_ok=True)
+    # Verify the shared agent exists
+    agent_dir = SHARED_AGENTS_DIR / cfg.id
+    if not (agent_dir / "agent.json").exists():
+        raise HTTPException(404, f"Shared agent '{cfg.id}' introuvable dans le catalogue")
     registry_path = tdir / "agents_registry.json"
     data = _read_json(registry_path)
     if "agents" not in data:
         data["agents"] = {}
     if cfg.id in data["agents"]:
         raise HTTPException(409, f"Agent {cfg.id} already exists")
-
-    prompt_file = cfg.prompt_file or f"{cfg.id}.md"
-    agent_data = {
-        "name": cfg.name,
-        "temperature": cfg.temperature,
-        "max_tokens": cfg.max_tokens,
-        "prompt": prompt_file,
-    }
-    if cfg.llm:
-        agent_data["llm"] = cfg.llm
+    # Store only reference: type + pipeline_steps
+    agent_data: dict = {}
     if cfg.type:
         agent_data["type"] = cfg.type
     if cfg.pipeline_steps:
         agent_data["pipeline_steps"] = cfg.pipeline_steps
-
     data["agents"][cfg.id] = agent_data
     _write_json(registry_path, data)
-
-    # Create prompt file in team folder
-    prompt_path = tdir / prompt_file
-    if not prompt_path.exists():
-        prompt_path.write_text(cfg.prompt_content or f"# {cfg.name}\n\n", encoding="utf-8")
-
     return {"ok": True}
 
 
 @app.put("/api/agents/{agent_id}")
 async def update_agent(agent_id: str, cfg: AgentConfig):
+    """Update an agent reference in a config team directory.
+
+    Only type and pipeline_steps can be overridden per-team.
+    """
     tdir = _team_dir(cfg.team_id)
     registry_path = tdir / "agents_registry.json"
     data = _read_json(registry_path)
     if agent_id not in data.get("agents", {}):
         raise HTTPException(404, f"Agent {agent_id} not found")
-
     existing = data["agents"][agent_id]
-    existing["name"] = cfg.name
-    existing["temperature"] = cfg.temperature
-    existing["max_tokens"] = cfg.max_tokens
-    if cfg.llm:
-        existing["llm"] = cfg.llm
-    elif "llm" in existing:
-        del existing["llm"]
-    # Clean legacy "model" field
-    existing.pop("model", None)
     if cfg.type:
         existing["type"] = cfg.type
     if cfg.pipeline_steps:
         existing["pipeline_steps"] = cfg.pipeline_steps
     elif "pipeline_steps" in existing:
         del existing["pipeline_steps"]
-
     data["agents"][agent_id] = existing
     _write_json(registry_path, data)
-
-    # Update prompt in team folder
-    if cfg.prompt_content is not None:
-        prompt_path = tdir / existing.get("prompt", f"{agent_id}.md")
-        prompt_path.write_text(cfg.prompt_content, encoding="utf-8")
-
     return {"ok": True}
 
 
@@ -1077,6 +1094,260 @@ async def delete_throttling(env_key: str):
     return {"ok": True}
 
 
+@app.post("/api/llm/providers/upload")
+async def upload_llm_providers(file: UploadFile):
+    """Upload a llm_providers.json file — merge providers & throttling into config."""
+    if not file.filename or not file.filename.endswith('.json'):
+        raise HTTPException(400, "Un fichier .json est requis")
+    raw = await file.read()
+    try:
+        uploaded = json.loads(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(400, "JSON invalide")
+
+    data = _read_json(LLM_PROVIDERS_FILE)
+    if "providers" not in data:
+        data["providers"] = {}
+    if "throttling" not in data:
+        data["throttling"] = {}
+
+    added_p = added_t = 0
+    for pid, prov in uploaded.get("providers", {}).items():
+        if pid not in data["providers"]:
+            data["providers"][pid] = prov
+            added_p += 1
+    for key, thr in uploaded.get("throttling", {}).items():
+        if key not in data["throttling"]:
+            data["throttling"][key] = thr
+            added_t += 1
+    if not data.get("default") and uploaded.get("default"):
+        data["default"] = uploaded["default"]
+
+    _write_json(LLM_PROVIDERS_FILE, data)
+    return {"ok": True, "added_providers": added_p, "added_throttling": added_t}
+
+
+@app.post("/api/templates/llm/upload")
+async def upload_template_llm(file: UploadFile):
+    """Upload a llm_providers.json file — merge into shared template."""
+    if not file.filename or not file.filename.endswith('.json'):
+        raise HTTPException(400, "Un fichier .json est requis")
+    raw = await file.read()
+    try:
+        uploaded = json.loads(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(400, "JSON invalide")
+
+    data = _read_json(SHARED_LLM_FILE)
+    if "providers" not in data:
+        data["providers"] = {}
+    if "throttling" not in data:
+        data["throttling"] = {}
+
+    added_p = added_t = 0
+    for pid, prov in uploaded.get("providers", {}).items():
+        if pid not in data["providers"]:
+            data["providers"][pid] = prov
+            added_p += 1
+    for key, thr in uploaded.get("throttling", {}).items():
+        if key not in data["throttling"]:
+            data["throttling"][key] = thr
+            added_t += 1
+    if not data.get("default") and uploaded.get("default"):
+        data["default"] = uploaded["default"]
+
+    _write_json(SHARED_LLM_FILE, data)
+    return {"ok": True, "added_providers": added_p, "added_throttling": added_t}
+
+
+# ── API: Agent Catalog (Shared/Agents/{id}/) ──────
+
+class SharedAgentEntry(BaseModel):
+    id: str
+    name: str = ""
+    description: str | None = None
+    llm: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    mcp_access: list[str] | None = None
+    prompt_content: str | None = None
+    assign_content: str | None = None
+    unassign_content: str | None = None
+    delivers_docs: bool | None = None
+    delivers_code: bool | None = None
+
+
+def _list_shared_agents() -> list[dict]:
+    """List all agents from Shared/Agents/*/agent.json."""
+    SHARED_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
+    agents = []
+    for d in sorted(SHARED_AGENTS_DIR.iterdir()):
+        if d.is_dir():
+            cfg_file = d / "agent.json"
+            if cfg_file.exists():
+                cfg = json.loads(cfg_file.read_text(encoding="utf-8"))
+                cfg["id"] = d.name
+                # Load prompt if exists
+                prompt_file = d / "prompt.md"
+                if prompt_file.exists():
+                    cfg["prompt_content"] = prompt_file.read_text(encoding="utf-8")
+                agents.append(cfg)
+    return agents
+
+
+@app.get("/api/shared-agents")
+async def get_shared_agents():
+    return {"agents": _list_shared_agents()}
+
+
+@app.get("/api/shared-agents/{agent_id}")
+async def get_shared_agent(agent_id: str):
+    agent_dir = SHARED_AGENTS_DIR / agent_id
+    cfg_file = agent_dir / "agent.json"
+    if not cfg_file.exists():
+        raise HTTPException(404, f"Agent '{agent_id}' introuvable")
+    cfg = json.loads(cfg_file.read_text(encoding="utf-8"))
+    cfg["id"] = agent_id
+    prompt_file = agent_dir / "prompt.md"
+    if prompt_file.exists():
+        cfg["prompt_content"] = prompt_file.read_text(encoding="utf-8")
+    assign_file = agent_dir / f"{agent_id}_assign.md"
+    if assign_file.exists():
+        cfg["assign_content"] = assign_file.read_text(encoding="utf-8")
+    unassign_file = agent_dir / f"{agent_id}_unassign.md"
+    if unassign_file.exists():
+        cfg["unassign_content"] = unassign_file.read_text(encoding="utf-8")
+    return cfg
+
+
+@app.post("/api/shared-agents")
+async def create_shared_agent(entry: SharedAgentEntry):
+    if not entry.id or not entry.id.replace("_", "").isalnum():
+        raise HTTPException(400, "ID invalide (lettres, chiffres, _ uniquement)")
+    agent_dir = SHARED_AGENTS_DIR / entry.id
+    if agent_dir.exists():
+        raise HTTPException(409, f"Agent '{entry.id}' existe deja")
+    agent_dir.mkdir(parents=True)
+    cfg = {
+        "name": entry.name or entry.id,
+        "description": entry.description or "",
+        "llm": entry.llm or "",
+        "temperature": entry.temperature or 0.3,
+        "max_tokens": entry.max_tokens or 32768,
+        "mcp_access": entry.mcp_access or [],
+        "delivers_docs": entry.delivers_docs or False,
+        "delivers_code": entry.delivers_code or False,
+    }
+    (agent_dir / "agent.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+    # Default prompt from Agents/Prompts/New.md
+    new_prompt = PROMPTS_DIR / "New.md"
+    prompt = new_prompt.read_text(encoding="utf-8") if new_prompt.exists() else f"# {entry.name or entry.id}\n\n"
+    if entry.prompt_content:
+        prompt = entry.prompt_content
+    (agent_dir / "prompt.md").write_text(prompt, encoding="utf-8")
+    return {"ok": True}
+
+
+@app.put("/api/shared-agents/{agent_id}")
+async def update_shared_agent(agent_id: str, entry: SharedAgentEntry):
+    agent_dir = SHARED_AGENTS_DIR / agent_id
+    if not agent_dir.exists():
+        raise HTTPException(404, f"Agent '{agent_id}' introuvable")
+    # Read existing config and merge only provided fields
+    cfg_file = agent_dir / "agent.json"
+    cfg = json.loads(cfg_file.read_text(encoding="utf-8")) if cfg_file.exists() else {}
+    if entry.name is not None:
+        cfg["name"] = entry.name or agent_id
+    if entry.description is not None:
+        cfg["description"] = entry.description
+    if entry.llm is not None:
+        cfg["llm"] = entry.llm
+    if entry.temperature is not None:
+        cfg["temperature"] = entry.temperature
+    if entry.max_tokens is not None:
+        cfg["max_tokens"] = entry.max_tokens
+    if entry.mcp_access is not None:
+        cfg["mcp_access"] = entry.mcp_access
+    if entry.delivers_docs is not None:
+        cfg["delivers_docs"] = entry.delivers_docs
+    if entry.delivers_code is not None:
+        cfg["delivers_code"] = entry.delivers_code
+    (agent_dir / "agent.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+    if entry.prompt_content is not None:
+        (agent_dir / "prompt.md").write_text(entry.prompt_content, encoding="utf-8")
+    if entry.assign_content is not None:
+        (agent_dir / f"{agent_id}_assign.md").write_text(entry.assign_content, encoding="utf-8")
+    if entry.unassign_content is not None:
+        (agent_dir / f"{agent_id}_unassign.md").write_text(entry.unassign_content, encoding="utf-8")
+    return {"ok": True}
+
+
+@app.delete("/api/shared-agents/{agent_id}")
+async def delete_shared_agent(agent_id: str):
+    agent_dir = SHARED_AGENTS_DIR / agent_id
+    if not agent_dir.exists():
+        raise HTTPException(404, f"Agent '{agent_id}' introuvable")
+    shutil.rmtree(agent_dir)
+    return {"ok": True}
+
+
+@app.post("/api/shared-agents/import")
+async def import_shared_agent(file: UploadFile, agent_id: str | None = None):
+    """Import an agent from a zip file containing agent.json + prompt.md.
+    If agent_id is provided, use it as the directory name (rename).
+    Otherwise, use the root folder name from the zip."""
+    data = await file.read()
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data), 'r')
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "Fichier zip invalide")
+
+    # Detect the agent id from the zip structure
+    names = [n for n in zf.namelist() if not n.startswith('__MACOSX')]
+    # Find root folder: first path component of the first entry
+    roots = set()
+    for n in names:
+        parts = n.strip('/').split('/')
+        if parts and parts[0]:
+            roots.add(parts[0])
+
+    if len(roots) == 1:
+        zip_root = roots.pop()
+    else:
+        zip_root = None
+
+    # Determine final agent id
+    final_id = agent_id or zip_root
+    if not final_id or not final_id.replace("_", "").replace("-", "").isalnum():
+        raise HTTPException(400, "Impossible de determiner l'ID de l'agent depuis le zip")
+
+    agent_dir = SHARED_AGENTS_DIR / final_id
+    # Check conflict
+    if agent_dir.exists() and not agent_id:
+        # Return conflict so frontend can ask for a new name
+        return {"conflict": True, "existing_id": final_id}
+
+    agent_dir.mkdir(parents=True, exist_ok=True)
+
+    # Extract files into agent_dir
+    for entry in names:
+        parts = entry.strip('/').split('/')
+        # Strip the root folder prefix if there is one
+        if zip_root and parts[0] == zip_root:
+            rel_parts = parts[1:]
+        else:
+            rel_parts = parts
+        if not rel_parts or not rel_parts[-1]:
+            continue  # directory entry
+        rel_path = '/'.join(rel_parts)
+        dest = agent_dir / rel_path
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(zf.read(entry))
+
+    zf.close()
+    return {"ok": True, "id": final_id}
+
+
 # ── API: Mail ──────────────────────────────────────
 
 @app.get("/api/mail")
@@ -1141,6 +1412,86 @@ async def save_others(request: Request):
     data = await request.json()
     _write_json(OTHERS_FILE, data)
     return {"ok": True}
+
+
+# ── API: Outline ──────────────────────────────────
+
+@app.get("/api/outline-config")
+async def get_outline_config():
+    """Read outline.json config."""
+    if not OUTLINE_FILE.exists():
+        return {
+            "enabled": False, "url_env": "OUTLINE_URL", "api_key_env": "OUTLINE_API_KEY",
+            "collection_prefix": "LandGraph", "phase_labels": {},
+            "auto_publish": {"enabled": False, "deliverables": {}},
+        }
+    return _read_json(OUTLINE_FILE)
+
+
+@app.put("/api/outline-config")
+async def save_outline_config(request: Request):
+    """Write outline.json config."""
+    data = await request.json()
+    _write_json(OUTLINE_FILE, data)
+    return {"ok": True}
+
+
+@app.post("/api/outline/test-connection")
+async def test_outline_connection():
+    """Test Outline API connection."""
+    import httpx as _httpx
+    cfg = _read_json(OUTLINE_FILE) if OUTLINE_FILE.exists() else {}
+    url_env = cfg.get("url_env", "OUTLINE_URL")
+    key_env = cfg.get("api_key_env", "OUTLINE_API_KEY")
+    base_url = os.getenv(url_env, "").rstrip("/")
+    api_key = os.getenv(key_env, "")
+    if not base_url or not api_key:
+        return {"ok": False, "error": f"Variables {url_env} et/ou {key_env} non definies dans .env"}
+    try:
+        async with _httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(
+                f"{base_url}/api/auth.info", json={},
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            )
+            r.raise_for_status()
+            data = r.json().get("data", {})
+            return {
+                "ok": True,
+                "info": {
+                    "user": data.get("user", {}).get("name", ""),
+                    "team": data.get("team", {}).get("name", ""),
+                },
+            }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/outline/documents/{thread_id}")
+async def get_outline_documents(thread_id: str):
+    """Get tracked Outline documents for a thread."""
+    try:
+        conn = psycopg.connect(os.getenv("DATABASE_URI"), autocommit=True)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, thread_id, team_id, agent_id, phase, deliverable_key, "
+                    "outline_document_id, outline_url, version, content_hash, created_at, updated_at "
+                    "FROM project.outline_documents WHERE thread_id=%s ORDER BY phase, deliverable_key",
+                    (thread_id,),
+                )
+                cols = [d[0] for d in cur.description]
+                rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+                # Serialize datetimes
+                for row in rows:
+                    for k in ("created_at", "updated_at"):
+                        if row.get(k):
+                            row[k] = row[k].isoformat()
+                    row["id"] = str(row["id"])
+                return {"documents": rows}
+        finally:
+            conn.close()
+    except Exception as e:
+        return {"documents": [], "error": str(e)}
 
 
 # ── API: Export ────────────────────────────────────
@@ -1496,7 +1847,11 @@ async def chat(req: ChatRequest):
     data = _read_json(LLM_PROVIDERS_FILE)
     default_id = data.get("default", "")
     if not default_id or default_id not in data.get("providers", {}):
-        raise HTTPException(400, "Aucun provider LLM par defaut configure")
+        # Fallback: try the template LLM config
+        data = _read_json(SHARED_LLM_FILE)
+        default_id = data.get("default", "")
+    if not default_id or default_id not in data.get("providers", {}):
+        raise HTTPException(400, "Aucun provider LLM par defaut configure (ni dans config, ni dans template)")
 
     provider = data["providers"][default_id]
     ptype = provider["type"]
@@ -1650,6 +2005,52 @@ async def generate_prompt(req: GeneratePromptRequest):
     return {"prompt": result["content"]}
 
 
+class GenerateAssignRequest(BaseModel):
+    agent_id: str
+    agent_name: str = ""
+    agent_prompt: str = ""
+
+
+@app.post("/api/agents/generate-assign")
+async def generate_assign(req: GenerateAssignRequest):
+    """Use the default LLM to generate correct assignment routing examples."""
+    meta_path = PROMPTS_DIR / "Assignations.md"
+    if not meta_path.exists():
+        raise HTTPException(500, "Meta-prompt Assignations.md introuvable")
+    prompt_text = req.agent_prompt[:8000] if req.agent_prompt else "(aucun prompt fourni)"
+    context = (
+        f"<agent_prompt>\n{prompt_text}\n</agent_prompt>\n\n"
+        f"Agent: {req.agent_name or req.agent_id} (id: {req.agent_id})\n"
+        "Genere les exemples demandes. Reponds uniquement avec le JSON, sans bloc de code markdown, sans explication."
+    )
+    system_prompt = meta_path.read_text(encoding="utf-8")
+    result = await chat(ChatRequest(messages=[
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": context},
+    ]))
+    return {"content": result["content"]}
+
+
+@app.post("/api/agents/generate-unassign")
+async def generate_unassign(req: GenerateAssignRequest):
+    """Use the default LLM to generate incorrect assignment routing examples."""
+    meta_path = PROMPTS_DIR / "UnAssignation.md"
+    if not meta_path.exists():
+        raise HTTPException(500, "Meta-prompt UnAssignation.md introuvable")
+    prompt_text = req.agent_prompt[:8000] if req.agent_prompt else "(aucun prompt fourni)"
+    context = (
+        f"<agent_prompt>\n{prompt_text}\n</agent_prompt>\n\n"
+        f"Agent: {req.agent_name or req.agent_id} (id: {req.agent_id})\n"
+        "Genere les exemples demandes. Reponds uniquement avec le JSON, sans bloc de code markdown, sans explication."
+    )
+    system_prompt = meta_path.read_text(encoding="utf-8")
+    result = await chat(ChatRequest(messages=[
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": context},
+    ]))
+    return {"content": result["content"]}
+
+
 # ── API: Teams (Configs) ──────────────────────────
 
 
@@ -1676,7 +2077,20 @@ def _write_teams_list(teams: list):
 @app.get("/api/teams")
 async def get_teams():
     teams = _read_teams_list()
-    # Enrich each team with its agents and mcp_access
+    # Pre-load shared agents catalog for merging
+    shared_agents_map = {}
+    if SHARED_AGENTS_DIR.exists():
+        for sa_dir in SHARED_AGENTS_DIR.iterdir():
+            if sa_dir.is_dir():
+                cfg_file = sa_dir / "agent.json"
+                if cfg_file.exists():
+                    cfg = json.loads(cfg_file.read_text(encoding="utf-8"))
+                    cfg["id"] = sa_dir.name
+                    prompt_file = sa_dir / "prompt.md"
+                    if prompt_file.exists():
+                        cfg["prompt_content"] = prompt_file.read_text(encoding="utf-8")
+                    shared_agents_map[sa_dir.name] = cfg
+    # Enrich each team with its agents (merged from shared catalog)
     enriched = []
     for t in teams:
         tid = t.get("id", "")
@@ -1687,11 +2101,23 @@ async def get_teams():
         agents_raw = reg.get("agents", {})
         agents_detail = {}
         for aid, acfg in agents_raw.items():
-            prompt_file = tdir / acfg.get("prompt", f"{aid}.md")
-            prompt_content = ""
-            if prompt_file.exists():
-                prompt_content = prompt_file.read_text(encoding="utf-8")
-            agents_detail[aid] = {**acfg, "prompt_content": prompt_content}
+            # Merge: shared agent properties + team overrides (type, pipeline_steps)
+            shared = shared_agents_map.get(aid, {})
+            merged = {**shared}
+            if acfg.get("type"):
+                merged["type"] = acfg["type"]
+            if acfg.get("pipeline_steps"):
+                merged["pipeline_steps"] = acfg["pipeline_steps"]
+            if "id" not in merged:
+                merged["id"] = aid
+            # Fallback: if shared agent not found, use legacy registry data
+            if not shared:
+                prompt_file = tdir / acfg.get("prompt", f"{aid}.md")
+                prompt_content = ""
+                if prompt_file.exists():
+                    prompt_content = prompt_file.read_text(encoding="utf-8")
+                merged = {**acfg, "prompt_content": prompt_content, "id": aid}
+            agents_detail[aid] = merged
         # Read MCP access
         mcp_access = _read_json(tdir / "agent_mcp_access.json") if (tdir / "agent_mcp_access.json").exists() else {}
         enriched.append({
@@ -1802,7 +2228,31 @@ async def delete_team(team_id: str):
 
 @app.get("/api/templates")
 async def list_templates():
-    """List available team templates from Shared/Teams/."""
+    """List available team templates from Shared/Teams/.
+
+    The registry only stores references (type + pipeline_steps).
+    Agent properties are resolved from Shared/Agents/{id}/agent.json + prompt.md.
+    """
+    # Build name lookup from teams.json
+    teams_cfg = _read_json(SHARED_TEAMS_FILE) if SHARED_TEAMS_FILE.exists() else {}
+    name_map = {}
+    for t in teams_cfg.get("teams", []):
+        directory = t.get("directory", "")
+        if directory:
+            name_map[directory] = t.get("name", directory)
+    # Pre-load shared agents catalog for merging
+    shared_agents_map = {}
+    if SHARED_AGENTS_DIR.exists():
+        for sa_dir in SHARED_AGENTS_DIR.iterdir():
+            if sa_dir.is_dir():
+                cfg_file = sa_dir / "agent.json"
+                if cfg_file.exists():
+                    cfg = json.loads(cfg_file.read_text(encoding="utf-8"))
+                    cfg["id"] = sa_dir.name
+                    prompt_file = sa_dir / "prompt.md"
+                    if prompt_file.exists():
+                        cfg["prompt_content"] = prompt_file.read_text(encoding="utf-8")
+                    shared_agents_map[sa_dir.name] = cfg
     templates = []
     if SHARED_TEAMS_DIR.exists():
         for d in sorted(SHARED_TEAMS_DIR.iterdir()):
@@ -1811,19 +2261,29 @@ async def list_templates():
                 agents_raw = reg.get("agents", {})
                 agents_detail = {}
                 for aid, acfg in agents_raw.items():
-                    prompt_file = d / acfg.get("prompt", f"{aid}.md")
-                    prompt_content = ""
-                    if prompt_file.exists():
-                        prompt_content = prompt_file.read_text(encoding="utf-8")
-                    agents_detail[aid] = {**acfg, "prompt_content": prompt_content}
+                    # Merge: shared agent properties + team overrides (type, pipeline_steps)
+                    shared = shared_agents_map.get(aid, {})
+                    merged = {**shared}
+                    if acfg.get("type"):
+                        merged["type"] = acfg["type"]
+                    if acfg.get("pipeline_steps"):
+                        merged["pipeline_steps"] = acfg["pipeline_steps"]
+                    if "id" not in merged:
+                        merged["id"] = aid
+                    # Fallback: if shared agent not found, use legacy registry data
+                    if not shared:
+                        prompt_file = d / acfg.get("prompt", f"{aid}.md")
+                        prompt_content = ""
+                        if prompt_file.exists():
+                            prompt_content = prompt_file.read_text(encoding="utf-8")
+                        merged = {**acfg, "prompt_content": prompt_content, "id": aid}
+                    agents_detail[aid] = merged
                 mcp_access = _read_json(d / "agent_mcp_access.json") if (d / "agent_mcp_access.json").exists() else {}
-                prompt_count = len([f for f in d.iterdir() if f.suffix == ".md"])
                 templates.append({
                     "id": d.name,
+                    "name": name_map.get(d.name, d.name),
                     "agents": agents_detail,
                     "agent_count": len(agents_raw),
-                    "prompts": prompt_count,
-                    "has_mcp_access": bool(mcp_access),
                     "mcp_access": mcp_access,
                 })
     return {"templates": templates}
@@ -1979,48 +2439,46 @@ def _shared_team_dir(directory: str) -> Path:
 
 @app.post("/api/templates/agents")
 async def add_template_agent(cfg: AgentConfig):
-    """Add an agent to a Shared template directory."""
+    """Add an agent reference to a Shared template directory.
+
+    Only stores type (+ pipeline_steps if applicable).
+    Agent properties come from Shared/Agents/{id}/agent.json.
+    """
     tdir = _shared_team_dir(cfg.team_id)
     tdir.mkdir(parents=True, exist_ok=True)
+    # Verify the shared agent exists
+    agent_dir = SHARED_AGENTS_DIR / cfg.id
+    if not (agent_dir / "agent.json").exists():
+        raise HTTPException(404, f"Shared agent '{cfg.id}' introuvable dans le catalogue")
     registry_path = tdir / "agents_registry.json"
     data = _read_json(registry_path)
     if "agents" not in data:
         data["agents"] = {}
     if cfg.id in data["agents"]:
         raise HTTPException(409, f"Agent {cfg.id} already exists")
-    prompt_file = cfg.prompt_file or f"{cfg.id}.md"
-    agent_data = {"name": cfg.name, "temperature": cfg.temperature, "max_tokens": cfg.max_tokens, "prompt": prompt_file}
-    if cfg.llm:
-        agent_data["llm"] = cfg.llm
+    # Store only reference: type + pipeline_steps
+    agent_data: dict = {}
     if cfg.type:
         agent_data["type"] = cfg.type
     if cfg.pipeline_steps:
         agent_data["pipeline_steps"] = cfg.pipeline_steps
     data["agents"][cfg.id] = agent_data
     _write_json(registry_path, data)
-    prompt_path = tdir / prompt_file
-    if not prompt_path.exists():
-        prompt_path.write_text(cfg.prompt_content or f"# {cfg.name}\n\n", encoding="utf-8")
     return {"ok": True}
 
 
 @app.put("/api/templates/agents/{agent_id}")
 async def update_template_agent(agent_id: str, cfg: AgentConfig):
-    """Update an agent in a Shared template directory."""
+    """Update an agent reference in a Shared template directory.
+
+    Only type and pipeline_steps can be overridden per-team.
+    """
     tdir = _shared_team_dir(cfg.team_id)
     registry_path = tdir / "agents_registry.json"
     data = _read_json(registry_path)
     if agent_id not in data.get("agents", {}):
         raise HTTPException(404, f"Agent {agent_id} not found")
     existing = data["agents"][agent_id]
-    existing["name"] = cfg.name
-    existing["temperature"] = cfg.temperature
-    existing["max_tokens"] = cfg.max_tokens
-    if cfg.llm:
-        existing["llm"] = cfg.llm
-    elif "llm" in existing:
-        del existing["llm"]
-    existing.pop("model", None)
     if cfg.type:
         existing["type"] = cfg.type
     if cfg.pipeline_steps:
@@ -2029,9 +2487,6 @@ async def update_template_agent(agent_id: str, cfg: AgentConfig):
         del existing["pipeline_steps"]
     data["agents"][agent_id] = existing
     _write_json(registry_path, data)
-    if cfg.prompt_content is not None:
-        prompt_path = tdir / existing.get("prompt", f"{agent_id}.md")
-        prompt_path.write_text(cfg.prompt_content, encoding="utf-8")
     return {"ok": True}
 
 
@@ -2074,10 +2529,19 @@ def _git_file_for(repo_key: str) -> Path:
 
 
 def _get_repo_cfg(repo_key: str) -> dict:
-    """Return git config for a specific repo."""
+    """Return git config for a specific repo, with fallback to git_service.json."""
     cfg_file = _git_file_for(repo_key)
     if cfg_file.exists():
-        return _read_json(cfg_file)
+        data = _read_json(cfg_file)
+        if data.get("path"):
+            return data
+    # Fallback: derive from git_service.json
+    if GIT_SERVICE_FILE.exists():
+        svc = _read_json(GIT_SERVICE_FILE)
+        login = svc.get("login", "")
+        token = svc.get("token", "")
+        if login and token:
+            return {"path": "", "login": login, "password": token}
     return {}
 
 
@@ -2170,6 +2634,300 @@ async def save_repo_git_config(repo_key: str, request: Request):
         password = body.get("password", "").strip()
         _git_configure_remote(target_dir, repo_path, login, password)
     return {"ok": True}
+
+
+# ── API: Git service (remote repo creation) ──────
+
+GIT_SERVICES = {
+    "github":    {"name": "GitHub",    "url": "https://api.github.com"},
+    "gitlab":    {"name": "GitLab",    "url": "https://gitlab.com"},
+    "gitea":     {"name": "Gitea",     "url": ""},
+    "forgejo":   {"name": "Forgejo",   "url": ""},
+    "bitbucket": {"name": "Bitbucket", "url": "https://api.bitbucket.org/2.0"},
+}
+
+
+@app.get("/api/git-service/types")
+async def git_service_types():
+    return {"services": GIT_SERVICES}
+
+
+@app.get("/api/git-service/config")
+async def get_git_service_config():
+    data = _read_json(GIT_SERVICE_FILE) if GIT_SERVICE_FILE.exists() else {}
+    return {
+        "service": data.get("service", ""),
+        "url": data.get("url", ""),
+        "login": data.get("login", ""),
+        "token": data.get("token", ""),
+        "repo_name": data.get("repo_name", ""),
+        "repo_key": data.get("repo_key", "shared"),
+    }
+
+
+@app.put("/api/git-service/config")
+async def save_git_service_config(request: Request):
+    body = await request.json()
+    GIT_SERVICE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(GIT_SERVICE_FILE, {
+        "service": body.get("service", ""),
+        "url": body.get("url", ""),
+        "login": body.get("login", ""),
+        "token": body.get("token", ""),
+        "repo_name": body.get("repo_name", ""),
+        "repo_key": body.get("repo_key", "shared"),
+    })
+    return {"ok": True}
+
+
+async def _git_service_create_repo(service: str, base_url: str, login: str, token: str,
+                                    repo_name: str, private: bool = True) -> dict:
+    """Create a remote repo via the git service API. Returns {ok, clone_url, message}."""
+    headers = {"Accept": "application/json"}
+    async with httpx.AsyncClient(timeout=30) as client:
+        if service == "github":
+            headers["Authorization"] = f"token {token}"
+            r = await client.post(f"{base_url}/user/repos", headers=headers,
+                                  json={"name": repo_name, "private": private, "auto_init": False})
+            if r.status_code == 201:
+                return {"ok": True, "clone_url": r.json().get("clone_url", "")}
+            if r.status_code == 422:
+                return {"ok": False, "message": "Le depot existe deja sur GitHub"}
+            return {"ok": False, "message": f"GitHub {r.status_code}: {r.text[:300]}"}
+
+        elif service == "gitlab":
+            headers["PRIVATE-TOKEN"] = token
+            r = await client.post(f"{base_url}/api/v4/projects", headers=headers,
+                                  json={"name": repo_name, "visibility": "private" if private else "public"})
+            if r.status_code == 201:
+                return {"ok": True, "clone_url": r.json().get("http_url_to_repo", "")}
+            if r.status_code == 400 and "already been taken" in r.text:
+                return {"ok": False, "message": "Le depot existe deja sur GitLab"}
+            return {"ok": False, "message": f"GitLab {r.status_code}: {r.text[:300]}"}
+
+        elif service in ("gitea", "forgejo"):
+            headers["Authorization"] = f"token {token}"
+            r = await client.post(f"{base_url}/api/v1/user/repos", headers=headers,
+                                  json={"name": repo_name, "private": private, "auto_init": False})
+            if r.status_code == 201:
+                return {"ok": True, "clone_url": r.json().get("clone_url", "")}
+            if r.status_code == 409:
+                return {"ok": False, "message": f"Le depot existe deja sur {service.title()}"}
+            return {"ok": False, "message": f"{service.title()} {r.status_code}: {r.text[:300]}"}
+
+        elif service == "bitbucket":
+            r = await client.post(
+                f"{base_url}/repositories/{login}/{repo_name}",
+                headers=headers, auth=(login, token),
+                json={"scm": "git", "is_private": private})
+            if r.status_code == 200:
+                links = r.json().get("links", {}).get("clone", [])
+                clone = next((l["href"] for l in links if l["name"] == "https"), "")
+                return {"ok": True, "clone_url": clone}
+            if r.status_code == 400 and "already exists" in r.text:
+                return {"ok": False, "message": "Le depot existe deja sur Bitbucket"}
+            return {"ok": False, "message": f"Bitbucket {r.status_code}: {r.text[:300]}"}
+
+        return {"ok": False, "message": f"Service inconnu: {service}"}
+
+
+@app.post("/api/git-service/sync-repo-config")
+async def git_service_sync_repo_config(request: Request):
+    """Sync git_service.json credentials into a repo's git.json and configure remote."""
+    body = await request.json()
+    repo_key = body.get("repo_key", "").strip()
+    if not repo_key:
+        raise HTTPException(400, "repo_key requis")
+    svc = _read_json(GIT_SERVICE_FILE) if GIT_SERVICE_FILE.exists() else {}
+    login = svc.get("login", "")
+    token = svc.get("token", "")
+    cfg_file = _git_file_for(repo_key)
+    repo_cfg = _read_json(cfg_file) if cfg_file.exists() else {}
+    # Update credentials if service config has them
+    if login or token:
+        repo_cfg["login"] = login
+        repo_cfg["password"] = token
+        cfg_file.parent.mkdir(parents=True, exist_ok=True)
+        _write_json(cfg_file, repo_cfg)
+    # Reconfigure remote if repo is initialized
+    repo_path = repo_cfg.get("path", "").strip()
+    target_dir = _get_repo_dir(repo_key)
+    if repo_path and (target_dir / ".git").exists():
+        _git_configure_remote(target_dir, repo_path, login, token)
+    return {"ok": True}
+
+
+@app.post("/api/git-service/create-repo")
+async def git_service_create_repo(request: Request):
+    """Create a new repo on the remote git service."""
+    body = await request.json()
+    cfg = _read_json(GIT_SERVICE_FILE) if GIT_SERVICE_FILE.exists() else {}
+    service = cfg.get("service", "")
+    base_url = cfg.get("url", "").rstrip("/")
+    login = cfg.get("login", "")
+    token = cfg.get("token", "")
+    repo_name = body.get("repo_name", "").strip()
+    repo_key = body.get("repo_key", "").strip()
+    if not service or not base_url or not token or not repo_name:
+        raise HTTPException(400, "Service, URL, token et nom du depot sont requis")
+    result = await _git_service_create_repo(service, base_url, login, token, repo_name)
+    if not result["ok"]:
+        return result
+    # Auto-configure the repo git.json with the clone URL
+    clone_url = result.get("clone_url", "")
+    if clone_url and repo_key:
+        cfg_file = _git_file_for(repo_key)
+        cfg_file.parent.mkdir(parents=True, exist_ok=True)
+        _write_json(cfg_file, {"path": clone_url, "login": login, "password": token})
+        # Configure remote if repo already initialized
+        target_dir = _get_repo_dir(repo_key)
+        if (target_dir / ".git").exists():
+            _git_configure_remote(target_dir, clone_url, login, token)
+    return {"ok": True, "clone_url": clone_url, "message": f"Depot '{repo_name}' cree avec succes"}
+
+
+@app.post("/api/git-service/fetch-repo")
+async def git_service_fetch_repo(request: Request):
+    """Fetch (clone) an existing remote repo into a local repo directory."""
+    body = await request.json()
+    repo_key = body.get("repo_key", "").strip()
+    repo_url = body.get("repo_url", "").strip()
+    if not repo_key or not repo_url:
+        raise HTTPException(400, "repo_key et repo_url sont requis")
+    cfg = _read_json(GIT_SERVICE_FILE) if GIT_SERVICE_FILE.exists() else {}
+    login = cfg.get("login", "")
+    token = cfg.get("token", "")
+    # Save git config for this repo
+    cfg_file = _git_file_for(repo_key)
+    cfg_file.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(cfg_file, {"path": repo_url, "login": login, "password": token})
+    # Do pull (which handles init + fetch + reset if not initialized)
+    target_dir = _get_repo_dir(repo_key)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        git_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        remote_url = _build_remote_url(repo_url, login, token)
+        if (target_dir / ".git").exists():
+            _git_configure_remote(target_dir, repo_url, login, token)
+            r = subprocess.run(["git", "pull", "origin"], cwd=str(target_dir),
+                               capture_output=True, text=True, timeout=60, env=git_env)
+        else:
+            subprocess.run(["git", "config", "--global", "--add", "safe.directory", str(target_dir)],
+                           capture_output=True, text=True, timeout=5)
+            r = subprocess.run(["git", "clone", remote_url, "."], cwd=str(target_dir),
+                               capture_output=True, text=True, timeout=120, env=git_env)
+        stderr = _git_sanitize(r.stderr, login, token)
+        if r.returncode != 0:
+            return {"ok": False, "message": f"Erreur: {stderr[:300]}"}
+        return {"ok": True, "message": "Depot recupere avec succes"}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+# ── API: Config-scope Git service ─────────────────
+
+@app.get("/api/cfg-git-service/config")
+async def get_cfg_git_service_config():
+    data = _read_json(CFG_GIT_SERVICE_FILE) if CFG_GIT_SERVICE_FILE.exists() else {}
+    return {
+        "service": data.get("service", ""),
+        "url": data.get("url", ""),
+        "login": data.get("login", ""),
+        "token": data.get("token", ""),
+        "repo_name": data.get("repo_name", ""),
+    }
+
+
+@app.put("/api/cfg-git-service/config")
+async def save_cfg_git_service_config(request: Request):
+    body = await request.json()
+    CFG_GIT_SERVICE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(CFG_GIT_SERVICE_FILE, {
+        "service": body.get("service", ""),
+        "url": body.get("url", ""),
+        "login": body.get("login", ""),
+        "token": body.get("token", ""),
+        "repo_name": body.get("repo_name", ""),
+    })
+    return {"ok": True}
+
+
+@app.post("/api/cfg-git-service/create-repo")
+async def cfg_git_service_create_repo(request: Request):
+    body = await request.json()
+    cfg = _read_json(CFG_GIT_SERVICE_FILE) if CFG_GIT_SERVICE_FILE.exists() else {}
+    service = cfg.get("service", "")
+    base_url = cfg.get("url", "").rstrip("/")
+    login = cfg.get("login", "")
+    token = cfg.get("token", "")
+    repo_name = body.get("repo_name", "").strip()
+    if not service or not base_url or not token or not repo_name:
+        raise HTTPException(400, "Service, URL, token et nom du depot sont requis")
+    result = await _git_service_create_repo(service, base_url, login, token, repo_name)
+    if not result["ok"]:
+        return result
+    clone_url = result.get("clone_url", "")
+    if clone_url:
+        cfg_file = _git_file_for("configs")
+        cfg_file.parent.mkdir(parents=True, exist_ok=True)
+        _write_json(cfg_file, {"path": clone_url, "login": login, "password": token})
+        target_dir = _get_repo_dir("configs")
+        if (target_dir / ".git").exists():
+            _git_configure_remote(target_dir, clone_url, login, token)
+    return {"ok": True, "clone_url": clone_url, "message": f"Depot '{repo_name}' cree avec succes"}
+
+
+@app.post("/api/cfg-git-service/sync-repo-config")
+async def cfg_git_service_sync_repo_config(request: Request):
+    svc = _read_json(CFG_GIT_SERVICE_FILE) if CFG_GIT_SERVICE_FILE.exists() else {}
+    login = svc.get("login", "")
+    token = svc.get("token", "")
+    cfg_file = _git_file_for("configs")
+    repo_cfg = _read_json(cfg_file) if cfg_file.exists() else {}
+    if login or token:
+        repo_cfg["login"] = login
+        repo_cfg["password"] = token
+        cfg_file.parent.mkdir(parents=True, exist_ok=True)
+        _write_json(cfg_file, repo_cfg)
+    repo_path = repo_cfg.get("path", "").strip()
+    target_dir = _get_repo_dir("configs")
+    if repo_path and (target_dir / ".git").exists():
+        _git_configure_remote(target_dir, repo_path, login, token)
+    return {"ok": True}
+
+
+@app.post("/api/cfg-git-service/fetch-repo")
+async def cfg_git_service_fetch_repo(request: Request):
+    body = await request.json()
+    repo_url = body.get("repo_url", "").strip()
+    if not repo_url:
+        raise HTTPException(400, "repo_url requis")
+    cfg = _read_json(CFG_GIT_SERVICE_FILE) if CFG_GIT_SERVICE_FILE.exists() else {}
+    login = cfg.get("login", "")
+    token = cfg.get("token", "")
+    cfg_file = _git_file_for("configs")
+    cfg_file.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(cfg_file, {"path": repo_url, "login": login, "password": token})
+    target_dir = _get_repo_dir("configs")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        git_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        remote_url = _build_remote_url(repo_url, login, token)
+        if (target_dir / ".git").exists():
+            _git_configure_remote(target_dir, repo_url, login, token)
+            r = subprocess.run(["git", "pull", "origin"], cwd=str(target_dir),
+                               capture_output=True, text=True, timeout=60, env=git_env)
+        else:
+            subprocess.run(["git", "config", "--global", "--add", "safe.directory", str(target_dir)],
+                           capture_output=True, text=True, timeout=5)
+            r = subprocess.run(["git", "clone", remote_url, "."], cwd=str(target_dir),
+                               capture_output=True, text=True, timeout=120, env=git_env)
+        stderr = _git_sanitize(r.stderr, login, token)
+        if r.returncode != 0:
+            return {"ok": False, "message": f"Erreur: {stderr[:300]}"}
+        return {"ok": True, "message": "Depot recupere avec succes"}
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 # ── API: Git operations ──────────────────────────

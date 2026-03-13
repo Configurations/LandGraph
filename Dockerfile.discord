@@ -3,5 +3,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY Agents/ ./agents/
+RUN if [ -d /app/agents/Shared ]; then mv /app/agents/Shared /app/agents/shared; fi
 COPY config/ ./config/
 CMD ["python", "agents/discord_listener.py"]

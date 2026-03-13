@@ -21,6 +21,7 @@
 # == Communication et Productivite ==
 1|slack-legacy|Slack (legacy)|Messages channels recherche reactions|uvx|mcp-server-slack|stdio|BOT_TOKEN:Token bot Slack (xoxb-...),SLACK_TEAM_ID:ID equipe Slack
 0|notion|Notion|Pages bases de donnees blocs recherche CRUD|npx|-y @notionhq/notion-mcp-server|stdio|API_KEY:Cle API Notion (secret_...)
+0|outline|Outline|Wiki collaboratif documents collections recherche publication|npx|-y @punkpeye/outline-mcp-server|stdio|OUTLINE_API_KEY:Cle API Outline,OUTLINE_URL:URL instance Outline
 0|linear|Linear|Issues projets cycles equipes labels|uvx|mcp-server-linear|stdio|API_KEY:Cle API Linear
 #
 # == Bases de donnees ==

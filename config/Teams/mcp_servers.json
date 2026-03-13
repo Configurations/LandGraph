@@ -50,6 +50,16 @@
         "GITHUB_PERSONAL_ACCESS_TOKEN": "PERSONAL_ACCESS_TOKEN"
       },
       "enabled": true
+    },
+    "outline": {
+      "command": "npx",
+      "args": ["-y", "@punkpeye/outline-mcp-server"],
+      "transport": "stdio",
+      "env": {
+        "OUTLINE_API_KEY": "OUTLINE_API_KEY",
+        "OUTLINE_URL": "OUTLINE_URL"
+      },
+      "enabled": true
     }
   }
 }

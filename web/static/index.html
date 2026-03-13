@@ -6,7 +6,7 @@
   <title>LandGraph Admin</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/style.css?v=20260312a">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260314k">
 </head>
 <body>
   <div class="app-layout">
@@ -66,7 +66,6 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
           Deconnexion
         </a>
-        <div class="admin-version-tag" id="admin-version"></div>
       </div>
     </nav>
 
@@ -122,6 +121,7 @@
           <div class="prompt-tab" data-cfg-tab="cfg-teams" onclick="showConfigTab('cfg-teams')">Equipes</div>
           <div class="prompt-tab" data-cfg-tab="cfg-mail" onclick="showConfigTab('cfg-mail')">Mail</div>
           <div class="prompt-tab" data-cfg-tab="cfg-security" onclick="showConfigTab('cfg-security')">Securite</div>
+          <div class="prompt-tab" data-cfg-tab="cfg-outline" onclick="showConfigTab('cfg-outline')">Base de connaissances</div>
           <div class="prompt-tab" data-cfg-tab="cfg-misc" onclick="showConfigTab('cfg-misc')">Divers</div>
           <div class="prompt-tab" data-cfg-tab="cfg-git" onclick="showConfigTab('cfg-git')">Enregistrement</div>
           <div id="cfg-tab-save-btn" style="margin-left:auto;display:none">
@@ -146,6 +146,7 @@
               <h3>Providers</h3>
               <div style="display:flex;gap:0.5rem">
                 <button class="btn btn-outline btn-sm" onclick="copyCfgLLMFromTemplate()">Copier depuis Template</button>
+                <button class="btn btn-outline btn-sm" onclick="uploadCfgLLM()">Importer JSON</button>
                 <button class="btn btn-primary btn-sm" onclick="showAddCfgProviderModal()">+ Ajouter</button>
               </div>
             </div>
@@ -534,6 +535,68 @@
 
         <!-- cfg-auth removed: merged into cfg-security above -->
 
+        <!-- Sub-tab: Outline (Base de connaissances) -->
+        <div class="cfg-tab-content" id="cfg-tab-cfg-outline">
+          <div class="card">
+            <div class="card-header"><h3>Outline Wiki</h3></div>
+            <div class="card-body">
+              <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:1rem">
+                Connectez la plateforme a votre instance Outline pour publier automatiquement les livrables des agents dans un wiki centralise.
+                Les variables <code>OUTLINE_URL</code> et <code>OUTLINE_API_KEY</code> doivent etre definies dans le fichier <code>.env</code>.
+              </p>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label>
+                    <input type="checkbox" id="outline-enabled" style="margin-right:0.5rem" />
+                    Activer l'integration Outline
+                  </label>
+                </div>
+                <div class="form-group">
+                  <button class="btn btn-sm" onclick="testOutlineConnection()" id="outline-test-btn">Tester la connexion</button>
+                  <span id="outline-test-result" style="font-size:0.8rem;margin-left:0.5rem"></span>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label>Prefixe des collections</label>
+                  <input id="outline-collection-prefix" placeholder="LandGraph" />
+                </div>
+                <div class="form-group">
+                  <label>Variable URL (env)</label>
+                  <input id="outline-url-env" placeholder="OUTLINE_URL" />
+                </div>
+                <div class="form-group">
+                  <label>Variable API Key (env)</label>
+                  <input id="outline-api-key-env" placeholder="OUTLINE_API_KEY" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header"><h3>Publication automatique</h3></div>
+            <div class="card-body">
+              <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem">
+                Quand un agent termine un livrable, il est automatiquement publie dans Outline si la case correspondante est cochee.
+              </p>
+              <div class="form-row" style="align-items:center;margin-bottom:0.75rem">
+                <label>
+                  <input type="checkbox" id="outline-auto-publish" style="margin-right:0.5rem" />
+                  Activer la publication automatique
+                </label>
+              </div>
+              <div id="outline-deliverables-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:0.5rem">
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-top:1rem;display:flex;gap:0.5rem">
+            <button class="btn btn-primary" onclick="saveOutlineConfig()">Sauvegarder</button>
+          </div>
+        </div>
+
         <!-- Sub-tab: Divers -->
         <div class="cfg-tab-content" id="cfg-tab-cfg-misc">
           <p style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:1rem">
@@ -569,13 +632,20 @@
               </div>
               <div class="form-row">
                 <div class="form-group">
+                  <label>Outline Wiki (port 3200)</label>
+                  <input id="misc-host-outline" placeholder="https://outline.example.com" />
+                </div>
+                <div class="form-group">
                   <label>PostgreSQL</label>
                   <input id="misc-host-postgres" placeholder="langgraph-postgres:5432" />
                 </div>
+              </div>
+              <div class="form-row">
                 <div class="form-group">
                   <label>Redis</label>
                   <input id="misc-host-redis" placeholder="langgraph-redis:6379" />
                 </div>
+                <div class="form-group"></div>
               </div>
             </div>
           </div>
@@ -604,41 +674,72 @@
 
         <!-- Sub-tab: Git (Enregistrement) -->
         <div class="cfg-tab-content" id="cfg-tab-cfg-git">
-          <div class="card">
+          <!-- ── Service Git (Config) ── -->
+          <div class="card" style="margin-bottom:1rem">
             <div class="card-header">
-              <h3>Depot config</h3>
-              <span class="tag tag-yellow">config/</span>
+              <h3>Service Git</h3>
+              <span class="tag tag-blue" id="cgs-status-tag" style="display:none">Connecte</span>
             </div>
             <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem">
-              Contient la configuration active des equipes dans config/Teams/. C'est la configuration operationnelle utilisee par la plateforme.
+              Configurez votre service Git pour creer ou recuperer des depots distants.
             </p>
-            <div class="form-group">
-              <label>URL du depot</label>
-              <input id="cfg-git-path" placeholder="github.com/org/my-configs.git" />
+            <div class="form-row">
+              <div class="form-group" style="flex:0.8">
+                <label>Service</label>
+                <select id="cgs-service" onchange="_onCfgGitServiceChange()">
+                  <option value="">-- Choisir --</option>
+                  <option value="github">GitHub</option>
+                  <option value="gitlab">GitLab</option>
+                  <option value="gitea">Gitea</option>
+                  <option value="forgejo">Forgejo</option>
+                  <option value="bitbucket">Bitbucket</option>
+                </select>
+              </div>
+              <div class="form-group" style="flex:2">
+                <label>URL du service</label>
+                <input id="cgs-url" placeholder="https://api.github.com" />
+              </div>
             </div>
             <div class="form-row">
               <div class="form-group">
-                <label>Login</label>
-                <input id="cfg-git-login" placeholder="username" autocomplete="off" />
+                <label>Login / Utilisateur</label>
+                <input id="cgs-login" placeholder="username" autocomplete="off" oninput="_checkCfgGitServiceBtns()" />
               </div>
               <div class="form-group">
-                <label>Password / Token</label>
-                <input id="cfg-git-password" type="password" placeholder="token ou mot de passe" autocomplete="off" />
+                <label>Token d'acces</label>
+                <input id="cgs-token" type="password" placeholder="ghp_... / glpat-..." autocomplete="off" oninput="_checkCfgGitServiceBtns()" />
               </div>
             </div>
             <div class="form-row" style="margin-top:0.5rem">
-              <div>
-                <label>Branche</label>
-                <div id="cfg-git-branch" style="font-size:1.1rem;font-weight:600;margin-top:0.25rem">-</div>
+              <div class="form-group" style="flex:1.5">
+                <label>Nom du depot</label>
+                <input id="cgs-repo-name" placeholder="my-project" oninput="_checkCfgGitServiceBtns()" />
               </div>
-              <div style="display:flex;gap:0.5rem;align-items:flex-end">
-                <button class="btn btn-primary btn-sm" onclick="saveRepoGitConfig('cfg-git')">Enregistrer</button>
-                <button class="btn btn-outline btn-sm" id="btn-cfg-git-init" onclick="repoGitInit('cfg-git')" disabled>Init</button>
-                <button class="btn btn-primary btn-sm" id="btn-cfg-git-pull" onclick="repoGitPull('cfg-git')" disabled>Pull</button>
-                <button class="btn btn-success btn-sm" id="btn-cfg-git-commit" onclick="showGitCommitModal('cfg-git')" disabled>Commit &amp; Push</button>
-                <button class="btn btn-outline btn-sm" id="btn-cfg-git-push" onclick="repoGitPushOnly('cfg-git')" disabled>Push seul</button>
-                <button class="btn btn-outline btn-sm" id="btn-cfg-git-reset" onclick="repoGitResetLocal('cfg-git')" disabled style="color:var(--error)">Reset local</button>
-              </div>
+            </div>
+            <div style="display:flex;gap:0.5rem;margin-top:0.5rem;margin-bottom:0.75rem">
+              <button class="btn btn-primary btn-sm" onclick="saveCfgGitServiceConfig()">Enregistrer</button>
+              <button class="btn btn-primary btn-sm" id="cgs-btn-init" disabled onclick="cfgGitServiceInit()">Init</button>
+              <button class="btn btn-outline btn-sm" id="cgs-btn-fetch" disabled onclick="cfgGitServiceFetch()">Fetch</button>
+              <button class="btn btn-success btn-sm" id="cgs-btn-commit" disabled onclick="cfgGitServiceCommitPush()">Commit &amp; Push</button>
+              <button class="btn btn-outline btn-sm" id="cgs-btn-push" disabled onclick="cfgGitServicePush()">Push</button>
+            </div>
+            <p style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem">
+              <b>Init</b> : cree le depot distant + initialise le depot local. &nbsp;
+              <b>Fetch</b> : recupere un depot distant existant en local. &nbsp;
+              <b>Push</b> : pousse les commits locaux vers le depot distant.
+            </p>
+          </div>
+
+          <!-- ── Depot Config ── -->
+          <div class="card">
+            <div class="card-header">
+              <h3>Depot Config</h3>
+              <span class="tag tag-yellow">config/</span>
+            </div>
+            <input type="hidden" id="cfg-git-path" /><input type="hidden" id="cfg-git-login" /><input type="hidden" id="cfg-git-password" />
+            <div style="margin-top:0.5rem">
+              <label>Branche</label>
+              <div id="cfg-git-branch" style="font-size:1.1rem;font-weight:600;margin-top:0.25rem">-</div>
             </div>
             <div style="margin-top:0.75rem">
               <label>Status</label>
@@ -677,6 +778,7 @@
         <div class="prompt-tabs" style="margin-bottom:1rem">
           <div class="prompt-tab active" data-tpl-tab="tpl-llm" onclick="showTemplateTab('tpl-llm')">Modeles LLM</div>
           <div class="prompt-tab" data-tpl-tab="tpl-mcp" onclick="showTemplateTab('tpl-mcp')">Services MCP</div>
+          <div class="prompt-tab" data-tpl-tab="tpl-agents" onclick="showTemplateTab('tpl-agents')">Agents</div>
           <div class="prompt-tab" data-tpl-tab="tpl-teams" onclick="showTemplateTab('tpl-teams')">Equipes</div>
           <div class="prompt-tab" data-tpl-tab="tpl-git" onclick="showTemplateTab('tpl-git')">Enregistrement</div>
         </div>
@@ -696,7 +798,10 @@
           <div class="card" style="margin-top:1rem">
             <div class="card-header">
               <h3>Providers</h3>
-              <button class="btn btn-primary btn-sm" onclick="showAddTplProviderModal()">+ Ajouter</button>
+              <div style="display:flex;gap:0.5rem">
+                <button class="btn btn-outline btn-sm" onclick="uploadTplLLM()">Importer JSON</button>
+                <button class="btn btn-primary btn-sm" onclick="showAddTplProviderModal()">+ Ajouter</button>
+              </div>
             </div>
             <div class="table-container" id="tpl-llm-providers-table"></div>
           </div>
@@ -727,6 +832,27 @@
           </div>
         </div>
 
+        <!-- Sub-tab: Agents -->
+        <div class="tpl-tab-content" id="tpl-tab-tpl-agents">
+          <div class="card">
+            <div class="card-header">
+              <h3>Catalogue d'agents</h3>
+              <div style="display:flex;gap:0.5rem;align-items:center">
+                <div style="position:relative;min-width:240px" id="sa-combo">
+                  <input type="text" id="sa-agent-filter" placeholder="Rechercher un agent..." autocomplete="off"
+                    oninput="_filterSharedAgents()" onfocus="_openSaDropdown()" onblur="_closeSaDropdown()" style="width:100%;padding:6px 28px 6px 8px">
+                  <span style="position:absolute;right:8px;top:50%;transform:translateY(-50%);cursor:pointer;color:var(--text-muted);font-size:11px" onclick="_toggleSaDropdown()">&#9660;</span>
+                  <div id="sa-agent-dropdown" class="sa-dropdown" style="display:none"></div>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="showCreateSharedAgentModal()">Ajouter</button>
+                <button class="btn btn-outline btn-sm" onclick="importSharedAgent()">Importer</button>
+                <button class="btn btn-outline btn-sm" id="sa-delete-btn" disabled style="color:var(--danger);opacity:0.5" onclick="deleteSharedAgent(saSelectedId)">Supprimer</button>
+              </div>
+            </div>
+            <div id="sa-agent-detail"></div>
+          </div>
+        </div>
+
         <!-- Sub-tab: Teams -->
         <div class="tpl-tab-content" id="tpl-tab-tpl-teams">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
@@ -738,41 +864,79 @@
 
         <!-- Sub-tab: Git (Enregistrement) -->
         <div class="tpl-tab-content" id="tpl-tab-tpl-git">
+          <!-- ── Service Git ── -->
+          <div class="card" style="margin-bottom:1rem">
+            <div class="card-header">
+              <h3>Service Git</h3>
+              <span class="tag tag-blue" id="gs-status-tag" style="display:none">Connecte</span>
+            </div>
+            <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem">
+              Configurez votre service Git pour creer ou recuperer des depots distants.
+            </p>
+            <div class="form-row">
+              <div class="form-group" style="flex:0.8">
+                <label>Service</label>
+                <select id="gs-service" onchange="_onGitServiceChange()">
+                  <option value="">-- Choisir --</option>
+                  <option value="github">GitHub</option>
+                  <option value="gitlab">GitLab</option>
+                  <option value="gitea">Gitea</option>
+                  <option value="forgejo">Forgejo</option>
+                  <option value="bitbucket">Bitbucket</option>
+                </select>
+              </div>
+              <div class="form-group" style="flex:2">
+                <label>URL du service</label>
+                <input id="gs-url" placeholder="https://api.github.com" />
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Login / Utilisateur</label>
+                <input id="gs-login" placeholder="username" autocomplete="off" oninput="_checkGitServiceBtns()" />
+              </div>
+              <div class="form-group">
+                <label>Token d'acces</label>
+                <input id="gs-token" type="password" placeholder="ghp_... / glpat-..." autocomplete="off" oninput="_checkGitServiceBtns()" />
+              </div>
+            </div>
+            <div class="form-row" style="margin-top:0.5rem">
+              <div class="form-group" style="flex:1.5">
+                <label>Nom du depot</label>
+                <input id="gs-repo-name" placeholder="my-project" oninput="_checkGitServiceBtns()" />
+              </div>
+              <div class="form-group" style="flex:0.8">
+                <label>Cible</label>
+                <select id="gs-repo-key">
+                  <option value="shared">Templates (Shared)</option>
+                  <option value="configs">Config</option>
+                </select>
+              </div>
+            </div>
+            <div style="display:flex;gap:0.5rem;margin-top:0.5rem;margin-bottom:0.75rem">
+              <button class="btn btn-primary btn-sm" onclick="saveGitServiceConfig()">Enregistrer</button>
+              <button class="btn btn-primary btn-sm" id="gs-btn-init" disabled onclick="gitServiceInit()">Init</button>
+              <button class="btn btn-outline btn-sm" id="gs-btn-fetch" disabled onclick="gitServiceFetch()">Fetch</button>
+              <button class="btn btn-success btn-sm" id="gs-btn-commit" disabled onclick="gitServiceCommitPush()">Commit &amp; Push</button>
+              <button class="btn btn-outline btn-sm" id="gs-btn-push" disabled onclick="gitServicePush()">Push</button>
+            </div>
+            <p style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem">
+              <b>Init</b> : cree le depot distant + initialise le depot local. &nbsp;
+              <b>Fetch</b> : recupere un depot distant existant en local. &nbsp;
+              <b>Push</b> : pousse les commits locaux vers le depot distant.
+            </p>
+          </div>
+
+          <!-- ── Depot Shared ── -->
           <div class="card">
             <div class="card-header">
               <h3>Depot Shared (Templates)</h3>
               <span class="tag tag-yellow">Shared/</span>
             </div>
-            <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem">
-              Contient les templates d'equipe dans Shared/Teams/. Sert de base pour creer de nouvelles equipes.
-            </p>
-            <div class="form-group">
-              <label>URL du depot</label>
-              <input id="tpl-git-path" placeholder="github.com/org/my-shared-templates.git" />
-            </div>
-            <div class="form-row">
-              <div class="form-group">
-                <label>Login</label>
-                <input id="tpl-git-login" placeholder="username" autocomplete="off" />
-              </div>
-              <div class="form-group">
-                <label>Password / Token</label>
-                <input id="tpl-git-password" type="password" placeholder="token ou mot de passe" autocomplete="off" />
-              </div>
-            </div>
-            <div class="form-row" style="margin-top:0.5rem">
-              <div>
-                <label>Branche</label>
-                <div id="tpl-git-branch" style="font-size:1.1rem;font-weight:600;margin-top:0.25rem">-</div>
-              </div>
-              <div style="display:flex;gap:0.5rem;align-items:flex-end">
-                <button class="btn btn-primary btn-sm" onclick="saveRepoGitConfig('tpl-git')">Enregistrer</button>
-                <button class="btn btn-outline btn-sm" id="btn-tpl-git-init" onclick="repoGitInit('tpl-git')" disabled>Init</button>
-                <button class="btn btn-primary btn-sm" id="btn-tpl-git-pull" onclick="repoGitPull('tpl-git')" disabled>Pull</button>
-                <button class="btn btn-success btn-sm" id="btn-tpl-git-commit" onclick="showGitCommitModal('tpl-git')" disabled>Commit &amp; Push</button>
-                <button class="btn btn-outline btn-sm" id="btn-tpl-git-push" onclick="repoGitPushOnly('tpl-git')" disabled>Push seul</button>
-                <button class="btn btn-outline btn-sm" id="btn-tpl-git-reset" onclick="repoGitResetLocal('tpl-git')" disabled style="color:var(--error)">Reset local</button>
-              </div>
+            <input type="hidden" id="tpl-git-path" /><input type="hidden" id="tpl-git-login" /><input type="hidden" id="tpl-git-password" />
+            <div style="margin-top:0.5rem">
+              <label>Branche</label>
+              <div id="tpl-git-branch" style="font-size:1.1rem;font-weight:600;margin-top:0.25rem">-</div>
             </div>
             <div style="margin-top:0.75rem">
               <label>Status</label>
@@ -1118,6 +1282,6 @@
   <div id="modal-container"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="/static/js/app.js?v=20260312a"></script>
+  <script src="/static/js/app.js?v=20260314k"></script>
 </body>
 </html>

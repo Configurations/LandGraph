@@ -1,11 +1,23 @@
 #!/bin/bash
-PROJECT_DIR="${HOME}/langgraph-project"
+# ─────────────────────────────────────────────────────────────
+# build.sh — Stop, rebuild and restart Docker services
+#
+# Usage:
+#   ./build.sh                          # rebuild all app services
+#   ./build.sh langgraph-api            # rebuild only the API
+#   ./build.sh langgraph-api discord-bot # rebuild specific services
+#
+# If no services are specified, defaults to all app services.
+# This script is meant to run ON the server (not locally).
+# ─────────────────────────────────────────────────────────────
+
+# Resolve project dir from the script's own location
+# (works whether called from cron, another dir, or directly)
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "${PROJECT_DIR}"
 
-docker compose stop
-sleep 12
-
-SERVICES="langgraph-admin langgraph-api discord-bot mail-bot hitl-console"
+# Services to rebuild: from args, or all app services by default
+SERVICES="${*:-langgraph-admin langgraph-api discord-bot mail-bot hitl-console}"
 
 echo "  Arret des services..."
 docker compose stop $SERVICES 2>/dev/null || true

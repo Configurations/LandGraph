@@ -192,6 +192,8 @@ async def run_single_agent(agent_id, agent_callable, state, channel_id, thread_i
             if deliverable:
                 agent_name = output.get("agent_name", agent_id)
                 await post_to_channel(channel_id, f"**{agent_name}** :\n{deliverable[:3000]}", thread_id)
+            # Auto-publish to Outline if enabled
+            await _maybe_publish_to_outline(state, agent_id, output)
         return result
     except asyncio.TimeoutError:
         logger.error(f"[bg] {agent_id} timeout")
@@ -323,6 +325,34 @@ async def run_orchestrated(state, decisions, channel_id, thread_id="default", ca
         await run_agents_parallel(agents, state, channel_id, thread_id)
     elif not any(d.get("decision_type") == "phase_transition" for d in decisions):
         await post_to_channel(channel_id, "Aucun agent dispatche.", thread_id)
+
+
+# ── Outline auto-publish ─────────────────────
+async def _maybe_publish_to_outline(state: dict, agent_id: str, output: dict):
+    """Publish deliverables to Outline if auto-publish is enabled."""
+    try:
+        from agents.shared.outline_client import is_enabled, _auto_publish_enabled, publish_deliverable
+        if not is_enabled():
+            return
+        deliverables = output.get("deliverables", {})
+        if not deliverables:
+            return
+        thread_id = state.get("project_id", "default")
+        team_id = state.get("_team_id", "default")
+        phase = state.get("project_phase", "discovery")
+        project_name = state.get("project_metadata", {}).get("name", "")
+        for key, content in deliverables.items():
+            if _auto_publish_enabled(key):
+                result = await publish_deliverable(
+                    thread_id=thread_id, team_id=team_id, agent_id=agent_id,
+                    phase=phase, key=key, content=content, project_name=project_name,
+                )
+                if result:
+                    logger.info(f"[outline] Auto-published {key} → {result.get('url', '')}")
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.warning(f"[outline] Auto-publish error: {e}")
 
 
 # ── Endpoints ────────────────────────────────
@@ -545,6 +575,39 @@ async def delete_api_key(key_hash: str):
     try:
         db_delete_key(key_hash)
         return {"status": "deleted"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Outline manual publish ────────────────────
+class OutlinePublishRequest(BaseModel):
+    thread_id: str
+    team_id: str = "default"
+    agent_id: str = ""
+    phase: str = ""
+    key: str = ""
+    content: str = ""
+    project_name: str = ""
+
+
+@app.post("/outline/publish")
+async def outline_publish(req: OutlinePublishRequest):
+    """Manually publish a deliverable to Outline."""
+    try:
+        from agents.shared.outline_client import publish_deliverable, is_enabled
+        if not is_enabled():
+            raise HTTPException(status_code=400, detail="Outline integration is disabled")
+        result = await publish_deliverable(
+            thread_id=req.thread_id, team_id=req.team_id, agent_id=req.agent_id,
+            phase=req.phase, key=req.key, content=req.content, project_name=req.project_name,
+        )
+        if result:
+            return {"ok": True, **result}
+        raise HTTPException(status_code=500, detail="Publication failed")
+    except ImportError:
+        raise HTTPException(status_code=500, detail="outline_client module not available")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

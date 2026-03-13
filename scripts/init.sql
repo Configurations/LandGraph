@@ -89,6 +89,26 @@ CREATE TABLE IF NOT EXISTS project.hitl_team_members (
 CREATE INDEX IF NOT EXISTS idx_hitl_tm_user ON project.hitl_team_members(user_id);
 CREATE INDEX IF NOT EXISTS idx_hitl_tm_team ON project.hitl_team_members(team_id);
 
+-- ── Outline document tracking ─────────────────────
+CREATE TABLE IF NOT EXISTS project.outline_documents (
+    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    thread_id     TEXT NOT NULL,
+    team_id       TEXT NOT NULL DEFAULT 'default',
+    agent_id      TEXT NOT NULL,
+    phase         TEXT NOT NULL,
+    deliverable_key TEXT NOT NULL,
+    outline_document_id TEXT,
+    outline_url   TEXT,
+    version       INTEGER DEFAULT 1,
+    content_hash  TEXT,
+    created_at    TIMESTAMPTZ DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(thread_id, team_id, phase, deliverable_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_outline_docs_thread ON project.outline_documents(thread_id);
+CREATE INDEX IF NOT EXISTS idx_outline_docs_team ON project.outline_documents(team_id);
+
 -- Migration: add remind columns if missing
 DO $$
 BEGIN

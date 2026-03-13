@@ -60,7 +60,7 @@ function showSection(name) {
   document.querySelector(`.nav-item[data-section="${name}"]`).classList.add('active');
 
   // Load data on section switch
-  const loaders = { secrets: loadEnv, mcp: loadMCP, llm: loadLLM, teams: loadTeams, templates: loadTemplates, channels: loadChannels, chat: loadChat, monitoring: loadMonitoring, hitl: loadHitl, users: loadUsers, scripts: loadScripts, git: loadGit };
+  const loaders = { secrets: loadEnv, mcp: loadMCP, llm: loadLLM, teams: loadTeams, templates: loadTemplates, channels: loadChannels, chat: loadChat, monitoring: loadMonitoring, hitl: loadHitl, users: loadUsers, scripts: loadScripts };
   if (loaders[name]) loaders[name]();
 }
 
@@ -252,13 +252,30 @@ function editEnvEntry(key) {
     </div>
     <div class="form-group">
       <label>Valeur</label>
-      <input id="edit-env-value" value="${escHtml(entry.value)}" />
+      <div style="display:flex;gap:0.5rem">
+        <input id="edit-env-value" value="${escHtml(entry.value)}" style="flex:1" />
+        <button class="btn btn-outline btn-sm" onclick="pasteToEnvValue()">Coller</button>
+      </div>
     </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
       <button class="btn btn-primary" onclick="saveEnvEntry('${escHtml(entry.key)}')">Sauvegarder</button>
     </div>
   `);
+}
+
+async function pasteToEnvValue() {
+  const field = document.getElementById('edit-env-value');
+  if (navigator.clipboard && navigator.clipboard.readText) {
+    try {
+      field.value = await navigator.clipboard.readText();
+      return;
+    } catch {}
+  }
+  // Fallback HTTP : focus + select pour Ctrl+V
+  field.value = '';
+  field.focus();
+  toast('HTTPS requis pour le collage auto. Faites Ctrl+V dans le champ.', 'info');
 }
 
 async function saveEnvEntry(key) {
@@ -750,27 +767,25 @@ async function saveTeam(teamId) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-function editAgent(id) {
+async function editAgent(id) {
   const a = agents[id];
   const providerNames = Object.keys(llmProviders.providers || {});
   const mcpList = mcpAccess[id] || [];
-  const availableMCP = mcpCatalog.filter(c => !c.deprecated);
+  let mcpInstalled = [];
+  try { const d = await api('/api/mcp/servers'); mcpInstalled = Object.keys(d.servers || {}); } catch {}
 
-  const mcpChips = availableMCP.length > 0
-    ? availableMCP.map(c => {
-        const checked = mcpList.includes(c.id);
-        const installedClass = c.installed ? '' : ' not-installed';
-        return `<label class="mcp-chip${checked ? ' active' : ''}${installedClass}" title="${escHtml(c.description || '')}">
-          <input type="checkbox" class="agent-mcp-cb" value="${escHtml(c.id)}" ${checked ? 'checked' : ''} onchange="this.parentElement.classList.toggle('active',this.checked)" />
-          ${escHtml(c.label)}
+  const mcpChips = mcpInstalled.length > 0
+    ? mcpInstalled.map(sid => {
+        const checked = mcpList.includes(sid);
+        return `<label class="mcp-chip${checked ? ' active' : ''}" title="${escHtml(sid)}">
+          <input type="checkbox" class="agent-mcp-cb" value="${escHtml(sid)}" ${checked ? 'checked' : ''} onchange="this.parentElement.classList.toggle('active',this.checked)" />
+          ${escHtml(sid)}
         </label>`;
       }).join('')
-    : '<p style="color:var(--text-secondary);font-size:0.8rem">Aucun serveur MCP dans le catalogue.</p>';
+    : '<p style="color:var(--text-secondary);font-size:0.8rem">Aucun serveur MCP installe.</p>';
 
-  const promptRaw = a.prompt_content || '';
-  const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
-  const hasPipeline = a.type === 'pipeline' || (a.pipeline_steps && a.pipeline_steps.length > 0);
   const isOrchestrator = a.type === 'orchestrator';
+  const hasPipeline = a.type === 'pipeline' || (a.pipeline_steps && a.pipeline_steps.length > 0);
   const curType = isOrchestrator ? 'orchestrator' : (hasPipeline ? 'pipeline' : 'single');
   const hasOtherOrch = Object.entries(agents).some(([aid, ag]) => aid !== id && ag.type === 'orchestrator');
 
@@ -781,7 +796,7 @@ function editAgent(id) {
     </div>
     <div class="agent-tabs">
       <div class="agent-tab active" onclick="switchAgentTab('divers')">Divers</div>
-      <div class="agent-tab" onclick="switchAgentTab('prompt')">Prompt</div>
+      <div class="agent-tab" onclick="switchAgentTab('pipeline')">Pipeline Steps</div>
     </div>
 
     <!-- Tab: Divers -->
@@ -811,15 +826,11 @@ function editAgent(id) {
       </div>
       <div class="form-group">
         <label>Type</label>
-        <select id="agent-edit-type" onchange="document.getElementById('agent-edit-pipeline-wrap').style.display=this.value==='pipeline'?'':'none'">
+        <select id="agent-edit-type">
           <option value="single" ${curType==='single'?'selected':''}>Single</option>
           <option value="pipeline" ${curType==='pipeline'?'selected':''}>Pipeline</option>
           <option value="orchestrator" ${curType==='orchestrator'?'selected':''} ${hasOtherOrch && curType!=='orchestrator'?'disabled':''}>Orchestrator</option>
         </select>
-      </div>
-      <div id="agent-edit-pipeline-wrap" class="form-group" style="${hasPipeline ? '' : 'display:none'}">
-        <label>Pipeline Steps</label>
-        <div id="agent-edit-pipeline-steps" class="pipeline-steps-container"></div>
       </div>
       <div class="form-group">
         <label>Services MCP autorises</label>
@@ -829,19 +840,10 @@ function editAgent(id) {
       </div>
     </div>
 
-    <!-- Tab: Prompt -->
-    <div id="agent-tab-prompt" class="agent-tab-content">
-      <div class="form-group">
-        <label>Prompt (${escHtml(a.prompt)})</label>
-        <div class="prompt-tabs">
-          <div class="prompt-tab active" id="prompt-tab-preview" onclick="switchPromptTab('preview')">Apercu</div>
-          <div class="prompt-tab" id="prompt-tab-edit" onclick="switchPromptTab('edit')">Editer</div>
-          <div class="prompt-tabs-spacer"></div>
-          <button class="btn btn-sm btn-generate" id="btn-generate-prompt" onclick="generatePrompt('agent-edit-prompt','${escHtml(id)}',document.getElementById('agent-edit-name').value)">Generer avec l&apos;IA</button>
-        </div>
-        <div class="prompt-preview" id="agent-prompt-preview">${promptHtml}</div>
-        <textarea id="agent-edit-prompt" style="min-height:500px;display:none;border-radius:0 0.5rem 0.5rem 0.5rem">${escHtml(promptRaw)}</textarea>
-      </div>
+    <!-- Tab: Pipeline Steps -->
+    <div id="agent-tab-pipeline" class="agent-tab-content">
+      <p style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:1rem">Definissez les etapes du pipeline. Chaque etape a un nom, une cle de sortie (output_key) et une instruction.</p>
+      <div id="agent-edit-pipeline-steps" class="pipeline-steps-container"></div>
     </div>
 
     <div class="modal-actions">
@@ -912,12 +914,11 @@ async function saveAgent(id) {
   const model = document.getElementById('agent-edit-model').value;
   const temperature = parseFloat(document.getElementById('agent-edit-temp').value);
   const max_tokens = parseInt(document.getElementById('agent-edit-tokens').value);
-  const prompt_content = document.getElementById('agent-edit-prompt').value;
   const agentType = document.getElementById('agent-edit-type').value;
   if (agentType === 'orchestrator' && Object.entries(agents).some(([aid, ag]) => aid !== id && ag.type === 'orchestrator')) {
     toast('Un orchestrator existe deja dans cette equipe', 'error'); return;
   }
-  const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('agent-edit-pipeline-steps') : [];
+  const pipeline_steps = getPipelineSteps('agent-edit-pipeline-steps');
   const mcpCheckboxes = document.querySelectorAll('.agent-mcp-cb:checked');
   const mcpList = Array.from(mcpCheckboxes).map(cb => cb.value);
 
@@ -926,7 +927,7 @@ async function saveAgent(id) {
     await Promise.all([
       api(`/api/agents/${id}`, {
         method: 'PUT',
-        body: { id, name, model, temperature, max_tokens, prompt_content, prompt_file: '', type: agentType, pipeline_steps, team_id: agents[id]._team_id || 'default' }
+        body: { id, name, model, temperature, max_tokens, prompt_file: '', type: agentType, pipeline_steps, team_id: agents[id]._team_id || 'default' }
       }),
       api(`/api/agents/mcp-access/${encodeURIComponent(teamDir)}/${encodeURIComponent(id)}`, { method: 'PUT', body: { servers: mcpList } }),
     ]);
@@ -936,33 +937,41 @@ async function saveAgent(id) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-function showAddAgentModal() {
+async function showAddAgentModal() {
   const providerNames = Object.keys(llmProviders.providers || {});
   const teamOpts = agentGroups.map(g => `<option value="${escHtml(g.team_id)}">${escHtml(g.team_name)}</option>`).join('');
-  const mcpInstalled = mcpCatalog.filter(c => c.installed);
-  const mcpTags = mcpInstalled.length
-    ? mcpInstalled.map(c => `<label class="mcp-check-tag"><input type="checkbox" value="${escHtml(c.id)}" onchange="this.parentElement.classList.toggle('active',this.checked)" />${escHtml(c.label)}</label>`).join('')
-    : '<span style="color:var(--text-secondary);font-size:0.8rem">Aucun serveur MCP installe</span>';
+
+  // Load shared agents catalog
+  let sharedList = [];
+  try { const d = await api('/api/shared-agents'); sharedList = d.agents || []; } catch {}
+  const agentOpts = sharedList.length
+    ? sharedList.map(a => `<option value="${escHtml(a.id)}" data-name="${escHtml(a.name || a.id)}" data-llm="${escHtml(a.llm || '')}" data-temp="${a.temperature ?? 0.2}">${escHtml(a.name || a.id)} (${escHtml(a.id)})</option>`).join('')
+    : '';
+
   showModal(`
     <div class="modal-header">
-      <h3>Nouvel agent</h3>
+      <h3>Ajouter un agent</h3>
       <button class="btn-icon" onclick="closeModal()">&times;</button>
     </div>
+    <div class="form-group">
+      <label>Agent (catalogue)</label>
+      <select id="agent-new-id" onchange="_onSharedAgentSelect()">
+        <option value="">-- Choisir un agent --</option>
+        ${agentOpts}
+      </select>
+      ${!sharedList.length ? '<p style="color:var(--text-secondary);font-size:0.8rem;margin-top:0.25rem">Aucun agent dans le catalogue. Creez-en d\'abord dans Templates &gt; Agents.</p>' : ''}
+    </div>
     <div class="form-row">
-      <div class="form-group">
-        <label>ID (identifiant unique)</label>
-        <input id="agent-new-id" placeholder="mon_agent" />
-      </div>
       <div class="form-group">
         <label>Nom affiche</label>
         <input id="agent-new-name" placeholder="Mon Agent" />
       </div>
-    </div>
-    <div class="form-row">
       <div class="form-group">
         <label>Equipe</label>
         <select id="agent-new-team">${teamOpts}</select>
       </div>
+    </div>
+    <div class="form-row">
       <div class="form-group">
         <label>Modele LLM</label>
         <select id="agent-new-model">
@@ -970,45 +979,38 @@ function showAddAgentModal() {
           ${providerNames.map(p => `<option value="${p}">${escHtml(p)}</option>`).join('')}
         </select>
       </div>
-    </div>
-    <div class="form-group">
-      <label>Temperature</label>
-      <input id="agent-new-temp" type="number" step="0.1" min="0" max="2" value="0.2" />
+      <div class="form-group">
+        <label>Temperature</label>
+        <input id="agent-new-temp" type="number" step="0.1" min="0" max="2" value="0.2" />
+      </div>
     </div>
     <div class="form-group">
       <label>Type</label>
-      <select id="agent-new-type" onchange="document.getElementById('agent-new-pipeline-wrap').style.display=this.value==='pipeline'?'':'none'">
+      <select id="agent-new-type">
         <option value="single" selected>Single</option>
         <option value="pipeline">Pipeline</option>
         <option value="orchestrator" ${Object.values(agents).some(ag => ag.type === 'orchestrator') ? 'disabled' : ''}>Orchestrator</option>
       </select>
     </div>
-    <div id="agent-new-pipeline-wrap" class="form-group" style="display:none">
-      <label>Pipeline Steps</label>
-      <div id="agent-new-pipeline-steps" class="pipeline-steps-container"></div>
-    </div>
-    <div class="form-group">
-      <label>Services MCP</label>
-      <div class="mcp-check-tags">${mcpTags}</div>
-    </div>
-    <div class="form-group">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.25rem">
-        <label style="margin-bottom:0">Prompt initial</label>
-        <button class="btn btn-sm btn-generate" id="btn-generate-prompt" onclick="generatePrompt('agent-new-prompt',document.getElementById('agent-new-id').value,document.getElementById('agent-new-name').value)">Generer avec l&apos;IA</button>
-      </div>
-      <textarea id="agent-new-prompt" style="min-height:200px" placeholder="Chargement du template..."></textarea>
-    </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
-      <button class="btn btn-primary" onclick="addAgent()">Creer</button>
+      <button class="btn btn-primary" onclick="addAgent()">Ajouter</button>
     </div>
   `);
-  renderPipelineSteps('agent-new-pipeline-steps', []);
-  // Load default prompt template
-  api('/api/prompts/templates/New').then(r => {
-    const ta = document.getElementById('agent-new-prompt');
-    if (ta && !ta.value) ta.value = r.content;
-  }).catch(() => {});
+}
+
+function _onSharedAgentSelect() {
+  const sel = document.getElementById('agent-new-id');
+  const opt = sel.selectedOptions[0];
+  if (!opt || !opt.value) return;
+  document.getElementById('agent-new-name').value = opt.dataset.name || opt.value;
+  const llm = opt.dataset.llm || '';
+  if (llm) {
+    const modelSel = document.getElementById('agent-new-model');
+    if (modelSel) modelSel.value = llm;
+  }
+  const temp = opt.dataset.temp;
+  if (temp) document.getElementById('agent-new-temp').value = temp;
 }
 
 async function addAgent() {
@@ -1016,25 +1018,30 @@ async function addAgent() {
   const name = document.getElementById('agent-new-name').value.trim();
   const model = document.getElementById('agent-new-model').value;
   const temperature = parseFloat(document.getElementById('agent-new-temp').value);
-  const prompt_content = document.getElementById('agent-new-prompt').value;
   const team_id = document.getElementById('agent-new-team')?.value || 'default';
-  if (!id || !name) { toast('ID et nom requis', 'error'); return; }
+  if (!id) { toast('Selectionnez un agent du catalogue', 'error'); return; }
+  if (!name) { toast('Nom requis', 'error'); return; }
   const agentType = document.getElementById('agent-new-type').value;
   if (agentType === 'orchestrator' && Object.values(agents).some(ag => ag.type === 'orchestrator')) {
     toast('Un orchestrator existe deja dans cette equipe', 'error'); return;
   }
-  const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('agent-new-pipeline-steps') : [];
-  const mcpChecked = [...document.querySelectorAll('#modal-container .mcp-check-tag input:checked')].map(cb => cb.value);
+  // Load prompt + MCP from the shared agent catalog
+  let prompt_content = '', mcp_access = [];
+  try {
+    const sa = await api(`/api/shared-agents/${encodeURIComponent(id)}`);
+    prompt_content = sa.prompt_content || '';
+    mcp_access = sa.mcp_access || [];
+  } catch {}
   const teamDir = agentGroups.find(g => g.team_id === team_id)?.team_dir || team_id;
   try {
     await api('/api/agents', {
       method: 'POST',
-      body: { id, name, model, temperature, max_tokens: 32768, prompt_content, prompt_file: '', type: agentType, pipeline_steps, team_id }
+      body: { id, name, model, temperature, max_tokens: 32768, prompt_content, prompt_file: '', type: agentType, pipeline_steps: [], team_id }
     });
-    if (mcpChecked.length) {
-      await api(`/api/agents/mcp-access/${encodeURIComponent(teamDir)}/${encodeURIComponent(id)}`, { method: 'PUT', body: { servers: mcpChecked } });
+    if (mcp_access.length) {
+      await api(`/api/agents/mcp-access/${encodeURIComponent(teamDir)}/${encodeURIComponent(id)}`, { method: 'PUT', body: { servers: mcp_access } });
     }
-    toast('Agent cree', 'success');
+    toast('Agent ajoute', 'success');
     closeModal();
     loadAgents();
   } catch (e) { toast(e.message, 'error'); }
@@ -1659,7 +1666,7 @@ async function loadContainers() {
       <tbody>${containers.map(c => {
         const running = c.state === 'running';
         const dot = running ? '🟢' : '🔴';
-        const isManaged = ['langgraph-api','langgraph-discord','langgraph-mail','langgraph-admin'].includes(c.name);
+        const isManaged = ['langgraph-api','langgraph-discord','langgraph-mail','langgraph-admin','langgraph-hitl','langgraph-outline','langgraph-minio'].includes(c.name);
         const actions = isManaged ? `
           <button class="btn btn-outline btn-sm" onclick="containerAction('${c.name}','restart')" style="font-size:0.7rem">Restart</button>
           ${running
@@ -1723,6 +1730,150 @@ async function runScript(name) {
 // GIT (factorized: works for both configs + shared)
 // ═══════════════════════════════════════════════════
 
+// ── Git Service (remote repo creation/fetch) ────
+
+const GIT_SERVICE_URLS = {
+  github:    'https://api.github.com',
+  gitlab:    'https://gitlab.com',
+  gitea:     '',
+  forgejo:   '',
+  bitbucket: 'https://api.bitbucket.org/2.0',
+};
+
+async function loadGitServiceConfig() {
+  try {
+    const cfg = await api('/api/git-service/config');
+    document.getElementById('gs-service').value = cfg.service || '';
+    document.getElementById('gs-url').value = cfg.url || '';
+    document.getElementById('gs-login').value = cfg.login || '';
+    document.getElementById('gs-token').value = cfg.token || '';
+    document.getElementById('gs-repo-name').value = cfg.repo_name || '';
+    document.getElementById('gs-repo-key').value = cfg.repo_key || 'shared';
+    _checkGitServiceBtns();
+  } catch {}
+}
+
+function _onGitServiceChange() {
+  const svc = document.getElementById('gs-service').value;
+  const urlField = document.getElementById('gs-url');
+  if (svc && GIT_SERVICE_URLS[svc] !== undefined) {
+    urlField.value = GIT_SERVICE_URLS[svc];
+    urlField.placeholder = GIT_SERVICE_URLS[svc] || 'https://votre-instance.com';
+  }
+  _checkGitServiceBtns();
+}
+
+function _checkGitServiceBtns() {
+  const svc = document.getElementById('gs-service').value;
+  const url = document.getElementById('gs-url').value.trim();
+  const token = document.getElementById('gs-token').value.trim();
+  const repo = document.getElementById('gs-repo-name').value.trim();
+  const ready = svc && url && token && repo;
+  document.getElementById('gs-btn-init').disabled = !ready;
+  document.getElementById('gs-btn-fetch').disabled = !ready;
+  document.getElementById('gs-btn-commit').disabled = !ready;
+  document.getElementById('gs-btn-push').disabled = !ready;
+}
+
+async function saveGitServiceConfig() {
+  try {
+    await api('/api/git-service/config', { method: 'PUT', body: {
+      service: document.getElementById('gs-service').value,
+      url: document.getElementById('gs-url').value.trim(),
+      login: document.getElementById('gs-login').value.trim(),
+      token: document.getElementById('gs-token').value.trim(),
+      repo_name: document.getElementById('gs-repo-name').value.trim(),
+      repo_key: document.getElementById('gs-repo-key').value,
+    }});
+    toast('Configuration du service Git enregistree', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function gitServiceInit() {
+  const repoName = document.getElementById('gs-repo-name').value.trim();
+  const repoKey = document.getElementById('gs-repo-key').value;
+  if (!repoName) { toast('Nom du depot requis', 'error'); return; }
+  const btn = document.getElementById('gs-btn-init');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Creation...';
+  try {
+    // 1. Save service config first
+    await saveGitServiceConfig();
+    // 2. Create remote repo
+    const result = await api('/api/git-service/create-repo', { method: 'POST', body: {
+      repo_name: repoName, repo_key: repoKey
+    }});
+    if (!result.ok) { toast(result.message || 'Erreur creation', 'error'); return; }
+    toast(result.message || 'Depot cree', 'success');
+    // 3. Init local repo + push
+    const init = await api(`/api/git/${repoKey}/init`, { method: 'POST' });
+    if (init.ok) toast('Depot local initialise', 'success');
+    // 4. Reload the repo git panel
+    const prefix = repoKey === 'shared' ? 'tpl-git' : 'cfg-git';
+    loadRepoGit(prefix);
+  } catch (e) { toast(e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = 'Init'; _checkGitServiceBtns(); }
+}
+
+async function gitServiceFetch() {
+  const repoName = document.getElementById('gs-repo-name').value.trim();
+  const repoKey = document.getElementById('gs-repo-key').value;
+  const svc = document.getElementById('gs-service').value;
+  const baseUrl = document.getElementById('gs-url').value.trim();
+  const login = document.getElementById('gs-login').value.trim();
+  if (!repoName) { toast('Nom du depot requis', 'error'); return; }
+  // Build expected repo URL based on service
+  let repoUrl = '';
+  if (svc === 'github') repoUrl = `https://github.com/${login}/${repoName}.git`;
+  else if (svc === 'gitlab') repoUrl = `${baseUrl.replace('/api/v4','').replace('api.','').replace('/api','') || 'https://gitlab.com'}/${login}/${repoName}.git`;
+  else if (svc === 'bitbucket') repoUrl = `https://bitbucket.org/${login}/${repoName}.git`;
+  else repoUrl = `${baseUrl.replace(/\/api\/v1$/,'').replace(/\/api$/,'')}/${login}/${repoName}.git`;
+
+  const btn = document.getElementById('gs-btn-fetch');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Fetch...';
+  try {
+    await saveGitServiceConfig();
+    const result = await api('/api/git-service/fetch-repo', { method: 'POST', body: {
+      repo_key: repoKey, repo_url: repoUrl
+    }});
+    toast(result.message || (result.ok ? 'Fetch OK' : 'Erreur'), result.ok ? 'success' : 'error');
+    const prefix = repoKey === 'shared' ? 'tpl-git' : 'cfg-git';
+    loadRepoGit(prefix);
+  } catch (e) { toast(e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = 'Fetch'; _checkGitServiceBtns(); }
+}
+
+async function gitServicePush() {
+  const repoKey = document.getElementById('gs-repo-key').value;
+  const btn = document.getElementById('gs-btn-push');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Push...';
+  try {
+    // Ensure git service config is saved (credentials)
+    await saveGitServiceConfig();
+    // Ensure repo git.json has credentials from service config
+    await api('/api/git-service/sync-repo-config', { method: 'POST', body: { repo_key: repoKey } });
+    const data = await api(`/api/git/${repoKey}/push`, { method: 'POST' });
+    toast(data.message || (data.ok ? 'Push OK' : 'Erreur'), data.ok ? 'success' : 'error');
+    const prefix = repoKey === 'shared' ? 'tpl-git' : 'cfg-git';
+    loadRepoGit(prefix);
+  } catch (e) { toast(e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = 'Push'; _checkGitServiceBtns(); }
+}
+
+async function gitServiceCommitPush() {
+  const repoKey = document.getElementById('gs-repo-key').value;
+  const btn = document.getElementById('gs-btn-commit');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Commit...';
+  try {
+    await saveGitServiceConfig();
+    await api('/api/git-service/sync-repo-config', { method: 'POST', body: { repo_key: repoKey } });
+    const data = await api(`/api/git/${repoKey}/commit`, { method: 'POST', body: { message: 'Mise a jour depuis le dashboard' } });
+    toast(data.message || (data.ok ? 'Commit & Push OK' : 'Erreur'), data.ok ? 'success' : 'error');
+    const prefix = repoKey === 'shared' ? 'tpl-git' : 'cfg-git';
+    loadRepoGit(prefix);
+  } catch (e) { toast(e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = 'Commit & Push'; _checkGitServiceBtns(); }
+}
+
 // Mapping: prefix → repoKey. HTML elements use prefix (cfg-git-*, tpl-git-*)
 const GIT_REPOS = {
   'cfg-git': 'configs',
@@ -1742,19 +1893,133 @@ async function loadRepoGit(prefix) {
     document.getElementById(`${prefix}-password`).value = cfg.password || '';
     const inited = status.initialized;
     document.getElementById(`${prefix}-branch`).textContent = inited ? (status.branch || 'inconnu') : 'Non initialise';
-    document.getElementById(`${prefix}-status`).textContent = inited ? (status.status || '(aucun changement)') : 'Git non initialise. Enregistrez la configuration puis cliquez Init.';
+    document.getElementById(`${prefix}-status`).textContent = inited ? (status.status || '(aucun changement)') : 'Git non initialise. Utilisez le bloc Service Git pour Init ou Fetch.';
     document.getElementById(`${prefix}-log`).textContent = inited ? (status.log || '(vide)') : '';
-    document.getElementById(`btn-${prefix}-init`).disabled = inited;
-    document.getElementById(`btn-${prefix}-pull`).disabled = !inited;
-    document.getElementById(`btn-${prefix}-commit`).disabled = !inited;
-    document.getElementById(`btn-${prefix}-push`).disabled = !inited;
-    document.getElementById(`btn-${prefix}-reset`).disabled = !inited;
+    for (const b of ['init','pull','commit','push','reset']) {
+      const el = document.getElementById(`btn-${prefix}-${b}`);
+      if (el) el.disabled = b === 'init' ? inited : !inited;
+    }
     if (inited) loadRepoGitCommits(prefix);
   } catch (e) { toast(e.message, 'error'); }
 }
 
-function loadCfgGit() { loadRepoGit('cfg-git'); }
-function loadTplGit() { loadRepoGit('tpl-git'); }
+function loadCfgGit() { loadCfgGitServiceConfig(); loadRepoGit('cfg-git'); }
+
+// ── Config-scope Git Service ────
+
+async function loadCfgGitServiceConfig() {
+  try {
+    const cfg = await api('/api/cfg-git-service/config');
+    document.getElementById('cgs-service').value = cfg.service || '';
+    document.getElementById('cgs-url').value = cfg.url || '';
+    document.getElementById('cgs-login').value = cfg.login || '';
+    document.getElementById('cgs-token').value = cfg.token || '';
+    document.getElementById('cgs-repo-name').value = cfg.repo_name || '';
+    _checkCfgGitServiceBtns();
+  } catch {}
+}
+
+function _onCfgGitServiceChange() {
+  const svc = document.getElementById('cgs-service').value;
+  const urlField = document.getElementById('cgs-url');
+  if (svc && GIT_SERVICE_URLS[svc] !== undefined) {
+    urlField.value = GIT_SERVICE_URLS[svc];
+    urlField.placeholder = GIT_SERVICE_URLS[svc] || 'https://votre-instance.com';
+  }
+  _checkCfgGitServiceBtns();
+}
+
+function _checkCfgGitServiceBtns() {
+  const svc = document.getElementById('cgs-service').value;
+  const url = document.getElementById('cgs-url').value.trim();
+  const token = document.getElementById('cgs-token').value.trim();
+  const repo = document.getElementById('cgs-repo-name').value.trim();
+  const ready = svc && url && token && repo;
+  document.getElementById('cgs-btn-init').disabled = !ready;
+  document.getElementById('cgs-btn-fetch').disabled = !ready;
+  document.getElementById('cgs-btn-commit').disabled = !ready;
+  document.getElementById('cgs-btn-push').disabled = !ready;
+}
+
+async function saveCfgGitServiceConfig() {
+  try {
+    await api('/api/cfg-git-service/config', { method: 'PUT', body: {
+      service: document.getElementById('cgs-service').value,
+      url: document.getElementById('cgs-url').value.trim(),
+      login: document.getElementById('cgs-login').value.trim(),
+      token: document.getElementById('cgs-token').value.trim(),
+      repo_name: document.getElementById('cgs-repo-name').value.trim(),
+    }});
+    toast('Configuration du service Git enregistree', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function cfgGitServiceInit() {
+  const repoName = document.getElementById('cgs-repo-name').value.trim();
+  if (!repoName) { toast('Nom du depot requis', 'error'); return; }
+  const btn = document.getElementById('cgs-btn-init');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Creation...';
+  try {
+    await saveCfgGitServiceConfig();
+    const result = await api('/api/cfg-git-service/create-repo', { method: 'POST', body: { repo_name: repoName } });
+    if (!result.ok) { toast(result.message || 'Erreur creation', 'error'); return; }
+    toast(result.message || 'Depot cree', 'success');
+    const init = await api('/api/git/configs/init', { method: 'POST' });
+    if (init.ok) toast('Depot local initialise', 'success');
+    loadRepoGit('cfg-git');
+  } catch (e) { toast(e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = 'Init'; _checkCfgGitServiceBtns(); }
+}
+
+async function cfgGitServiceFetch() {
+  const repoName = document.getElementById('cgs-repo-name').value.trim();
+  const svc = document.getElementById('cgs-service').value;
+  const baseUrl = document.getElementById('cgs-url').value.trim();
+  const login = document.getElementById('cgs-login').value.trim();
+  if (!repoName) { toast('Nom du depot requis', 'error'); return; }
+  let repoUrl = '';
+  if (svc === 'github') repoUrl = `https://github.com/${login}/${repoName}.git`;
+  else if (svc === 'gitlab') repoUrl = `${baseUrl.replace('/api/v4','').replace('api.','').replace('/api','') || 'https://gitlab.com'}/${login}/${repoName}.git`;
+  else if (svc === 'bitbucket') repoUrl = `https://bitbucket.org/${login}/${repoName}.git`;
+  else repoUrl = `${baseUrl.replace(/\/api\/v1$/,'').replace(/\/api$/,'')}/${login}/${repoName}.git`;
+  const btn = document.getElementById('cgs-btn-fetch');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Fetch...';
+  try {
+    await saveCfgGitServiceConfig();
+    const result = await api('/api/cfg-git-service/fetch-repo', { method: 'POST', body: { repo_url: repoUrl } });
+    toast(result.message || (result.ok ? 'Fetch OK' : 'Erreur'), result.ok ? 'success' : 'error');
+    loadRepoGit('cfg-git');
+  } catch (e) { toast(e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = 'Fetch'; _checkCfgGitServiceBtns(); }
+}
+
+async function cfgGitServicePush() {
+  const btn = document.getElementById('cgs-btn-push');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Push...';
+  try {
+    await saveCfgGitServiceConfig();
+    await api('/api/cfg-git-service/sync-repo-config', { method: 'POST' });
+    const data = await api('/api/git/configs/push', { method: 'POST' });
+    toast(data.message || (data.ok ? 'Push OK' : 'Erreur'), data.ok ? 'success' : 'error');
+    loadRepoGit('cfg-git');
+  } catch (e) { toast(e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = 'Push'; _checkCfgGitServiceBtns(); }
+}
+
+async function cfgGitServiceCommitPush() {
+  const btn = document.getElementById('cgs-btn-commit');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Commit...';
+  try {
+    await saveCfgGitServiceConfig();
+    await api('/api/cfg-git-service/sync-repo-config', { method: 'POST' });
+    const data = await api('/api/git/configs/commit', { method: 'POST', body: { message: 'Mise a jour depuis le dashboard' } });
+    toast(data.message || (data.ok ? 'Commit & Push OK' : 'Erreur'), data.ok ? 'success' : 'error');
+    loadRepoGit('cfg-git');
+  } catch (e) { toast(e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = 'Commit & Push'; _checkCfgGitServiceBtns(); }
+}
+
+function loadTplGit() { loadGitServiceConfig(); loadRepoGit('tpl-git'); }
 
 async function saveRepoGitConfig(prefix) {
   const repoKey = GIT_REPOS[prefix];
@@ -1954,6 +2219,8 @@ function renderTeams() {
           ${a.max_tokens != null ? `<span class="tag tag-blue">tokens: ${a.max_tokens}</span>` : ''}
           ${a.llm || a.model ? `<span class="tag tag-yellow">${escHtml(a.llm || a.model)}</span>` : ''}
           ${a.type ? `<span class="tag tag-gray">${escHtml(a.type)}</span>` : ''}
+          ${a.delivers_docs ? '<span class="tag tag-purple">Documentation</span>' : ''}
+          ${a.delivers_code ? '<span class="tag tag-purple">Code</span>' : ''}
         </div>
         ${mcpList.length ? `<div class="agent-meta">
           ${mcpList.map(m => `<span class="tag tag-green">${escHtml(m)}</span>`).join('')}
@@ -2001,90 +2268,71 @@ function renderTeams() {
 }
 
 async function showAddCfgAgentModal(dir) {
-  let llmNames = [], mcpCatalogList = [], hasOrch = false;
+  let sharedList = [], hasOrch = false;
   try {
-    const llmData = await api('/api/templates/llm');
-    llmNames = Object.keys(llmData.providers || {});
-  } catch { /* ignore */ }
-  try {
-    const mcpData = await api('/api/mcp/catalog');
-    mcpCatalogList = (mcpData.servers || []).filter(c => !c.deprecated);
+    const d = await api('/api/shared-agents');
+    sharedList = d.agents || [];
   } catch { /* ignore */ }
   try {
     const reg = await api(`/api/agents/registry/${encodeURIComponent(dir)}`);
     hasOrch = Object.values(reg.agents || reg || {}).some(a => a.type === 'orchestrator');
   } catch { /* ignore */ }
-  const llmOptions = `<option value="">-- Defaut --</option>` +
-    llmNames.map(p => `<option value="${escHtml(p)}">${escHtml(p)}</option>`).join('');
-  const mcpTags = mcpCatalogList.length
-    ? mcpCatalogList.map(c => `<label class="mcp-check-tag"><input type="checkbox" value="${escHtml(c.id)}" onchange="this.parentElement.classList.toggle('active',this.checked)" />${escHtml(c.label || c.id)}</label>`).join('')
-    : '<span style="color:var(--text-secondary);font-size:0.8rem">Aucun serveur MCP dans le catalogue</span>';
+  const sortedSharedCfg = sharedList.slice().sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id, 'fr'));
   showModal(`
     <div class="modal-header">
-      <h3>Nouvel agent</h3>
+      <h3>Ajouter un agent</h3>
       <button class="btn-icon" onclick="closeModal()">&times;</button>
     </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>ID (identifiant unique)</label>
-        <input id="cfg-agent-new-id" placeholder="mon_agent" />
+    <div class="form-group">
+      <label>Agent (catalogue)</label>
+      <div style="position:relative">
+        <input id="cfg-agent-filter" placeholder="Filtrer / choisir un agent..." autocomplete="off"
+          oninput="_filterCfgAgentDropdown()" onfocus="_openCfgAgentDropdown()" />
+        <input type="hidden" id="cfg-agent-new-id" />
+        <div id="cfg-agent-dropdown" class="sa-dropdown" style="display:none">
+          ${sortedSharedCfg.map(a => `<div class="sa-dropdown-item" data-id="${escHtml(a.id)}" data-name="${escHtml(a.name || a.id)}" onclick="_pickCfgAgent(this)">${escHtml(a.name || a.id)} <span style="color:var(--text-secondary);font-size:0.8rem">(${escHtml(a.id)})</span></div>`).join('')}
+        </div>
       </div>
-      <div class="form-group">
-        <label>Nom affiche</label>
-        <input id="cfg-agent-new-name" placeholder="Mon Agent" />
-      </div>
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Modele LLM</label>
-        <select id="cfg-agent-new-llm">${llmOptions}</select>
-      </div>
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Temperature</label>
-        <input id="cfg-agent-new-temp" type="number" step="0.1" min="0" max="2" value="0.3" />
-      </div>
-      <div class="form-group">
-        <label>Max tokens</label>
-        <input id="cfg-agent-new-tokens" type="number" value="32768" />
-      </div>
+      ${!sharedList.length ? '<p style="color:var(--text-secondary);font-size:0.8rem;margin-top:0.25rem">Aucun agent dans le catalogue. Creez-en d\'abord dans Templates &gt; Agents.</p>' : ''}
     </div>
     <div class="form-group">
       <label>Type</label>
-      <select id="cfg-agent-new-type" onchange="document.getElementById('cfg-new-pipeline-wrap').style.display=this.value==='pipeline'?'':'none'">
+      <select id="cfg-agent-new-type">
         <option value="single" selected>Single</option>
         <option value="pipeline">Pipeline</option>
         <option value="orchestrator" ${hasOrch?'disabled':''}>Orchestrator</option>
       </select>
     </div>
-    <div id="cfg-new-pipeline-wrap" class="form-group" style="display:none">
-      <label>Pipeline Steps</label>
-      <div id="cfg-new-pipeline-steps" class="pipeline-steps-container"></div>
-    </div>
-    <div class="form-group">
-      <label>Services MCP</label>
-      <div class="mcp-check-tags">${mcpTags}</div>
-    </div>
-    <div class="form-group">
-      <label>Prompt initial</label>
-      <textarea id="cfg-agent-new-prompt" style="min-height:120px" placeholder="# Mon Agent\n\nDescription du role..."></textarea>
-    </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
       <button class="btn btn-primary" onclick="addCfgAgent('${escHtml(dir)}')">Ajouter</button>
     </div>
-  `);
-  renderPipelineSteps('cfg-new-pipeline-steps', []);
+  `, 'modal-tall');
+}
+
+function _filterCfgAgentDropdown() {
+  const filter = (document.getElementById('cfg-agent-filter').value || '').toLowerCase();
+  const dd = document.getElementById('cfg-agent-dropdown');
+  dd.style.display = '';
+  dd.querySelectorAll('.sa-dropdown-item').forEach(item => {
+    const label = (item.dataset.name + ' ' + item.dataset.id).toLowerCase();
+    item.style.display = label.includes(filter) ? '' : 'none';
+  });
+}
+function _openCfgAgentDropdown() {
+  document.getElementById('cfg-agent-dropdown').style.display = '';
+  _filterCfgAgentDropdown();
+}
+function _pickCfgAgent(el) {
+  const id = el.dataset.id, name = el.dataset.name;
+  document.getElementById('cfg-agent-new-id').value = id;
+  document.getElementById('cfg-agent-filter').value = name + ' (' + id + ')';
+  document.getElementById('cfg-agent-dropdown').style.display = 'none';
 }
 
 async function addCfgAgent(dir) {
-  const id = (document.getElementById('cfg-agent-new-id').value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
-  const name = document.getElementById('cfg-agent-new-name').value.trim();
-  if (!id || !name) { toast('ID et nom requis', 'error'); return; }
-  const llm = document.getElementById('cfg-agent-new-llm').value;
-  const temperature = parseFloat(document.getElementById('cfg-agent-new-temp').value) || 0.3;
-  const max_tokens = parseInt(document.getElementById('cfg-agent-new-tokens').value) || 32768;
+  const id = (document.getElementById('cfg-agent-new-id').value || '').trim();
+  if (!id) { toast('Selectionnez un agent du catalogue', 'error'); return; }
   const agentType = document.getElementById('cfg-agent-new-type').value;
   if (agentType === 'orchestrator') {
     try {
@@ -2094,21 +2342,13 @@ async function addCfgAgent(dir) {
       }
     } catch { /* ignore */ }
   }
-  const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('cfg-new-pipeline-steps') : [];
-  const prompt_content = document.getElementById('cfg-agent-new-prompt').value || `# ${name}\n\n`;
-  const mcpChecked = [...document.querySelectorAll('#modal-container .mcp-check-tag input:checked')].map(cb => cb.value);
   try {
     await api('/api/agents', { method: 'POST', body: {
-      id, name, llm, temperature, max_tokens,
-      prompt_content,
-      prompt_file: `${id}.md`,
+      id,
+      name: id,
       type: agentType,
-      pipeline_steps,
       team_id: dir,
     }});
-    if (mcpChecked.length) {
-      await api(`/api/agents/mcp-access/${encodeURIComponent(dir)}/${encodeURIComponent(id)}`, { method: 'PUT', body: { servers: mcpChecked } });
-    }
     toast('Agent ajoute', 'success');
     closeModal();
     loadTeams();
@@ -2119,29 +2359,16 @@ async function editCfgAgent(dir, agentId) {
   const team = teamsData.find(t => (t.directory || t.id) === dir);
   if (!team || !team.agents[agentId]) { toast('Agent introuvable', 'error'); return; }
   const a = team.agents[agentId];
-  // Load LLM providers + MCP catalog in parallel
-  let llmNames = [], mcpCatalogList = [];
-  try {
-    const llmData = await api('/api/templates/llm');
-    llmNames = Object.keys(llmData.providers || {});
-  } catch { /* ignore */ }
-  try {
-    const mcpData = await api('/api/mcp/catalog');
-    mcpCatalogList = (mcpData.servers || []).filter(c => !c.deprecated);
-  } catch { /* ignore */ }
-  const currentLlm = a.llm || a.model || '';
-  const llmOptions = `<option value="">-- Defaut --</option>` +
-    llmNames.map(p => `<option value="${escHtml(p)}" ${p === currentLlm ? 'selected' : ''}>${escHtml(p)}</option>`).join('');
 
-  const agentMcp = (team.mcp_access || {})[agentId] || [];
-  const mcpTags = mcpCatalogList.length
-    ? mcpCatalogList.map(c => {
-        const checked = agentMcp.includes(c.id) ? 'checked' : '';
-        return `<label class="mcp-check-tag ${checked ? 'active' : ''}">
-          <input type="checkbox" value="${escHtml(c.id)}" ${checked} onchange="this.parentElement.classList.toggle('active',this.checked)" />${escHtml(c.label || c.id)}
-        </label>`;
-      }).join('')
-    : '<span style="color:var(--text-secondary);font-size:0.85rem">Aucun serveur MCP dans le catalogue</span>';
+  // Agent properties are read-only (from Shared/Agents catalog)
+  const mcpAccess = a.mcp_access || [];
+  const mcpReadOnly = mcpAccess.length
+    ? mcpAccess.map(id => `<span class="tag tag-green">${escHtml(id)}</span>`).join('')
+    : '<span style="color:var(--text-secondary);font-size:0.85rem">Aucun</span>';
+  const delivTags = [
+    a.delivers_docs ? '<span class="tag tag-purple">Documentation</span>' : '',
+    a.delivers_code ? '<span class="tag tag-purple">Code</span>' : '',
+  ].filter(Boolean).join('') || '<span style="color:var(--text-secondary);font-size:0.85rem">Aucun</span>';
 
   const promptRaw = a.prompt_content || '';
   const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
@@ -2152,54 +2379,62 @@ async function editCfgAgent(dir, agentId) {
 
   showModal(`
     <div class="modal-header">
-      <h3>Agent: ${escHtml(a.name)} (${escHtml(agentId)})</h3>
+      <h3>Agent: ${escHtml(a.name || agentId)} <span style="color:var(--text-secondary);font-weight:normal;font-size:0.85rem">(${escHtml(agentId)})</span></h3>
       <button class="btn-icon" onclick="closeModal()">&times;</button>
     </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Nom</label>
-        <input id="cfg-agent-edit-name" value="${escHtml(a.name)}" />
+    <div class="prompt-tabs" style="margin-bottom:0.5rem">
+      <div class="prompt-tab active" id="cfg-modal-tab-info" onclick="switchCfgModalTab('info')">Signaletique</div>
+      <div class="prompt-tab" id="cfg-modal-tab-prompt" onclick="switchCfgModalTab('prompt')">Prompt</div>
+      <div class="prompt-tab" id="cfg-modal-tab-pipeline" onclick="switchCfgModalTab('pipeline')" style="${hasPipeline ? '' : 'display:none'}">Pipeline</div>
+    </div>
+    <div id="cfg-modal-pane-info">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Nom</label>
+          <input value="${escHtml(a.name || agentId)}" readonly style="background:var(--bg-secondary)" />
+        </div>
+        <div class="form-group">
+          <label>Modele LLM</label>
+          <input value="${escHtml(a.llm || '(defaut)')}" readonly style="background:var(--bg-secondary)" />
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Temperature</label>
+          <input value="${a.temperature ?? ''}" readonly style="background:var(--bg-secondary)" />
+        </div>
+        <div class="form-group">
+          <label>Max tokens</label>
+          <input value="${a.max_tokens ?? ''}" readonly style="background:var(--bg-secondary)" />
+        </div>
       </div>
       <div class="form-group">
-        <label>Modele LLM</label>
-        <select id="cfg-agent-edit-llm">${llmOptions}</select>
-      </div>
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Temperature</label>
-        <input id="cfg-agent-edit-temp" type="number" step="0.1" min="0" max="2" value="${a.temperature}" />
+        <label>Type</label>
+        <select id="cfg-agent-edit-type" onchange="_onCfgTypeChange(this.value)">
+          <option value="single" ${curType==='single'?'selected':''}>Single</option>
+          <option value="pipeline" ${curType==='pipeline'?'selected':''}>Pipeline</option>
+          <option value="orchestrator" ${curType==='orchestrator'?'selected':''} ${hasOtherOrch && curType!=='orchestrator'?'disabled':''}>Orchestrator</option>
+        </select>
       </div>
       <div class="form-group">
-        <label>Max tokens</label>
-        <input id="cfg-agent-edit-tokens" type="number" value="${a.max_tokens}" />
+        <label>Serveurs MCP autorises</label>
+        <div style="display:flex;flex-wrap:wrap;gap:0.35rem;margin-top:0.25rem">${mcpReadOnly}</div>
+      </div>
+      <div class="form-group">
+        <label>Type de livrable</label>
+        <div style="display:flex;flex-wrap:wrap;gap:0.35rem;margin-top:0.25rem">${delivTags}</div>
       </div>
     </div>
-    <div class="form-group">
-      <label>Type</label>
-      <select id="cfg-agent-edit-type" onchange="document.getElementById('cfg-pipeline-wrap').style.display=this.value==='pipeline'?'':'none'">
-        <option value="single" ${curType==='single'?'selected':''}>Single</option>
-        <option value="pipeline" ${curType==='pipeline'?'selected':''}>Pipeline</option>
-        <option value="orchestrator" ${curType==='orchestrator'?'selected':''} ${hasOtherOrch && curType!=='orchestrator'?'disabled':''}>Orchestrator</option>
-      </select>
-    </div>
-    <div id="cfg-pipeline-wrap" class="form-group" style="${hasPipeline ? '' : 'display:none'}">
-      <label>Pipeline Steps</label>
-      <div id="cfg-pipeline-steps" class="pipeline-steps-container"></div>
-    </div>
-    <div class="form-group">
-      <label>Prompt (${escHtml(a.prompt || agentId + '.md')})</label>
-      <div class="prompt-tabs">
-        <div class="prompt-tab active" id="cfg-prompt-tab-preview" onclick="switchCfgPromptTab('preview')">Apercu</div>
-        <div class="prompt-tab" id="cfg-prompt-tab-edit" onclick="switchCfgPromptTab('edit')">Editer</div>
+    <div id="cfg-modal-pane-prompt" style="display:none">
+      <div class="form-group">
+        <label>Prompt</label>
+        <div class="prompt-preview" id="cfg-agent-prompt-preview" style="max-height:500px;overflow-y:auto"></div>
       </div>
-      <div class="prompt-preview" id="cfg-agent-prompt-preview" style="max-height:400px;overflow-y:auto">${promptHtml}</div>
-      <textarea id="cfg-agent-edit-prompt" style="min-height:300px;display:none;border-radius:0 0.5rem 0.5rem 0.5rem">${escHtml(promptRaw)}</textarea>
     </div>
-    <div class="form-group">
-      <label>Serveurs MCP autorises</label>
-      <div class="mcp-check-tags" id="cfg-agent-mcp-tags">
-        ${mcpTags || '<span style="color:var(--text-secondary);font-size:0.85rem">Aucun serveur MCP configure</span>'}
+    <div id="cfg-modal-pane-pipeline" style="display:none">
+      <div class="form-group">
+        <label>Pipeline Steps</label>
+        <div id="cfg-pipeline-steps" class="pipeline-steps-container"></div>
       </div>
     </div>
     <div class="modal-actions">
@@ -2207,56 +2442,44 @@ async function editCfgAgent(dir, agentId) {
       <button class="btn btn-primary" onclick="saveCfgAgent('${escHtml(dir)}','${escHtml(agentId)}')">Sauvegarder</button>
     </div>
   `, 'modal-wide');
+  // Set prompt after modal creation to avoid template literal issues with backticks
+  const cfgPromptEl = document.getElementById('cfg-agent-prompt-preview');
+  if (cfgPromptEl) cfgPromptEl.innerHTML = promptHtml;
   renderPipelineSteps('cfg-pipeline-steps', a.pipeline_steps || []);
 }
 
-function switchCfgPromptTab(tab) {
-  const preview = document.getElementById('cfg-agent-prompt-preview');
-  const editor = document.getElementById('cfg-agent-edit-prompt');
-  const tabPreview = document.getElementById('cfg-prompt-tab-preview');
-  const tabEdit = document.getElementById('cfg-prompt-tab-edit');
-  if (tab === 'edit') {
-    preview.style.display = 'none';
-    editor.style.display = '';
-    tabPreview.classList.remove('active');
-    tabEdit.classList.add('active');
-  } else {
-    const raw = editor.value;
-    preview.innerHTML = typeof marked !== 'undefined' ? marked.parse(raw) : escHtml(raw);
-    preview.style.display = '';
-    editor.style.display = 'none';
-    tabPreview.classList.add('active');
-    tabEdit.classList.remove('active');
+function switchCfgModalTab(tab) {
+  ['info', 'prompt', 'pipeline'].forEach(t => {
+    const pane = document.getElementById('cfg-modal-pane-' + t);
+    const tabEl = document.getElementById('cfg-modal-tab-' + t);
+    if (pane) pane.style.display = t === tab ? '' : 'none';
+    if (tabEl) tabEl.classList.toggle('active', t === tab);
+  });
+}
+
+function _onCfgTypeChange(val) {
+  const tabEl = document.getElementById('cfg-modal-tab-pipeline');
+  if (tabEl) tabEl.style.display = val === 'pipeline' ? '' : 'none';
+  if (val !== 'pipeline') {
+    const pane = document.getElementById('cfg-modal-pane-pipeline');
+    if (pane && pane.style.display !== 'none') switchCfgModalTab('info');
   }
 }
 
 async function saveCfgAgent(dir, agentId) {
-  const name = document.getElementById('cfg-agent-edit-name').value.trim();
-  if (!name) { toast('Nom requis', 'error'); return; }
-  const llm = document.getElementById('cfg-agent-edit-llm').value;
-  const temperature = parseFloat(document.getElementById('cfg-agent-edit-temp').value);
-  const max_tokens = parseInt(document.getElementById('cfg-agent-edit-tokens').value);
-  const prompt_content = document.getElementById('cfg-agent-edit-prompt').value;
   const agentType = document.getElementById('cfg-agent-edit-type').value;
   const team = teamsData.find(t => (t.directory || t.id) === dir);
   if (agentType === 'orchestrator' && Object.entries(team.agents || {}).some(([aid, ag]) => aid !== agentId && ag.type === 'orchestrator')) {
     toast('Un orchestrator existe deja dans cette equipe', 'error'); return;
   }
   const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('cfg-pipeline-steps') : [];
-  const a = team.agents[agentId];
-  const mcpChecked = [...document.querySelectorAll('#cfg-agent-mcp-tags input[type=checkbox]:checked')].map(cb => cb.value);
   try {
-    await Promise.all([
-      api(`/api/agents/${encodeURIComponent(agentId)}`, { method: 'PUT', body: {
-        id: agentId, name, llm, temperature, max_tokens,
-        prompt_content,
-        prompt_file: a.prompt || `${agentId}.md`,
-        type: agentType,
-        pipeline_steps,
-        team_id: dir,
-      }}),
-      api(`/api/agents/mcp-access/${encodeURIComponent(dir)}/${encodeURIComponent(agentId)}`, { method: 'PUT', body: { servers: mcpChecked }}),
-    ]);
+    await api(`/api/agents/${encodeURIComponent(agentId)}`, { method: 'PUT', body: {
+      id: agentId, name: agentId,
+      type: agentType,
+      pipeline_steps,
+      team_id: dir,
+    }});
     toast('Agent sauvegarde', 'success');
     closeModal();
     loadTeams();
@@ -2314,7 +2537,7 @@ async function showAddTeamModal() {
     const data = await api('/api/templates');
     templatesData = data.templates || [];
   } catch (e) { templatesData = []; }
-  const dirOpts = templatesData.map(tp => `<option value="${escHtml(tp.id)}">${escHtml(tp.id)} (${tp.agent_count} agents)</option>`).join('');
+  const dirOpts = templatesData.map(tp => `<option value="${escHtml(tp.id)}">${escHtml(tp.name || tp.id)} (${tp.agent_count} agents)</option>`).join('');
   showModal(`
     <div class="modal-header">
       <h3>Nouvelle equipe</h3>
@@ -2474,8 +2697,89 @@ function showConfigTab(tabId) {
   else if (tabId === 'cfg-teams') loadCfgTeams();
   else if (tabId === 'cfg-mail') loadMail();
   else if (tabId === 'cfg-security') { loadApiKeys(); loadAuthConfig(); }
+  else if (tabId === 'cfg-outline') loadOutlineConfig();
   else if (tabId === 'cfg-misc') loadCfgMisc();
   else if (tabId === 'cfg-git') loadCfgGit();
+}
+
+// ── Config Outline (Base de connaissances) ────────
+let _outlineData = {};
+const _defaultDeliverables = {
+  prd: 'PRD / Cahier des charges',
+  legal_review: 'Analyse juridique',
+  architecture: 'Architecture technique',
+  ux_design: 'Design UX/UI',
+  project_plan: 'Plan de projet',
+  technical_docs: 'Documentation technique',
+  user_docs: 'Documentation utilisateur',
+  qa_report: 'Rapport QA',
+  deployment_plan: 'Plan de deploiement',
+};
+
+async function loadOutlineConfig() {
+  try {
+    _outlineData = await api('/api/outline-config');
+    document.getElementById('outline-enabled').checked = _outlineData.enabled || false;
+    document.getElementById('outline-collection-prefix').value = _outlineData.collection_prefix || 'LandGraph';
+    document.getElementById('outline-url-env').value = _outlineData.url_env || 'OUTLINE_URL';
+    document.getElementById('outline-api-key-env').value = _outlineData.api_key_env || 'OUTLINE_API_KEY';
+
+    const ap = _outlineData.auto_publish || {};
+    document.getElementById('outline-auto-publish').checked = ap.enabled || false;
+
+    const deliverables = ap.deliverables || {};
+    const container = document.getElementById('outline-deliverables-list');
+    container.innerHTML = Object.entries(_defaultDeliverables).map(([key, label]) =>
+      `<label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem">
+        <input type="checkbox" class="outline-deliv-cb" data-key="${key}" ${deliverables[key] ? 'checked' : ''} />
+        ${escHtml(label)}
+      </label>`
+    ).join('');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function saveOutlineConfig() {
+  const deliverables = {};
+  document.querySelectorAll('.outline-deliv-cb').forEach(cb => {
+    deliverables[cb.dataset.key] = cb.checked;
+  });
+  const data = {
+    enabled: document.getElementById('outline-enabled').checked,
+    url_env: document.getElementById('outline-url-env').value || 'OUTLINE_URL',
+    api_key_env: document.getElementById('outline-api-key-env').value || 'OUTLINE_API_KEY',
+    collection_prefix: document.getElementById('outline-collection-prefix').value || 'LandGraph',
+    phase_labels: _outlineData.phase_labels || {},
+    auto_publish: {
+      enabled: document.getElementById('outline-auto-publish').checked,
+      deliverables,
+    },
+  };
+  try {
+    await api('/api/outline-config', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(data) });
+    toast('Configuration Outline sauvegardee', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function testOutlineConnection() {
+  const btn = document.getElementById('outline-test-btn');
+  const result = document.getElementById('outline-test-result');
+  btn.disabled = true;
+  result.textContent = 'Test en cours...';
+  result.style.color = 'var(--text-secondary)';
+  try {
+    const r = await api('/api/outline/test-connection', { method: 'POST' });
+    if (r.ok) {
+      result.textContent = `Connecte (${r.info.team || '?'} — ${r.info.user || '?'})`;
+      result.style.color = 'var(--success)';
+    } else {
+      result.textContent = r.error || 'Erreur inconnue';
+      result.style.color = 'var(--danger)';
+    }
+  } catch (e) {
+    result.textContent = e.message;
+    result.style.color = 'var(--danger)';
+  }
+  btn.disabled = false;
 }
 
 // ── Config Divers ─────────────────────────────────
@@ -2512,6 +2816,7 @@ async function loadCfgMisc() {
     document.getElementById('misc-host-hitl').value = hosts.hitl || '';
     document.getElementById('misc-host-api').value = hosts.api || '';
     document.getElementById('misc-host-openlit').value = hosts.openlit || '';
+    document.getElementById('misc-host-outline').value = hosts.outline || '';
     document.getElementById('misc-host-postgres').value = hosts.postgres || '';
     document.getElementById('misc-host-redis').value = hosts.redis || '';
   } catch (e) { toast(e.message, 'error'); }
@@ -2526,6 +2831,7 @@ async function saveCfgMisc() {
         hitl: document.getElementById('misc-host-hitl').value.trim(),
         api: document.getElementById('misc-host-api').value.trim(),
         openlit: document.getElementById('misc-host-openlit').value.trim(),
+        outline: document.getElementById('misc-host-outline').value.trim(),
         postgres: document.getElementById('misc-host-postgres').value.trim(),
         redis: document.getElementById('misc-host-redis').value.trim(),
       },
@@ -2757,6 +3063,26 @@ async function copyCfgLLMFromTemplate() {
     }
     loadCfgLLM();
   } catch (e) { toast(e.message, 'error'); }
+}
+
+function uploadCfgLLM() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+    const form = new FormData();
+    form.append('file', file);
+    try {
+      const res = await fetch('/api/llm/providers/upload', { method: 'POST', body: form });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Erreur upload');
+      toast(`${data.added_providers} provider(s) et ${data.added_throttling} throttling(s) importes`, 'success');
+      loadCfgLLM();
+    } catch (e) { toast(e.message, 'error'); }
+  };
+  input.click();
 }
 
 function showAddCfgThrottlingModal() {
@@ -3026,7 +3352,7 @@ async function copyCfgMCPFromTemplate() {
   try {
     const tplData = await api('/api/templates/mcp');
     const tplServers = tplData.servers || {};
-    const cfgData = await api('/api/mcp/servers');
+    const cfgData = await api('/api/mcp/cfg-servers');
     const cfgServers = cfgData.servers || {};
 
     const missing = Object.entries(tplServers).filter(([id]) => !cfgServers[id]);
@@ -3035,20 +3361,13 @@ async function copyCfgMCPFromTemplate() {
       return;
     }
 
-    let added = 0;
-    for (const [id, srv] of missing) {
-      const envMapping = {};
-      for (const [k, v] of Object.entries(srv.env || {})) {
-        envMapping[k] = v;
-      }
-      await api(`/api/mcp/install/${encodeURIComponent(id)}`, {
-        method: 'POST',
-        body: { env_mapping: envMapping },
-      });
-      added++;
-    }
+    // Copy servers directly (preserves args, params, etc.)
+    await api('/api/mcp/copy-from-template', {
+      method: 'POST',
+      body: { server_ids: missing.map(([id]) => id) },
+    });
 
-    toast(`${added} service(s) MCP copie(s) depuis le template`, 'success');
+    toast(`${missing.length} service(s) MCP copie(s) depuis le template`, 'success');
     loadCfgMCP();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -3078,6 +3397,7 @@ function showTemplateTab(tabId) {
   document.querySelector(`[data-tpl-tab="${tabId}"]`).classList.add('active');
   if (tabId === 'tpl-llm') loadTplLLM();
   else if (tabId === 'tpl-mcp') loadTplMCP();
+  else if (tabId === 'tpl-agents') loadSharedAgents();
   else if (tabId === 'tpl-teams') loadTplTeamsList();
   else if (tabId === 'tpl-git') loadTplGit();
 }
@@ -3087,6 +3407,392 @@ async function loadTemplates() {
   const active = document.querySelector('[data-tpl-tab].active');
   const tab = active ? active.getAttribute('data-tpl-tab') : 'tpl-llm';
   showTemplateTab(tab);
+}
+
+// ── Shared Agents (Shared/Agents/{id}/) ──────────
+
+let sharedAgentsData = [];
+let saSelectedId = '';
+
+async function loadSharedAgents() {
+  try {
+    const data = await api('/api/shared-agents');
+    sharedAgentsData = (data.agents || []).sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id, 'fr'));
+  } catch { sharedAgentsData = []; }
+  const prev = saSelectedId;
+  const input = document.getElementById('sa-agent-filter');
+  if (prev && sharedAgentsData.find(a => a.id === prev)) {
+    const ag = sharedAgentsData.find(a => a.id === prev);
+    input.value = ag.name || ag.id;
+    selectSharedAgent(prev);
+  } else {
+    input.value = '';
+    saSelectedId = '';
+    document.getElementById('sa-agent-detail').innerHTML = '';
+    _updateSaDeleteBtn();
+  }
+  _renderSaDropdown(sharedAgentsData);
+}
+
+function _renderSaDropdown(list) {
+  const dd = document.getElementById('sa-agent-dropdown');
+  dd.innerHTML = list.map(a =>
+    `<div class="sa-dropdown-item${a.id === saSelectedId ? ' active' : ''}" data-id="${escHtml(a.id)}" onclick="_pickSharedAgent('${escHtml(a.id)}')">${escHtml(a.name || a.id)}</div>`
+  ).join('') || '<div style="padding:8px;color:var(--text-muted);font-size:0.85rem">Aucun agent</div>';
+}
+
+function _filterSharedAgents() {
+  const q = (document.getElementById('sa-agent-filter').value || '').toLowerCase();
+  const filtered = sharedAgentsData.filter(a => (a.name || a.id).toLowerCase().includes(q) || a.id.toLowerCase().includes(q));
+  _renderSaDropdown(filtered);
+  _openSaDropdown();
+}
+
+function _openSaDropdown() {
+  document.getElementById('sa-agent-dropdown').style.display = 'block';
+}
+
+function _closeSaDropdown() {
+  setTimeout(() => { document.getElementById('sa-agent-dropdown').style.display = 'none'; }, 180);
+}
+
+function _toggleSaDropdown() {
+  const dd = document.getElementById('sa-agent-dropdown');
+  dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
+  if (dd.style.display === 'block') document.getElementById('sa-agent-filter').focus();
+}
+
+function _pickSharedAgent(id) {
+  const ag = sharedAgentsData.find(a => a.id === id);
+  document.getElementById('sa-agent-filter').value = ag ? (ag.name || ag.id) : id;
+  document.getElementById('sa-agent-dropdown').style.display = 'none';
+  selectSharedAgent(id);
+}
+
+function _updateSaDeleteBtn() {
+  const btn = document.getElementById('sa-delete-btn');
+  if (!btn) return;
+  btn.disabled = !saSelectedId;
+  btn.style.opacity = saSelectedId ? '1' : '0.5';
+}
+
+async function selectSharedAgent(id) {
+  saSelectedId = id;
+  _updateSaDeleteBtn();
+  const detail = document.getElementById('sa-agent-detail');
+  if (!id) { detail.innerHTML = ''; return; }
+  let agent;
+  try { agent = await api(`/api/shared-agents/${encodeURIComponent(id)}`); }
+  catch (e) { toast(e.message, 'error'); return; }
+
+  let llmNames = [], mcpInstalled = [];
+  try { const d = await api('/api/templates/llm'); llmNames = Object.keys(d.providers || {}); } catch {}
+  try { const d = await api('/api/mcp/servers'); mcpInstalled = Object.keys(d.servers || {}); } catch {}
+
+  const llmOptions = '<option value="">-- Defaut --</option>' +
+    llmNames.map(p => `<option value="${escHtml(p)}" ${p === (agent.llm || '') ? 'selected' : ''}>${escHtml(p)}</option>`).join('');
+  const agentMcp = agent.mcp_access || [];
+  const mcpTags = mcpInstalled.length
+    ? mcpInstalled.map(id => {
+        const chk = agentMcp.includes(id) ? 'checked' : '';
+        return `<label class="mcp-check-tag ${chk ? 'active' : ''}"><input type="checkbox" value="${escHtml(id)}" ${chk} onchange="this.parentElement.classList.toggle('active',this.checked)" />${escHtml(id)}</label>`;
+      }).join('')
+    : '<span style="color:var(--text-secondary);font-size:0.85rem">Aucun serveur MCP installe</span>';
+
+  const promptRaw = agent.prompt_content || '';
+  const assignRaw = agent.assign_content || '';
+  const unassignRaw = agent.unassign_content || '';
+
+  detail.innerHTML = `
+    <div class="prompt-tabs" style="margin-top:0.75rem">
+      <div class="prompt-tab active" id="sa-tab-info" onclick="showSaSubTab('info')">Signaletique</div>
+      <div class="prompt-tab" id="sa-tab-prompt" onclick="showSaSubTab('prompt')">Prompt</div>
+      <div class="prompt-tab" id="sa-tab-assign" onclick="showSaSubTab('assign')">Assignations</div>
+    </div>
+    <div id="sa-subtab-info" style="padding:1rem 0">
+      <div class="form-row">
+        <div class="form-group"><label>ID</label><input id="sa-id" value="${escHtml(id)}" readonly style="background:var(--bg-secondary)" /></div>
+        <div class="form-group"><label>Nom</label><input id="sa-name" value="${escHtml(agent.name || '')}" /></div>
+      </div>
+      <div class="form-group"><label>Description</label><textarea id="sa-desc" style="min-height:60px">${escHtml(agent.description || '')}</textarea></div>
+      <div class="form-row">
+        <div class="form-group"><label>Modele LLM</label><select id="sa-llm">${llmOptions}</select></div>
+        <div class="form-group"><label>Temperature</label><input id="sa-temp" type="number" step="0.1" min="0" max="2" value="${agent.temperature ?? 0.3}" /></div>
+        <div class="form-group"><label>Max Tokens</label><input id="sa-tokens" type="number" value="${agent.max_tokens ?? 32768}" /></div>
+      </div>
+      <div class="form-group">
+        <label>Services MCP</label>
+        <div class="mcp-check-tags" id="sa-mcp-tags">${mcpTags}</div>
+      </div>
+      <div class="form-group">
+        <label>Type de livrable</label>
+        <div style="display:flex;gap:1.5rem;margin-top:0.25rem">
+          <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;cursor:pointer">
+            <input type="checkbox" id="sa-delivers-docs" ${agent.delivers_docs ? 'checked' : ''} /> Documentation
+          </label>
+          <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;cursor:pointer">
+            <input type="checkbox" id="sa-delivers-code" ${agent.delivers_code ? 'checked' : ''} /> Code
+          </label>
+        </div>
+      </div>
+      <div style="text-align:right;margin-top:1rem">
+        <button class="btn btn-primary btn-sm" onclick="saveSharedAgent('${escHtml(id)}')">Sauvegarder</button>
+      </div>
+    </div>
+    <div id="sa-subtab-prompt" style="padding:1rem 0;display:none">
+      <div style="display:flex;justify-content:flex-end;margin-bottom:0.5rem">
+        <button class="btn btn-outline btn-sm" onclick="generateSharedAgentPrompt('${escHtml(id)}')">Aide moi a creer mon agent</button>
+      </div>
+      <textarea id="sa-prompt-edit" style="min-height:400px;max-height:60vh;overflow-y:auto">${escHtml(promptRaw)}</textarea>
+      <div style="text-align:right;margin-top:1rem">
+        <button class="btn btn-primary btn-sm" onclick="saveSharedAgent('${escHtml(id)}')">Sauvegarder</button>
+      </div>
+    </div>
+    <div id="sa-subtab-assign" style="padding:1rem 0;display:none">
+      <div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">
+        <button class="btn btn-outline btn-sm" id="sa-btn-gen-assign" onclick="generateSharedAgentAssign('${escHtml(id)}')">Generer les exemples d'assignation</button>
+      </div>
+      <div class="form-group">
+        <label>Exemples de routing correct</label>
+        <textarea id="sa-assign-edit" style="min-height:200px;max-height:30vh;overflow-y:auto">${escHtml(assignRaw)}</textarea>
+      </div>
+      <div style="display:flex;justify-content:flex-end;margin-top:1rem;margin-bottom:0.25rem">
+        <button class="btn btn-outline btn-sm" id="sa-btn-gen-unassign" onclick="generateSharedAgentUnassign('${escHtml(id)}')">Generer les exemples de non-assignation</button>
+      </div>
+      <div class="form-group">
+        <label>Exemples de routing incorrect</label>
+        <textarea id="sa-unassign-edit" style="min-height:200px;max-height:30vh;overflow-y:auto">${escHtml(unassignRaw)}</textarea>
+      </div>
+      <div style="text-align:right;margin-top:1rem">
+        <button class="btn btn-primary btn-sm" onclick="saveSharedAgentAssign('${escHtml(id)}')">Sauvegarder</button>
+      </div>
+    </div>`;
+}
+
+function showSaSubTab(tab) {
+  document.getElementById('sa-subtab-info').style.display = tab === 'info' ? '' : 'none';
+  document.getElementById('sa-subtab-prompt').style.display = tab === 'prompt' ? '' : 'none';
+  document.getElementById('sa-subtab-assign').style.display = tab === 'assign' ? '' : 'none';
+  document.getElementById('sa-tab-info').classList.toggle('active', tab === 'info');
+  document.getElementById('sa-tab-prompt').classList.toggle('active', tab === 'prompt');
+  document.getElementById('sa-tab-assign').classList.toggle('active', tab === 'assign');
+}
+
+async function saveSharedAgentAssign(id) {
+  const assignContent = document.getElementById('sa-assign-edit').value;
+  const unassignContent = document.getElementById('sa-unassign-edit').value;
+  try {
+    await api(`/api/shared-agents/${encodeURIComponent(id)}`, { method: 'PUT', body: {
+      id,
+      name: document.getElementById('sa-name').value.trim(),
+      assign_content: assignContent,
+      unassign_content: unassignContent,
+    }});
+    toast('Assignations sauvegardees', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function generateSharedAgentAssign(id) {
+  const name = document.getElementById('sa-name')?.value || id;
+  const prompt = document.getElementById('sa-prompt-edit')?.value || '';
+  const editor = document.getElementById('sa-assign-edit');
+  const btn = document.getElementById('sa-btn-gen-assign');
+  const savedContent = editor.value;
+  const savedBtn = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Generation...';
+  editor.disabled = true; editor.value = 'Generation en cours...';
+  try {
+    const result = await api('/api/agents/generate-assign', { method: 'POST', body: {
+      agent_id: id, agent_name: name, agent_prompt: prompt
+    }});
+    editor.disabled = false;
+    editor.value = result.content || '';
+    toast('Exemples d\'assignation generes', 'success');
+  } catch (e) {
+    editor.disabled = false; editor.value = savedContent;
+    toast(e.message, 'error');
+  } finally { btn.disabled = false; btn.innerHTML = savedBtn; }
+}
+
+async function generateSharedAgentUnassign(id) {
+  const name = document.getElementById('sa-name')?.value || id;
+  const prompt = document.getElementById('sa-prompt-edit')?.value || '';
+  const editor = document.getElementById('sa-unassign-edit');
+  const btn = document.getElementById('sa-btn-gen-unassign');
+  const savedContent = editor.value;
+  const savedBtn = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Generation...';
+  editor.disabled = true; editor.value = 'Generation en cours...';
+  try {
+    const result = await api('/api/agents/generate-unassign', { method: 'POST', body: {
+      agent_id: id, agent_name: name, agent_prompt: prompt
+    }});
+    editor.disabled = false;
+    editor.value = result.content || '';
+    toast('Exemples de non-assignation generes', 'success');
+  } catch (e) {
+    editor.disabled = false; editor.value = savedContent;
+    toast(e.message, 'error');
+  } finally { btn.disabled = false; btn.innerHTML = savedBtn; }
+}
+
+// switchSaPromptTab removed — prompt tab is now editor-only
+
+function showCreateSharedAgentModal() {
+  showModal(`
+    <div class="modal-header">
+      <h3>Nouvel agent</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-group">
+      <label>ID unique (lettres, chiffres, _)</label>
+      <input id="sa-new-id" placeholder="mon_agent" pattern="[a-zA-Z0-9_]+" oninput="this.value=this.value.replace(/[^a-zA-Z0-9_]/g,'')" />
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="createSharedAgent()">Creer</button>
+    </div>
+  `);
+}
+
+async function createSharedAgent() {
+  const id = (document.getElementById('sa-new-id').value || '').trim();
+  if (!id) { toast('ID requis', 'error'); return; }
+  if (!/^[a-zA-Z0-9_]+$/.test(id)) { toast('ID invalide (lettres, chiffres, _ uniquement)', 'error'); return; }
+  try {
+    await api('/api/shared-agents', { method: 'POST', body: { id, name: id } });
+    toast('Agent cree', 'success');
+    closeModal();
+    saSelectedId = id;
+    loadSharedAgents();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function saveSharedAgent(id) {
+  const name = (document.getElementById('sa-name')?.value || '').trim();
+  const description = document.getElementById('sa-desc')?.value || '';
+  const llm = document.getElementById('sa-llm')?.value || '';
+  const temperature = parseFloat(document.getElementById('sa-temp')?.value) || 0.3;
+  const max_tokens = parseInt(document.getElementById('sa-tokens')?.value) || 32768;
+  const prompt_content = document.getElementById('sa-prompt-edit')?.value || '';
+  const mcp_access = [...document.querySelectorAll('#sa-mcp-tags input[type=checkbox]:checked')].map(cb => cb.value);
+  const delivers_docs = document.getElementById('sa-delivers-docs')?.checked || false;
+  const delivers_code = document.getElementById('sa-delivers-code')?.checked || false;
+  if (!name) { toast('Nom requis', 'error'); return; }
+  try {
+    await api(`/api/shared-agents/${encodeURIComponent(id)}`, { method: 'PUT', body: {
+      id, name, description, llm, temperature, max_tokens, mcp_access, prompt_content, delivers_docs, delivers_code
+    }});
+    toast('Agent sauvegarde', 'success');
+    // Update dropdown + filter input without reloading detail (preserves active tab)
+    const ag = sharedAgentsData.find(a => a.id === id);
+    if (ag) ag.name = name;
+    document.getElementById('sa-agent-filter').value = name || id;
+    _renderSaDropdown(sharedAgentsData);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteSharedAgent(id) {
+  if (!id) return;
+  if (!(await confirmModal(`Supprimer l'agent "${id}" ?`))) return;
+  try {
+    await api(`/api/shared-agents/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    toast('Agent supprime', 'success');
+    saSelectedId = '';
+    loadSharedAgents();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function importSharedAgent() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.zip';
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+    const form = new FormData();
+    form.append('file', file);
+    try {
+      const res = await fetch('/api/shared-agents/import', { method: 'POST', body: form });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Erreur import');
+      if (data.conflict) {
+        // ID already exists — ask for a new name
+        _showImportRenameModal(file, data.existing_id);
+        return;
+      }
+      toast(`Agent "${data.id}" importe`, 'success');
+      saSelectedId = data.id;
+      loadSharedAgents();
+    } catch (e) { toast(e.message, 'error'); }
+  };
+  input.click();
+}
+
+function _showImportRenameModal(file, existingId) {
+  showModal(`
+    <div class="modal-header">
+      <h3>Agent "${existingId}" existe deja</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-group">
+      <label>Choisir un nouvel ID</label>
+      <input id="sa-import-rename" placeholder="nouvel_id" oninput="this.value=this.value.replace(/[^a-zA-Z0-9_]/g,'')" />
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" id="sa-import-rename-btn">Importer</button>
+    </div>
+  `);
+  // Store file ref and wire up button
+  document.getElementById('sa-import-rename-btn').onclick = async () => {
+    const newId = (document.getElementById('sa-import-rename').value || '').trim();
+    if (!newId) { toast('ID requis', 'error'); return; }
+    if (!/^[a-zA-Z0-9_]+$/.test(newId)) { toast('ID invalide', 'error'); return; }
+    const form = new FormData();
+    form.append('file', file);
+    try {
+      const res = await fetch(`/api/shared-agents/import?agent_id=${encodeURIComponent(newId)}`, { method: 'POST', body: form });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Erreur import');
+      if (data.conflict) { toast(`L'agent "${newId}" existe aussi`, 'error'); return; }
+      toast(`Agent "${data.id}" importe`, 'success');
+      closeModal();
+      saSelectedId = data.id;
+      loadSharedAgents();
+    } catch (e) { toast(e.message, 'error'); }
+  };
+}
+
+async function generateSharedAgentPrompt(id) {
+  const name = document.getElementById('sa-name')?.value || id;
+  const desc = document.getElementById('sa-desc')?.value || '';
+  const info = `Identifiant: ${id}\nNom: ${name}\nDescription: ${desc}`;
+  const editor = document.getElementById('sa-prompt-edit');
+  const btn = document.querySelector('[onclick*="generateSharedAgentPrompt"]');
+  const savedContent = editor.value;
+  const savedBtn = btn ? btn.innerHTML : '';
+  editor.value = 'Generation en cours...';
+  editor.disabled = true;
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Generation...';
+  }
+  try {
+    const result = await api('/api/agents/generate-prompt', { method: 'POST', body: {
+      agent_id: id, agent_name: name, agent_info: info
+    }});
+    editor.disabled = false;
+    editor.value = result.prompt || '';
+    toast('Prompt genere', 'success');
+  } catch (e) {
+    editor.disabled = false;
+    editor.value = savedContent;
+    toast(e.message, 'error');
+  } finally {
+    editor.disabled = false;
+    if (btn) { btn.disabled = false; btn.innerHTML = savedBtn; }
+  }
 }
 
 // ── Template Git (Enregistrement) — delegates to factorized functions ──
@@ -3170,6 +3876,26 @@ async function setTplLLMDefault(providerId) {
     toast('Modele par defaut du template mis a jour', 'success');
     loadTplLLM();
   } catch (e) { toast(e.message, 'error'); }
+}
+
+function uploadTplLLM() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+    const form = new FormData();
+    form.append('file', file);
+    try {
+      const res = await fetch('/api/templates/llm/upload', { method: 'POST', body: form });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Erreur upload');
+      toast(`${data.added_providers} provider(s) et ${data.added_throttling} throttling(s) importes`, 'success');
+      loadTplLLM();
+    } catch (e) { toast(e.message, 'error'); }
+  };
+  input.click();
 }
 
 function showAddTplProviderModal() {
@@ -3647,90 +4373,71 @@ function renderTplTeams() {
 }
 
 async function showAddTplAgentModal(dir) {
-  let llmNames = [], mcpCatalogList = [], hasOrch = false;
+  let sharedList = [], hasOrch = false;
   try {
-    const llmData = await api('/api/templates/llm');
-    llmNames = Object.keys(llmData.providers || {});
-  } catch { /* ignore */ }
-  try {
-    const mcpData = await api('/api/mcp/catalog');
-    mcpCatalogList = (mcpData.servers || []).filter(c => !c.deprecated);
+    const d = await api('/api/shared-agents');
+    sharedList = d.agents || [];
   } catch { /* ignore */ }
   try {
     const reg = await api(`/api/templates/registry/${encodeURIComponent(dir)}`);
     hasOrch = Object.values(reg.agents || reg || {}).some(a => a.type === 'orchestrator');
   } catch { /* ignore */ }
-  const llmOptions = `<option value="">-- Defaut --</option>` +
-    llmNames.map(p => `<option value="${escHtml(p)}">${escHtml(p)}</option>`).join('');
-  const mcpTags = mcpCatalogList.length
-    ? mcpCatalogList.map(c => `<label class="mcp-check-tag"><input type="checkbox" value="${escHtml(c.id)}" onchange="this.parentElement.classList.toggle('active',this.checked)" />${escHtml(c.label || c.id)}</label>`).join('')
-    : '<span style="color:var(--text-secondary);font-size:0.8rem">Aucun serveur MCP dans le catalogue</span>';
+  const sortedShared = sharedList.slice().sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id, 'fr'));
   showModal(`
     <div class="modal-header">
-      <h3>Nouvel agent (template)</h3>
+      <h3>Ajouter un agent (template)</h3>
       <button class="btn-icon" onclick="closeModal()">&times;</button>
     </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>ID (identifiant unique)</label>
-        <input id="tpl-agent-new-id" placeholder="mon_agent" />
+    <div class="form-group">
+      <label>Agent (catalogue)</label>
+      <div style="position:relative">
+        <input id="tpl-agent-filter" placeholder="Filtrer / choisir un agent..." autocomplete="off"
+          oninput="_filterTplAgentDropdown()" onfocus="_openTplAgentDropdown()" />
+        <input type="hidden" id="tpl-agent-new-id" />
+        <div id="tpl-agent-dropdown" class="sa-dropdown" style="display:none">
+          ${sortedShared.map(a => `<div class="sa-dropdown-item" data-id="${escHtml(a.id)}" data-name="${escHtml(a.name || a.id)}" onclick="_pickTplAgent(this)">${escHtml(a.name || a.id)} <span style="color:var(--text-secondary);font-size:0.8rem">(${escHtml(a.id)})</span></div>`).join('')}
+        </div>
       </div>
-      <div class="form-group">
-        <label>Nom affiche</label>
-        <input id="tpl-agent-new-name" placeholder="Mon Agent" />
-      </div>
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Modele LLM</label>
-        <select id="tpl-agent-new-llm">${llmOptions}</select>
-      </div>
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Temperature</label>
-        <input id="tpl-agent-new-temp" type="number" step="0.1" min="0" max="2" value="0.3" />
-      </div>
-      <div class="form-group">
-        <label>Max tokens</label>
-        <input id="tpl-agent-new-tokens" type="number" value="32768" />
-      </div>
+      ${!sharedList.length ? '<p style="color:var(--text-secondary);font-size:0.8rem;margin-top:0.25rem">Aucun agent dans le catalogue. Creez-en d\'abord dans Templates &gt; Agents.</p>' : ''}
     </div>
     <div class="form-group">
       <label>Type</label>
-      <select id="tpl-agent-new-type" onchange="document.getElementById('tpl-new-pipeline-wrap').style.display=this.value==='pipeline'?'':'none'">
+      <select id="tpl-agent-new-type">
         <option value="single" selected>Single</option>
         <option value="pipeline">Pipeline</option>
         <option value="orchestrator" ${hasOrch?'disabled':''}>Orchestrator</option>
       </select>
     </div>
-    <div id="tpl-new-pipeline-wrap" class="form-group" style="display:none">
-      <label>Pipeline Steps</label>
-      <div id="tpl-new-pipeline-steps" class="pipeline-steps-container"></div>
-    </div>
-    <div class="form-group">
-      <label>Services MCP</label>
-      <div class="mcp-check-tags">${mcpTags}</div>
-    </div>
-    <div class="form-group">
-      <label>Prompt initial</label>
-      <textarea id="tpl-agent-new-prompt" style="min-height:120px" placeholder="# Mon Agent\n\nDescription du role..."></textarea>
-    </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
       <button class="btn btn-primary" onclick="addTplAgent('${escHtml(dir)}')">Ajouter</button>
     </div>
-  `);
-  renderPipelineSteps('tpl-new-pipeline-steps', []);
+  `, 'modal-tall');
+}
+
+function _filterTplAgentDropdown() {
+  const filter = (document.getElementById('tpl-agent-filter').value || '').toLowerCase();
+  const dd = document.getElementById('tpl-agent-dropdown');
+  dd.style.display = '';
+  dd.querySelectorAll('.sa-dropdown-item').forEach(item => {
+    const label = (item.dataset.name + ' ' + item.dataset.id).toLowerCase();
+    item.style.display = label.includes(filter) ? '' : 'none';
+  });
+}
+function _openTplAgentDropdown() {
+  document.getElementById('tpl-agent-dropdown').style.display = '';
+  _filterTplAgentDropdown();
+}
+function _pickTplAgent(el) {
+  const id = el.dataset.id, name = el.dataset.name;
+  document.getElementById('tpl-agent-new-id').value = id;
+  document.getElementById('tpl-agent-filter').value = name + ' (' + id + ')';
+  document.getElementById('tpl-agent-dropdown').style.display = 'none';
 }
 
 async function addTplAgent(dir) {
-  const id = (document.getElementById('tpl-agent-new-id').value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
-  const name = document.getElementById('tpl-agent-new-name').value.trim();
-  if (!id || !name) { toast('ID et nom requis', 'error'); return; }
-  const llm = document.getElementById('tpl-agent-new-llm').value;
-  const temperature = parseFloat(document.getElementById('tpl-agent-new-temp').value) || 0.3;
-  const max_tokens = parseInt(document.getElementById('tpl-agent-new-tokens').value) || 32768;
+  const id = (document.getElementById('tpl-agent-new-id').value || '').trim();
+  if (!id) { toast('Selectionnez un agent du catalogue', 'error'); return; }
   const agentType = document.getElementById('tpl-agent-new-type').value;
   if (agentType === 'orchestrator') {
     try {
@@ -3740,21 +4447,13 @@ async function addTplAgent(dir) {
       }
     } catch { /* ignore */ }
   }
-  const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('tpl-new-pipeline-steps') : [];
-  const prompt_content = document.getElementById('tpl-agent-new-prompt').value || `# ${name}\n\n`;
-  const mcpChecked = [...document.querySelectorAll('#modal-container .mcp-check-tag input:checked')].map(cb => cb.value);
   try {
     await api('/api/templates/agents', { method: 'POST', body: {
-      id, name, llm, temperature, max_tokens,
-      prompt_content,
-      prompt_file: `${id}.md`,
+      id,
+      name: id,
       type: agentType,
-      pipeline_steps,
       team_id: dir,
     }});
-    if (mcpChecked.length) {
-      await api(`/api/templates/mcp-access/${encodeURIComponent(dir)}/${encodeURIComponent(id)}`, { method: 'PUT', body: { servers: mcpChecked } });
-    }
     toast('Agent ajoute', 'success');
     closeModal();
     loadTplTeamsList();
@@ -3765,29 +4464,16 @@ async function editTplAgent(dir, agentId) {
   const tpl = tplTemplatesData.find(tp => tp.id === dir);
   if (!tpl || !tpl.agents[agentId]) { toast('Agent introuvable', 'error'); return; }
   const a = tpl.agents[agentId];
-  // Load LLM providers + MCP catalog
-  let llmNames = [], mcpCatalogList = [];
-  try {
-    const llmData = await api('/api/templates/llm');
-    llmNames = Object.keys(llmData.providers || {});
-  } catch { /* ignore */ }
-  try {
-    const mcpData = await api('/api/mcp/catalog');
-    mcpCatalogList = (mcpData.servers || []).filter(c => !c.deprecated);
-  } catch { /* ignore */ }
-  const currentLlm = a.llm || a.model || '';
-  const llmOptions = `<option value="">-- Defaut --</option>` +
-    llmNames.map(p => `<option value="${escHtml(p)}" ${p === currentLlm ? 'selected' : ''}>${escHtml(p)}</option>`).join('');
 
-  const agentMcp = (tpl.mcp_access || {})[agentId] || [];
-  const mcpTags = mcpCatalogList.length
-    ? mcpCatalogList.map(c => {
-        const checked = agentMcp.includes(c.id) ? 'checked' : '';
-        return `<label class="mcp-check-tag ${checked ? 'active' : ''}">
-          <input type="checkbox" value="${escHtml(c.id)}" ${checked} onchange="this.parentElement.classList.toggle('active',this.checked)" />${escHtml(c.label || c.id)}
-        </label>`;
-      }).join('')
-    : '<span style="color:var(--text-secondary);font-size:0.85rem">Aucun serveur MCP dans le catalogue</span>';
+  // Agent properties are read-only (from Shared/Agents catalog)
+  const mcpAccess = a.mcp_access || [];
+  const mcpReadOnly = mcpAccess.length
+    ? mcpAccess.map(id => `<span class="tag tag-green">${escHtml(id)}</span>`).join('')
+    : '<span style="color:var(--text-secondary);font-size:0.85rem">Aucun</span>';
+  const delivTags = [
+    a.delivers_docs ? '<span class="tag tag-purple">Documentation</span>' : '',
+    a.delivers_code ? '<span class="tag tag-purple">Code</span>' : '',
+  ].filter(Boolean).join('') || '<span style="color:var(--text-secondary);font-size:0.85rem">Aucun</span>';
 
   const promptRaw = a.prompt_content || '';
   const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
@@ -3798,54 +4484,62 @@ async function editTplAgent(dir, agentId) {
 
   showModal(`
     <div class="modal-header">
-      <h3>Agent: ${escHtml(a.name)} (${escHtml(agentId)})</h3>
+      <h3>Agent: ${escHtml(a.name || agentId)} <span style="color:var(--text-secondary);font-weight:normal;font-size:0.85rem">(${escHtml(agentId)})</span></h3>
       <button class="btn-icon" onclick="closeModal()">&times;</button>
     </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Nom</label>
-        <input id="tpl-agent-edit-name" value="${escHtml(a.name)}" />
+    <div class="prompt-tabs" style="margin-bottom:0.5rem">
+      <div class="prompt-tab active" id="tpl-modal-tab-info" onclick="switchTplModalTab('info')">Signaletique</div>
+      <div class="prompt-tab" id="tpl-modal-tab-prompt" onclick="switchTplModalTab('prompt')">Prompt</div>
+      <div class="prompt-tab" id="tpl-modal-tab-pipeline" onclick="switchTplModalTab('pipeline')" style="${hasPipeline ? '' : 'display:none'}">Pipeline</div>
+    </div>
+    <div id="tpl-modal-pane-info">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Nom</label>
+          <input value="${escHtml(a.name || agentId)}" readonly style="background:var(--bg-secondary)" />
+        </div>
+        <div class="form-group">
+          <label>Modele LLM</label>
+          <input value="${escHtml(a.llm || '(defaut)')}" readonly style="background:var(--bg-secondary)" />
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Temperature</label>
+          <input value="${a.temperature ?? ''}" readonly style="background:var(--bg-secondary)" />
+        </div>
+        <div class="form-group">
+          <label>Max tokens</label>
+          <input value="${a.max_tokens ?? ''}" readonly style="background:var(--bg-secondary)" />
+        </div>
       </div>
       <div class="form-group">
-        <label>Modele LLM</label>
-        <select id="tpl-agent-edit-llm">${llmOptions}</select>
-      </div>
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Temperature</label>
-        <input id="tpl-agent-edit-temp" type="number" step="0.1" min="0" max="2" value="${a.temperature}" />
+        <label>Type</label>
+        <select id="tpl-agent-edit-type" onchange="_onTplTypeChange(this.value)">
+          <option value="single" ${curType==='single'?'selected':''}>Single</option>
+          <option value="pipeline" ${curType==='pipeline'?'selected':''}>Pipeline</option>
+          <option value="orchestrator" ${curType==='orchestrator'?'selected':''} ${hasOtherOrch && curType!=='orchestrator'?'disabled':''}>Orchestrator</option>
+        </select>
       </div>
       <div class="form-group">
-        <label>Max tokens</label>
-        <input id="tpl-agent-edit-tokens" type="number" value="${a.max_tokens}" />
+        <label>Serveurs MCP autorises</label>
+        <div style="display:flex;flex-wrap:wrap;gap:0.35rem;margin-top:0.25rem">${mcpReadOnly}</div>
+      </div>
+      <div class="form-group">
+        <label>Type de livrable</label>
+        <div style="display:flex;flex-wrap:wrap;gap:0.35rem;margin-top:0.25rem">${delivTags}</div>
       </div>
     </div>
-    <div class="form-group">
-      <label>Type</label>
-      <select id="tpl-agent-edit-type" onchange="document.getElementById('tpl-pipeline-wrap').style.display=this.value==='pipeline'?'':'none'">
-        <option value="single" ${curType==='single'?'selected':''}>Single</option>
-        <option value="pipeline" ${curType==='pipeline'?'selected':''}>Pipeline</option>
-        <option value="orchestrator" ${curType==='orchestrator'?'selected':''} ${hasOtherOrch && curType!=='orchestrator'?'disabled':''}>Orchestrator</option>
-      </select>
-    </div>
-    <div id="tpl-pipeline-wrap" class="form-group" style="${hasPipeline ? '' : 'display:none'}">
-      <label>Pipeline Steps</label>
-      <div id="tpl-pipeline-steps" class="pipeline-steps-container"></div>
-    </div>
-    <div class="form-group">
-      <label>Prompt (${escHtml(a.prompt || agentId + '.md')})</label>
-      <div class="prompt-tabs">
-        <div class="prompt-tab active" id="tpl-prompt-tab-preview" onclick="switchTplPromptTab('preview')">Apercu</div>
-        <div class="prompt-tab" id="tpl-prompt-tab-edit" onclick="switchTplPromptTab('edit')">Editer</div>
+    <div id="tpl-modal-pane-prompt" style="display:none">
+      <div class="form-group">
+        <label>Prompt</label>
+        <div class="prompt-preview" id="tpl-agent-prompt-preview" style="max-height:500px;overflow-y:auto"></div>
       </div>
-      <div class="prompt-preview" id="tpl-agent-prompt-preview" style="max-height:400px;overflow-y:auto">${promptHtml}</div>
-      <textarea id="tpl-agent-edit-prompt" style="min-height:300px;display:none;border-radius:0 0.5rem 0.5rem 0.5rem">${escHtml(promptRaw)}</textarea>
     </div>
-    <div class="form-group">
-      <label>Serveurs MCP autorises</label>
-      <div class="mcp-check-tags" id="tpl-agent-mcp-tags">
-        ${mcpTags || '<span style="color:var(--text-secondary);font-size:0.85rem">Aucun serveur MCP configure</span>'}
+    <div id="tpl-modal-pane-pipeline" style="display:none">
+      <div class="form-group">
+        <label>Pipeline Steps</label>
+        <div id="tpl-pipeline-steps" class="pipeline-steps-container"></div>
       </div>
     </div>
     <div class="modal-actions">
@@ -3853,56 +4547,45 @@ async function editTplAgent(dir, agentId) {
       <button class="btn btn-primary" onclick="saveTplAgent('${escHtml(dir)}','${escHtml(agentId)}')">Sauvegarder</button>
     </div>
   `, 'modal-wide');
+  // Set prompt after modal creation to avoid template literal issues with backticks
+  const promptEl = document.getElementById('tpl-agent-prompt-preview');
+  if (promptEl) promptEl.innerHTML = promptHtml;
   renderPipelineSteps('tpl-pipeline-steps', a.pipeline_steps || []);
 }
 
-function switchTplPromptTab(tab) {
-  const preview = document.getElementById('tpl-agent-prompt-preview');
-  const editor = document.getElementById('tpl-agent-edit-prompt');
-  const tabPreview = document.getElementById('tpl-prompt-tab-preview');
-  const tabEdit = document.getElementById('tpl-prompt-tab-edit');
-  if (tab === 'edit') {
-    preview.style.display = 'none';
-    editor.style.display = '';
-    tabPreview.classList.remove('active');
-    tabEdit.classList.add('active');
-  } else {
-    const raw = editor.value;
-    preview.innerHTML = typeof marked !== 'undefined' ? marked.parse(raw) : escHtml(raw);
-    preview.style.display = '';
-    editor.style.display = 'none';
-    tabPreview.classList.add('active');
-    tabEdit.classList.remove('active');
+function switchTplModalTab(tab) {
+  ['info', 'prompt', 'pipeline'].forEach(t => {
+    const pane = document.getElementById('tpl-modal-pane-' + t);
+    const tabEl = document.getElementById('tpl-modal-tab-' + t);
+    if (pane) pane.style.display = t === tab ? '' : 'none';
+    if (tabEl) tabEl.classList.toggle('active', t === tab);
+  });
+}
+
+function _onTplTypeChange(val) {
+  const tabEl = document.getElementById('tpl-modal-tab-pipeline');
+  if (tabEl) tabEl.style.display = val === 'pipeline' ? '' : 'none';
+  // If switching away from pipeline, hide the pane if it was active
+  if (val !== 'pipeline') {
+    const pane = document.getElementById('tpl-modal-pane-pipeline');
+    if (pane && pane.style.display !== 'none') switchTplModalTab('info');
   }
 }
 
 async function saveTplAgent(dir, agentId) {
-  const name = document.getElementById('tpl-agent-edit-name').value.trim();
-  if (!name) { toast('Nom requis', 'error'); return; }
-  const llm = document.getElementById('tpl-agent-edit-llm').value;
-  const temperature = parseFloat(document.getElementById('tpl-agent-edit-temp').value);
-  const max_tokens = parseInt(document.getElementById('tpl-agent-edit-tokens').value);
-  const prompt_content = document.getElementById('tpl-agent-edit-prompt').value;
   const agentType = document.getElementById('tpl-agent-edit-type').value;
   const tpl = tplTemplatesData.find(tp => tp.id === dir);
   if (agentType === 'orchestrator' && Object.entries(tpl.agents || {}).some(([aid, ag]) => aid !== agentId && ag.type === 'orchestrator')) {
     toast('Un orchestrator existe deja dans cette equipe', 'error'); return;
   }
   const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('tpl-pipeline-steps') : [];
-  const a = tpl.agents[agentId];
-  const mcpChecked = [...document.querySelectorAll('#tpl-agent-mcp-tags input[type=checkbox]:checked')].map(cb => cb.value);
   try {
-    await Promise.all([
-      api(`/api/templates/agents/${encodeURIComponent(agentId)}`, { method: 'PUT', body: {
-        id: agentId, name, llm, temperature, max_tokens,
-        prompt_content,
-        prompt_file: a.prompt || `${agentId}.md`,
-        type: agentType,
-        pipeline_steps,
-        team_id: dir,
-      }}),
-      api(`/api/templates/mcp-access/${encodeURIComponent(dir)}/${encodeURIComponent(agentId)}`, { method: 'PUT', body: { servers: mcpChecked }}),
-    ]);
+    await api(`/api/templates/agents/${encodeURIComponent(agentId)}`, { method: 'PUT', body: {
+      id: agentId, name: agentId,
+      type: agentType,
+      pipeline_steps,
+      team_id: dir,
+    }});
     toast('Agent sauvegarde', 'success');
     closeModal();
     loadTplTeamsList();
@@ -6346,8 +7029,6 @@ document.addEventListener('DOMContentLoaded', () => {
         txt += ' \u2014 ' + dt.toLocaleDateString('fr-FR') + ' ' + dt.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
       } catch(e) {}
     }
-    const el = document.getElementById('admin-version');
-    if (el && txt) el.textContent = txt;
     const sv = document.getElementById('sidebar-version');
     if (sv && d.version) sv.textContent = '(' + d.version + ')';
   }).catch(() => {});

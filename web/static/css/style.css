@@ -1,4 +1,33 @@
 /* LandGraph Admin — Custom styles */
+
+/* Spinner animation */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  vertical-align: middle;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Filterable agent dropdown */
+.sa-dropdown {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 100;
+  max-height: 420px; overflow-y: auto;
+  background: var(--bg-secondary); border: 1px solid var(--border-color);
+  border-radius: 0 0 6px 6px; box-shadow: 0 4px 12px rgba(0,0,0,.3);
+}
+.sa-dropdown-item {
+  padding: 6px 10px; cursor: pointer; font-size: 0.85rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sa-dropdown-item:hover, .sa-dropdown-item.active {
+  background: var(--accent-primary); color: #fff;
+}
+
 :root {
   --bg-primary: #0f172a;
   --bg-secondary: #1e293b;
@@ -111,7 +140,7 @@ body {
   margin-left: 240px;
   flex: 1;
   padding: 2rem;
-  max-width: 1200px;
+  max-width: 1800px;
 }
 
 .page-header {
@@ -313,6 +342,7 @@ tr:hover { background: rgba(255,255,255,0.02); }
 .tag-red { background: rgba(239,68,68,0.2); color: #f87171; }
 .tag-yellow { background: rgba(245,158,11,0.2); color: #fbbf24; }
 .tag-gray { background: rgba(148,163,184,0.2); color: #94a3b8; }
+.tag-purple { background: rgba(168,85,247,0.2); color: #c084fc; }
 
 /* Modal */
 .modal-overlay {
@@ -337,6 +367,7 @@ tr:hover { background: rgba(255,255,255,0.02); }
 }
 
 .modal.modal-confirm { max-width: 420px; }
+.modal.modal-tall { min-height: 35vh; overflow: visible; }
 
 .modal-header {
   display: flex;
@@ -1673,15 +1704,6 @@ tr:hover { background: rgba(255,255,255,0.02); }
 }
 
 /* Version tag */
-.admin-version-tag {
-  font-size: 0.65rem;
-  color: var(--text-secondary);
-  text-align: center;
-  padding: 0.5rem 1rem;
-  opacity: 0.5;
-  letter-spacing: 0.03em;
-}
-
 /* Responsive sidebar collapse */
 @media (max-width: 900px) {
   .wf-sidebar { width: 260px; }
