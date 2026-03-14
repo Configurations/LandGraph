@@ -1,0 +1,26 @@
+<svg width="680" height="280" viewBox="0 0 680 280" xmlns="http://www.w3.org/2000/svg">
+
+  <text x="100" y="175"
+    font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
+    font-size="110"
+    font-weight="800"
+    fill="#26215C"
+    letter-spacing="-4">ag</text>
+
+  <circle cx="286" cy="148" r="7" fill="#7F77DD"/>
+
+  <text x="302" y="175"
+    font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
+    font-size="110"
+    font-weight="200"
+    fill="#534AB7"
+    letter-spacing="-3">flow</text>
+
+  <text x="100" y="212"
+    font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
+    font-size="12"
+    font-weight="400"
+    fill="#7F77DD"
+    letter-spacing="4.5">AGENT WORKFLOW PLATFORM</text>
+
+</svg>

@@ -232,6 +232,12 @@ def parse_llm_decision(raw: str, project_id: str) -> RoutingDecision:
 
     data = json.loads(clean)
     data["project_id"] = project_id
+    # Normalize common LLM aliases for decision_type
+    dt_aliases = {"dispatch": "parallel_dispatch", "route_agent": "route", "transition": "phase_transition",
+                   "human_gate": "escalate", "dispatch_agents": "parallel_dispatch"}
+    dt = data.get("decision_type", "")
+    if dt in dt_aliases:
+        data["decision_type"] = dt_aliases[dt]
     return RoutingDecision(**data)
 
 

@@ -6,6 +6,7 @@ from langgraph.graph.message import add_messages
 class ProjectState(TypedDict, total=False):
     messages: Annotated[list, add_messages]
     project_id: str
+    project_slug: str
     project_phase: str
     project_metadata: dict
     agent_outputs: dict

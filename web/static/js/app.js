@@ -60,8 +60,95 @@ function showSection(name) {
   document.querySelector(`.nav-item[data-section="${name}"]`).classList.add('active');
 
   // Load data on section switch
-  const loaders = { secrets: loadEnv, mcp: loadMCP, llm: loadLLM, teams: loadTeams, templates: loadTemplates, channels: loadChannels, chat: loadChat, monitoring: loadMonitoring, hitl: loadHitl, users: loadUsers, scripts: loadScripts };
+  const loaders = { dashboard: loadDashboard, secrets: loadEnv, mcp: loadMCP, llm: loadLLM, teams: loadTeams, templates: loadTemplates, channels: loadChannels, chat: loadChat, monitoring: loadMonitoring, hitl: loadHitl, users: loadUsers, scripts: loadScripts };
   if (loaders[name]) loaders[name]();
+}
+
+// ── Dashboard ─────────────────────────────────────
+async function loadDashboard() {
+  const el = document.getElementById('dashboard-content');
+  el.innerHTML = '<div class="loading">Chargement...</div>';
+
+  const [gateway, containers, agents, teams, hitl, llm] = await Promise.allSettled([
+    api('/api/monitoring/gateway'),
+    api('/api/monitoring/containers'),
+    api('/api/agents'),
+    api('/api/teams'),
+    api('/api/hitl/stats'),
+    api('/api/llm/providers'),
+  ]);
+
+  let html = '';
+
+  // Gateway status
+  const gw = gateway.status === 'fulfilled' ? gateway.value : null;
+  const gwOk = gw && gw.status === 'ok';
+  html += `<div class="dash-card">
+    <div class="dash-card-title">Gateway</div>
+    <div class="dash-card-value"><span class="dash-status-dot ${gwOk ? 'dash-status-ok' : 'dash-status-err'}"></span>${gwOk ? 'En ligne' : 'Hors ligne'}</div>
+    <div class="dash-card-sub">${gwOk ? 'v' + (gw.version || '?') : (gw?.error || 'Non joignable')}</div>
+  </div>`;
+
+  // Containers
+  const ct = containers.status === 'fulfilled' ? (containers.value.containers || []) : [];
+  const running = ct.filter(c => c.status && c.status.toLowerCase().includes('up')).length;
+  html += `<div class="dash-card">
+    <div class="dash-card-title">Containers</div>
+    <div class="dash-card-value">${running} / ${ct.length}</div>
+    <div class="dash-card-sub">en cours d'execution</div>
+    <ul class="dash-card-list">${ct.map(c => {
+      const up = c.status && c.status.toLowerCase().includes('up');
+      return `<li><span><span class="dash-status-dot ${up ? 'dash-status-ok' : 'dash-status-err'}"></span>${escHtml(c.name)}</span><span style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(c.status || '')}</span></li>`;
+    }).join('')}</ul>
+  </div>`;
+
+  // Teams
+  const tm = teams.status === 'fulfilled' ? (teams.value.teams || []) : [];
+  html += `<div class="dash-card">
+    <div class="dash-card-title">Equipes</div>
+    <div class="dash-card-value">${tm.length}</div>
+    <ul class="dash-card-list">${tm.map(t =>
+      `<li><span>${escHtml(t.name || t.id)}</span><span class="tag tag-blue" style="font-size:0.7rem">${escHtml(t.id)}</span></li>`
+    ).join('')}</ul>
+  </div>`;
+
+  // Agents
+  const ag = agents.status === 'fulfilled' ? (agents.value || []) : [];
+  html += `<div class="dash-card">
+    <div class="dash-card-title">Agents</div>
+    <div class="dash-card-value">${ag.length}</div>
+    <ul class="dash-card-list">${ag.slice(0, 8).map(a =>
+      `<li><span>${escHtml(a.name || a.id)}</span><span style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(a.llm || '')}</span></li>`
+    ).join('')}${ag.length > 8 ? `<li style="color:var(--text-secondary)">+${ag.length - 8} autres</li>` : ''}</ul>
+  </div>`;
+
+  // HITL
+  const ht = hitl.status === 'fulfilled' ? hitl.value : {};
+  html += `<div class="dash-card">
+    <div class="dash-card-title">Validations HITL</div>
+    <div class="dash-card-value">${ht.pending || 0}</div>
+    <div class="dash-card-sub">en attente</div>
+    <ul class="dash-card-list">
+      <li><span>Total</span><span>${ht.total || 0}</span></li>
+      <li><span>Approuvees</span><span style="color:#22c55e">${ht.approved || 0}</span></li>
+      <li><span>Rejetees</span><span style="color:#ef4444">${ht.rejected || 0}</span></li>
+    </ul>
+  </div>`;
+
+  // LLM Providers
+  const lm = llm.status === 'fulfilled' ? llm.value : {};
+  const provCount = Object.keys(lm.providers || {}).length;
+  const defaultLlm = lm.default || '—';
+  html += `<div class="dash-card">
+    <div class="dash-card-title">Modeles LLM</div>
+    <div class="dash-card-value">${provCount}</div>
+    <div class="dash-card-sub">Defaut : ${escHtml(defaultLlm)}</div>
+    <ul class="dash-card-list">${Object.entries(lm.providers || {}).slice(0, 6).map(([id, p]) =>
+      `<li><span>${escHtml(id)}</span><span class="tag tag-blue" style="font-size:0.7rem">${escHtml(p.type)}</span></li>`
+    ).join('')}${provCount > 6 ? `<li style="color:var(--text-secondary)">+${provCount - 6} autres</li>` : ''}</ul>
+  </div>`;
+
+  el.innerHTML = html;
 }
 
 // ── Modal helpers ──────────────────────────────────
@@ -714,58 +801,7 @@ function renderAgents() {
   }).join('');
 }
 
-function editTeam(teamId) {
-  const g = agentGroups.find(t => t.team_id === teamId);
-  if (!g) return;
-  const agentIds = Object.keys(g.agents || {});
-  const orchOpts = `<option value="">-- Aucun --</option>` +
-    agentIds.map(aid => `<option value="${escHtml(aid)}" ${(g.orchestrator || '') === aid ? 'selected' : ''}>${escHtml(g.agents[aid].name)} (${escHtml(aid)})</option>`).join('');
-  showModal(`
-    <div class="modal-header">
-      <h3>Equipe: ${escHtml(g.team_name)}</h3>
-      <button class="btn-icon" onclick="closeModal()">&times;</button>
-    </div>
-    <div class="form-group">
-      <label>Nom</label>
-      <input id="team-edit-name" value="${escHtml(g.team_name)}" />
-    </div>
-    <div class="form-group">
-      <label>Description</label>
-      <input id="team-edit-desc" value="${escHtml(g.team_description || '')}" />
-    </div>
-    <div class="form-group">
-      <label>Orchestrateur</label>
-      <select id="team-edit-orchestrator">${orchOpts}</select>
-    </div>
-    <div class="form-group">
-      <label>Channels Discord <span style="font-size:0.75rem;color:var(--text-secondary)">(IDs separes par des virgules)</span></label>
-      <input id="team-edit-channels" value="${escHtml((g.discord_channels || []).join(', '))}" />
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
-      <button class="btn btn-primary" onclick="saveTeam('${escHtml(teamId)}')">Sauvegarder</button>
-    </div>
-  `);
-}
-
-async function saveTeam(teamId) {
-  const name = document.getElementById('team-edit-name').value.trim();
-  const description = document.getElementById('team-edit-desc').value.trim();
-  const orchestrator = document.getElementById('team-edit-orchestrator').value;
-  const channelsRaw = document.getElementById('team-edit-channels').value.trim();
-  const discord_channels = channelsRaw ? channelsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
-  if (!name) { toast('Le nom est requis', 'error'); return; }
-  try {
-    const g = agentGroups.find(t => t.team_id === teamId);
-    await api(`/api/teams/${encodeURIComponent(teamId)}`, {
-      method: 'PUT',
-      body: { name, description, directory: g?.team_dir || teamId, discord_channels, orchestrator }
-    });
-    toast('Equipe sauvegardee', 'success');
-    closeModal();
-    loadAgents();
-  } catch (e) { toast(e.message, 'error'); }
-}
+// editTeam is defined in the Teams section below (with members support)
 
 async function editAgent(id) {
   const a = agents[id];
@@ -1411,13 +1447,11 @@ async function loadChat() {
   try {
     const data = await api('/api/llm/providers');
     const defaultId = data.default || '';
-    const provider = defaultId ? data.providers[defaultId] : null;
-    const label = document.getElementById('chat-provider-label');
-    if (provider) {
-      label.innerHTML = `<span class="tag tag-blue">${escHtml(provider.type)}</span> <strong>${escHtml(defaultId)}</strong> — ${escHtml(provider.model)}`;
-    } else {
-      label.textContent = 'Aucun provider par defaut';
-    }
+    const providers = data.providers || {};
+    const sel = document.getElementById('chat-provider-select');
+    sel.innerHTML = Object.entries(providers).map(([id, p]) =>
+      `<option value="${escHtml(id)}" ${id === defaultId ? 'selected' : ''}>${escHtml(id)} (${escHtml(p.type)}) — ${escHtml(p.model)}</option>`
+    ).join('');
   } catch (e) { /* ignore */ }
 }
 
@@ -1469,7 +1503,8 @@ async function sendChat() {
 
   try {
     const apiMessages = chatMessages.filter(m => m.role === 'user' || m.role === 'assistant');
-    const result = await api('/api/chat', { method: 'POST', body: { messages: apiMessages } });
+    const providerId = document.getElementById('chat-provider-select')?.value || '';
+    const result = await api('/api/chat', { method: 'POST', body: { messages: apiMessages, provider_id: providerId } });
     chatMessages.push({ role: 'assistant', content: result.content });
   } catch (e) {
     chatMessages.push({ role: 'error', content: e.message });
@@ -1740,149 +1775,185 @@ const GIT_SERVICE_URLS = {
   bitbucket: 'https://api.bitbucket.org/2.0',
 };
 
-async function loadGitServiceConfig() {
-  try {
-    const cfg = await api('/api/git-service/config');
-    document.getElementById('gs-service').value = cfg.service || '';
-    document.getElementById('gs-url').value = cfg.url || '';
-    document.getElementById('gs-login').value = cfg.login || '';
-    document.getElementById('gs-token').value = cfg.token || '';
-    document.getElementById('gs-repo-name').value = cfg.repo_name || '';
-    document.getElementById('gs-repo-key').value = cfg.repo_key || 'shared';
-    _checkGitServiceBtns();
-  } catch {}
+// ── Factorized Git Service (works for both scopes) ──
+// scope = 'shared' or 'configs'
+// Each scope has HTML elements with a prefix: shared→'gs', configs→'cgs'
+// Each scope maps to a git prefix: shared→'tpl-git', configs→'cfg-git'
+
+const GIT_SVC = {
+  shared:  { el: 'gs',  gitPrefix: 'tpl-git', repoKey: 'shared' },
+  configs: { el: 'cgs', gitPrefix: 'cfg-git', repoKey: 'configs' },
+};
+const GIT_REPOS = { 'cfg-git': 'configs', 'tpl-git': 'shared' };
+const GIT_LABELS = { configs: 'Configs', shared: 'Shared (Templates)' };
+
+const _gitSvcInited = { shared: false, configs: false };
+
+function _checkGitSvcBtns(scope) {
+  const p = GIT_SVC[scope].el;
+  const svc = document.getElementById(`${p}-service`).value;
+  const url = document.getElementById(`${p}-url`).value.trim();
+  const token = document.getElementById(`${p}-token`).value.trim();
+  const repo = document.getElementById(`${p}-repo-name`).value.trim();
+  const ready = svc && url && token && repo;
+  const initBtn = document.getElementById(`${p}-btn-init`);
+  const fetchBtn = document.getElementById(`${p}-btn-fetch`);
+  const commitBtn = document.getElementById(`${p}-btn-commit`);
+  const resetBtn = document.getElementById(`${p}-btn-reset`);
+  if (!ready) {
+    initBtn.style.display = 'none';
+    fetchBtn.style.display = 'none';
+    commitBtn.style.display = 'none';
+    if (resetBtn) resetBtn.style.display = 'none';
+  } else if (_gitSvcInited[scope]) {
+    initBtn.style.display = 'none';
+    fetchBtn.style.display = '';
+    commitBtn.style.display = '';
+    if (resetBtn) resetBtn.style.display = '';
+    fetchBtn.disabled = false;
+    commitBtn.disabled = false;
+    if (resetBtn) resetBtn.disabled = false;
+  } else {
+    initBtn.style.display = '';
+    fetchBtn.style.display = 'none';
+    commitBtn.style.display = 'none';
+    if (resetBtn) resetBtn.style.display = 'none';
+    initBtn.disabled = false;
+  }
 }
 
-function _onGitServiceChange() {
-  const svc = document.getElementById('gs-service').value;
-  const urlField = document.getElementById('gs-url');
+function _onGitSvcChange(scope) {
+  const p = GIT_SVC[scope].el;
+  const svc = document.getElementById(`${p}-service`).value;
+  const urlField = document.getElementById(`${p}-url`);
   if (svc && GIT_SERVICE_URLS[svc] !== undefined) {
     urlField.value = GIT_SERVICE_URLS[svc];
     urlField.placeholder = GIT_SERVICE_URLS[svc] || 'https://votre-instance.com';
   }
-  _checkGitServiceBtns();
+  _checkGitSvcBtns(scope);
 }
 
-function _checkGitServiceBtns() {
-  const svc = document.getElementById('gs-service').value;
-  const url = document.getElementById('gs-url').value.trim();
-  const token = document.getElementById('gs-token').value.trim();
-  const repo = document.getElementById('gs-repo-name').value.trim();
-  const ready = svc && url && token && repo;
-  document.getElementById('gs-btn-init').disabled = !ready;
-  document.getElementById('gs-btn-fetch').disabled = !ready;
-  document.getElementById('gs-btn-commit').disabled = !ready;
-  document.getElementById('gs-btn-push').disabled = !ready;
+async function _saveGitSvcConfig(scope) {
+  const p = GIT_SVC[scope].el;
+  await api(`/api/git-svc/${scope}/config`, { method: 'PUT', body: {
+    service: document.getElementById(`${p}-service`).value,
+    url: document.getElementById(`${p}-url`).value.trim(),
+    login: document.getElementById(`${p}-login`).value.trim(),
+    token: document.getElementById(`${p}-token`).value.trim(),
+    repo_name: document.getElementById(`${p}-repo-name`).value.trim(),
+  }});
 }
 
-async function saveGitServiceConfig() {
+async function loadGitSvcConfig(scope) {
+  const p = GIT_SVC[scope].el;
   try {
-    await api('/api/git-service/config', { method: 'PUT', body: {
-      service: document.getElementById('gs-service').value,
-      url: document.getElementById('gs-url').value.trim(),
-      login: document.getElementById('gs-login').value.trim(),
-      token: document.getElementById('gs-token').value.trim(),
-      repo_name: document.getElementById('gs-repo-name').value.trim(),
-      repo_key: document.getElementById('gs-repo-key').value,
-    }});
-    toast('Configuration du service Git enregistree', 'success');
-  } catch (e) { toast(e.message, 'error'); }
+    const cfg = await api(`/api/git-svc/${scope}/config`);
+    document.getElementById(`${p}-service`).value = cfg.service || '';
+    document.getElementById(`${p}-url`).value = cfg.url || '';
+    document.getElementById(`${p}-login`).value = cfg.login || '';
+    document.getElementById(`${p}-token`).value = cfg.token || '';
+    document.getElementById(`${p}-repo-name`).value = cfg.repo_name || '';
+    _checkGitSvcBtns(scope);
+  } catch {}
 }
 
-async function gitServiceInit() {
-  const repoName = document.getElementById('gs-repo-name').value.trim();
-  const repoKey = document.getElementById('gs-repo-key').value;
+function _buildRepoUrl(scope) {
+  const p = GIT_SVC[scope].el;
+  const svc = document.getElementById(`${p}-service`).value;
+  const baseUrl = document.getElementById(`${p}-url`).value.trim();
+  const login = document.getElementById(`${p}-login`).value.trim();
+  const repoName = document.getElementById(`${p}-repo-name`).value.trim();
+  if (svc === 'github') return `https://github.com/${login}/${repoName}.git`;
+  if (svc === 'gitlab') return `${baseUrl.replace('/api/v4','').replace('api.','').replace('/api','') || 'https://gitlab.com'}/${login}/${repoName}.git`;
+  if (svc === 'bitbucket') return `https://bitbucket.org/${login}/${repoName}.git`;
+  return `${baseUrl.replace(/\/api\/v1$/,'').replace(/\/api$/,'')}/${login}/${repoName}.git`;
+}
+
+async function gitSvcInit(scope) {
+  const { el: p, gitPrefix, repoKey } = GIT_SVC[scope];
+  const repoName = document.getElementById(`${p}-repo-name`).value.trim();
   if (!repoName) { toast('Nom du depot requis', 'error'); return; }
-  const btn = document.getElementById('gs-btn-init');
-  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Creation...';
+  const btn = document.getElementById(`${p}-btn-init`);
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Verification...';
   try {
-    // 1. Save service config first
-    await saveGitServiceConfig();
-    // 2. Create remote repo
-    const result = await api('/api/git-service/create-repo', { method: 'POST', body: {
-      repo_name: repoName, repo_key: repoKey
-    }});
-    if (!result.ok) { toast(result.message || 'Erreur creation', 'error'); return; }
-    toast(result.message || 'Depot cree', 'success');
-    // 3. Init local repo + push
-    const init = await api(`/api/git/${repoKey}/init`, { method: 'POST' });
-    if (init.ok) toast('Depot local initialise', 'success');
-    // 4. Reload the repo git panel
-    const prefix = repoKey === 'shared' ? 'tpl-git' : 'cfg-git';
-    loadRepoGit(prefix);
+    await _saveGitSvcConfig(scope);
+    const check = await api(`/api/git-svc/${scope}/check-repo`, { method: 'POST', body: { repo_name: repoName } });
+    if (check.exists) {
+      btn.innerHTML = '<span class="spinner"></span> Clonage...';
+      let repoUrl = check.clone_url || _buildRepoUrl(scope);
+      const result = await api(`/api/git-svc/${scope}/fetch-repo`, { method: 'POST', body: { repo_url: repoUrl } });
+      toast(result.message || (result.ok ? 'Depot clone avec succes' : 'Erreur'), result.ok ? 'success' : 'error');
+      loadRepoGit(gitPrefix);
+    } else {
+      const yes = await confirmModal('Le depot distant n\'existe pas.\n\nVoulez-vous le creer ?');
+      if (!yes) return;
+      btn.innerHTML = '<span class="spinner"></span> Creation...';
+      const result = await api(`/api/git-svc/${scope}/create-repo`, { method: 'POST', body: { repo_name: repoName } });
+      if (!result.ok) { toast(result.message || 'Erreur creation', 'error'); return; }
+      toast(result.message || 'Depot cree', 'success');
+      const init = await api(`/api/git/${repoKey}/init`, { method: 'POST' });
+      if (init.ok) toast('Depot local initialise', 'success');
+      loadRepoGit(gitPrefix);
+    }
   } catch (e) { toast(e.message, 'error'); }
-  finally { btn.disabled = false; btn.textContent = 'Init'; _checkGitServiceBtns(); }
+  finally { btn.disabled = false; btn.textContent = 'Init'; _checkGitSvcBtns(scope); }
 }
 
-async function gitServiceFetch() {
-  const repoName = document.getElementById('gs-repo-name').value.trim();
-  const repoKey = document.getElementById('gs-repo-key').value;
-  const svc = document.getElementById('gs-service').value;
-  const baseUrl = document.getElementById('gs-url').value.trim();
-  const login = document.getElementById('gs-login').value.trim();
+async function gitSvcFetch(scope) {
+  const { el: p, gitPrefix, repoKey } = GIT_SVC[scope];
+  const repoName = document.getElementById(`${p}-repo-name`).value.trim();
   if (!repoName) { toast('Nom du depot requis', 'error'); return; }
-  // Build expected repo URL based on service
-  let repoUrl = '';
-  if (svc === 'github') repoUrl = `https://github.com/${login}/${repoName}.git`;
-  else if (svc === 'gitlab') repoUrl = `${baseUrl.replace('/api/v4','').replace('api.','').replace('/api','') || 'https://gitlab.com'}/${login}/${repoName}.git`;
-  else if (svc === 'bitbucket') repoUrl = `https://bitbucket.org/${login}/${repoName}.git`;
-  else repoUrl = `${baseUrl.replace(/\/api\/v1$/,'').replace(/\/api$/,'')}/${login}/${repoName}.git`;
-
-  const btn = document.getElementById('gs-btn-fetch');
+  const btn = document.getElementById(`${p}-btn-fetch`);
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Fetch...';
   try {
-    await saveGitServiceConfig();
-    const result = await api('/api/git-service/fetch-repo', { method: 'POST', body: {
-      repo_key: repoKey, repo_url: repoUrl
-    }});
+    await _saveGitSvcConfig(scope);
+    const repoUrl = _buildRepoUrl(scope);
+    const result = await api(`/api/git-svc/${scope}/fetch-repo`, { method: 'POST', body: { repo_url: repoUrl } });
     toast(result.message || (result.ok ? 'Fetch OK' : 'Erreur'), result.ok ? 'success' : 'error');
-    const prefix = repoKey === 'shared' ? 'tpl-git' : 'cfg-git';
-    loadRepoGit(prefix);
+    loadRepoGit(gitPrefix);
   } catch (e) { toast(e.message, 'error'); }
-  finally { btn.disabled = false; btn.textContent = 'Fetch'; _checkGitServiceBtns(); }
+  finally { btn.disabled = false; btn.textContent = 'Fetch'; _checkGitSvcBtns(scope); }
 }
 
-async function gitServicePush() {
-  const repoKey = document.getElementById('gs-repo-key').value;
-  const btn = document.getElementById('gs-btn-push');
-  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Push...';
-  try {
-    // Ensure git service config is saved (credentials)
-    await saveGitServiceConfig();
-    // Ensure repo git.json has credentials from service config
-    await api('/api/git-service/sync-repo-config', { method: 'POST', body: { repo_key: repoKey } });
-    const data = await api(`/api/git/${repoKey}/push`, { method: 'POST' });
-    toast(data.message || (data.ok ? 'Push OK' : 'Erreur'), data.ok ? 'success' : 'error');
-    const prefix = repoKey === 'shared' ? 'tpl-git' : 'cfg-git';
-    loadRepoGit(prefix);
-  } catch (e) { toast(e.message, 'error'); }
-  finally { btn.disabled = false; btn.textContent = 'Push'; _checkGitServiceBtns(); }
-}
-
-async function gitServiceCommitPush() {
-  const repoKey = document.getElementById('gs-repo-key').value;
-  const btn = document.getElementById('gs-btn-commit');
+async function gitSvcCommit(scope) {
+  const { el: p, gitPrefix, repoKey } = GIT_SVC[scope];
+  const btn = document.getElementById(`${p}-btn-commit`);
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Commit...';
   try {
-    await saveGitServiceConfig();
-    await api('/api/git-service/sync-repo-config', { method: 'POST', body: { repo_key: repoKey } });
+    await _saveGitSvcConfig(scope);
+    await api(`/api/git-svc/${scope}/sync-repo-config`, { method: 'POST' });
     const data = await api(`/api/git/${repoKey}/commit`, { method: 'POST', body: { message: 'Mise a jour depuis le dashboard' } });
-    toast(data.message || (data.ok ? 'Commit & Push OK' : 'Erreur'), data.ok ? 'success' : 'error');
-    const prefix = repoKey === 'shared' ? 'tpl-git' : 'cfg-git';
-    loadRepoGit(prefix);
+    toast(data.message || (data.ok ? 'Commit OK' : 'Erreur'), data.ok ? 'success' : 'error');
+    loadRepoGit(gitPrefix);
   } catch (e) { toast(e.message, 'error'); }
-  finally { btn.disabled = false; btn.textContent = 'Commit & Push'; _checkGitServiceBtns(); }
+  finally { btn.disabled = false; btn.textContent = 'Commit'; _checkGitSvcBtns(scope); }
 }
 
-// Mapping: prefix → repoKey. HTML elements use prefix (cfg-git-*, tpl-git-*)
-const GIT_REPOS = {
-  'cfg-git': 'configs',
-  'tpl-git': 'shared',
-};
-const GIT_LABELS = { configs: 'Configs', shared: 'Shared (Templates)' };
+async function gitSvcReset(scope) {
+  const { el: p, gitPrefix, repoKey } = GIT_SVC[scope];
+  const status = await api(`/api/git/${repoKey}/status`);
+  if (status.status && status.status !== '(aucun changement)' && status.status.trim()) {
+    if (!(await confirmModal('Des modifications sont en cours et non commitees.\nToutes les modifications seront perdues.\n\nVoulez-vous continuer ?'))) return;
+  } else {
+    if (!(await confirmModal('Reset sur la version distante ?\nToutes les modifications locales seront ecrasees.'))) return;
+  }
+  const btn = document.getElementById(`${p}-btn-reset`);
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Reset...';
+  try {
+    const data = await api(`/api/git/${repoKey}/reset`, { method: 'POST' });
+    toast(data.message || 'Reset effectue', data.ok ? 'success' : 'error');
+    loadRepoGit(gitPrefix);
+  } catch (e) { toast(e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = 'Reset'; _checkGitSvcBtns(scope); }
+}
+
+// Convenience wrappers for HTML onclick
+function saveGitServiceConfig() { _saveGitSvcConfig('shared'); }
+function loadGitServiceConfig() { loadGitSvcConfig('shared'); }
 
 async function loadRepoGit(prefix) {
   const repoKey = GIT_REPOS[prefix];
+  const scope = repoKey; // 'shared' or 'configs'
   try {
     const [status, cfg] = await Promise.all([
       api(`/api/git/${repoKey}/status`),
@@ -1893,131 +1964,14 @@ async function loadRepoGit(prefix) {
     document.getElementById(`${prefix}-password`).value = cfg.password || '';
     const inited = status.initialized;
     document.getElementById(`${prefix}-branch`).textContent = inited ? (status.branch || 'inconnu') : 'Non initialise';
-    document.getElementById(`${prefix}-status`).textContent = inited ? (status.status || '(aucun changement)') : 'Git non initialise. Utilisez le bloc Service Git pour Init ou Fetch.';
-    document.getElementById(`${prefix}-log`).textContent = inited ? (status.log || '(vide)') : '';
-    for (const b of ['init','pull','commit','push','reset']) {
-      const el = document.getElementById(`btn-${prefix}-${b}`);
-      if (el) el.disabled = b === 'init' ? inited : !inited;
-    }
+    document.getElementById(`${prefix}-status`).textContent = inited ? (status.status || '(aucun changement)') : 'Git non initialise.';
+    _gitSvcInited[scope] = inited;
+    _checkGitSvcBtns(scope);
     if (inited) loadRepoGitCommits(prefix);
   } catch (e) { toast(e.message, 'error'); }
 }
 
-function loadCfgGit() { loadCfgGitServiceConfig(); loadRepoGit('cfg-git'); }
-
-// ── Config-scope Git Service ────
-
-async function loadCfgGitServiceConfig() {
-  try {
-    const cfg = await api('/api/cfg-git-service/config');
-    document.getElementById('cgs-service').value = cfg.service || '';
-    document.getElementById('cgs-url').value = cfg.url || '';
-    document.getElementById('cgs-login').value = cfg.login || '';
-    document.getElementById('cgs-token').value = cfg.token || '';
-    document.getElementById('cgs-repo-name').value = cfg.repo_name || '';
-    _checkCfgGitServiceBtns();
-  } catch {}
-}
-
-function _onCfgGitServiceChange() {
-  const svc = document.getElementById('cgs-service').value;
-  const urlField = document.getElementById('cgs-url');
-  if (svc && GIT_SERVICE_URLS[svc] !== undefined) {
-    urlField.value = GIT_SERVICE_URLS[svc];
-    urlField.placeholder = GIT_SERVICE_URLS[svc] || 'https://votre-instance.com';
-  }
-  _checkCfgGitServiceBtns();
-}
-
-function _checkCfgGitServiceBtns() {
-  const svc = document.getElementById('cgs-service').value;
-  const url = document.getElementById('cgs-url').value.trim();
-  const token = document.getElementById('cgs-token').value.trim();
-  const repo = document.getElementById('cgs-repo-name').value.trim();
-  const ready = svc && url && token && repo;
-  document.getElementById('cgs-btn-init').disabled = !ready;
-  document.getElementById('cgs-btn-fetch').disabled = !ready;
-  document.getElementById('cgs-btn-commit').disabled = !ready;
-  document.getElementById('cgs-btn-push').disabled = !ready;
-}
-
-async function saveCfgGitServiceConfig() {
-  try {
-    await api('/api/cfg-git-service/config', { method: 'PUT', body: {
-      service: document.getElementById('cgs-service').value,
-      url: document.getElementById('cgs-url').value.trim(),
-      login: document.getElementById('cgs-login').value.trim(),
-      token: document.getElementById('cgs-token').value.trim(),
-      repo_name: document.getElementById('cgs-repo-name').value.trim(),
-    }});
-    toast('Configuration du service Git enregistree', 'success');
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-async function cfgGitServiceInit() {
-  const repoName = document.getElementById('cgs-repo-name').value.trim();
-  if (!repoName) { toast('Nom du depot requis', 'error'); return; }
-  const btn = document.getElementById('cgs-btn-init');
-  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Creation...';
-  try {
-    await saveCfgGitServiceConfig();
-    const result = await api('/api/cfg-git-service/create-repo', { method: 'POST', body: { repo_name: repoName } });
-    if (!result.ok) { toast(result.message || 'Erreur creation', 'error'); return; }
-    toast(result.message || 'Depot cree', 'success');
-    const init = await api('/api/git/configs/init', { method: 'POST' });
-    if (init.ok) toast('Depot local initialise', 'success');
-    loadRepoGit('cfg-git');
-  } catch (e) { toast(e.message, 'error'); }
-  finally { btn.disabled = false; btn.textContent = 'Init'; _checkCfgGitServiceBtns(); }
-}
-
-async function cfgGitServiceFetch() {
-  const repoName = document.getElementById('cgs-repo-name').value.trim();
-  const svc = document.getElementById('cgs-service').value;
-  const baseUrl = document.getElementById('cgs-url').value.trim();
-  const login = document.getElementById('cgs-login').value.trim();
-  if (!repoName) { toast('Nom du depot requis', 'error'); return; }
-  let repoUrl = '';
-  if (svc === 'github') repoUrl = `https://github.com/${login}/${repoName}.git`;
-  else if (svc === 'gitlab') repoUrl = `${baseUrl.replace('/api/v4','').replace('api.','').replace('/api','') || 'https://gitlab.com'}/${login}/${repoName}.git`;
-  else if (svc === 'bitbucket') repoUrl = `https://bitbucket.org/${login}/${repoName}.git`;
-  else repoUrl = `${baseUrl.replace(/\/api\/v1$/,'').replace(/\/api$/,'')}/${login}/${repoName}.git`;
-  const btn = document.getElementById('cgs-btn-fetch');
-  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Fetch...';
-  try {
-    await saveCfgGitServiceConfig();
-    const result = await api('/api/cfg-git-service/fetch-repo', { method: 'POST', body: { repo_url: repoUrl } });
-    toast(result.message || (result.ok ? 'Fetch OK' : 'Erreur'), result.ok ? 'success' : 'error');
-    loadRepoGit('cfg-git');
-  } catch (e) { toast(e.message, 'error'); }
-  finally { btn.disabled = false; btn.textContent = 'Fetch'; _checkCfgGitServiceBtns(); }
-}
-
-async function cfgGitServicePush() {
-  const btn = document.getElementById('cgs-btn-push');
-  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Push...';
-  try {
-    await saveCfgGitServiceConfig();
-    await api('/api/cfg-git-service/sync-repo-config', { method: 'POST' });
-    const data = await api('/api/git/configs/push', { method: 'POST' });
-    toast(data.message || (data.ok ? 'Push OK' : 'Erreur'), data.ok ? 'success' : 'error');
-    loadRepoGit('cfg-git');
-  } catch (e) { toast(e.message, 'error'); }
-  finally { btn.disabled = false; btn.textContent = 'Push'; _checkCfgGitServiceBtns(); }
-}
-
-async function cfgGitServiceCommitPush() {
-  const btn = document.getElementById('cgs-btn-commit');
-  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Commit...';
-  try {
-    await saveCfgGitServiceConfig();
-    await api('/api/cfg-git-service/sync-repo-config', { method: 'POST' });
-    const data = await api('/api/git/configs/commit', { method: 'POST', body: { message: 'Mise a jour depuis le dashboard' } });
-    toast(data.message || (data.ok ? 'Commit & Push OK' : 'Erreur'), data.ok ? 'success' : 'error');
-    loadRepoGit('cfg-git');
-  } catch (e) { toast(e.message, 'error'); }
-  finally { btn.disabled = false; btn.textContent = 'Commit & Push'; _checkCfgGitServiceBtns(); }
-}
+function loadCfgGit() { loadGitSvcConfig('configs'); loadRepoGit('cfg-git'); }
 
 function loadTplGit() { loadGitServiceConfig(); loadRepoGit('tpl-git'); }
 
@@ -2049,8 +2003,16 @@ async function repoGitInit(prefix) {
 async function repoGitPull(prefix) {
   const repoKey = GIT_REPOS[prefix];
   try {
-    const data = await api(`/api/git/${repoKey}/pull`, { method: 'POST' });
-    toast(data.message || 'Pull effectue', data.ok ? 'success' : 'error');
+    const data = await api(`/api/git/${repoKey}/pull`, { method: 'POST', body: {} });
+    if (!data.ok && data.uncommitted) {
+      const yes = await confirmModal(data.message + '\n\nVoulez-vous continuer et ecraser ces modifications ?');
+      if (!yes) return;
+      const d2 = await api(`/api/git/${repoKey}/pull`, { method: 'POST', body: { force: true } });
+      toast(d2.message || 'Erreur', d2.ok ? 'success' : 'error');
+      loadRepoGit(prefix);
+      return;
+    }
+    toast(data.message || 'Fetch effectue', data.ok ? 'success' : 'error');
     loadRepoGit(prefix);
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -2078,52 +2040,54 @@ function showGitCommitModal(prefix) {
   `);
 }
 
-async function gitCommit(force) {
+async function gitCommit() {
   const msg = document.getElementById('git-commit-msg').value.trim();
   if (!msg) { toast('Message requis', 'error'); return; }
+  closeModal();
   try {
-    const data = await api(`/api/git/${_gitCommitRepoKey}/commit`, { method: 'POST', body: { message: msg, force: !!force } });
-    if (!data.ok && data.non_fast_forward) {
-      showModal(`
-        <div class="modal-header">
-          <h3>Push rejete</h3>
-          <button class="btn-icon" onclick="closeModal()">&times;</button>
-        </div>
-        <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:1rem">Le depot distant a des commits plus recents. Voulez-vous forcer le push et ecraser la version distante avec votre version locale ?</p>
-        <input type="hidden" id="git-commit-msg" value="${escHtml(msg)}" />
-        <div class="modal-actions">
-          <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
-          <button class="btn btn-danger" onclick="gitCommit(true)">Forcer l'envoi</button>
-        </div>
-      `);
+    const res = await fetch(`/api/git/${_gitCommitRepoKey}/commit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg }),
+    });
+    const data = await res.json();
+    console.log('gitCommit response:', res.status, data);
+    if (res.ok && data.ok) {
+      toast(data.message, 'success');
+      loadRepoGit(_gitCommitPrefix);
       return;
     }
-    toast(data.message || 'Erreur', data.ok ? 'success' : 'error');
-    closeModal();
-    loadRepoGit(_gitCommitPrefix);
+    // Push failed — propose force push
+    const errMsg = data.message || data.detail || 'Push echoue';
+    const yes = await confirmModal(errMsg + '\n\nVoulez-vous forcer l\'envoi et ecraser la version distante ?');
+    if (yes) {
+      const r2 = await fetch(`/api/git/${_gitCommitRepoKey}/commit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg, force: true }),
+      });
+      const d2 = await r2.json();
+      toast(d2.message || 'Erreur', d2.ok ? 'success' : 'error');
+      loadRepoGit(_gitCommitPrefix);
+    }
   } catch (e) { toast(e.message, 'error'); }
 }
 
-async function repoGitPushOnly(prefix, force) {
+async function repoGitPushOnly(prefix) {
   const repoKey = GIT_REPOS[prefix];
   try {
-    const data = await api(`/api/git/${repoKey}/push`, { method: 'POST', body: { force: !!force } });
-    if (!data.ok && data.non_fast_forward) {
-      showModal(`
-        <div class="modal-header">
-          <h3>Push rejete</h3>
-          <button class="btn-icon" onclick="closeModal()">&times;</button>
-        </div>
-        <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:1rem">Le depot distant a des commits plus recents. Voulez-vous forcer le push et ecraser la version distante avec votre version locale ?</p>
-        <div class="modal-actions">
-          <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
-          <button class="btn btn-danger" onclick="closeModal();repoGitPushOnly('${prefix}', true)">Forcer l'envoi</button>
-        </div>
-      `);
+    const data = await api(`/api/git/${repoKey}/push`, { method: 'POST', body: {} });
+    if (data.ok) {
+      toast(data.message, 'success');
+      loadRepoGit(prefix);
       return;
     }
-    toast(data.message || 'Erreur', data.ok ? 'success' : 'error');
-    loadRepoGit(prefix);
+    const yes = await confirmModal(data.message + '\n\nVoulez-vous forcer l\'envoi et ecraser la version distante ?');
+    if (yes) {
+      const r2 = await api(`/api/git/${repoKey}/push`, { method: 'POST', body: { force: true } });
+      toast(r2.message || 'Erreur', r2.ok ? 'success' : 'error');
+      loadRepoGit(prefix);
+    }
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -2156,7 +2120,10 @@ async function loadRepoGitCommits(prefix) {
         <td class="commit-hash">${escHtml(c.short)}</td>
         <td>${tags}</td>
         <td>${escHtml(c.subject)}</td>
-        <td><button class="btn-revert" onclick="repoGitCheckout('${prefix}','${c.hash}')" title="Revenir a cette version">&#8634;</button></td>
+        <td style="white-space:nowrap">
+          <button class="btn-view" onclick="repoGitView('${prefix}','${c.hash}')" title="Voir les fichiers">View</button>
+          <button class="btn-revert" onclick="repoGitCheckout('${prefix}','${c.hash}')" title="Revenir a cette version">Restaurer</button>
+        </td>
       </tr>`;
     }).join('');
     wrap.innerHTML = `<table class="commits-table">
@@ -2169,13 +2136,97 @@ async function loadRepoGitCommits(prefix) {
 }
 
 async function repoGitCheckout(prefix, hash) {
-  if (!(await confirmModal('Revenir a cette version ?\nLes modifications non commitees seront verifiees avant.'))) return;
   const repoKey = GIT_REPOS[prefix];
   try {
+    // Check for uncommitted changes first
+    const status = await api(`/api/git/${repoKey}/status`);
+    if (status.status && status.status !== '(aucun changement)' && status.status.trim()) {
+      if (!(await confirmModal('Des modifications sont en cours et non commitees.\nToutes les modifications en cours vont etre perdues.\n\nVoulez-vous continuer ?'))) return;
+    } else {
+      if (!(await confirmModal('Revenir a la version ' + hash.substring(0, 7) + ' ?'))) return;
+    }
     const data = await api(`/api/git/${repoKey}/checkout/${hash}`, { method: 'POST' });
-    toast(data.message || 'Version restauree', 'success');
+    toast(data.message || 'Version restauree', data.ok ? 'success' : 'error');
     loadRepoGit(prefix);
   } catch (e) { toast(e.message, 'error'); }
+}
+
+// ── Version file browser ─────────────────────────
+let _vbSessionId = null;
+
+async function repoGitView(prefix, hash) {
+  const repoKey = GIT_REPOS[prefix];
+  const overlay = document.getElementById('modal-version-browser');
+  const titleEl = document.getElementById('vb-title');
+  const treeEl = document.getElementById('vb-tree');
+  const fileEl = document.getElementById('vb-file-content');
+  const pathEl = document.getElementById('vb-file-path');
+  titleEl.textContent = 'Chargement...';
+  treeEl.innerHTML = '<p style="padding:1rem;color:var(--text-secondary)">Clone en cours...</p>';
+  fileEl.textContent = '';
+  pathEl.textContent = '';
+  overlay.classList.add('active');
+  try {
+    const data = await api(`/api/git/${repoKey}/version-browse/${hash}`, { method: 'POST' });
+    if (!data.ok) { toast(data.message || 'Erreur', 'error'); overlay.classList.remove('active'); return; }
+    _vbSessionId = data.session_id;
+    titleEl.textContent = 'Version ' + hash.substring(0, 7);
+    await _vbLoadTree('');
+  } catch (e) {
+    toast(e.message, 'error');
+    overlay.classList.remove('active');
+  }
+}
+
+async function _vbLoadTree(path) {
+  const treeEl = document.getElementById('vb-tree');
+  try {
+    const data = await api(`/api/git/version-browse/${_vbSessionId}/tree?path=${encodeURIComponent(path)}`);
+    let html = '';
+    if (path) {
+      const parent = path.includes('/') ? path.substring(0, path.lastIndexOf('/')) : '';
+      html += `<div class="vb-item vb-dir" onclick="_vbLoadTree('${parent}')"><span class="vb-icon">&#x2190;</span> ..</div>`;
+    }
+    for (const item of (data.items || [])) {
+      if (item.type === 'dir') {
+        html += `<div class="vb-item vb-dir" onclick="_vbLoadTree('${item.path}')"><span class="vb-icon">&#x1F4C1;</span> ${escHtml(item.name)}</div>`;
+      } else {
+        html += `<div class="vb-item vb-file" onclick="_vbLoadFile('${item.path}')"><span class="vb-icon">&#x1F4C4;</span> ${escHtml(item.name)}</div>`;
+      }
+    }
+    if (!data.items || !data.items.length) html = '<p style="padding:1rem;color:var(--text-secondary)">Repertoire vide</p>';
+    treeEl.innerHTML = html;
+  } catch (e) {
+    treeEl.innerHTML = `<p style="padding:1rem;color:#ef4444">${escHtml(e.message)}</p>`;
+  }
+}
+
+async function _vbLoadFile(path) {
+  const fileEl = document.getElementById('vb-file-content');
+  const pathEl = document.getElementById('vb-file-path');
+  pathEl.textContent = path;
+  fileEl.textContent = 'Chargement...';
+  // highlight selected file
+  document.querySelectorAll('.vb-item').forEach(el => el.classList.remove('selected'));
+  const items = document.querySelectorAll('.vb-item.vb-file');
+  items.forEach(el => { if (el.textContent.trim().endsWith(path.split('/').pop())) el.classList.add('selected'); });
+  try {
+    const data = await api(`/api/git/version-browse/${_vbSessionId}/file?path=${encodeURIComponent(path)}`);
+    fileEl.textContent = data.content || '(vide)';
+  } catch (e) {
+    fileEl.textContent = 'Erreur: ' + e.message;
+  }
+}
+
+async function closeVersionBrowser() {
+  const overlay = document.getElementById('modal-version-browser');
+  overlay.classList.remove('active');
+  if (_vbSessionId) {
+    try { await api(`/api/git/version-browse/${_vbSessionId}/close`, { method: 'POST' }); } catch (_) {}
+    _vbSessionId = null;
+  }
+  document.getElementById('vb-file-content').textContent = '';
+  document.getElementById('vb-tree').innerHTML = '';
 }
 
 // ═══════════════════════════════════════════════════
@@ -2656,8 +2707,12 @@ async function showAddTeamModal() {
   _renderMemberRows(document.getElementById('team-members-list'), ['']);
 }
 
-async function editTeam(idx) {
-  const t = teamsData[idx];
+async function editTeam(idxOrId) {
+  if (!teamsData.length) {
+    try { const data = await api('/api/teams'); teamsData = data.teams || []; } catch (_) {}
+  }
+  const t = typeof idxOrId === 'number' ? teamsData[idxOrId] : teamsData.find(x => x.id === idxOrId);
+  if (!t) { toast('Equipe introuvable', 'error'); return; }
   await _loadHitlUsers(true);
   // Find existing members for this team from HITL users data
   const existingMembers = _hitlUsersList
@@ -2685,7 +2740,7 @@ async function editTeam(idx) {
     </div>
     <div class="form-group">
       <label>Repertoire</label>
-      <input id="team-dir" value="config/Teams/${escHtml(t.id)}" readonly style="background:var(--bg-tertiary);color:var(--text-secondary)" />
+      <input id="team-dir" value="${escHtml(t.directory || t.id)}" disabled style="background:var(--bg-tertiary);color:var(--text-secondary)" />
     </div>
     <div class="form-group">
       <label>Orchestrateur</label>
@@ -2963,16 +3018,21 @@ function renderCfgLLM() {
     tbl.innerHTML = '<p style="color:var(--text-secondary);text-align:center;padding:1rem">Aucun provider configure.</p>';
   } else {
     tbl.innerHTML = `<table>
-      <thead><tr><th>ID</th><th>Type</th><th>Modele</th><th>Cle API</th><th>Description</th><th style="width:100px">Actions</th></tr></thead>
+      <thead><tr><th>ID</th><th>Type</th><th>Modele</th><th>URL</th><th>Cle API</th><th>Description</th><th style="width:130px">Actions</th></tr></thead>
       <tbody>${Object.entries(providers).map(([id, p]) => {
         const isDefault = id === defaultId;
+        const url = p.base_url || p.azure_endpoint || '';
         return `<tr>
           <td><strong>${escHtml(id)}</strong>${isDefault ? '<span class="tag tag-green" style="margin-left:0.5rem">defaut</span>' : ''}</td>
           <td><span class="tag tag-blue">${escHtml(p.type)}</span></td>
           <td><code style="font-size:0.8rem">${escHtml(p.model)}</code></td>
+          <td>${url ? `<code style="font-size:0.75rem">${escHtml(url)}</code>` : '<span style="color:var(--text-secondary)">—</span>'}</td>
           <td>${p.env_key ? `<code style="font-size:0.75rem">${escHtml(p.env_key)}</code>` : '<span style="color:var(--text-secondary)">—</span>'}</td>
           <td style="font-size:0.8rem;color:var(--text-secondary)">${escHtml(p.description || '')}</td>
           <td>
+            <button class="btn-icon" onclick="cloneCfgProvider('${escHtml(id)}')" title="Cloner">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </button>
             <button class="btn-icon" onclick="editCfgProvider('${escHtml(id)}')" title="Modifier">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
             </button>
@@ -3007,6 +3067,14 @@ function renderCfgLLM() {
       </tr>`).join('')}</tbody>
     </table>`;
   }
+  filterCfgLLM();
+}
+
+function filterCfgLLM() {
+  const q = (document.getElementById('cfg-llm-filter')?.value || '').toLowerCase();
+  document.querySelectorAll('#cfg-llm-providers-table tbody tr').forEach(tr => {
+    tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
 }
 
 async function setCfgLLMDefault(providerId) {
@@ -3015,6 +3083,46 @@ async function setCfgLLMDefault(providerId) {
     toast('Modele par defaut mis a jour', 'success');
     loadCfgLLM();
   } catch (e) { toast(e.message, 'error'); }
+}
+
+function _uniqueProviderId(baseId, providers) {
+  let candidate = baseId + '-copy';
+  let n = 2;
+  while (candidate in providers) { candidate = baseId + '-copy-' + n; n++; }
+  return candidate;
+}
+
+function cloneCfgProvider(id) {
+  const p = cfgLlmData.providers[id];
+  if (!p) return;
+  const newId = _uniqueProviderId(id, cfgLlmData.providers);
+  showModal(`
+    <div class="modal-header">
+      <h3>Cloner provider (config)</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>ID (unique)</label><input id="prov-id" value="${escHtml(newId)}" /></div>
+      <div class="form-group"><label>Type</label>
+        <select id="prov-type" onchange="_updateProviderTypeFields()">
+          ${LLM_TYPES.map(t => `<option value="${t}" ${t === p.type ? 'selected' : ''}>${t}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Modele</label><input id="prov-model" value="${escHtml(p.model)}" /></div>
+      <div class="form-group"><label>Cle API (env var)</label><input id="prov-envkey" value="${escHtml(p.env_key || '')}" /></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Description</label><input id="prov-desc" value="${escHtml(p.description || '')}" /></div>
+      <div class="form-group"><label>Base URL</label><input id="prov-base-url" value="${escHtml(p.base_url || '')}" placeholder="https://..." /></div>
+    </div>
+    ${_providerTypeFields(p.type, p)}
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="addCfgProvider()">Ajouter</button>
+    </div>
+  `);
 }
 
 function showAddCfgProviderModal() {
@@ -3124,13 +3232,18 @@ async function copyCfgLLMFromTemplate() {
     const cfgProviders = cfgLlmData.providers || {};
     const cfgThrottling = cfgLlmData.throttling || {};
 
-    let addedP = 0, addedT = 0;
+    let addedP = 0, addedT = 0, skippedIdentical = 0;
+    const conflicts = [];
 
-    // Copy missing providers
+    // Copy missing providers, detect conflicts
     for (const [id, prov] of Object.entries(tplProviders)) {
       if (!cfgProviders[id]) {
         await api('/api/llm/providers/provider', { method: 'POST', body: { id, ...prov } });
         addedP++;
+      } else if (JSON.stringify(cfgProviders[id]) !== JSON.stringify(prov)) {
+        conflicts.push({ id, existing: cfgProviders[id], imported: prov });
+      } else {
+        skippedIdentical++;
       }
     }
 
@@ -3147,13 +3260,118 @@ async function copyCfgLLMFromTemplate() {
       await api('/api/llm/providers/default', { method: 'PUT', body: { provider_id: tplData.default } });
     }
 
-    if (addedP === 0 && addedT === 0) {
-      toast('Aucun provider manquant a copier', 'info');
+    await loadCfgLLM();
+    const summaryData = { added_providers: addedP, added_throttling: addedT, skipped_identical: skippedIdentical, conflicts };
+    if (conflicts.length > 0) {
+      showLlmConflictsModal(conflicts, '/api/llm/providers/resolve', loadCfgLLM, summaryData);
     } else {
-      toast(`${addedP} provider(s) et ${addedT} throttling(s) copies depuis le template`, 'success');
+      _llmUploadToast(summaryData);
     }
-    loadCfgLLM();
   } catch (e) { toast(e.message, 'error'); }
+}
+
+function _llmUploadToast(data) {
+  const parts = [];
+  if (data.added_providers) parts.push(`${data.added_providers} ajouté(s)`);
+  if (data.added_throttling) parts.push(`${data.added_throttling} throttling ajouté(s)`);
+  if (data.skipped_identical) parts.push(`${data.skipped_identical} identique(s)`);
+  const nc = (data.conflicts || []).length;
+  if (nc) parts.push(`${nc} conflit(s) à résoudre`);
+  toast(parts.length ? parts.join(', ') : 'Aucun changement', nc ? 'warn' : (parts.length ? 'success' : 'info'));
+}
+
+function _diffKeys(a, b) {
+  const keys = new Set([...Object.keys(a || {}), ...Object.keys(b || {})]);
+  const diffs = [];
+  for (const k of keys) {
+    const va = JSON.stringify(a?.[k] ?? '—');
+    const vb = JSON.stringify(b?.[k] ?? '—');
+    if (va !== vb) diffs.push({ key: k, existing: a?.[k] ?? '—', imported: b?.[k] ?? '—' });
+  }
+  return diffs;
+}
+
+function showLlmConflictsModal(conflicts, resolveUrl, reloadFn, uploadData) {
+  let rows = '';
+  for (const c of conflicts) {
+    const diffs = _diffKeys(c.existing, c.imported);
+    const diffHtml = diffs.map(d =>
+      `<tr><td style="color:var(--text-tertiary);padding:2px 8px">${d.key}</td>` +
+      `<td style="color:#ef4444;padding:2px 8px;word-break:break-all">${typeof d.existing === 'object' ? JSON.stringify(d.existing) : d.existing}</td>` +
+      `<td style="color:#22c55e;padding:2px 8px;word-break:break-all">${typeof d.imported === 'object' ? JSON.stringify(d.imported) : d.imported}</td></tr>`
+    ).join('');
+    rows += `
+      <div style="border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:8px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" class="conflict-cb" data-id="${c.id}" checked />
+          <strong>${c.id}</strong>
+          <span style="font-size:11px;color:var(--text-tertiary)">${c.existing.name || ''} → ${c.imported.name || ''}</span>
+        </label>
+        <table style="font-size:11px;margin-top:6px;width:100%">
+          <tr style="color:var(--text-tertiary)"><th style="text-align:left;padding:2px 8px">Champ</th><th style="text-align:left;padding:2px 8px">Actuel</th><th style="text-align:left;padding:2px 8px">Importé</th></tr>
+          ${diffHtml}
+        </table>
+      </div>`;
+  }
+  showModal(`
+    <div class="modal-header"><h3>Conflits détectés (${conflicts.length})</h3></div>
+    <div class="modal-body" style="max-height:60vh;overflow-y:auto">
+      <p style="font-size:12px;color:var(--text-secondary);margin-bottom:10px">Ces providers existent déjà avec des valeurs différentes. Cochez ceux que vous voulez remplacer par la version importée.</p>
+      ${rows}
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="_cancelLlmConflicts()">Annuler</button>
+      <button class="btn btn-primary" onclick="_applyLlmConflicts()">Appliquer</button>
+    </div>
+  `, 'modal-lg');
+
+  window._llmConflictCtx = { conflicts, resolveUrl, reloadFn, uploadData };
+}
+
+async function _applyLlmConflicts() {
+  const ctx = window._llmConflictCtx;
+  if (!ctx) return;
+  const checked = document.querySelectorAll('.conflict-cb:checked');
+  const overwrites = {};
+  for (const cb of checked) {
+    const id = cb.dataset.id;
+    const c = ctx.conflicts.find(x => x.id === id);
+    if (c) overwrites[id] = c.imported;
+  }
+  closeModal();
+  const d = ctx.uploadData || {};
+  const parts = [];
+  if (d.added_providers) parts.push(`${d.added_providers} ajouté(s)`);
+  if (d.added_throttling) parts.push(`${d.added_throttling} throttling ajouté(s)`);
+  if (d.skipped_identical) parts.push(`${d.skipped_identical} identique(s)`);
+  const nOverwrites = Object.keys(overwrites).length;
+  const nSkipped = ctx.conflicts.length - nOverwrites;
+  if (nOverwrites === 0) {
+    if (nSkipped) parts.push(`${nSkipped} conflit(s) ignoré(s)`);
+    toast(parts.length ? parts.join(', ') : 'Aucun changement', 'info');
+    return;
+  }
+  try {
+    const res = await api(ctx.resolveUrl, { method: 'POST', body: { overwrites } });
+    parts.push(`${res.updated} mis à jour`);
+    if (nSkipped) parts.push(`${nSkipped} conflit(s) ignoré(s)`);
+    toast(parts.join(', '), 'success');
+    ctx.reloadFn();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function _cancelLlmConflicts() {
+  const ctx = window._llmConflictCtx;
+  closeModal();
+  if (ctx && ctx.uploadData) {
+    const d = ctx.uploadData;
+    const parts = [];
+    if (d.added_providers) parts.push(`${d.added_providers} ajouté(s)`);
+    if (d.added_throttling) parts.push(`${d.added_throttling} throttling ajouté(s)`);
+    if (d.skipped_identical) parts.push(`${d.skipped_identical} identique(s)`);
+    parts.push(`${(d.conflicts || []).length} conflit(s) ignoré(s)`);
+    toast(parts.join(', '), 'info');
+  }
 }
 
 function uploadCfgLLM() {
@@ -3169,8 +3387,12 @@ function uploadCfgLLM() {
       const res = await fetch('/api/llm/providers/upload', { method: 'POST', body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Erreur upload');
-      toast(`${data.added_providers} provider(s) et ${data.added_throttling} throttling(s) importes`, 'success');
-      loadCfgLLM();
+      await loadCfgLLM();
+      if (data.conflicts && data.conflicts.length > 0) {
+        showLlmConflictsModal(data.conflicts, '/api/llm/providers/resolve', loadCfgLLM, data);
+      } else {
+        _llmUploadToast(data);
+      }
     } catch (e) { toast(e.message, 'error'); }
   };
   input.click();
@@ -3914,16 +4136,21 @@ function renderTplLLM() {
     tbl.innerHTML = '<p style="color:var(--text-secondary);text-align:center;padding:1rem">Aucun provider configure.</p>';
   } else {
     tbl.innerHTML = `<table>
-      <thead><tr><th>ID</th><th>Type</th><th>Modele</th><th>Cle API</th><th>Description</th><th style="width:100px">Actions</th></tr></thead>
+      <thead><tr><th>ID</th><th>Type</th><th>Modele</th><th>URL</th><th>Cle API</th><th>Description</th><th style="width:130px">Actions</th></tr></thead>
       <tbody>${Object.entries(providers).map(([id, p]) => {
         const isDefault = id === defaultId;
+        const url = p.base_url || p.azure_endpoint || '';
         return `<tr>
           <td><strong>${escHtml(id)}</strong>${isDefault ? '<span class="tag tag-green" style="margin-left:0.5rem">defaut</span>' : ''}</td>
           <td><span class="tag tag-blue">${escHtml(p.type)}</span></td>
           <td><code style="font-size:0.8rem">${escHtml(p.model)}</code></td>
+          <td>${url ? `<code style="font-size:0.75rem">${escHtml(url)}</code>` : '<span style="color:var(--text-secondary)">—</span>'}</td>
           <td>${p.env_key ? `<code style="font-size:0.75rem">${escHtml(p.env_key)}</code>` : '<span style="color:var(--text-secondary)">—</span>'}</td>
           <td style="font-size:0.8rem;color:var(--text-secondary)">${escHtml(p.description || '')}</td>
           <td>
+            <button class="btn-icon" onclick="cloneTplProvider('${escHtml(id)}')" title="Cloner">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </button>
             <button class="btn-icon" onclick="editTplProvider('${escHtml(id)}')" title="Modifier">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
             </button>
@@ -3958,6 +4185,14 @@ function renderTplLLM() {
       </tr>`).join('')}</tbody>
     </table>`;
   }
+  filterTplLLM();
+}
+
+function filterTplLLM() {
+  const q = (document.getElementById('tpl-llm-filter')?.value || '').toLowerCase();
+  document.querySelectorAll('#tpl-llm-providers-table tbody tr').forEach(tr => {
+    tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
 }
 
 async function setTplLLMDefault(providerId) {
@@ -3982,11 +4217,48 @@ function uploadTplLLM() {
       const res = await fetch('/api/templates/llm/upload', { method: 'POST', body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Erreur upload');
-      toast(`${data.added_providers} provider(s) et ${data.added_throttling} throttling(s) importes`, 'success');
-      loadTplLLM();
+      await loadTplLLM();
+      if (data.conflicts && data.conflicts.length > 0) {
+        showLlmConflictsModal(data.conflicts, '/api/templates/llm/resolve', loadTplLLM, data);
+      } else {
+        _llmUploadToast(data);
+      }
     } catch (e) { toast(e.message, 'error'); }
   };
   input.click();
+}
+
+function cloneTplProvider(id) {
+  const p = tplLlmData.providers[id];
+  if (!p) return;
+  const newId = _uniqueProviderId(id, tplLlmData.providers);
+  showModal(`
+    <div class="modal-header">
+      <h3>Cloner provider (template)</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>ID (unique)</label><input id="prov-id" value="${escHtml(newId)}" /></div>
+      <div class="form-group"><label>Type</label>
+        <select id="prov-type" onchange="_updateProviderTypeFields()">
+          ${LLM_TYPES.map(t => `<option value="${t}" ${t === p.type ? 'selected' : ''}>${t}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Modele</label><input id="prov-model" value="${escHtml(p.model)}" /></div>
+      <div class="form-group"><label>Cle API (env var)</label><input id="prov-envkey" value="${escHtml(p.env_key || '')}" /></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Description</label><input id="prov-desc" value="${escHtml(p.description || '')}" /></div>
+      <div class="form-group"><label>Base URL</label><input id="prov-base-url" value="${escHtml(p.base_url || '')}" placeholder="https://..." /></div>
+    </div>
+    ${_providerTypeFields(p.type, p)}
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="addTplProvider()">Ajouter</button>
+    </div>
+  `);
 }
 
 function showAddTplProviderModal() {
@@ -7139,7 +7411,7 @@ async function deleteUser(uid, email) {
 // INIT
 // ═══════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
-  loadEnv();
+  loadDashboard();
   // Check HITL badge on startup
   api('/api/hitl/stats').then(s => updateHitlBadge(s.pending)).catch(() => {});
   // Load version tag

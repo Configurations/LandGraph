@@ -27,7 +27,7 @@ for _vp in ["/project/.version", str(Path(__file__).resolve().parent.parent / ".
         _version = open(_vp).read().strip()
         break
 _log.info("LandGraph version: %s", _version)
-from fastapi import FastAPI, HTTPException, Request, UploadFile
+from fastapi import Body, FastAPI, HTTPException, Request, UploadFile
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel
@@ -202,7 +202,7 @@ _LOGIN_PAGE = """<!DOCTYPE html>
 <body>
   <div class="login-card">
     <div class="login-logo">
-      <h1>Ag flow</h1>
+      <img src="/static/ag_flow_logo.svg" alt="ag.flow" style="width:180px;height:auto;filter:brightness(0) invert(1) brightness(0.85) sepia(1) hue-rotate(210deg) saturate(3)">
       <span>Administration</span>
     </div>
     <div class="error-msg" id="error-msg">Identifiants incorrects</div>
@@ -1094,6 +1094,33 @@ async def delete_throttling(env_key: str):
     return {"ok": True}
 
 
+def _merge_llm_upload(uploaded: dict, data: dict) -> dict:
+    """Merge uploaded LLM providers into existing data, detecting conflicts."""
+    if "providers" not in data:
+        data["providers"] = {}
+    if "throttling" not in data:
+        data["throttling"] = {}
+
+    added_p = added_t = skipped_identical = 0
+    conflicts = []
+    for pid, prov in uploaded.get("providers", {}).items():
+        if pid not in data["providers"]:
+            data["providers"][pid] = prov
+            added_p += 1
+        elif data["providers"][pid] != prov:
+            conflicts.append({"id": pid, "existing": data["providers"][pid], "imported": prov})
+        else:
+            skipped_identical += 1
+    for key, thr in uploaded.get("throttling", {}).items():
+        if key not in data["throttling"]:
+            data["throttling"][key] = thr
+            added_t += 1
+    if not data.get("default") and uploaded.get("default"):
+        data["default"] = uploaded["default"]
+    return {"added_providers": added_p, "added_throttling": added_t,
+            "skipped_identical": skipped_identical, "conflicts": conflicts}
+
+
 @app.post("/api/llm/providers/upload")
 async def upload_llm_providers(file: UploadFile):
     """Upload a llm_providers.json file — merge providers & throttling into config."""
@@ -1106,25 +1133,24 @@ async def upload_llm_providers(file: UploadFile):
         raise HTTPException(400, "JSON invalide")
 
     data = _read_json(LLM_PROVIDERS_FILE)
-    if "providers" not in data:
-        data["providers"] = {}
-    if "throttling" not in data:
-        data["throttling"] = {}
-
-    added_p = added_t = 0
-    for pid, prov in uploaded.get("providers", {}).items():
-        if pid not in data["providers"]:
-            data["providers"][pid] = prov
-            added_p += 1
-    for key, thr in uploaded.get("throttling", {}).items():
-        if key not in data["throttling"]:
-            data["throttling"][key] = thr
-            added_t += 1
-    if not data.get("default") and uploaded.get("default"):
-        data["default"] = uploaded["default"]
-
+    result = _merge_llm_upload(uploaded, data)
     _write_json(LLM_PROVIDERS_FILE, data)
-    return {"ok": True, "added_providers": added_p, "added_throttling": added_t}
+    return {"ok": True, **result}
+
+
+@app.post("/api/llm/providers/resolve")
+async def resolve_llm_conflicts(body: dict = Body(...)):
+    """Apply user-chosen conflict resolutions for config LLM providers."""
+    overwrites = body.get("overwrites", {})
+    if not overwrites:
+        return {"ok": True, "updated": 0}
+    data = _read_json(LLM_PROVIDERS_FILE)
+    updated = 0
+    for pid, prov in overwrites.items():
+        data.setdefault("providers", {})[pid] = prov
+        updated += 1
+    _write_json(LLM_PROVIDERS_FILE, data)
+    return {"ok": True, "updated": updated}
 
 
 @app.post("/api/templates/llm/upload")
@@ -1139,25 +1165,24 @@ async def upload_template_llm(file: UploadFile):
         raise HTTPException(400, "JSON invalide")
 
     data = _read_json(SHARED_LLM_FILE)
-    if "providers" not in data:
-        data["providers"] = {}
-    if "throttling" not in data:
-        data["throttling"] = {}
-
-    added_p = added_t = 0
-    for pid, prov in uploaded.get("providers", {}).items():
-        if pid not in data["providers"]:
-            data["providers"][pid] = prov
-            added_p += 1
-    for key, thr in uploaded.get("throttling", {}).items():
-        if key not in data["throttling"]:
-            data["throttling"][key] = thr
-            added_t += 1
-    if not data.get("default") and uploaded.get("default"):
-        data["default"] = uploaded["default"]
-
+    result = _merge_llm_upload(uploaded, data)
     _write_json(SHARED_LLM_FILE, data)
-    return {"ok": True, "added_providers": added_p, "added_throttling": added_t}
+    return {"ok": True, **result}
+
+
+@app.post("/api/templates/llm/resolve")
+async def resolve_template_llm_conflicts(body: dict = Body(...)):
+    """Apply user-chosen conflict resolutions for template LLM providers."""
+    overwrites = body.get("overwrites", {})
+    if not overwrites:
+        return {"ok": True, "updated": 0}
+    data = _read_json(SHARED_LLM_FILE)
+    updated = 0
+    for pid, prov in overwrites.items():
+        data.setdefault("providers", {})[pid] = prov
+        updated += 1
+    _write_json(SHARED_LLM_FILE, data)
+    return {"ok": True, "updated": updated}
 
 
 # ── API: Agent Catalog (Shared/Agents/{id}/) ──────
@@ -1840,20 +1865,21 @@ _LLM_BASE_URLS = {
 
 class ChatRequest(BaseModel):
     messages: list[dict]
+    provider_id: str = ""
 
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     data = _read_json(LLM_PROVIDERS_FILE)
-    default_id = data.get("default", "")
-    if not default_id or default_id not in data.get("providers", {}):
+    chosen_id = req.provider_id or data.get("default", "")
+    if not chosen_id or chosen_id not in data.get("providers", {}):
         # Fallback: try the template LLM config
         data = _read_json(SHARED_LLM_FILE)
-        default_id = data.get("default", "")
-    if not default_id or default_id not in data.get("providers", {}):
+        chosen_id = req.provider_id or data.get("default", "")
+    if not chosen_id or chosen_id not in data.get("providers", {}):
         raise HTTPException(400, "Aucun provider LLM par defaut configure (ni dans config, ni dans template)")
 
-    provider = data["providers"][default_id]
+    provider = data["providers"][chosen_id]
     ptype = provider["type"]
     model = provider["model"]
     env_key = provider.get("env_key", "")
@@ -2228,7 +2254,7 @@ async def update_team(team_id: str, entry: TeamEntry):
                 "id": team_id,
                 "name": entry.name,
                 "description": entry.description,
-                "directory": entry.directory or t.get("directory", team_id),
+                "directory": t.get("directory", team_id),
                 "discord_channels": entry.discord_channels,
             }
             if entry.orchestrator:
@@ -2699,30 +2725,37 @@ async def git_service_types():
     return {"services": GIT_SERVICES}
 
 
-@app.get("/api/git-service/config")
-async def get_git_service_config():
-    data = _read_json(GIT_SERVICE_FILE) if GIT_SERVICE_FILE.exists() else {}
+def _git_svc_file(scope: str) -> Path:
+    """Return the git service config file for a scope."""
+    if scope == "configs":
+        return CFG_GIT_SERVICE_FILE
+    return GIT_SERVICE_FILE
+
+
+@app.get("/api/git-svc/{scope}/config")
+async def get_git_svc_config(scope: str):
+    f = _git_svc_file(scope)
+    data = _read_json(f) if f.exists() else {}
     return {
         "service": data.get("service", ""),
         "url": data.get("url", ""),
         "login": data.get("login", ""),
         "token": data.get("token", ""),
         "repo_name": data.get("repo_name", ""),
-        "repo_key": data.get("repo_key", "shared"),
     }
 
 
-@app.put("/api/git-service/config")
-async def save_git_service_config(request: Request):
+@app.put("/api/git-svc/{scope}/config")
+async def save_git_svc_config(scope: str, request: Request):
     body = await request.json()
-    GIT_SERVICE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _write_json(GIT_SERVICE_FILE, {
+    f = _git_svc_file(scope)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(f, {
         "service": body.get("service", ""),
         "url": body.get("url", ""),
         "login": body.get("login", ""),
         "token": body.get("token", ""),
         "repo_name": body.get("repo_name", ""),
-        "repo_key": body.get("repo_key", "shared"),
     })
     return {"ok": True}
 
@@ -2778,25 +2811,21 @@ async def _git_service_create_repo(service: str, base_url: str, login: str, toke
         return {"ok": False, "message": f"Service inconnu: {service}"}
 
 
-@app.post("/api/git-service/sync-repo-config")
-async def git_service_sync_repo_config(request: Request):
-    """Sync git_service.json credentials into a repo's git.json and configure remote."""
-    body = await request.json()
-    repo_key = body.get("repo_key", "").strip()
-    if not repo_key:
-        raise HTTPException(400, "repo_key requis")
-    svc = _read_json(GIT_SERVICE_FILE) if GIT_SERVICE_FILE.exists() else {}
+@app.post("/api/git-svc/{scope}/sync-repo-config")
+async def git_svc_sync_repo_config(scope: str):
+    """Sync git service credentials into the repo's git.json and configure remote."""
+    repo_key = "configs" if scope == "configs" else "shared"
+    svc_file = _git_svc_file(scope)
+    svc = _read_json(svc_file) if svc_file.exists() else {}
     login = svc.get("login", "")
     token = svc.get("token", "")
     cfg_file = _git_file_for(repo_key)
     repo_cfg = _read_json(cfg_file) if cfg_file.exists() else {}
-    # Update credentials if service config has them
     if login or token:
         repo_cfg["login"] = login
         repo_cfg["password"] = token
         cfg_file.parent.mkdir(parents=True, exist_ok=True)
         _write_json(cfg_file, repo_cfg)
-    # Reconfigure remote if repo is initialized
     repo_path = repo_cfg.get("path", "").strip()
     target_dir = _get_repo_dir(repo_key)
     if repo_path and (target_dir / ".git").exists():
@@ -2804,51 +2833,103 @@ async def git_service_sync_repo_config(request: Request):
     return {"ok": True}
 
 
-@app.post("/api/git-service/create-repo")
-async def git_service_create_repo(request: Request):
-    """Create a new repo on the remote git service."""
+async def _git_service_check_repo_exists(service: str, base_url: str, login: str, token: str,
+                                          repo_name: str) -> dict:
+    """Check if a remote repo exists. Returns {exists: bool, clone_url: str}."""
+    headers = {"Accept": "application/json"}
+    async with httpx.AsyncClient(timeout=15) as client:
+        try:
+            if service == "github":
+                headers["Authorization"] = f"token {token}"
+                r = await client.get(f"{base_url}/repos/{login}/{repo_name}", headers=headers)
+                if r.status_code == 200:
+                    return {"exists": True, "clone_url": r.json().get("clone_url", "")}
+                return {"exists": False}
+            elif service == "gitlab":
+                headers["PRIVATE-TOKEN"] = token
+                encoded = f"{login}%2F{repo_name}"
+                r = await client.get(f"{base_url}/api/v4/projects/{encoded}", headers=headers)
+                if r.status_code == 200:
+                    return {"exists": True, "clone_url": r.json().get("http_url_to_repo", "")}
+                return {"exists": False}
+            elif service in ("gitea", "forgejo"):
+                headers["Authorization"] = f"token {token}"
+                r = await client.get(f"{base_url}/api/v1/repos/{login}/{repo_name}", headers=headers)
+                if r.status_code == 200:
+                    return {"exists": True, "clone_url": r.json().get("clone_url", "")}
+                return {"exists": False}
+            elif service == "bitbucket":
+                r = await client.get(f"{base_url}/repositories/{login}/{repo_name}",
+                                     headers=headers, auth=(login, token))
+                if r.status_code == 200:
+                    links = r.json().get("links", {}).get("clone", [])
+                    clone = next((l["href"] for l in links if l["name"] == "https"), "")
+                    return {"exists": True, "clone_url": clone}
+                return {"exists": False}
+        except Exception:
+            pass
+    return {"exists": False}
+
+
+@app.post("/api/git-svc/{scope}/check-repo")
+async def git_svc_check_repo(scope: str, request: Request):
+    """Check if a remote repo exists on the git service."""
     body = await request.json()
-    cfg = _read_json(GIT_SERVICE_FILE) if GIT_SERVICE_FILE.exists() else {}
+    svc_file = _git_svc_file(scope)
+    cfg = _read_json(svc_file) if svc_file.exists() else {}
     service = cfg.get("service", "")
     base_url = cfg.get("url", "").rstrip("/")
     login = cfg.get("login", "")
     token = cfg.get("token", "")
     repo_name = body.get("repo_name", "").strip()
-    repo_key = body.get("repo_key", "").strip()
+    if not service or not base_url or not token or not repo_name:
+        raise HTTPException(400, "Service, URL, token et nom du depot sont requis")
+    return await _git_service_check_repo_exists(service, base_url, login, token, repo_name)
+
+
+@app.post("/api/git-svc/{scope}/create-repo")
+async def git_svc_create_repo(scope: str, request: Request):
+    """Create a new repo on the remote git service."""
+    body = await request.json()
+    repo_key = "configs" if scope == "configs" else "shared"
+    svc_file = _git_svc_file(scope)
+    cfg = _read_json(svc_file) if svc_file.exists() else {}
+    service = cfg.get("service", "")
+    base_url = cfg.get("url", "").rstrip("/")
+    login = cfg.get("login", "")
+    token = cfg.get("token", "")
+    repo_name = body.get("repo_name", "").strip()
     if not service or not base_url or not token or not repo_name:
         raise HTTPException(400, "Service, URL, token et nom du depot sont requis")
     result = await _git_service_create_repo(service, base_url, login, token, repo_name)
     if not result["ok"]:
         return result
-    # Auto-configure the repo git.json with the clone URL
     clone_url = result.get("clone_url", "")
-    if clone_url and repo_key:
+    if clone_url:
         cfg_file = _git_file_for(repo_key)
         cfg_file.parent.mkdir(parents=True, exist_ok=True)
         _write_json(cfg_file, {"path": clone_url, "login": login, "password": token})
-        # Configure remote if repo already initialized
         target_dir = _get_repo_dir(repo_key)
         if (target_dir / ".git").exists():
             _git_configure_remote(target_dir, clone_url, login, token)
     return {"ok": True, "clone_url": clone_url, "message": f"Depot '{repo_name}' cree avec succes"}
 
 
-@app.post("/api/git-service/fetch-repo")
-async def git_service_fetch_repo(request: Request):
+@app.post("/api/git-svc/{scope}/fetch-repo")
+async def git_svc_fetch_repo(scope: str, request: Request):
     """Fetch (clone) an existing remote repo into a local repo directory."""
     body = await request.json()
-    repo_key = body.get("repo_key", "").strip()
+    repo_key = "configs" if scope == "configs" else "shared"
     repo_url = body.get("repo_url", "").strip()
-    if not repo_key or not repo_url:
-        raise HTTPException(400, "repo_key et repo_url sont requis")
-    cfg = _read_json(GIT_SERVICE_FILE) if GIT_SERVICE_FILE.exists() else {}
+    if not repo_url:
+        raise HTTPException(400, "repo_url requis")
+    svc_file = _git_svc_file(scope)
+    cfg = _read_json(svc_file) if svc_file.exists() else {}
     login = cfg.get("login", "")
     token = cfg.get("token", "")
-    # Save git config for this repo
     cfg_file = _git_file_for(repo_key)
     cfg_file.parent.mkdir(parents=True, exist_ok=True)
     _write_json(cfg_file, {"path": repo_url, "login": login, "password": token})
-    # Do pull (which handles init + fetch + reset if not initialized)
     target_dir = _get_repo_dir(repo_key)
     target_dir.mkdir(parents=True, exist_ok=True)
     try:
@@ -2871,108 +2952,22 @@ async def git_service_fetch_repo(request: Request):
         raise HTTPException(500, str(e))
 
 
-# ── API: Config-scope Git service ─────────────────
-
-@app.get("/api/cfg-git-service/config")
-async def get_cfg_git_service_config():
-    data = _read_json(CFG_GIT_SERVICE_FILE) if CFG_GIT_SERVICE_FILE.exists() else {}
-    return {
-        "service": data.get("service", ""),
-        "url": data.get("url", ""),
-        "login": data.get("login", ""),
-        "token": data.get("token", ""),
-        "repo_name": data.get("repo_name", ""),
-    }
-
-
-@app.put("/api/cfg-git-service/config")
-async def save_cfg_git_service_config(request: Request):
-    body = await request.json()
-    CFG_GIT_SERVICE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _write_json(CFG_GIT_SERVICE_FILE, {
-        "service": body.get("service", ""),
-        "url": body.get("url", ""),
-        "login": body.get("login", ""),
-        "token": body.get("token", ""),
-        "repo_name": body.get("repo_name", ""),
-    })
-    return {"ok": True}
-
-
-@app.post("/api/cfg-git-service/create-repo")
-async def cfg_git_service_create_repo(request: Request):
-    body = await request.json()
-    cfg = _read_json(CFG_GIT_SERVICE_FILE) if CFG_GIT_SERVICE_FILE.exists() else {}
-    service = cfg.get("service", "")
-    base_url = cfg.get("url", "").rstrip("/")
-    login = cfg.get("login", "")
-    token = cfg.get("token", "")
-    repo_name = body.get("repo_name", "").strip()
-    if not service or not base_url or not token or not repo_name:
-        raise HTTPException(400, "Service, URL, token et nom du depot sont requis")
-    result = await _git_service_create_repo(service, base_url, login, token, repo_name)
-    if not result["ok"]:
-        return result
-    clone_url = result.get("clone_url", "")
-    if clone_url:
-        cfg_file = _git_file_for("configs")
-        cfg_file.parent.mkdir(parents=True, exist_ok=True)
-        _write_json(cfg_file, {"path": clone_url, "login": login, "password": token})
-        target_dir = _get_repo_dir("configs")
-        if (target_dir / ".git").exists():
-            _git_configure_remote(target_dir, clone_url, login, token)
-    return {"ok": True, "clone_url": clone_url, "message": f"Depot '{repo_name}' cree avec succes"}
-
-
-@app.post("/api/cfg-git-service/sync-repo-config")
-async def cfg_git_service_sync_repo_config(request: Request):
-    svc = _read_json(CFG_GIT_SERVICE_FILE) if CFG_GIT_SERVICE_FILE.exists() else {}
-    login = svc.get("login", "")
-    token = svc.get("token", "")
-    cfg_file = _git_file_for("configs")
-    repo_cfg = _read_json(cfg_file) if cfg_file.exists() else {}
-    if login or token:
-        repo_cfg["login"] = login
-        repo_cfg["password"] = token
-        cfg_file.parent.mkdir(parents=True, exist_ok=True)
-        _write_json(cfg_file, repo_cfg)
-    repo_path = repo_cfg.get("path", "").strip()
-    target_dir = _get_repo_dir("configs")
-    if repo_path and (target_dir / ".git").exists():
-        _git_configure_remote(target_dir, repo_path, login, token)
-    return {"ok": True}
-
-
-@app.post("/api/cfg-git-service/fetch-repo")
-async def cfg_git_service_fetch_repo(request: Request):
-    body = await request.json()
-    repo_url = body.get("repo_url", "").strip()
-    if not repo_url:
-        raise HTTPException(400, "repo_url requis")
-    cfg = _read_json(CFG_GIT_SERVICE_FILE) if CFG_GIT_SERVICE_FILE.exists() else {}
-    login = cfg.get("login", "")
-    token = cfg.get("token", "")
-    cfg_file = _git_file_for("configs")
-    cfg_file.parent.mkdir(parents=True, exist_ok=True)
-    _write_json(cfg_file, {"path": repo_url, "login": login, "password": token})
-    target_dir = _get_repo_dir("configs")
-    target_dir.mkdir(parents=True, exist_ok=True)
+@app.post("/api/git/{repo_key}/reset")
+async def git_reset(repo_key: str):
+    """Hard reset to remote: git fetch origin + git reset --hard origin/{branch} + git clean -fd."""
+    target_dir = _get_repo_dir(repo_key)
+    if not (target_dir / ".git").exists():
+        raise HTTPException(400, "Repository non initialise")
     try:
         git_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-        remote_url = _build_remote_url(repo_url, login, token)
-        if (target_dir / ".git").exists():
-            _git_configure_remote(target_dir, repo_url, login, token)
-            r = subprocess.run(["git", "pull", "origin"], cwd=str(target_dir),
-                               capture_output=True, text=True, timeout=60, env=git_env)
-        else:
-            subprocess.run(["git", "config", "--global", "--add", "safe.directory", str(target_dir)],
-                           capture_output=True, text=True, timeout=5)
-            r = subprocess.run(["git", "clone", remote_url, "."], cwd=str(target_dir),
-                               capture_output=True, text=True, timeout=120, env=git_env)
-        stderr = _git_sanitize(r.stderr, login, token)
-        if r.returncode != 0:
-            return {"ok": False, "message": f"Erreur: {stderr[:300]}"}
-        return {"ok": True, "message": "Depot recupere avec succes"}
+        branch = _git_detect_branch(target_dir)
+        subprocess.run(["git", "fetch", "origin"], cwd=str(target_dir),
+                       capture_output=True, text=True, timeout=60, env=git_env)
+        subprocess.run(["git", "reset", "--hard", f"origin/{branch}"], cwd=str(target_dir),
+                       capture_output=True, text=True, timeout=30)
+        subprocess.run(["git", "clean", "-fd"], cwd=str(target_dir),
+                       capture_output=True, text=True, timeout=30)
+        return {"ok": True, "message": f"Reset sur origin/{branch} effectue"}
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -3038,8 +3033,11 @@ async def git_init(repo_key: str):
         raise HTTPException(500, str(e))
 
 
+class GitPullRequest(BaseModel):
+    force: bool = False
+
 @app.post("/api/git/{repo_key}/pull")
-async def git_pull(repo_key: str):
+async def git_pull(repo_key: str, req: GitPullRequest = GitPullRequest()):
     """Pull from remote. If not initialized, does init + fetch + reset."""
     target_dir = _get_repo_dir(repo_key)
     log.info("Git pull (%s)", repo_key)
@@ -3070,20 +3068,31 @@ async def git_pull(repo_key: str):
             branch = _git_detect_branch(target_dir)
             subprocess.run(["git", "checkout", "-B", branch, f"origin/{branch}"], cwd=str(target_dir),
                            capture_output=True, text=True, timeout=30)
+            subprocess.run(["git", "branch", f"--set-upstream-to=origin/{branch}", branch], cwd=str(target_dir),
+                           capture_output=True, text=True, timeout=5)
             _ensure_gitignore(target_dir)
             return {"ok": True, "message": f"Pull initial reussi (branche {branch})"}
         else:
-            # Normal pull
+            # Fetch + reset hard to remote branch
             branch = _git_detect_branch(target_dir)
-            result = subprocess.run(["git", "pull", "origin", branch], cwd=str(target_dir),
-                                    capture_output=True, text=True, timeout=60, env=git_env)
-            stdout = _git_sanitize(result.stdout, login, password)
-            stderr = _git_sanitize(result.stderr, login, password)
-            if result.returncode != 0:
-                log.error("Git pull failed (%s): %s", repo_key, stderr[:300])
-                return {"ok": False, "message": f"Pull echoue: {stderr[:300]}"}
-            log.info("Git pull success (%s)", repo_key)
-            return {"ok": True, "message": f"Pull reussi"}
+            # Check for uncommitted changes
+            status_r = subprocess.run(["git", "status", "--porcelain"], cwd=str(target_dir),
+                                      capture_output=True, text=True, timeout=10)
+            has_changes = bool(status_r.stdout.strip())
+            fetch_r = subprocess.run(["git", "fetch", "origin"], cwd=str(target_dir),
+                                     capture_output=True, text=True, timeout=120, env=git_env)
+            stderr = _git_sanitize(fetch_r.stderr, login, password)
+            if fetch_r.returncode != 0:
+                log.error("Git fetch failed (%s): %s", repo_key, stderr[:300])
+                return {"ok": False, "message": f"Fetch echoue: {stderr[:300]}"}
+            if has_changes and not req.force:
+                return {"ok": False, "uncommitted": True, "message": "Des modifications locales non commitees seront perdues."}
+            reset_r = subprocess.run(["git", "reset", "--hard", f"origin/{branch}"], cwd=str(target_dir),
+                                     capture_output=True, text=True, timeout=30)
+            if reset_r.returncode != 0:
+                return {"ok": False, "message": f"Reset echoue: {reset_r.stderr[:300]}"}
+            log.info("Git fetch + reset success (%s)", repo_key)
+            return {"ok": True, "message": f"Fetch reussi (branche {branch})"}
     except HTTPException:
         raise
     except Exception as e:
@@ -3133,10 +3142,7 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
                                     capture_output=True, text=True, timeout=60, env=git_env)
             stderr = _git_sanitize(push_r.stderr, login, password)
             if push_r.returncode != 0:
-                rejected = any(hint in stderr for hint in ("non-fast-forward", "fetch first", "rejected", "failed to push"))
-                if rejected:
-                    return {"ok": False, "non_fast_forward": True, "message": "Le depot distant contient des commits plus recents que votre version locale."}
-                return {"ok": False, "message": f"Push echoue: {stderr[:300]}"}
+                return {"ok": False, "non_fast_forward": True, "message": stderr[:300] or "Push echoue"}
 
         if nothing:
             return {"ok": True, "message": "Rien a commiter, depot a jour"}
@@ -3169,10 +3175,7 @@ async def git_push_only(repo_key: str, req: GitPushRequest = GitPushRequest()):
                                 capture_output=True, text=True, timeout=60, env=git_env)
         stderr = _git_sanitize(result.stderr, login, password)
         if result.returncode != 0:
-            rejected = any(hint in stderr for hint in ("non-fast-forward", "fetch first", "rejected", "failed to push"))
-            if rejected:
-                return {"ok": False, "non_fast_forward": True, "message": "Le depot distant contient des commits plus recents que votre version locale."}
-            return {"ok": False, "message": f"Push echoue: {stderr[:300]}"}
+            return {"ok": False, "non_fast_forward": True, "message": stderr[:300] or "Push echoue"}
         return {"ok": True, "message": "Push effectue"}
     except Exception as e:
         log.exception("Git push exception for %s", repo_key)
@@ -3232,28 +3235,224 @@ async def git_commits(repo_key: str):
 
 @app.post("/api/git/{repo_key}/checkout/{commit_hash}")
 async def git_checkout(repo_key: str, commit_hash: str):
-    """Checkout a specific commit. Refuses if uncommitted changes."""
-    import re
+    """Rollback to an old commit's content on top of the latest remote commit.
+    1. fetch + reset --hard origin/branch + clean -fd  (go to latest)
+    2. git checkout <hash>  (get old version's files)
+    3. Copy all files (except .git) to a temp dir
+    4. fetch + reset --hard origin/branch + clean -fd  (back to latest)
+    5. Delete working tree (except .git), copy temp files over
+    Result: content from old commit, HEAD on latest remote commit."""
+    import re, shutil, tempfile
     if not re.match(r'^[0-9a-f]{7,40}$', commit_hash):
         raise HTTPException(400, "Hash de commit invalide")
     target_dir = _get_repo_dir(repo_key)
     if not (target_dir / ".git").exists():
         raise HTTPException(400, "Repository non initialise")
     try:
-        status = subprocess.run(["git", "status", "--porcelain"], cwd=str(target_dir),
-                                capture_output=True, text=True, timeout=10)
-        if status.stdout.strip():
-            raise HTTPException(409, "Des modifications non commitees sont en attente. Commitez ou annulez-les avant.")
-        result = subprocess.run(["git", "reset", "--hard", commit_hash], cwd=str(target_dir),
-                                capture_output=True, text=True, timeout=30)
-        if result.returncode != 0:
-            raise HTTPException(500, f"Reset echoue: {result.stderr}")
-        return {"ok": True, "message": f"Version restauree: {commit_hash[:7]}"}
+        git_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        branch = _git_detect_branch(target_dir)
+
+        def _reset_to_latest():
+            subprocess.run(["git", "fetch", "origin"], cwd=str(target_dir),
+                           capture_output=True, text=True, timeout=60, env=git_env)
+            subprocess.run(["git", "reset", "--hard", f"origin/{branch}"], cwd=str(target_dir),
+                           capture_output=True, text=True, timeout=30)
+            subprocess.run(["git", "clean", "-fd"], cwd=str(target_dir),
+                           capture_output=True, text=True, timeout=30)
+
+        # 1. Reset to latest remote version
+        _reset_to_latest()
+
+        # 2. Checkout the old version
+        co_r = subprocess.run(["git", "checkout", commit_hash], cwd=str(target_dir),
+                               capture_output=True, text=True, timeout=30)
+        if co_r.returncode != 0:
+            _reset_to_latest()
+            raise HTTPException(500, f"Checkout echoue: {co_r.stderr[:300]}")
+
+        # 3. Copy all files (except .git) to a temp dir
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            for item in target_dir.iterdir():
+                if item.name == ".git":
+                    continue
+                dest = tmp_path / item.name
+                if item.is_dir():
+                    shutil.copytree(str(item), str(dest))
+                else:
+                    shutil.copy2(str(item), str(dest))
+
+            # 4. Reset back to latest remote version
+            subprocess.run(["git", "checkout", branch], cwd=str(target_dir),
+                           capture_output=True, text=True, timeout=30)
+            _reset_to_latest()
+
+            # 5. Delete working tree (except .git), copy temp files over
+            for item in target_dir.iterdir():
+                if item.name == ".git":
+                    continue
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+            for item in tmp_path.iterdir():
+                dest = target_dir / item.name
+                if item.is_dir():
+                    shutil.copytree(str(item), str(dest))
+                else:
+                    shutil.copy2(str(item), str(dest))
+
+        return {"ok": True, "message": f"Version {commit_hash[:7]} restauree. Faites un Commit pour la conserver."}
     except HTTPException:
         raise
     except Exception as e:
         log.exception("Git checkout exception")
         raise HTTPException(500, str(e))
+
+
+# ── API: Git version browser (temp clone + checkout) ──
+
+_version_temp_dirs: dict[str, tuple[Path, float]] = {}  # session_id -> (work_dir, created_at)
+_VB_SESSION_TTL = 1800  # 30 minutes
+
+
+def _vb_cleanup_stale():
+    """Remove version-browse sessions older than TTL."""
+    import shutil, time
+    now = time.time()
+    expired = [sid for sid, (_, ts) in _version_temp_dirs.items() if now - ts > _VB_SESSION_TTL]
+    for sid in expired:
+        work_dir, _ = _version_temp_dirs.pop(sid, (None, 0))
+        if work_dir and work_dir.exists():
+            shutil.rmtree(str(work_dir.parent), ignore_errors=True)
+
+
+def _vb_cleanup_orphans():
+    """Remove any lgview_* temp dirs left from previous runs."""
+    import shutil, tempfile, glob
+    tmp_root = tempfile.gettempdir()
+    for d in glob.glob(os.path.join(tmp_root, "lgview_*")):
+        shutil.rmtree(d, ignore_errors=True)
+        log.info("Cleaned orphan version-browse dir: %s", d)
+
+
+# Clean orphans on import (server startup)
+_vb_cleanup_orphans()
+
+
+@app.post("/api/git/{repo_key}/version-browse/{commit_hash}")
+async def git_version_browse(repo_key: str, commit_hash: str):
+    """Clone repo into temp dir and checkout a specific commit for browsing."""
+    import re, shutil, tempfile, time, uuid
+    # Clean stale sessions before creating a new one
+    _vb_cleanup_stale()
+    if not re.match(r'^[0-9a-f]{7,40}$', commit_hash):
+        raise HTTPException(400, "Hash de commit invalide")
+    target_dir = _get_repo_dir(repo_key)
+    if not (target_dir / ".git").exists():
+        raise HTTPException(400, "Repository non initialise")
+    cfg = _get_repo_cfg(repo_key)
+    repo_path = cfg.get("path", "")
+    login = cfg.get("login", "")
+    password = cfg.get("password", "")
+    try:
+        git_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        tmp = tempfile.mkdtemp(prefix="lgview_")
+        tmp_path = Path(tmp)
+        if repo_path:
+            remote_url = _build_remote_url(repo_path, login, password)
+            r = subprocess.run(["git", "clone", remote_url, "repo"], cwd=str(tmp_path),
+                               capture_output=True, text=True, timeout=120, env=git_env)
+            if r.returncode != 0:
+                shutil.rmtree(tmp, ignore_errors=True)
+                stderr = _git_sanitize(r.stderr, login, password)
+                raise HTTPException(500, f"Clone echoue: {stderr[:300]}")
+            work_dir = tmp_path / "repo"
+        else:
+            r = subprocess.run(["git", "clone", str(target_dir), "repo"], cwd=str(tmp_path),
+                               capture_output=True, text=True, timeout=60, env=git_env)
+            if r.returncode != 0:
+                shutil.rmtree(tmp, ignore_errors=True)
+                raise HTTPException(500, f"Clone local echoue: {r.stderr[:300]}")
+            work_dir = tmp_path / "repo"
+        co = subprocess.run(["git", "checkout", commit_hash], cwd=str(work_dir),
+                            capture_output=True, text=True, timeout=30, env=git_env)
+        if co.returncode != 0:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise HTTPException(500, f"Checkout echoue: {co.stderr[:300]}")
+        session_id = str(uuid.uuid4())[:12]
+        _version_temp_dirs[session_id] = (work_dir, time.time())
+        return {"ok": True, "session_id": session_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("Version browse exception")
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/git/version-browse/{session_id}/tree")
+async def git_version_tree(session_id: str, path: str = ""):
+    """List files/dirs at a path in a temp version browse session."""
+    entry = _version_temp_dirs.get(session_id)
+    work_dir = entry[0] if entry else None
+    if not work_dir or not work_dir.exists():
+        raise HTTPException(404, "Session introuvable ou expiree")
+    target = work_dir / path if path else work_dir
+    if not target.exists():
+        raise HTTPException(404, f"Chemin introuvable: {path}")
+    if not str(target.resolve()).startswith(str(work_dir.resolve())):
+        raise HTTPException(403, "Acces interdit")
+    items = []
+    try:
+        for item in sorted(target.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
+            if item.name == ".git":
+                continue
+            items.append({
+                "name": item.name,
+                "type": "dir" if item.is_dir() else "file",
+                "path": str(item.relative_to(work_dir)).replace("\\", "/"),
+            })
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    return {"items": items}
+
+
+@app.get("/api/git/version-browse/{session_id}/file")
+async def git_version_file(session_id: str, path: str = ""):
+    """Read file content from a temp version browse session."""
+    entry = _version_temp_dirs.get(session_id)
+    work_dir = entry[0] if entry else None
+    if not work_dir or not work_dir.exists():
+        raise HTTPException(404, "Session introuvable ou expiree")
+    if not path:
+        raise HTTPException(400, "path requis")
+    target = work_dir / path
+    if not target.exists():
+        raise HTTPException(404, f"Fichier introuvable: {path}")
+    if not str(target.resolve()).startswith(str(work_dir.resolve())):
+        raise HTTPException(403, "Acces interdit")
+    if target.is_dir():
+        raise HTTPException(400, "C'est un repertoire, pas un fichier")
+    try:
+        content = target.read_text(encoding="utf-8", errors="replace")
+        # Limit to 100KB
+        if len(content) > 100_000:
+            content = content[:100_000] + "\n\n--- [tronque a 100KB] ---"
+        return {"ok": True, "content": content, "path": path}
+    except Exception as e:
+        return {"ok": False, "content": f"Erreur lecture: {e}", "path": path}
+
+
+@app.post("/api/git/version-browse/{session_id}/close")
+async def git_version_close(session_id: str):
+    """Clean up a temp version browse session."""
+    import shutil
+    entry = _version_temp_dirs.pop(session_id, None)
+    if entry:
+        work_dir = entry[0]
+        if work_dir and work_dir.exists():
+            shutil.rmtree(str(work_dir.parent), ignore_errors=True)
+    return {"ok": True}
 
 
 # ── API: Shell scripts ────────────────────────────

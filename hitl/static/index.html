@@ -6,7 +6,7 @@
   <title>Ag Flow Manager</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/style.css?v=20260314p">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260315a">
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
@@ -14,9 +14,10 @@
   <!-- Login overlay -->
   <div class="login-overlay" id="login-screen">
     <div class="login-box">
-      <div class="login-logo">&#x2B21;</div>
-      <div class="login-title">Ag Flow Manager</div>
-      <div class="login-sub">Connecte-toi a ton espace team</div>
+      <div class="login-logo">
+        <img src="/static/ag_flow_logo.svg" alt="ag.flow" style="width:180px;height:auto;filter:brightness(0) invert(1) brightness(0.85) sepia(1) hue-rotate(210deg) saturate(3)">
+        <div style="font-size:11px;color:var(--text-quaternary);margin-top:6px;letter-spacing:1px">MANAGER</div>
+      </div>
       <div class="login-error" id="login-error"></div>
       <div class="form-group">
         <div class="form-label">EMAIL</div>
@@ -44,9 +45,10 @@
   <!-- Register overlay -->
   <div class="login-overlay" id="register-screen" style="display:none">
     <div class="login-box">
-      <div class="login-logo">&#x2B21;</div>
-      <div class="login-title">Inscription</div>
-      <div class="login-sub">Cree ton compte</div>
+      <div class="login-logo">
+        <img src="/static/ag_flow_logo.svg" alt="ag.flow" style="width:180px;height:auto;filter:brightness(0) invert(1) brightness(0.85) sepia(1) hue-rotate(210deg) saturate(3)">
+        <div style="font-size:11px;color:var(--text-quaternary);margin-top:6px;letter-spacing:1px">INSCRIPTION</div>
+      </div>
       <div class="login-error" id="register-error"></div>
       <div class="form-group">
         <div class="form-label">EMAIL</div>
@@ -220,6 +222,6 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js?v=20260314p"></script>
+  <script src="/static/js/app.js?v=20260315a"></script>
 </body>
 </html>

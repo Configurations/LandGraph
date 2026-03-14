@@ -12,7 +12,7 @@ let ws = null;
 let selectedIssue = null;
 let selectedProject = null;
 let sidebarCollapsed = false;
-let createProjectState = { step: 1, name: '', team: '', startDate: '', targetDate: '', aiIssues: [], aiRelations: [], aiDescription: '', chatMessages: [] };
+let createProjectState = { step: 1, name: '', team: '', language: '', startDate: '', targetDate: '', sourceMode: 'new', slug: '', projectUuid: '', repoUrl: '', repoCloned: false, uploadedDocs: [], analyzedUrls: [], importResult: null, aiIssues: [], aiRelations: [], aiDescription: '', chatMessages: [] };
 
 // ── SVG Icons ────────────────────────────────────
 const Icons = {
@@ -35,6 +35,8 @@ const Icons = {
   clock: '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><polyline points="8 5 8 8 10.5 9.5"/></svg>',
   check: '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 8 7 12 13 4"/></svg>',
   lock: '<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="3" y="8" width="10" height="6" rx="1"/><path d="M5 8V5a3 3 0 0 1 6 0v3"/></svg>',
+  logs: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><rect x="2" y="2" width="12" height="12" rx="2"/><line x1="5" y1="5" x2="11" y2="5"/><line x1="5" y1="8" x2="11" y2="8"/><line x1="5" y1="11" x2="9" y2="11"/></svg>',
+  activity: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="2 8 5 4 8 10 11 6 14 8"/></svg>',
 };
 
 // ── Helpers ──────────────────────────────────────
@@ -58,6 +60,18 @@ function timeAgo(iso) {
   return Math.floor(diff / 86400) + 'd';
 }
 
+function simpleMarkdown(text) {
+  return esc(text)
+    .replace(/^### (.+)$/gm, '<h4>$1</h4>')
+    .replace(/^## (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^# (.+)$/gm, '<h2 style="font-size:14px;margin:8px 0 4px">$1</h2>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/`([^`]+)`/g, '<code style="background:var(--bg-tertiary);padding:1px 4px;border-radius:3px;font-size:11px">$1</code>')
+    .replace(/^- (.+)$/gm, '<div style="padding-left:12px">&bull; $1</div>')
+    .replace(/\n/g, '<br>');
+}
+
 async function api(url, opts = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
@@ -73,6 +87,46 @@ async function api(url, opts = {}) {
 
 function openModal(id) { document.getElementById(id).classList.add('active'); }
 function closeModal(id) { document.getElementById(id).classList.remove('active'); }
+
+function confirmModal(message) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay active';
+    overlay.innerHTML = `<div class="modal" style="max-width:400px">
+      <div class="modal-title">Confirmation</div>
+      <div style="font-size:13px;color:var(--text-secondary);margin-bottom:16px">${message}</div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" id="_cm_cancel">Annuler</button>
+        <button class="btn btn-primary" id="_cm_ok">Confirmer</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#_cm_cancel').onclick = () => { overlay.remove(); resolve(false); };
+    overlay.querySelector('#_cm_ok').onclick = () => { overlay.remove(); resolve(true); };
+  });
+}
+
+function promptModal(message, placeholder) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay active';
+    overlay.innerHTML = `<div class="modal" style="max-width:420px">
+      <div class="modal-title">Confirmation</div>
+      <div style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">${message}</div>
+      <input class="form-input" id="_pm_input" placeholder="${esc(placeholder || '')}" style="margin-bottom:16px" />
+      <div class="modal-footer">
+        <button class="btn btn-outline" id="_pm_cancel">Annuler</button>
+        <button class="btn btn-primary" id="_pm_ok">Confirmer</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+    const input = overlay.querySelector('#_pm_input');
+    input.focus();
+    input.onkeydown = (e) => { if (e.key === 'Enter') { overlay.remove(); resolve(input.value.trim()); } };
+    overlay.querySelector('#_pm_cancel').onclick = () => { overlay.remove(); resolve(null); };
+    overlay.querySelector('#_pm_ok').onclick = () => { overlay.remove(); resolve(input.value.trim()); };
+  });
+}
 
 // ── Shared Components ────────────────────────────
 const AVATAR_COLORS = ['#6366f1', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
@@ -298,23 +352,38 @@ function buildSidebar() {
       <span class="icon">${Icons.hitl}</span><span class="sidebar-label">Questions</span>
       <span class="badge" id="hitl-badge" style="display:none">0</span>
     </button>
-    <button class="sidebar-item" data-view="agents" onclick="switchView('agents')">
-      <span class="icon">${Icons.agents}</span><span class="sidebar-label">Agents</span>
+    <button class="sidebar-item" data-view="threads" onclick="switchView('threads')">
+      <span class="icon">${Icons.pulse}</span><span class="sidebar-label">Threads</span>
     </button>
-    <button class="sidebar-item" data-view="members" onclick="switchView('members')">
-      <span class="icon">${Icons.members}</span><span class="sidebar-label">Members</span>
+    <button class="sidebar-item" data-view="activity" onclick="switchView('activity')">
+      <span class="icon">${Icons.activity || '⚡'}</span><span class="sidebar-label">Activité</span>
+    </button>
+    <button class="sidebar-item" data-view="logs" onclick="switchView('logs')">
+      <span class="icon">${Icons.logs}</span><span class="sidebar-label">Logs</span>
     </button>`;
   const teamsLabel = document.getElementById('sidebar-teams-label');
   teamsLabel.parentNode.insertBefore(hitlSection, teamsLabel);
 
-  // Teams
-  document.getElementById('sidebar-teams').innerHTML = teams.map(t =>
-    `<div class="sidebar-team" onclick="switchTeam('${esc(t.id)}')">
-      <div class="sidebar-team-dot" style="background:${t.color || '#6366f1'}"></div>
-      <span class="sidebar-team-name sidebar-label">${esc(t.name)}</span>
-      <span class="sidebar-team-code">${esc(t.id).toUpperCase()}</span>
-    </div>`
-  ).join('');
+  // Teams with sub-items (Agents, Members)
+  document.getElementById('sidebar-teams').innerHTML = teams.map(t => {
+    const isActive = t.id === activeTeam;
+    return `<div class="sidebar-team-group" data-team-group="${esc(t.id)}">
+      <div class="sidebar-team ${isActive ? 'active' : ''}" data-team="${esc(t.id)}" onclick="toggleTeam('${esc(t.id)}')">
+        <div class="sidebar-team-dot" style="background:${t.color || '#6366f1'}"></div>
+        <span class="sidebar-team-name sidebar-label">${esc(t.name)}</span>
+        <span class="sidebar-team-code">${esc(t.id).toUpperCase()}</span>
+        <span class="sidebar-team-chevron sidebar-label" style="margin-left:auto;font-size:10px;color:var(--text-quaternary)">${isActive ? '\u25BE' : '\u25B8'}</span>
+      </div>
+      <div class="sidebar-team-sub" style="display:${isActive ? 'block' : 'none'}">
+        <button class="sidebar-item sidebar-sub-item" data-view="agents" data-team-view="${esc(t.id)}" onclick="switchTeamView('${esc(t.id)}','agents')">
+          <span class="icon">${Icons.agents}</span><span class="sidebar-label">Agents</span>
+        </button>
+        <button class="sidebar-item sidebar-sub-item" data-view="members" data-team-view="${esc(t.id)}" onclick="switchTeamView('${esc(t.id)}','members')">
+          <span class="icon">${Icons.members}</span><span class="sidebar-label">Members</span>
+        </button>
+      </div>
+    </div>`;
+  }).join('');
 
   // User
   document.getElementById('sidebar-user').innerHTML = `
@@ -332,10 +401,49 @@ function buildSidebar() {
   refreshHitlBadge();
 }
 
-function switchTeam(teamId) {
+function toggleTeam(teamId) {
+  if (activeTeam === teamId) {
+    // Collapse: deselect
+    activeTeam = teamId;
+    const group = document.querySelector(`[data-team-group="${teamId}"]`);
+    const sub = group?.querySelector('.sidebar-team-sub');
+    const chevron = group?.querySelector('.sidebar-team-chevron');
+    const isVisible = sub && sub.style.display !== 'none';
+    if (sub) sub.style.display = isVisible ? 'none' : 'block';
+    if (chevron) chevron.textContent = isVisible ? '\u25B8' : '\u25BE';
+    return;
+  }
   activeTeam = teamId;
   connectWS();
-  switchView(activeView);
+  // Collapse all, expand selected
+  document.querySelectorAll('.sidebar-team-group').forEach(g => {
+    const tid = g.dataset.teamGroup;
+    const sub = g.querySelector('.sidebar-team-sub');
+    const chevron = g.querySelector('.sidebar-team-chevron');
+    const team = g.querySelector('.sidebar-team');
+    if (tid === teamId) {
+      if (sub) sub.style.display = 'block';
+      if (chevron) chevron.textContent = '\u25BE';
+      if (team) team.classList.add('active');
+    } else {
+      if (sub) sub.style.display = 'none';
+      if (chevron) chevron.textContent = '\u25B8';
+      if (team) team.classList.remove('active');
+    }
+  });
+  switchView('agents');
+}
+
+function switchTeamView(teamId, view) {
+  if (activeTeam !== teamId) {
+    activeTeam = teamId;
+    connectWS();
+  }
+  // Highlight sub-item
+  document.querySelectorAll('.sidebar-sub-item').forEach(el => el.classList.remove('active'));
+  const btn = document.querySelector(`.sidebar-sub-item[data-team-view="${teamId}"][data-view="${view}"]`);
+  if (btn) btn.classList.add('active');
+  switchView(view);
 }
 
 // ── Navigation ───────────────────────────────────
@@ -358,6 +466,9 @@ function switchView(view) {
   else if (view === 'hitl-inbox') { renderHeader('HITL Questions'); loadHitlInbox(); }
   else if (view === 'agents') { renderHeader('Agents'); loadAgents(); }
   else if (view === 'members') { renderHeader('Members', false, false, true); loadMembers(); }
+  else if (view === 'threads') { renderHeader('Threads'); loadThreads(); }
+  else if (view === 'activity') { renderHeader('Activité agents'); loadActivity(); }
+  else if (view === 'logs') { renderHeader('Logs'); loadLogs(); }
 }
 
 function renderHeader(title, showIssueAdd = false, showProjectAdd = false, showMemberAdd = false) {
@@ -853,6 +964,8 @@ async function loadProjectDetail() {
   try {
     const project = await api(`/api/pm/projects/${selectedProject}`);
     const issues = await api(`/api/pm/issues?project_id=${selectedProject}`);
+    let wfStatus = null;
+    try { wfStatus = await api(`/api/pm/projects/${selectedProject}/workflow-status?team_id=${encodeURIComponent(project.team_id || 'team1')}`); } catch (_) {}
 
     // Compute stats
     const statusCounts = { backlog: 0, todo: 0, 'in-progress': 0, 'in-review': 0, done: 0 };
@@ -884,7 +997,107 @@ async function loadProjectDetail() {
       <div style="display:flex;align-items:center;gap:4px;color:var(--text-tertiary)">${Icons.members}<span>${(project.members || []).length} members</span></div>
       ${blockedCount > 0 ? `<span class="dependency-indicator blocked">&#x1F512; ${blockedCount} blocked</span>` : ''}
       ${blockingCount > 0 ? `<span class="dependency-indicator blocking">&#x26A0; ${blockingCount} blocking</span>` : ''}
+      <div style="margin-left:auto;display:flex;gap:6px">
+        <button class="btn btn-primary" style="font-size:11px;padding:4px 12px" onclick="launchWorkflow(${project.id},'${esc(project.team_id)}','${esc(project.slug || '')}')">&#x26A1; Lancer les agents</button>
+        <button class="btn btn-outline" style="font-size:11px;padding:4px 12px;color:var(--text-secondary)" onclick="pauseWorkflow(${project.id},'${esc(project.team_id)}')">&#x23F8; Mettre en pause</button>
+      </div>
     </div>`;
+
+    // Workflow phase bar
+    const WF_PHASES = [
+      { key: 'discovery', label: 'Discovery', icon: '\u{1F50D}' },
+      { key: 'design', label: 'Design', icon: '\u{1F3A8}' },
+      { key: 'build', label: 'Build', icon: '\u{1F6E0}' },
+      { key: 'ship', label: 'Ship', icon: '\u{1F680}' },
+      { key: 'iterate', label: 'Iterate', icon: '\u{1F504}' },
+    ];
+    const currentPhase = wfStatus && !wfStatus.error ? (wfStatus.current_phase || 'discovery') : null;
+    if (currentPhase) {
+      html += '<div style="display:flex;gap:4px;margin-bottom:12px">';
+      WF_PHASES.forEach((ph, idx) => {
+        const phaseIdx = WF_PHASES.findIndex(p => p.key === currentPhase);
+        const isDone = idx < phaseIdx;
+        const isCurrent = ph.key === currentPhase;
+        const bg = isCurrent ? 'var(--accent-blue)' : isDone ? '#22c55e33' : 'var(--bg-tertiary)';
+        const color = isCurrent ? '#fff' : isDone ? '#22c55e' : 'var(--text-quaternary)';
+        const border = isCurrent ? '2px solid var(--accent-blue)' : isDone ? '2px solid #22c55e44' : '2px solid transparent';
+        html += `<div style="flex:1;padding:8px 10px;border-radius:6px;background:${bg};border:${border};text-align:center">
+          <div style="font-size:14px">${ph.icon}</div>
+          <div style="font-size:10px;font-weight:${isCurrent ? '700' : '400'};color:${color};letter-spacing:0.5px">${ph.label.toUpperCase()}</div>
+        </div>`;
+      });
+      html += '</div>';
+
+      // Workflow detail panel — agents per phase
+      const phaseData = wfStatus.phases || {};
+      const currentPhaseData = phaseData[currentPhase];
+      if (currentPhaseData && currentPhaseData.agents) {
+        const agents = currentPhaseData.agents;
+        const groups = {};
+        Object.entries(agents).forEach(([aid, a]) => {
+          const g = a.group || 'A';
+          if (!groups[g]) groups[g] = [];
+          groups[g].push({ id: aid, ...a });
+        });
+        const sortedGroups = Object.keys(groups).sort();
+
+        html += '<div style="background:var(--bg-secondary);border:1px solid var(--border-subtle);border-radius:8px;padding:14px 16px;margin-bottom:12px">';
+        html += `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div style="font-size:11px;font-weight:600;color:var(--text-secondary);letter-spacing:0.5px">AGENTS — ${esc(currentPhaseData.name || currentPhase).toUpperCase()}</div>
+          <div style="display:flex;align-items:center;gap:8px">`;
+        if (currentPhaseData.complete) {
+          html += '<span style="font-size:10px;color:#22c55e;font-weight:500">&#x2713; Phase complete</span>';
+        } else if (currentPhaseData.missing && currentPhaseData.missing.length > 0) {
+          html += `<span style="font-size:10px;color:var(--accent-orange)">&#x23F3; ${currentPhaseData.missing.length} manquant(s)</span>`;
+        }
+        const transition = wfStatus.transition || {};
+        if (transition.allowed) {
+          html += `<span style="font-size:10px;color:#22c55e">&#x2192; ${esc(transition.next_phase || '')} pret</span>`;
+        }
+        html += '</div></div>';
+
+        // Groups
+        sortedGroups.forEach((gKey, gi) => {
+          const gAgents = groups[gKey];
+          const allDone = gAgents.every(a => a.status === 'complete');
+          const anyActive = gAgents.some(a => a.status === 'running' || a.status === 'in_progress');
+          html += `<div style="margin-bottom:${gi < sortedGroups.length - 1 ? '8' : '0'}px">`;
+          if (sortedGroups.length > 1) {
+            const gIcon = allDone ? '&#x2713;' : anyActive ? '&#x25B6;' : '&#x25CB;';
+            const gColor = allDone ? '#22c55e' : anyActive ? 'var(--accent-blue)' : 'var(--text-quaternary)';
+            html += `<div style="font-size:9px;color:${gColor};font-weight:600;margin-bottom:4px;letter-spacing:1px">${gIcon} GROUPE ${esc(gKey)}</div>`;
+          }
+          html += '<div style="display:flex;flex-wrap:wrap;gap:6px">';
+          gAgents.forEach(a => {
+            let statusIcon, statusColor, statusBg;
+            if (a.status === 'complete') {
+              statusIcon = '&#x2713;'; statusColor = '#22c55e'; statusBg = '#22c55e18';
+            } else if (a.status === 'running' || a.status === 'in_progress') {
+              statusIcon = '&#x25B6;'; statusColor = 'var(--accent-blue)'; statusBg = 'var(--accent-blue-dim)';
+            } else if (a.status === 'error') {
+              statusIcon = '&#x2717;'; statusColor = 'var(--accent-red)'; statusBg = 'var(--accent-red)18';
+            } else {
+              statusIcon = '&#x25CB;'; statusColor = 'var(--text-quaternary)'; statusBg = 'var(--bg-tertiary)';
+            }
+            html += `<div style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:6px;background:${statusBg};border:1px solid ${statusColor}22">
+              <span style="color:${statusColor};font-size:11px">${statusIcon}</span>
+              <span style="font-size:11px;color:var(--text-primary)">${esc(a.name)}</span>
+              ${a.required ? '<span style="font-size:8px;color:var(--accent-orange);font-weight:600">REQ</span>' : ''}
+            </div>`;
+          });
+          html += '</div>';
+          if (gi < sortedGroups.length - 1) {
+            html += '<div style="text-align:center;color:var(--text-quaternary);font-size:10px;margin:4px 0">&#x25BC;</div>';
+          }
+          html += '</div>';
+        });
+
+        html += '</div>';
+      }
+
+    } else {
+      html += '<div style="margin-bottom:12px;font-size:11px;color:var(--text-quaternary);font-style:italic">Workflow non lance</div>';
+    }
 
     // Pipeline
     const pipelineSteps = [
@@ -917,7 +1130,7 @@ async function loadProjectDetail() {
     } else if (projectDetailTab === 'dependencies') {
       html += await renderProjectDependenciesTab(issues);
     } else if (projectDetailTab === 'team') {
-      html += renderProjectTeamTab(project, issues);
+      html += await renderProjectTeamTab(project, issues);
     } else if (projectDetailTab === 'activity') {
       html += await renderProjectActivityTab(project.id);
     }
@@ -1003,9 +1216,38 @@ async function renderProjectDependenciesTab(issues) {
   return html;
 }
 
-function renderProjectTeamTab(project, issues) {
+async function renderProjectTeamTab(project, issues) {
   const members = project.members || [];
-  let html = '<div style="flex:1;padding:24px"><div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:16px">Team Workload</div><div style="display:flex;flex-direction:column;gap:12px">';
+  const teamId = project.team_id || activeTeam;
+  let agents = [];
+  try { agents = await api(`/api/teams/${teamId}/agents`); } catch (e) { console.warn('Failed to load agents for', teamId, e); }
+  const teamName = teams.find(t => t.id === teamId)?.name || teamId;
+
+  let html = '<div style="flex:1;padding:24px;overflow:auto">';
+
+  // Agents section
+  html += `<div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:12px">Agents <span style="font-weight:400;color:var(--text-quaternary)">— ${esc(teamName)}</span></div>`;
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;margin-bottom:24px">';
+  agents.sort((a, b) => a.type === 'orchestrator' ? -1 : b.type === 'orchestrator' ? 1 : a.name.localeCompare(b.name));
+  agents.forEach((a, i) => {
+    const isOrch = a.type === 'orchestrator';
+    html += `<div class="metric-card stagger-in" style="animation-delay:${i * 50}ms;padding:10px 14px;cursor:pointer" onclick="openAgentChat('${esc(a.id)}', '${esc(a.name)}', '${esc(a.llm)}')">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="status-dot ${a.last_activity ? 'online' : 'offline'}"></span>
+        <span style="font-size:12px;font-weight:${isOrch ? '700' : '500'}">${esc(a.name)}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
+        <span class="tag tag-accent" style="font-size:9px">${esc(a.id)}</span>
+        ${a.pending > 0 ? `<span style="font-size:10px;color:var(--accent-orange)">${a.pending} pending</span>` : ''}
+      </div>
+    </div>`;
+  });
+  if (agents.length === 0) html += '<div style="font-size:11px;color:var(--text-quaternary);font-style:italic">Aucun agent configure</div>';
+  html += '</div>';
+
+  // Members section
+  html += '<div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:12px">Members</div>';
+  html += '<div style="display:flex;flex-direction:column;gap:12px">';
 
   members.forEach((member, i) => {
     const memberIssues = issues.filter(x => x.assignee === member.user_name);
@@ -1013,7 +1255,7 @@ function renderProjectTeamTab(project, issues) {
     const total = memberIssues.length;
     const blocked = memberIssues.filter(x => x.is_blocked).length;
 
-    html += `<div class="metric-card stagger-in" style="animation-delay:${i * 80}ms">
+    html += `<div class="metric-card stagger-in" style="animation-delay:${(agents.length + i) * 50}ms">
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
         ${renderAvatar(member.user_name, 32)}
         <div><div style="font-size:13px;font-weight:600">${esc(member.user_name)}</div><div style="font-size:11px;color:var(--text-tertiary)">${esc(member.role)}</div></div>
@@ -1035,6 +1277,7 @@ function renderProjectTeamTab(project, issues) {
     </div>`;
   });
 
+  if (members.length === 0) html += '<div style="font-size:11px;color:var(--text-quaternary);font-style:italic">Aucun membre</div>';
   html += '</div></div>';
   return html;
 }
@@ -1066,7 +1309,7 @@ async function renderProjectActivityTab(projectId) {
 // CREATE PROJECT FLOW
 // ══════════════════════════════════════════════════
 function startCreateProject() {
-  createProjectState = { step: 1, name: '', team: '', startDate: '', targetDate: '', aiIssues: [], aiRelations: [], aiDescription: '', chatMessages: [] };
+  createProjectState = { step: 1, name: '', team: '', startDate: '', targetDate: '', sourceMode: 'new', slug: '', projectUuid: '', repoUrl: '', repoCloned: false, uploadedDocs: [], analyzedUrls: [], importResult: null, aiIssues: [], aiRelations: [], aiDescription: '', chatMessages: [] };
   activeView = 'create-project';
   document.querySelectorAll('.sidebar-item').forEach(el => el.classList.toggle('active', el.dataset.view === 'pm-projects'));
   loadCreateProject();
@@ -1078,7 +1321,7 @@ function loadCreateProject() {
   const s = createProjectState;
 
   // Stepper header
-  const steps = ['Setup', 'AI Planning', 'Review'];
+  const steps = ['Setup', 'Sources', 'AI Planning', 'Review'];
   header.innerHTML = `
     <div style="display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--text-tertiary);padding:4px 8px;border-radius:6px" onclick="switchView('pm-projects')">
       ${Icons.back}<span style="font-size:12px">Projects</span>
@@ -1096,8 +1339,9 @@ function loadCreateProject() {
     </div>`;
 
   if (s.step === 1) renderSetupStep(content);
-  else if (s.step === 2) renderAIPlanningStep(content);
-  else if (s.step === 3) renderReviewStep(content);
+  else if (s.step === 2) renderSourcesStep(content);
+  else if (s.step === 3) renderAIPlanningStep(content);
+  else if (s.step === 4) renderReviewStep(content);
 }
 
 function renderSetupStep(content) {
@@ -1113,6 +1357,18 @@ function renderSetupStep(content) {
       <label class="form-label">Team <span class="required">*</span></label>
       <div class="team-cards" id="cp-teams"></div>
     </div>
+    <div class="form-group">
+      <label class="form-label">Language <span class="required">*</span></label>
+      <select class="form-input" id="cp-lang" onchange="createProjectState.language=this.value;updateSetupBtn()">
+        <option value="" ${!s.language ? 'selected' : ''}>-- Select --</option>
+        <option value="fr" ${s.language === 'fr' ? 'selected' : ''}>Francais</option>
+        <option value="en" ${s.language === 'en' ? 'selected' : ''}>English</option>
+        <option value="es" ${s.language === 'es' ? 'selected' : ''}>Espanol</option>
+        <option value="de" ${s.language === 'de' ? 'selected' : ''}>Deutsch</option>
+        <option value="it" ${s.language === 'it' ? 'selected' : ''}>Italiano</option>
+        <option value="pt" ${s.language === 'pt' ? 'selected' : ''}>Portugues</option>
+      </select>
+    </div>
     <div style="display:flex;gap:12px">
       <div class="form-group" style="flex:1">
         <label class="form-label">Start date</label>
@@ -1123,7 +1379,7 @@ function renderSetupStep(content) {
         <input class="form-input" type="date" id="cp-target" value="${s.targetDate}" onchange="createProjectState.targetDate=this.value" />
       </div>
     </div>
-    <button class="btn btn-primary btn-full" id="cp-continue-btn" disabled onclick="goToAIPlanning()">Continue with AI Planning</button>
+    <button class="btn btn-primary btn-full" id="cp-continue-btn" disabled onclick="goToSources()">Continue</button>
     <div style="text-align:center;margin-top:12px"><a style="font-size:12px;color:var(--accent-blue);cursor:pointer" onclick="skipToCreateProject()">Or skip and create empty project</a></div>
   </div>`;
 
@@ -1147,15 +1403,341 @@ function selectProjectTeam(teamId) {
 
 function updateSetupBtn() {
   const btn = document.getElementById('cp-continue-btn');
-  if (btn) btn.disabled = !(createProjectState.name.trim() && createProjectState.team);
+  if (btn) btn.disabled = !(createProjectState.name.trim() && createProjectState.team && createProjectState.language);
+}
+
+function renderSourcesStep(content) {
+  const s = createProjectState;
+  const mode = s.sourceMode || 'new';
+
+  // Uploaded docs list
+  const docsHtml = (s.uploadedDocs || []).map((d, i) =>
+    `<div class="source-file-item">
+      <span class="source-file-name">${esc(d.name)}</span>
+      <span class="source-file-size">${(d.size / 1024).toFixed(1)} KB</span>
+      <button class="btn-icon" onclick="removeUploadedDoc(${i})" title="Supprimer">&times;</button>
+    </div>`
+  ).join('');
+
+  // Analyzed URLs list
+  const urlsHtml = (s.analyzedUrls || []).map((u, i) =>
+    `<div class="source-file-item">
+      <span class="source-file-name" title="${esc(u.url)}">${esc(u.filename)}</span>
+      <span class="source-file-size">${u.analyzed ? 'Analyzed' : 'Raw'}</span>
+      <button class="btn-icon" onclick="removeAnalyzedUrl(${i})" title="Supprimer">&times;</button>
+    </div>`
+  ).join('');
+
+  content.innerHTML = `<div class="form-centered" style="max-width:600px">
+    <h2>Project sources</h2>
+    <div class="subtitle">How do you want to start this project?</div>
+
+    <div class="source-cards" style="margin-bottom:24px">
+      <div class="source-card ${mode === 'new' ? 'active' : ''}" onclick="selectSourceMode('new')">
+        <div class="source-card-icon">&#x2728;</div>
+        <div class="source-card-title">Nouveau projet</div>
+        <div class="source-card-desc">Partir de zero</div>
+      </div>
+      <div class="source-card ${mode === 'existing' ? 'active' : ''}" onclick="selectSourceMode('existing')">
+        <div class="source-card-icon">&#x1F4C4;</div>
+        <div class="source-card-title">Sources existantes</div>
+        <div class="source-card-desc">Documents, URL ou repo Git</div>
+      </div>
+      <div class="source-card ${mode === 'import' ? 'active' : ''}" onclick="selectSourceMode('import')">
+        <div class="source-card-icon">&#x1F4E5;</div>
+        <div class="source-card-title">Importer un projet</div>
+        <div class="source-card-desc">Archive d'un projet existant</div>
+      </div>
+    </div>
+
+    ${mode === 'existing' ? `
+    <div class="source-section">
+      <div class="form-label" style="margin-bottom:10px">Documents</div>
+      <div class="source-drop-zone" id="cp-drop-zone" onclick="document.getElementById('cp-file-input').click()">
+        <input type="file" id="cp-file-input" multiple hidden onchange="handleDocUpload(this.files)" />
+        <div class="source-drop-text">Drop files here or click to upload</div>
+        <div class="source-drop-hint">Markdown, PDF, images, text files...</div>
+      </div>
+      ${docsHtml ? `<div class="source-file-list">${docsHtml}</div>` : ''}
+    </div>
+
+    <div class="source-section" style="margin-top:20px">
+      <div class="form-label" style="margin-bottom:10px">URL (site web, documentation en ligne)</div>
+      <div style="display:flex;gap:8px">
+        <input class="form-input" id="cp-url-input" placeholder="https://docs.example.com/..." style="flex:1" />
+        <button class="btn btn-outline" onclick="analyzeUrl()" id="cp-url-btn">Analyser</button>
+      </div>
+      ${urlsHtml ? `<div class="source-file-list" style="margin-top:8px">${urlsHtml}</div>` : ''}
+    </div>
+
+    <div class="source-section" style="margin-top:20px">
+      <div class="form-label" style="margin-bottom:10px">Repository Git</div>
+      <div style="display:flex;gap:8px">
+        <input class="form-input" id="cp-repo-url" placeholder="https://github.com/org/repo" value="${esc(s.repoUrl)}" style="flex:1" />
+        <button class="btn btn-outline" onclick="cloneRepo()" id="cp-clone-btn">Cloner</button>
+      </div>
+      ${s.repoCloned ? '<div class="source-status-ok">Repository clone</div>' : ''}
+    </div>
+    ` : ''}
+
+    ${mode === 'import' ? `
+    <div class="source-section">
+      <div class="form-label" style="margin-bottom:10px">Archive du projet</div>
+      <div class="source-drop-zone" id="cp-import-zone" onclick="document.getElementById('cp-import-input').click()">
+        <input type="file" id="cp-import-input" accept=".zip,.tar.gz,.tgz,.tar" hidden onchange="handleArchiveImport(this.files[0])" />
+        <div class="source-drop-text">Drop archive here or click to select</div>
+        <div class="source-drop-hint">.zip, .tar.gz</div>
+      </div>
+      ${s.importResult ? `
+      <div class="source-import-result ${s.importResult.action === 'updated' ? 'source-status-warn' : 'source-status-ok'}">
+        ${s.importResult.action === 'updated'
+          ? 'Projet existant trouve et mis a jour (' + esc(s.importResult.slug) + ')'
+          : 'Nouveau projet importe (' + esc(s.importResult.slug) + ')'}
+      </div>` : ''}
+    </div>
+    ` : ''}
+
+    <div style="display:flex;gap:12px;margin-top:24px">
+      <button class="btn btn-outline" style="flex:1" onclick="createProjectState.step=1;loadCreateProject()">&#x2190; Back</button>
+      <button class="btn btn-primary" style="flex:2" onclick="initProjectAndContinue()">Continue to AI Planning &#x2192;</button>
+    </div>
+  </div>`;
+
+  // Drag & drop handlers
+  const dropZone = document.getElementById('cp-drop-zone');
+  if (dropZone) {
+    dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); };
+    dropZone.ondragleave = () => dropZone.classList.remove('drag-over');
+    dropZone.ondrop = (e) => { e.preventDefault(); dropZone.classList.remove('drag-over'); handleDocUpload(e.dataTransfer.files); };
+  }
+  const importZone = document.getElementById('cp-import-zone');
+  if (importZone) {
+    importZone.ondragover = (e) => { e.preventDefault(); importZone.classList.add('drag-over'); };
+    importZone.ondragleave = () => importZone.classList.remove('drag-over');
+    importZone.ondrop = (e) => { e.preventDefault(); importZone.classList.remove('drag-over'); handleArchiveImport(e.dataTransfer.files[0]); };
+  }
+}
+
+function selectSourceMode(mode) {
+  createProjectState.sourceMode = mode;
+  renderSourcesStep(document.getElementById('pm-content'));
+}
+
+function initProjectAndContinue() {
+  goToAIPlanning();
+}
+
+async function handleDocUpload(files) {
+  const s = createProjectState;
+  if (!s.uploadedDocs) s.uploadedDocs = [];
+  for (const file of files) {
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch(`/api/pm/project-files/${encodeURIComponent(s.slug)}/upload`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${token}` }, body: form,
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+      const data = await res.json();
+      if (data.exists && !data.ok) {
+        // File already exists — ask to overwrite
+        const overwrite = await confirmModal(
+          `Le fichier "${esc(data.filename)}" existe deja dans le projet. Ecraser ?`
+        );
+        if (overwrite) {
+          const form2 = new FormData();
+          form2.append('file', file);
+          const res2 = await fetch(`/api/pm/project-files/${encodeURIComponent(s.slug)}/upload?overwrite=true`, {
+            method: 'POST', headers: { 'Authorization': `Bearer ${token}` }, body: form2,
+          });
+          if (!res2.ok) throw new Error((await res2.json()).detail || res2.statusText);
+          const data2 = await res2.json();
+          // Update in list if already present
+          const idx = s.uploadedDocs.findIndex(d => d.name === data2.filename);
+          if (idx >= 0) s.uploadedDocs[idx] = { name: data2.filename, size: data2.size };
+          else s.uploadedDocs.push({ name: data2.filename, size: data2.size });
+          toast(`${data2.filename} ecrase`, 'success');
+        } else {
+          toast('Fichier ignore. Renommez-le pour l\'ajouter.', 'info');
+        }
+      } else {
+        s.uploadedDocs.push({ name: data.filename, size: data.size });
+        toast(`${data.filename} uploaded`, 'success');
+      }
+    } catch (e) { toast(`Upload failed: ${e.message}`, 'error'); }
+  }
+  renderSourcesStep(document.getElementById('pm-content'));
+}
+
+function removeUploadedDoc(idx) {
+  (createProjectState.uploadedDocs || []).splice(idx, 1);
+  renderSourcesStep(document.getElementById('pm-content'));
+}
+
+async function analyzeUrl() {
+  const s = createProjectState;
+  const input = document.getElementById('cp-url-input');
+  const url = input?.value.trim();
+  if (!url) return;
+
+  if (!s.slug) {
+    try {
+      const res = await api('/api/pm/project-files/init', { method: 'POST', body: { name: s.name, team_id: s.team, language: s.language } });
+      s.slug = res.slug;
+      s.projectUuid = res.uuid;
+    } catch (e) { toast(e.message, 'error'); return; }
+  }
+
+  const btn = document.getElementById('cp-url-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Analyse...'; }
+
+  try {
+    const res = await api('/api/pm/project-files/analyze-url', { method: 'POST', body: { url, slug: s.slug } });
+    if (!s.analyzedUrls) s.analyzedUrls = [];
+    s.analyzedUrls.push({ url, filename: res.filename, analyzed: res.analyzed });
+    toast(`${res.filename} ${res.analyzed ? 'analyzed' : 'saved'}`, 'success');
+    input.value = '';
+  } catch (e) { toast(e.message, 'error'); }
+
+  renderSourcesStep(document.getElementById('pm-content'));
+}
+
+function removeAnalyzedUrl(idx) {
+  (createProjectState.analyzedUrls || []).splice(idx, 1);
+  renderSourcesStep(document.getElementById('pm-content'));
+}
+
+async function cloneRepo() {
+  const s = createProjectState;
+  const input = document.getElementById('cp-repo-url');
+  const url = input?.value.trim();
+  if (!url) return;
+
+  if (!s.slug) {
+    try {
+      const res = await api('/api/pm/project-files/init', { method: 'POST', body: { name: s.name, team_id: s.team, language: s.language } });
+      s.slug = res.slug;
+      s.projectUuid = res.uuid;
+    } catch (e) { toast(e.message, 'error'); return; }
+  }
+
+  const btn = document.getElementById('cp-clone-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Clonage...'; }
+
+  try {
+    const res = await api('/api/pm/project-files/clone-repo', { method: 'POST', body: { url, slug: s.slug } });
+    s.repoUrl = url;
+    s.repoCloned = true;
+    toast(res.action === 'refreshed' ? 'Repository rafraichi' : 'Repository clone', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+
+  renderSourcesStep(document.getElementById('pm-content'));
+}
+
+async function handleArchiveImport(file) {
+  if (!file) return;
+  const btn = document.getElementById('cp-import-input');
+
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch('/api/pm/project-files/import-archive', {
+      method: 'POST', headers: { 'Authorization': `Bearer ${token}` }, body: form,
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+    const data = await res.json();
+    createProjectState.importResult = data;
+    createProjectState.slug = data.slug;
+    createProjectState.projectUuid = data.uuid;
+    toast(data.action === 'updated' ? 'Projet existant mis a jour' : 'Projet importe', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+
+  renderSourcesStep(document.getElementById('pm-content'));
+}
+
+async function goToSources() {
+  const s = createProjectState;
+
+  // Check if project dir already exists on disk
+  try {
+    const check = await api('/api/pm/project-files/check', { method: 'POST', body: { name: s.name } });
+
+    if (check.exists) {
+      const confirmCode = check.uuid.slice(-5);
+      const answer = await promptModal(
+        `Un projet avec ce nom existe deja (UUID: ...${esc(confirmCode)}).<br><br>` +
+        `Pour fusionner avec le projet existant, saisissez les 5 derniers caracteres de l'UUID :`,
+        confirmCode
+      );
+      if (answer === null) return; // cancelled
+      if (answer !== confirmCode) {
+        toast('Code incorrect, operation annulee', 'error');
+        return;
+      }
+      // Merge: reuse existing project
+      s.slug = check.slug;
+      s.projectUuid = check.uuid;
+    } else {
+      // Create new project dir
+      const res = await api('/api/pm/project-files/init', { method: 'POST', body: { name: s.name, team_id: s.team, language: s.language } });
+      s.slug = res.slug;
+      s.projectUuid = res.uuid;
+    }
+  } catch (e) {
+    toast(e.message, 'error');
+    return;
+  }
+
+  s.step = 2;
+  loadCreateProject();
 }
 
 function goToAIPlanning() {
-  createProjectState.step = 2;
-  createProjectState.chatMessages = [
-    { role: 'ai', content: `I'm ready to help you structure "${createProjectState.name}". Describe what you want to accomplish \u2014 goals, constraints, scope \u2014 and I'll propose a breakdown into issues with dependencies.` }
-  ];
-  loadCreateProject();
+  const s = createProjectState;
+  s.step = 3;
+
+  const hasSources = s.sourceMode !== 'new' && (
+    (s.uploadedDocs || []).length > 0 ||
+    (s.analyzedUrls || []).length > 0 ||
+    s.repoCloned ||
+    s.importResult
+  );
+
+  if (!s.chatMessages.length) {
+    if (hasSources) {
+      s.chatMessages = [{ role: 'ai', content: 'Analyse du projet. Veuillez patienter...', analyzing: true }];
+      loadCreateProject();
+      runProjectAnalysis();
+    } else {
+      s.chatMessages = [
+        { role: 'ai', content: `Je suis pret a vous aider a structurer "${s.name}". Decrivez ce que vous voulez accomplir \u2014 objectifs, contraintes, perimetre \u2014 et je proposerai un decoupage en issues avec leurs dependances.` }
+      ];
+      loadCreateProject();
+    }
+  } else {
+    loadCreateProject();
+  }
+}
+
+async function runProjectAnalysis() {
+  const s = createProjectState;
+  try {
+    const res = await api('/api/pm/project-files/analyze', {
+      method: 'POST',
+      body: { slug: s.slug, project_name: s.name },
+    });
+    // Replace the "analyzing" message with the synthesis
+    s.chatMessages = [
+      { role: 'ai', content: res.synthesis || 'Aucun contenu a analyser.' },
+      { role: 'ai', content: `Voici mon analyse des sources du projet "${s.name}". Vous pouvez maintenant decrire vos objectifs ou me demander de generer un decoupage en issues.` }
+    ];
+    s.projectSynthesis = res.synthesis;
+  } catch (e) {
+    s.chatMessages = [
+      { role: 'ai', content: `Erreur lors de l'analyse: ${e.message}. Vous pouvez continuer manuellement.` }
+    ];
+  }
+  renderAIPlanningStep(document.getElementById('pm-content'));
 }
 
 function renderAIPlanningStep(content) {
@@ -1164,7 +1746,11 @@ function renderAIPlanningStep(content) {
 
   let chatHtml = s.chatMessages.map(m => {
     if (m.role === 'ai') {
-      let body = `<div class="chat-bubble-content">${esc(m.content)}</div>`;
+      const rendered = m.content.includes('**') || m.content.includes('# ') ? simpleMarkdown(m.content) : esc(m.content);
+      let body = `<div class="chat-bubble-content">${rendered}</div>`;
+      if (m.analyzing) {
+        body += `<div class="chat-typing-dots" style="margin-top:8px"><span></span><span></span><span></span></div>`;
+      }
       if (m.issues) {
         body += `<hr style="border:none;border-top:1px solid var(--border-subtle);margin:8px 0">
           <div style="font-size:11px;font-weight:600;margin-bottom:6px">${m.issues.length} issues generated</div>
@@ -1208,8 +1794,8 @@ function renderAIPlanningStep(content) {
         </button>
       </div>
       <div style="display:flex;justify-content:space-between;padding:8px 24px;border-top:1px solid var(--border-subtle)">
-        <button class="btn btn-outline" onclick="createProjectState.step=1;loadCreateProject()">&#x2190; Back to Setup</button>
-        ${s.aiIssues.length > 0 ? '<button class="btn btn-success" onclick="createProjectState.step=3;loadCreateProject()">Review &amp; Create &#x2192;</button>' : ''}
+        <button class="btn btn-outline" onclick="createProjectState.step=2;loadCreateProject()">&#x2190; Back to Sources</button>
+        ${s.aiIssues.length > 0 ? '<button class="btn btn-success" onclick="createProjectState.step=4;loadCreateProject()">Review &amp; Create &#x2192;</button>' : ''}
       </div>
     </div>
     <div style="width:300px;border-left:1px solid var(--border-subtle);background:var(--bg-secondary);padding:20px;overflow-y:auto">
@@ -1344,18 +1930,19 @@ function renderReviewStep(content) {
   }
 
   html += `<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
-    <button class="btn btn-outline" onclick="createProjectState.step=2;loadCreateProject()">&#x2190; Back to AI</button>
-    <button class="btn btn-success" onclick="doCreateProject()">&#x2713; Create Project</button>
+    <button class="btn btn-outline" onclick="createProjectState.step=3;loadCreateProject()">&#x2190; Back to AI</button>
+    <button class="btn btn-success" onclick="doCreateProject(false)">&#x2713; Create Project</button>
+    <button class="btn btn-primary" onclick="doCreateProject(true)">&#x26A1; Create &amp; Launch Agents</button>
   </div></div>`;
 
   content.innerHTML = html;
 }
 
-async function doCreateProject() {
+async function doCreateProject(launchWorkflow = false) {
   const s = createProjectState;
   try {
     const project = await api('/api/pm/projects', { method: 'POST', body: {
-      name: s.name, team_id: s.team, lead: currentUser?.display_name || currentUser?.email || '',
+      name: s.name, slug: s.slug || '', team_id: s.team, lead: currentUser?.display_name || currentUser?.email || '',
       color: teams.find(t => t.id === s.team)?.color || '#6366f1',
       description: s.aiDescription, start_date: s.startDate || null, target_date: s.targetDate || null,
     }});
@@ -1383,10 +1970,50 @@ async function doCreateProject() {
       }
     }
 
-    toast('Project created!');
+    // Launch workflow if requested
+    if (launchWorkflow) {
+      const wf = await api('/api/pm/projects/launch-workflow', { method: 'POST', body: {
+        project_id: project.id, team_id: s.team, slug: s.slug || '', phase: 'discovery',
+      }});
+      if (wf.ok) {
+        toast('Projet cree — workflow lance !');
+      } else {
+        toast('Projet cree mais workflow non lance : ' + (wf.error || ''), 'error');
+      }
+    } else {
+      toast('Projet cree !');
+    }
+
     selectedProject = project.id;
     activeView = 'project-detail';
     loadProjectDetail();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function launchWorkflow(projectId, teamId, slug) {
+  if (!confirm('Lancer les agents sur ce projet ?')) return;
+  try {
+    const res = await api('/api/pm/projects/launch-workflow', { method: 'POST', body: {
+      project_id: projectId, team_id: teamId, slug: slug, phase: 'discovery',
+    }});
+    if (res.ok) {
+      toast('Workflow lance !');
+    } else {
+      toast('Erreur : ' + (res.error || ''), 'error');
+    }
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function pauseWorkflow(projectId, teamId) {
+  if (!confirm('Mettre le workflow en pause ?')) return;
+  try {
+    const res = await api(`/api/pm/projects/${projectId}/pause-workflow`, { method: 'POST', body: { team_id: teamId } });
+    if (res.ok) {
+      toast('Workflow mis en pause');
+      loadProjectDetail();
+    } else {
+      toast('Erreur : ' + (res.error || ''), 'error');
+    }
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -1494,6 +2121,30 @@ async function openHitlQuestion(qid) {
         </div>
       </div>`;
 
+    // Phase validation: show deliverables
+    if (q.context && q.context.type === 'phase_validation') {
+      html += `<div class="card" style="margin-top:12px">
+        <div class="question-label">PHASE ${esc(q.context.current_phase || '').toUpperCase()} &#x2192; ${esc(q.context.next_phase || '').toUpperCase()}</div>`;
+      const deliverables = q.context.deliverables || {};
+      for (const [agentId, data] of Object.entries(deliverables)) {
+        html += `<div style="margin-top:10px">
+          <div style="font-size:10px;color:var(--accent-blue);letter-spacing:1px;margin-bottom:4px">${esc(agentId).toUpperCase()}</div>`;
+        if (typeof data === 'string') {
+          html += `<pre style="font-size:11px;color:var(--text-secondary);white-space:pre-wrap;max-height:300px;overflow:auto;background:var(--bg-secondary);padding:8px;border-radius:4px">${esc(data)}</pre>`;
+        } else {
+          for (const [key, val] of Object.entries(data)) {
+            const preview = typeof val === 'object' ? JSON.stringify(val, null, 2) : String(val);
+            html += `<details style="margin-bottom:6px">
+              <summary style="font-size:11px;color:var(--text-primary);cursor:pointer">${esc(key)}</summary>
+              <pre style="font-size:10px;color:var(--text-secondary);white-space:pre-wrap;max-height:300px;overflow:auto;background:var(--bg-secondary);padding:8px;border-radius:4px;margin-top:4px">${esc(preview.substring(0, 5000))}</pre>
+            </details>`;
+          }
+        }
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+
     if (q.status === 'pending') {
       if (options.length > 0) {
         html += '<div class="options-section"><div class="options-label">PROPOSED ANSWERS</div><div class="options-grid">';
@@ -1554,12 +2205,12 @@ async function loadAgents() {
   activeAgent = null;
   try {
     const agents = await api(`/api/teams/${activeTeam}/agents`);
-    agents.sort((a, b) => a.id === 'orchestrator' ? -1 : b.id === 'orchestrator' ? 1 : a.name.localeCompare(b.name));
+    agents.sort((a, b) => a.type === 'orchestrator' ? -1 : b.type === 'orchestrator' ? 1 : a.name.localeCompare(b.name));
     let html = '<div class="agents-grid" style="padding:20px">';
     agents.forEach(a => {
       const hasActivity = !!a.last_activity;
-      const isOrch = a.id === 'orchestrator';
-      html += `<div class="card agent-card ${isOrch ? 'agent-card-orch' : ''}" onclick="openAgentChat('${esc(a.id)}', '${esc(a.name)}')">
+      const isOrch = a.type === 'orchestrator';
+      html += `<div class="card agent-card ${isOrch ? 'agent-card-orch' : ''}" onclick="openAgentChat('${esc(a.id)}', '${esc(a.name)}', '${esc(a.llm)}')">
         <div class="card-row" style="align-items:center">
           <div style="display:flex;align-items:center;gap:8px">
             <span class="status-dot ${hasActivity ? 'online' : 'offline'}"></span>
@@ -1579,8 +2230,8 @@ async function loadAgents() {
   } catch (e) { content.innerHTML = `<div class="empty-state">${esc(e.message)}</div>`; }
 }
 
-async function openAgentChat(agentId, agentName) {
-  activeAgent = { id: agentId, name: agentName };
+async function openAgentChat(agentId, agentName, agentLlm) {
+  activeAgent = { id: agentId, name: agentName, llm: agentLlm || '' };
   const content = document.getElementById('pm-content');
   content.innerHTML = `
     <div class="chat-container">
@@ -1590,6 +2241,7 @@ async function openAgentChat(agentId, agentName) {
           <span class="status-dot online"></span>
           <span class="chat-agent-name">${esc(agentName)}</span>
           <span class="tag tag-accent">${esc(agentId)}</span>
+          <span class="tag" style="background:var(--bg-hover);color:var(--text-secondary);font-size:9px">${esc(agentLlm || 'default')}</span>
         </div>
         <button class="chat-clear-btn" onclick="clearAgentChat('${esc(agentId)}')">Clear</button>
       </div>
@@ -1775,6 +2427,250 @@ async function loadVersion() {
     }
     document.querySelectorAll('.version-tag').forEach(el => { el.textContent = txt; });
   } catch (e) { /* ignore */ }
+}
+
+// ══════════════════════════════════════════════════
+// LOGS
+// ══════════════════════════════════════════════════
+let logAllLines = [];
+let logAutoRefreshId = null;
+let logService = 'langgraph-api';
+// ── Threads ─────────────────────────────────────
+async function loadThreads() {
+  const content = document.getElementById('pm-content');
+  content.innerHTML = '<div class="loading">Loading...</div>';
+  try {
+    const threads = await api('/api/threads');
+    if (!threads.length) {
+      content.innerHTML = '<div class="empty-state">Aucun thread</div>';
+      return;
+    }
+    let html = '<div style="padding:20px"><div class="table-wrapper"><table class="pm-table"><thead><tr><th>Thread ID</th><th>Requests</th><th>Last Activity</th><th>Actions</th></tr></thead><tbody>';
+    threads.forEach(t => {
+      html += `<tr>
+        <td style="font-family:monospace;font-size:11px">${esc(t.thread_id)}</td>
+        <td>${t.request_count}</td>
+        <td>${t.last_activity ? timeAgo(t.last_activity) : '—'}</td>
+        <td><button class="btn btn-outline" style="font-size:10px;padding:2px 8px" onclick="resetThread('${esc(t.thread_id).replace(/'/g, "\\'")}')">Reset</button></td>
+      </tr>`;
+    });
+    html += '</tbody></table></div></div>';
+    content.innerHTML = html;
+  } catch (e) { content.innerHTML = `<div class="empty-state">${esc(e.message)}</div>`; }
+}
+
+async function resetThread(threadId) {
+  if (!confirm(`Reset le thread "${threadId}" ? Le state sera purgé.`)) return;
+  try {
+    await api('/api/threads/reset', { method: 'POST', body: { thread_id: threadId } });
+    toast('Thread reset');
+    loadThreads();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ── Activity (agent events) ─────────────────────
+let _activityRefresh = null;
+
+async function loadActivity() {
+  if (_activityRefresh) { clearInterval(_activityRefresh); _activityRefresh = null; }
+  const content = document.getElementById('pm-content');
+  content.innerHTML = `
+    <div style="padding:20px;max-width:1000px">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+        <select class="form-input" id="activity-filter" style="width:160px;font-size:11px" onchange="fetchActivity()">
+          <option value="">Tous les events</option>
+          <option value="agent_start">agent_start</option>
+          <option value="agent_complete">agent_complete</option>
+          <option value="agent_error">agent_error</option>
+          <option value="agent_dispatch">agent_dispatch</option>
+          <option value="llm_call_start">llm_call</option>
+          <option value="phase_transition">phase_transition</option>
+          <option value="human_gate_requested">human_gate</option>
+        </select>
+        <select class="form-input" id="activity-agent" style="width:140px;font-size:11px" onchange="fetchActivity()">
+          <option value="">Tous les agents</option>
+        </select>
+        <button class="btn btn-outline" style="font-size:11px;padding:4px 10px" onclick="fetchActivity()">Refresh</button>
+        <label style="font-size:11px;color:var(--text-tertiary);display:flex;align-items:center;gap:4px;margin-left:auto">
+          <input type="checkbox" id="activity-auto" onchange="toggleActivityAuto()" /> Auto (5s)
+        </label>
+      </div>
+      <div id="activity-list" style="font-family:'JetBrains Mono',monospace;font-size:11px">
+        <div style="color:var(--text-quaternary)">Chargement...</div>
+      </div>
+    </div>`;
+  await fetchActivity();
+}
+
+async function fetchActivity() {
+  const filter = document.getElementById('activity-filter')?.value || '';
+  const agent = document.getElementById('activity-agent')?.value || '';
+  try {
+    const params = new URLSearchParams({ n: '200' });
+    if (filter) params.set('event_type', filter);
+    if (agent) params.set('agent_id', agent);
+    const data = await api(`/api/events?${params}`);
+    const events = (data.events || []).reverse();
+    renderActivityEvents(events);
+    // Populate agent filter if not already done
+    const sel = document.getElementById('activity-agent');
+    if (sel && sel.options.length <= 1) {
+      const agents = [...new Set(events.map(e => e.agent_id).filter(Boolean))].sort();
+      agents.forEach(a => { const o = document.createElement('option'); o.value = a; o.textContent = a; sel.appendChild(o); });
+    }
+  } catch (e) {
+    const el = document.getElementById('activity-list');
+    if (el) el.innerHTML = `<div style="color:var(--accent-red)">Erreur: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderActivityEvents(events) {
+  const el = document.getElementById('activity-list');
+  if (!el) return;
+  if (events.length === 0) {
+    el.innerHTML = '<div style="color:var(--text-quaternary);font-style:italic">Aucun event</div>';
+    return;
+  }
+  const typeIcons = {
+    agent_start: '▶', agent_complete: '✓', agent_error: '✗', agent_dispatch: '→',
+    llm_call_start: '◇', llm_call_end: '◆', tool_call: '⚙',
+    pipeline_step_start: '┌', pipeline_step_end: '└',
+    human_gate_requested: '?', human_gate_responded: '!',
+    phase_transition: '⬤',
+  };
+  const typeColors = {
+    agent_start: 'var(--accent-blue)', agent_complete: '#22c55e', agent_error: '#ef4444',
+    agent_dispatch: 'var(--accent-purple, #a78bfa)', llm_call_start: 'var(--text-tertiary)',
+    llm_call_end: 'var(--text-tertiary)', tool_call: '#f59e0b',
+    human_gate_requested: 'var(--accent-orange)', human_gate_responded: '#22c55e',
+    phase_transition: 'var(--accent-blue)',
+  };
+
+  let html = '<div style="display:flex;flex-direction:column;gap:2px">';
+  for (const e of events) {
+    const time = e.timestamp ? new Date(e.timestamp).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
+    const icon = typeIcons[e.event] || '·';
+    const color = typeColors[e.event] || 'var(--text-secondary)';
+    let detail = '';
+    const d = e.data || {};
+    if (e.event === 'agent_start') detail = d.task ? `task: ${d.task.slice(0, 80)}` : '';
+    else if (e.event === 'agent_complete') detail = d.status || '';
+    else if (e.event === 'agent_error') detail = `<span style="color:#ef4444">${esc((d.error || '').slice(0, 100))}</span>`;
+    else if (e.event === 'agent_dispatch') detail = d.agents ? `agents: ${d.agents.join(', ')}` : '';
+    else if (e.event === 'llm_call_start') detail = d.model || d.provider || '';
+    else if (e.event === 'llm_call_end') detail = d.total_tokens ? `${d.total_tokens} tokens` : '';
+    else if (e.event === 'tool_call') detail = d.tool_name || '';
+    else if (e.event === 'phase_transition') detail = `${d.from || '?'} → ${d.to || '?'}`;
+    else if (e.event === 'human_gate_requested') detail = d.summary || '';
+    else if (e.event === 'human_gate_responded') detail = d.approved ? 'approved' : 'rejected';
+    else detail = JSON.stringify(d).slice(0, 80);
+
+    html += `<div style="display:flex;gap:8px;padding:3px 0;border-bottom:1px solid var(--border-subtle)">
+      <span style="color:var(--text-quaternary);min-width:65px">${time}</span>
+      <span style="color:${color};min-width:16px;text-align:center">${icon}</span>
+      <span style="color:${color};min-width:90px;font-weight:500">${esc(e.event || '')}</span>
+      <span style="color:var(--accent-blue);min-width:120px">${esc(e.agent_id || '')}</span>
+      <span style="color:var(--text-secondary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${detail}</span>
+    </div>`;
+  }
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function toggleActivityAuto() {
+  const auto = document.getElementById('activity-auto')?.checked;
+  if (_activityRefresh) { clearInterval(_activityRefresh); _activityRefresh = null; }
+  if (auto) _activityRefresh = setInterval(fetchActivity, 5000);
+}
+
+// ── Logs ────────────────────────────────────────
+let logLines = 300;
+
+async function loadLogs() {
+  const content = document.getElementById('pm-content');
+  // Only build the UI shell on first load (no existing terminal)
+  if (!document.getElementById('log-output')) {
+    content.innerHTML = `
+      <div style="display:flex;flex-direction:column;height:100%;padding:16px;gap:10px">
+        <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+          <select id="log-service" class="form-input" style="width:180px;font-size:11px" onchange="logService=this.value;fetchLogs()">
+            <option value="langgraph-api" ${logService==='langgraph-api'?'selected':''}>Gateway API</option>
+            <option value="langgraph-discord" ${logService==='langgraph-discord'?'selected':''}>Discord Bot</option>
+            <option value="langgraph-mail" ${logService==='langgraph-mail'?'selected':''}>Mail Bot</option>
+            <option value="langgraph-hitl" ${logService==='langgraph-hitl'?'selected':''}>HITL Console</option>
+            <option value="langgraph-admin" ${logService==='langgraph-admin'?'selected':''}>Admin</option>
+          </select>
+          <input id="log-filter" class="form-input" style="width:200px;font-size:11px" placeholder="Filter..." oninput="filterLogLines()" />
+          <select id="log-level" class="form-input" style="width:100px;font-size:11px" onchange="filterLogLines()">
+            <option value="">All</option>
+            <option value="ERROR">ERROR</option>
+            <option value="WARN">WARN</option>
+            <option value="INFO">INFO</option>
+          </select>
+          <input id="log-count" class="form-input" type="number" style="width:70px;font-size:11px" value="${logLines}" min="10" max="5000" onchange="logLines=+this.value;fetchLogs()" />
+          <button class="btn btn-outline" style="font-size:11px;padding:4px 10px" onclick="fetchLogs()">Refresh</button>
+          <button class="btn ${logAutoRefreshId ? 'btn-primary' : 'btn-outline'}" id="log-auto-btn" style="font-size:11px;padding:4px 10px" onclick="toggleLogAutoRefresh()">Auto ${logAutoRefreshId ? 'ON' : 'OFF'}</button>
+          <span id="log-count-label" style="font-size:10px;color:var(--text-quaternary);margin-left:auto">0 lines</span>
+        </div>
+        <div id="log-output" style="flex:1;overflow-y:auto;background:var(--bg-primary);border:1px solid var(--border-subtle);border-radius:6px;padding:10px;font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.6;white-space:pre-wrap;word-break:break-all"></div>
+      </div>`;
+  }
+  fetchLogs();
+}
+
+async function fetchLogs() {
+  try {
+    const data = await api(`/api/logs?service=${logService}&lines=${logLines}`);
+    logAllLines = data.lines || [];
+    filterLogLines();
+  } catch (e) {
+    const out = document.getElementById('log-output');
+    if (out) out.textContent = 'Error: ' + e.message;
+  }
+}
+
+function filterLogLines() {
+  const out = document.getElementById('log-output');
+  if (!out) return;
+  const filterText = (document.getElementById('log-filter')?.value || '').toLowerCase();
+  const levelFilter = document.getElementById('log-level')?.value || '';
+
+  let lines = logAllLines;
+  if (levelFilter) lines = lines.filter(l => l.includes(levelFilter));
+  if (filterText) lines = lines.filter(l => l.toLowerCase().includes(filterText));
+
+  const label = document.getElementById('log-count-label');
+  if (label) label.textContent = `${lines.length} / ${logAllLines.length} lines`;
+
+  out.innerHTML = lines.map(l => {
+    let cls = 'log-line';
+    if (/\bERROR\b/i.test(l)) cls += ' log-error';
+    else if (/\bWARN/i.test(l)) cls += ' log-warn';
+    else if (/\bDEBUG\b/i.test(l)) cls += ' log-debug';
+    else if (/\bINFO\b/i.test(l)) cls += ' log-info';
+    // Dim health check lines
+    if (/GET \/health/.test(l)) cls += ' log-dim';
+    return `<div class="${cls}">${esc(l)}</div>`;
+  }).join('');
+
+  // Auto-scroll to bottom
+  out.scrollTop = out.scrollHeight;
+}
+
+function toggleLogAutoRefresh() {
+  if (logAutoRefreshId) {
+    clearInterval(logAutoRefreshId);
+    logAutoRefreshId = null;
+  } else {
+    logAutoRefreshId = setInterval(fetchLogs, 5000);
+  }
+  const btn = document.getElementById('log-auto-btn');
+  if (btn) {
+    btn.textContent = logAutoRefreshId ? 'Auto ON' : 'Auto OFF';
+    btn.className = logAutoRefreshId ? 'btn btn-primary' : 'btn btn-outline';
+    btn.style.fontSize = '11px';
+    btn.style.padding = '4px 10px';
+  }
 }
 
 // ── Init ─────────────────────────────────────────

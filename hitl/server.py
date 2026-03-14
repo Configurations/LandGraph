@@ -22,7 +22,7 @@ from typing import Optional
 
 import psycopg
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from jose import JWTError, jwt
@@ -195,6 +195,7 @@ def _ensure_pm_tables(cur):
         CREATE TABLE IF NOT EXISTS project.pm_projects (
             id SERIAL PRIMARY KEY,
             name TEXT NOT NULL,
+            slug TEXT DEFAULT '',
             description TEXT DEFAULT '',
             lead TEXT NOT NULL,
             team_id TEXT NOT NULL,
@@ -305,6 +306,11 @@ def _seed_admin():
             cur.execute("""
                 ALTER TABLE project.hitl_users
                 ADD COLUMN IF NOT EXISTS culture TEXT DEFAULT 'fr'
+            """)
+            # Ensure slug column exists on pm_projects
+            cur.execute("""
+                ALTER TABLE project.pm_projects
+                ADD COLUMN IF NOT EXISTS slug TEXT DEFAULT ''
             """)
             # Ensure chat messages table exists
             cur.execute("""
@@ -855,6 +861,13 @@ def answer_question(question_id: str, req: AnswerRequest, user: TokenData = Depe
                 raise HTTPException(403)
             if row[1] != "pending":
                 raise HTTPException(400, "Cette question n'est plus en attente")
+            # Get context before update (for phase validation callback)
+            cur.execute("SELECT context, thread_id, team_id FROM project.hitl_requests WHERE id = %s", (question_id,))
+            ctx_row = cur.fetchone()
+            ctx = ctx_row[0] if ctx_row and ctx_row[0] else {}
+            req_thread_id = ctx_row[1] if ctx_row else ""
+            req_team_id = ctx_row[2] if ctx_row else ""
+
             cur.execute("""
                 UPDATE project.hitl_requests
                 SET status = %s, response = %s, reviewer = %s, response_channel = 'web',
@@ -863,7 +876,59 @@ def answer_question(question_id: str, req: AnswerRequest, user: TokenData = Depe
             """, (new_status, response_text, user.email, question_id))
             if cur.rowcount == 0:
                 raise HTTPException(409, "Deja traitee")
+
+        # If phase validation approved, notify gateway to transition
+        if ctx.get("type") == "phase_validation" and req.action == "approve":
+            _notify_gateway_phase_transition(
+                req_thread_id, req_team_id,
+                ctx.get("current_phase", ""), ctx.get("next_phase", ""))
+
         return {"ok": True, "status": new_status}
+    finally:
+        conn.close()
+
+
+# ── Thread Reset ──────────────────────────────────
+class ResetThreadRequest(BaseModel):
+    thread_id: str
+
+
+@app.post("/api/threads/reset")
+def reset_thread(req: ResetThreadRequest, user: TokenData = Depends(get_current_user)):
+    """Reset a thread via gateway — admin only."""
+    if user.role != "admin":
+        raise HTTPException(403, "Admin only")
+    try:
+        import httpx
+        gw = _get_gateway_url()
+        r = httpx.post(f"{gw}/reset", json={"thread_id": req.thread_id}, timeout=10)
+        if r.status_code == 200:
+            logger.info(f"[hitl] Thread reset: {req.thread_id} by {user.email}")
+            return r.json()
+        raise HTTPException(r.status_code, r.text)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/threads")
+def list_threads(user: TokenData = Depends(get_current_user)):
+    """List known threads from hitl_requests."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT thread_id,
+                       MAX(created_at) as last_activity,
+                       COUNT(*) as request_count
+                FROM project.hitl_requests
+                GROUP BY thread_id
+                ORDER BY MAX(created_at) DESC
+                LIMIT 50
+            """)
+            return [{"thread_id": r[0], "last_activity": r[1].isoformat() if r[1] else None,
+                     "request_count": r[2]} for r in cur.fetchall()]
     finally:
         conn.close()
 
@@ -887,6 +952,21 @@ def list_agents(team_id: str, user: TokenData = Depends(get_current_user)):
                 data = json.load(f)
             agents = data.get("agents", {})
             break
+    # Resolve default LLM name
+    default_llm = ""
+    for base in ["/app/config/Teams", "config/Teams"]:
+        llm_path = os.path.join(base, "llm_providers.json")
+        if os.path.exists(llm_path):
+            try:
+                with open(llm_path) as f:
+                    llm_data = json.load(f)
+                default_id = llm_data.get("default", "")
+                if default_id:
+                    p = llm_data.get("providers", {}).get(default_id, {})
+                    default_llm = p.get("name", default_id) if p else default_id
+            except Exception:
+                pass
+            break
     # Enrich with question stats
     conn = get_conn()
     try:
@@ -908,10 +988,13 @@ def list_agents(team_id: str, user: TokenData = Depends(get_current_user)):
     result = []
     for aid, aconf in agents.items():
         s = stats.get(aid, {})
+        agent_llm = aconf.get("llm", "")
+        llm_display = agent_llm if agent_llm else f"default ({default_llm})" if default_llm else "default"
         result.append({
             "id": aid,
             "name": aconf.get("name", aid),
             "type": aconf.get("type", "single"),
+            "llm": llm_display,
             "pending": s.get("pending", 0),
             "total": s.get("total", 0),
             "last_activity": s.get("last_activity"),
@@ -1112,6 +1195,25 @@ def reset_password(req: ResetPasswordRequest):
         conn.close()
 
 
+def _notify_gateway_phase_transition(thread_id: str, team_id: str,
+                                      from_phase: str, to_phase: str):
+    """Notify gateway to execute phase transition after HITL approval."""
+    try:
+        import httpx
+        gw = _get_gateway_url()
+        r = httpx.post(f"{gw}/workflow/transition", json={
+            "thread_id": thread_id,
+            "from_phase": from_phase,
+            "to_phase": to_phase,
+        }, timeout=10)
+        if r.status_code == 200:
+            logger.info(f"[hitl] Phase transition triggered: {from_phase} → {to_phase}")
+        else:
+            logger.warning(f"[hitl] Phase transition failed: {r.status_code} {r.text}")
+    except Exception as e:
+        logger.warning(f"[hitl] Phase transition notification error: {e}")
+
+
 # ── Agent Chat ─────────────────────────────────
 def _get_gateway_url() -> str:
     """Read gateway URL from others.json (hosts.api), env var, or default."""
@@ -1174,6 +1276,7 @@ def send_chat_message(team_id: str, agent_id: str, req: ChatRequest, user: Token
             "thread_id": thread_id,
             "project_id": f"hitl-{team_id}",
             "channel_id": "",
+            "team_id": team_id,
         }
         if agent_id != "orchestrator":
             invoke_payload["direct_agent"] = agent_id
@@ -1223,6 +1326,7 @@ def clear_chat(team_id: str, agent_id: str, user: TokenData = Depends(get_curren
 
 class PMProjectCreate(BaseModel):
     name: str
+    slug: str = ''
     description: str = ''
     lead: str
     team_id: str
@@ -1352,7 +1456,7 @@ def pm_list_projects(user: TokenData = Depends(get_current_user)):
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT p.id, p.name, p.description, p.lead, p.team_id, p.color,
+                SELECT p.id, p.name, p.slug, p.description, p.lead, p.team_id, p.color,
                        p.status, p.start_date, p.target_date, p.created_by,
                        p.created_at, p.updated_at
                 FROM project.pm_projects p
@@ -1397,13 +1501,13 @@ def pm_list_projects(user: TokenData = Depends(get_current_user)):
                 members = [{"user_name": m[0], "role": m[1]} for m in cur.fetchall()]
 
                 projects.append({
-                    "id": pid, "name": r[1], "description": r[2], "lead": r[3],
-                    "team_id": r[4], "color": r[5], "status": r[6],
-                    "start_date": r[7].isoformat() if r[7] else None,
-                    "target_date": r[8].isoformat() if r[8] else None,
-                    "created_by": r[9],
-                    "created_at": r[10].isoformat() if r[10] else None,
-                    "updated_at": r[11].isoformat() if r[11] else None,
+                    "id": pid, "name": r[1], "slug": r[2] or "", "description": r[3], "lead": r[4],
+                    "team_id": r[5], "color": r[6], "status": r[7],
+                    "start_date": r[8].isoformat() if r[8] and hasattr(r[8], 'isoformat') else r[8],
+                    "target_date": r[9].isoformat() if r[9] and hasattr(r[9], 'isoformat') else r[9],
+                    "created_by": r[10],
+                    "created_at": r[11].isoformat() if r[11] and hasattr(r[11], 'isoformat') else r[11],
+                    "updated_at": r[12].isoformat() if r[12] and hasattr(r[12], 'isoformat') else r[12],
                     "progress": progress,
                     "completed_issues": done, "total_issues": total,
                     "blocked_count": blocked, "blocking_count": blocking,
@@ -1421,10 +1525,10 @@ def pm_create_project(req: PMProjectCreate, user: TokenData = Depends(get_curren
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO project.pm_projects
-                    (name, description, lead, team_id, color, status, start_date, target_date, created_by)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    (name, slug, description, lead, team_id, color, status, start_date, target_date, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
-            """, (req.name, req.description, req.lead, req.team_id, req.color,
+            """, (req.name, req.slug, req.description, req.lead, req.team_id, req.color,
                   req.status, req.start_date, req.target_date, user.email))
             pid = cur.fetchone()[0]
             # Add lead as member with role 'lead'
@@ -1447,13 +1551,107 @@ def pm_create_project(req: PMProjectCreate, user: TokenData = Depends(get_curren
         conn.close()
 
 
+class LaunchWorkflowRequest(BaseModel):
+    project_id: int
+    team_id: str
+    slug: str = ''
+    phase: str = 'discovery'
+
+
+@app.post("/api/pm/projects/launch-workflow")
+def pm_launch_workflow(req: LaunchWorkflowRequest, user: TokenData = Depends(get_current_user)):
+    """Launch agent workflow for a project via the gateway."""
+    import httpx
+    conn = get_conn()
+    try:
+        # Get project info
+        with conn.cursor() as cur:
+            cur.execute("SELECT name, slug, description FROM project.pm_projects WHERE id = %s", (req.project_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Project not found")
+            project_name, project_slug, description = row
+
+        slug = req.slug or project_slug or ''
+        thread_id = f"project-{req.team_id}-{req.project_id}"
+
+        # Build initial message with project context
+        msg = f"Nouveau projet : {project_name}\n\n"
+        if description:
+            msg += f"{description}\n\n"
+        msg += f"Phase initiale : {req.phase}. Lance les agents de cette phase."
+
+        invoke_payload = {
+            "messages": [{"role": "user", "content": msg}],
+            "thread_id": thread_id,
+            "project_id": f"pm-{req.team_id}-{req.project_id}",
+            "project_slug": slug,
+            "channel_id": "",
+            "team_id": req.team_id,
+        }
+
+        try:
+            resp = httpx.post(f"{_get_gateway_url()}/invoke", json=invoke_payload, timeout=30)
+            if resp.status_code == 200:
+                data = resp.json()
+                _log_activity(req.project_id, user.email, "launched_workflow", None, f"Phase: {req.phase}", conn)
+                return {"ok": True, "thread_id": thread_id, "gateway_response": data}
+            else:
+                return {"ok": False, "error": f"Gateway {resp.status_code}: {resp.text[:200]}"}
+        except httpx.ConnectError:
+            return {"ok": False, "error": "Gateway not reachable"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)[:200]}
+    finally:
+        conn.close()
+
+
+class PauseWorkflowRequest(BaseModel):
+    team_id: str = "team1"
+
+
+@app.post("/api/pm/projects/{project_id}/pause-workflow")
+def pm_pause_workflow(project_id: int, req: PauseWorkflowRequest, user: TokenData = Depends(get_current_user)):
+    """Pause the workflow for a project by setting status to 'paused' and resetting the gateway thread."""
+    import httpx
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE project.pm_projects SET status = 'paused', updated_at = NOW() WHERE id = %s", (project_id,))
+        thread_id = f"project-{req.team_id}-{project_id}"
+        try:
+            httpx.post(f"{_get_gateway_url()}/reset", json={"thread_id": thread_id}, timeout=10)
+        except Exception:
+            pass
+        _log_activity(project_id, user.email, "paused_workflow", None, "Workflow mis en pause", conn)
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.get("/api/pm/projects/{project_id}/workflow-status")
+def pm_workflow_status(project_id: int, team_id: str = "team1", user: TokenData = Depends(get_current_user)):
+    """Proxy to gateway /workflow/status for a project thread."""
+    import httpx
+    thread_id = f"project-{team_id}-{project_id}"
+    try:
+        resp = httpx.get(f"{_get_gateway_url()}/workflow/status/{thread_id}", timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        return {"error": f"Gateway {resp.status_code}"}
+    except httpx.ConnectError:
+        return {"error": "Gateway not reachable"}
+    except Exception as e:
+        return {"error": str(e)[:200]}
+
+
 @app.get("/api/pm/projects/{project_id}")
 def pm_get_project(project_id: int, user: TokenData = Depends(get_current_user)):
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, name, description, lead, team_id, color, status,
+                SELECT id, name, slug, description, lead, team_id, color, status,
                        start_date, target_date, created_by, created_at, updated_at
                 FROM project.pm_projects WHERE id = %s
             """, (project_id,))
@@ -1495,13 +1693,13 @@ def pm_get_project(project_id: int, user: TokenData = Depends(get_current_user))
             members = [{"user_name": m[0], "role": m[1]} for m in cur.fetchall()]
 
         return {
-            "id": r[0], "name": r[1], "description": r[2], "lead": r[3],
-            "team_id": r[4], "color": r[5], "status": r[6],
-            "start_date": r[7].isoformat() if r[7] else None,
-            "target_date": r[8].isoformat() if r[8] else None,
-            "created_by": r[9],
-            "created_at": r[10].isoformat() if r[10] else None,
-            "updated_at": r[11].isoformat() if r[11] else None,
+            "id": r[0], "name": r[1], "slug": r[2] or "", "description": r[3], "lead": r[4],
+            "team_id": r[5], "color": r[6], "status": r[7],
+            "start_date": r[8].isoformat() if r[8] and hasattr(r[8], 'isoformat') else r[8],
+            "target_date": r[9].isoformat() if r[9] and hasattr(r[9], 'isoformat') else r[9],
+            "created_by": r[10],
+            "created_at": r[11].isoformat() if r[11] and hasattr(r[11], 'isoformat') else r[11],
+            "updated_at": r[12].isoformat() if r[12] and hasattr(r[12], 'isoformat') else r[12],
             "progress": progress, "completed": done, "total": total,
             "blocked": blocked, "blocking": blocking,
             "members": members, "issues": issues,
@@ -1848,6 +2046,8 @@ def pm_list_relations(issue_id: str, user: TokenData = Depends(get_current_user)
 
 @app.post("/api/pm/issues/{issue_id}/relations")
 def pm_create_relation(issue_id: str, req: PMRelationCreate, user: TokenData = Depends(get_current_user)):
+    if req.target_issue_id == issue_id:
+        raise HTTPException(400, "Une issue ne peut pas avoir une relation avec elle-meme")
     conn = get_conn()
     try:
         with conn.cursor() as cur:
@@ -2148,6 +2348,476 @@ def pm_pulse(user: TokenData = Depends(get_current_user)):
         conn.close()
 
 
+# ── PM Project Files ────────────────────────────
+
+import re as _re
+import shutil
+import subprocess
+import tempfile
+import uuid as _uuid
+
+PROJECTS_ROOT = os.path.join(os.environ.get("AG_FLOW_ROOT", "/root/ag.flow"), "projects")
+
+
+def _slug(name: str) -> str:
+    """Convert project name to filesystem-safe slug."""
+    s = name.lower().strip()
+    s = _re.sub(r'[^a-z0-9]+', '-', s)
+    return s.strip('-') or 'project'
+
+
+def _ensure_project_dir(slug: str) -> str:
+    """Create project directory structure and return path. Write .project if new."""
+    project_dir = os.path.join(PROJECTS_ROOT, slug)
+    os.makedirs(os.path.join(project_dir, "docs"), exist_ok=True)
+    os.makedirs(os.path.join(project_dir, "deliverables"), exist_ok=True)
+    dot_project = os.path.join(project_dir, ".project")
+    if not os.path.isfile(dot_project):
+        with open(dot_project, "w") as f:
+            f.write(f"uuid: {_uuid.uuid4()}\n")
+    return project_dir
+
+
+def _read_project_uuid(project_dir: str) -> str:
+    """Read UUID from .project file."""
+    dot_project = os.path.join(project_dir, ".project")
+    if os.path.isfile(dot_project):
+        for line in open(dot_project):
+            if line.startswith("uuid:"):
+                return line.split(":", 1)[1].strip()
+    return ""
+
+
+def _append_project_line(project_dir: str, key: str, value: str):
+    """Append a line to .project file if not already present."""
+    dot_project = os.path.join(project_dir, ".project")
+    line = f"{key}: {value}\n"
+    if os.path.isfile(dot_project):
+        existing = open(dot_project).read()
+        if line.strip() in existing:
+            return  # already present
+        with open(dot_project, "a") as f:
+            f.write(line)
+    else:
+        with open(dot_project, "w") as f:
+            f.write(f"uuid: {_uuid.uuid4()}\n")
+            f.write(line)
+
+
+def _read_project_lines(project_dir: str, key: str) -> list:
+    """Read all values for a given key from .project file."""
+    dot_project = os.path.join(project_dir, ".project")
+    values = []
+    if os.path.isfile(dot_project):
+        for line in open(dot_project):
+            if line.startswith(f"{key}:"):
+                values.append(line.split(":", 1)[1].strip())
+    return values
+
+
+def _find_project_by_uuid(target_uuid: str) -> Optional[str]:
+    """Search existing projects for matching UUID. Returns slug or None."""
+    if not os.path.isdir(PROJECTS_ROOT):
+        return None
+    for entry in os.listdir(PROJECTS_ROOT):
+        entry_path = os.path.join(PROJECTS_ROOT, entry)
+        if os.path.isdir(entry_path):
+            if _read_project_uuid(entry_path) == target_uuid:
+                return entry
+    return None
+
+
+class ProjectInitRequest(BaseModel):
+    name: str
+    team_id: str = ''
+    language: str = ''
+
+
+class ProjectCheckRequest(BaseModel):
+    name: str
+
+
+@app.post("/api/pm/project-files/check")
+def pm_project_check(req: ProjectCheckRequest, _user: TokenData = Depends(get_current_user)):
+    """Check if a project directory already exists."""
+    slug = _slug(req.name)
+    project_dir = os.path.join(PROJECTS_ROOT, slug)
+    exists = os.path.isdir(project_dir)
+    project_uuid = _read_project_uuid(project_dir) if exists else ""
+    return {"exists": exists, "slug": slug, "uuid": project_uuid}
+
+
+@app.post("/api/pm/project-files/init")
+def pm_project_init(req: ProjectInitRequest, user: TokenData = Depends(get_current_user)):
+    """Create project directory structure."""
+    slug = _slug(req.name)
+    project_dir = _ensure_project_dir(slug)
+    project_uuid = _read_project_uuid(project_dir)
+    if req.team_id:
+        _append_project_line(project_dir, "team", req.team_id)
+    if req.language:
+        _append_project_line(project_dir, "language", req.language)
+    return {"ok": True, "slug": slug, "uuid": project_uuid, "path": project_dir}
+
+
+@app.post("/api/pm/project-files/{slug}/upload")
+async def pm_project_upload(slug: str, file: UploadFile = File(...), overwrite: str = "false", _user: TokenData = Depends(get_current_user)):
+    """Upload a document to the project docs/ folder."""
+    project_dir = os.path.join(PROJECTS_ROOT, slug)
+    docs_dir = os.path.join(project_dir, "docs")
+    os.makedirs(docs_dir, exist_ok=True)
+    # Sanitize filename
+    safe_name = _re.sub(r'[^\w.\-]', '_', file.filename or "upload")
+    dest = os.path.join(docs_dir, safe_name)
+    # Check if file already exists
+    if os.path.isfile(dest) and overwrite != "true":
+        return {"ok": False, "exists": True, "filename": safe_name, "size": os.path.getsize(dest)}
+    content = await file.read()
+    if len(content) > 50 * 1024 * 1024:  # 50MB limit
+        raise HTTPException(413, "Fichier trop volumineux (max 50MB)")
+    with open(dest, "wb") as f:
+        f.write(content)
+    return {"ok": True, "filename": safe_name, "size": len(content)}
+
+
+class AnalyzeUrlRequest(BaseModel):
+    url: str
+    slug: str
+
+
+@app.post("/api/pm/project-files/analyze-url")
+def pm_project_analyze_url(req: AnalyzeUrlRequest, user: TokenData = Depends(get_current_user)):
+    """Fetch URL content, analyze with LLM, save result to docs/."""
+    import httpx
+
+    project_dir = os.path.join(PROJECTS_ROOT, req.slug)
+    docs_dir = os.path.join(project_dir, "docs")
+    os.makedirs(docs_dir, exist_ok=True)
+
+    # Fetch URL content
+    try:
+        resp = httpx.get(req.url, timeout=30, follow_redirects=True)
+        resp.raise_for_status()
+        raw_content = resp.text[:100_000]  # Cap at 100KB
+    except Exception as e:
+        raise HTTPException(400, f"Impossible de recuperer l'URL: {str(e)[:200]}")
+
+    # LLM analysis
+    llm_config = _get_llm_config()
+    if not llm_config:
+        # No LLM available — save raw content
+        safe_name = _re.sub(r'[^\w.\-]', '_', req.url.split("//")[-1][:60]) + ".md"
+        with open(os.path.join(docs_dir, safe_name), "w", encoding="utf-8") as f:
+            f.write(f"# Source: {req.url}\n\n{raw_content[:50000]}")
+        return {"ok": True, "filename": safe_name, "analyzed": False}
+
+    analysis_prompt = (
+        "Analyze the following web page content and produce a structured summary in Markdown. "
+        "Extract: purpose, key features, technical details, architecture, APIs, data models — "
+        "whatever is relevant for a software project. Be thorough but concise. "
+        "Respond in the same language as the content."
+    )
+    try:
+        result = _call_llm_for_plan(
+            f"URL: {req.url}\n\nContent:\n{raw_content}",
+            llm_config,
+            analysis_prompt,
+        )
+        # _call_llm_for_plan expects JSON, but here we want raw text
+        summary = json.dumps(result, ensure_ascii=False, indent=2)
+    except (json.JSONDecodeError, Exception):
+        # Fallback: call LLM for raw text analysis
+        summary = _call_llm_raw(f"URL: {req.url}\n\nContent:\n{raw_content}", llm_config, analysis_prompt)
+
+    safe_name = _re.sub(r'[^\w.\-]', '_', req.url.split("//")[-1][:60]) + ".md"
+    with open(os.path.join(docs_dir, safe_name), "w", encoding="utf-8") as f:
+        f.write(f"# Source: {req.url}\n\n{summary}")
+    return {"ok": True, "filename": safe_name, "analyzed": True}
+
+
+def _call_llm_raw(user_message: str, llm_config: dict, system_prompt: str) -> str:
+    """Call LLM API and return raw text (no JSON parsing)."""
+    import httpx
+
+    ptype = llm_config["type"]
+    model = llm_config["model"]
+    api_key = llm_config["api_key"]
+
+    if ptype == "anthropic":
+        resp = httpx.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+            json={"model": model, "max_tokens": 4096, "system": system_prompt, "messages": [{"role": "user", "content": user_message}]},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        return resp.json().get("content", [{}])[0].get("text", "")
+    elif ptype in ("openai", "azure"):
+        base_url = "https://api.openai.com/v1" if ptype == "openai" else os.environ.get("AZURE_OPENAI_ENDPOINT", "")
+        resp = httpx.post(
+            f"{base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "content-type": "application/json"},
+            json={"model": model, "max_tokens": 4096, "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_message}]},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        return resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+    return ""
+
+
+class CloneRepoRequest(BaseModel):
+    url: str
+    slug: str
+
+
+@app.post("/api/pm/project-files/clone-repo")
+def pm_project_clone_repo(req: CloneRepoRequest, user: TokenData = Depends(get_current_user)):
+    """Git clone a repository into the project repo/ folder. If repo already tracked, pull instead."""
+    project_dir = os.path.join(PROJECTS_ROOT, req.slug)
+    os.makedirs(project_dir, exist_ok=True)
+    git_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+
+    # Check if this repo URL is already in .project
+    existing_repos = _read_project_lines(project_dir, "repo")
+    if req.url in existing_repos:
+        # Find the repo dir that matches this URL and pull
+        for entry in sorted(os.listdir(project_dir)):
+            entry_path = os.path.join(project_dir, entry)
+            if entry.startswith("repo") and os.path.isdir(os.path.join(entry_path, ".git")):
+                try:
+                    r = subprocess.run(["git", "remote", "get-url", "origin"],
+                                       cwd=entry_path, capture_output=True, text=True, timeout=10, env=git_env)
+                    if r.returncode == 0 and r.stdout.strip() == req.url:
+                        pull = subprocess.run(["git", "pull", "--ff-only"],
+                                              cwd=entry_path, capture_output=True, text=True, timeout=120, env=git_env)
+                        return {"ok": True, "action": "refreshed", "path": entry_path,
+                                "message": pull.stdout.strip()[:200] if pull.returncode == 0 else pull.stderr.strip()[:200]}
+                except Exception:
+                    continue
+        # Fallback: repo in .project but dir not found — re-clone
+
+    # Find next available repo dir (repo, repo2, repo3, ...)
+    repo_dir = os.path.join(project_dir, "repo")
+    idx = 2
+    while os.path.isdir(repo_dir):
+        repo_dir = os.path.join(project_dir, f"repo{idx}")
+        idx += 1
+
+    try:
+        result = subprocess.run(
+            ["git", "clone", "--depth", "1", req.url, repo_dir],
+            capture_output=True, text=True, timeout=120, env=git_env,
+        )
+        if result.returncode != 0:
+            raise HTTPException(400, f"Git clone failed: {result.stderr[:300]}")
+    except subprocess.TimeoutExpired:
+        raise HTTPException(408, "Git clone timeout (120s)")
+
+    # Record repo URL in .project
+    _append_project_line(project_dir, "repo", req.url)
+
+    return {"ok": True, "action": "cloned", "path": repo_dir}
+
+
+@app.post("/api/pm/project-files/import-archive")
+async def pm_project_import_archive(file: UploadFile = File(...), _user: TokenData = Depends(get_current_user)):
+    """Import a project archive (.zip/.tar.gz), check UUID against existing projects."""
+    content = await file.read()
+    if len(content) > 200 * 1024 * 1024:  # 200MB limit
+        raise HTTPException(413, "Archive trop volumineuse (max 200MB)")
+
+    tmp_dir = tempfile.mkdtemp(prefix="ag_import_")
+    try:
+        filename = (file.filename or "archive").lower()
+        archive_path = os.path.join(tmp_dir, "archive")
+
+        with open(archive_path, "wb") as f:
+            f.write(content)
+
+        extract_dir = os.path.join(tmp_dir, "extracted")
+        os.makedirs(extract_dir)
+
+        if filename.endswith(".zip"):
+            import zipfile
+            with zipfile.ZipFile(archive_path) as zf:
+                zf.extractall(extract_dir)
+        elif filename.endswith((".tar.gz", ".tgz")):
+            import tarfile
+            with tarfile.open(archive_path, "r:gz") as tf:
+                tf.extractall(extract_dir)
+        elif filename.endswith(".tar"):
+            import tarfile
+            with tarfile.open(archive_path, "r:") as tf:
+                tf.extractall(extract_dir)
+        else:
+            raise HTTPException(400, "Format non supporte (zip, tar.gz, tar)")
+
+        # Find .project file — could be at root or one level deep
+        project_root = extract_dir
+        entries = os.listdir(extract_dir)
+        if len(entries) == 1 and os.path.isdir(os.path.join(extract_dir, entries[0])):
+            project_root = os.path.join(extract_dir, entries[0])
+
+        dot_project = os.path.join(project_root, ".project")
+        if not os.path.isfile(dot_project):
+            raise HTTPException(400, "Fichier .project introuvable dans l'archive")
+
+        archive_uuid = ""
+        for line in open(dot_project):
+            if line.startswith("uuid:"):
+                archive_uuid = line.split(":", 1)[1].strip()
+                break
+        if not archive_uuid:
+            raise HTTPException(400, "UUID introuvable dans .project")
+
+        # Check if project already exists
+        existing_slug = _find_project_by_uuid(archive_uuid)
+
+        if existing_slug:
+            # Update existing project
+            target_dir = os.path.join(PROJECTS_ROOT, existing_slug)
+            # Merge: overwrite files from archive
+            for item in os.listdir(project_root):
+                src = os.path.join(project_root, item)
+                dst = os.path.join(target_dir, item)
+                if os.path.isdir(src):
+                    if os.path.isdir(dst):
+                        shutil.rmtree(dst)
+                    shutil.copytree(src, dst)
+                else:
+                    shutil.copy2(src, dst)
+            return {"ok": True, "action": "updated", "slug": existing_slug, "uuid": archive_uuid}
+        else:
+            # New project from archive
+            slug = os.path.basename(project_root)
+            if slug == "extracted":
+                slug = _slug(archive_uuid[:8])
+            target_dir = os.path.join(PROJECTS_ROOT, slug)
+            if os.path.exists(target_dir):
+                slug = f"{slug}-{archive_uuid[:8]}"
+                target_dir = os.path.join(PROJECTS_ROOT, slug)
+            shutil.copytree(project_root, target_dir)
+            return {"ok": True, "action": "created", "slug": slug, "uuid": archive_uuid}
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+@app.get("/api/pm/project-files/{slug}/docs")
+def pm_project_list_docs(slug: str, _user: TokenData = Depends(get_current_user)):
+    """List documents in the project docs/ folder."""
+    docs_dir = os.path.join(PROJECTS_ROOT, slug, "docs")
+    if not os.path.isdir(docs_dir):
+        return {"files": []}
+    files = []
+    for f in sorted(os.listdir(docs_dir)):
+        fpath = os.path.join(docs_dir, f)
+        if os.path.isfile(fpath):
+            files.append({"name": f, "size": os.path.getsize(fpath)})
+    return {"files": files}
+
+
+def _collect_project_content(slug: str, max_total: int = 200_000) -> str:
+    """Read all docs and repo key files to build context for LLM analysis."""
+    project_dir = os.path.join(PROJECTS_ROOT, slug)
+    parts = []
+    total = 0
+
+    # Read docs/
+    docs_dir = os.path.join(project_dir, "docs")
+    if os.path.isdir(docs_dir):
+        for fname in sorted(os.listdir(docs_dir)):
+            fpath = os.path.join(docs_dir, fname)
+            if not os.path.isfile(fpath):
+                continue
+            try:
+                text = open(fpath, encoding="utf-8", errors="replace").read()
+                if total + len(text) > max_total:
+                    text = text[:max_total - total]
+                parts.append(f"=== Document: {fname} ===\n{text}")
+                total += len(text)
+                if total >= max_total:
+                    break
+            except Exception:
+                continue
+
+    # Read repo key files (README, package.json, requirements.txt, etc.)
+    key_files = ["README.md", "README.rst", "README.txt", "readme.md",
+                 "package.json", "requirements.txt", "pyproject.toml", "Cargo.toml",
+                 "go.mod", "pom.xml", "build.gradle", "pubspec.yaml",
+                 "docker-compose.yml", "Dockerfile", ".env.example"]
+    for repo_name in sorted(os.listdir(project_dir)):
+        repo_path = os.path.join(project_dir, repo_name)
+        if not repo_name.startswith("repo") or not os.path.isdir(repo_path):
+            continue
+        # Repo tree (first 2 levels)
+        tree_lines = []
+        for root, dirs, files in os.walk(repo_path):
+            depth = root.replace(repo_path, "").count(os.sep)
+            if depth >= 2:
+                dirs.clear()
+                continue
+            indent = "  " * depth
+            rel = os.path.basename(root)
+            tree_lines.append(f"{indent}{rel}/")
+            for f in sorted(files)[:30]:
+                tree_lines.append(f"{indent}  {f}")
+        if tree_lines:
+            tree_text = "\n".join(tree_lines[:200])
+            parts.append(f"=== Repository structure: {repo_name} ===\n{tree_text}")
+            total += len(tree_text)
+
+        # Key files content
+        for kf in key_files:
+            kf_path = os.path.join(repo_path, kf)
+            if os.path.isfile(kf_path) and total < max_total:
+                try:
+                    text = open(kf_path, encoding="utf-8", errors="replace").read()
+                    if total + len(text) > max_total:
+                        text = text[:max_total - total]
+                    parts.append(f"=== {repo_name}/{kf} ===\n{text}")
+                    total += len(text)
+                except Exception:
+                    continue
+
+    return "\n\n".join(parts)
+
+
+class ProjectAnalyzeRequest(BaseModel):
+    slug: str
+    project_name: str = ''
+
+
+@app.post("/api/pm/project-files/analyze")
+def pm_project_analyze(req: ProjectAnalyzeRequest, user: TokenData = Depends(get_current_user)):
+    """Analyze all project sources (docs + repo) and return a synthesis."""
+    content = _collect_project_content(req.slug)
+    if not content.strip():
+        return {"synthesis": "No content found to analyze.", "has_content": False}
+
+    llm_config = _get_llm_config()
+    if not llm_config:
+        return {"synthesis": content[:5000], "has_content": True, "raw": True}
+
+    analysis_prompt = (
+        "You are a project analyst. You receive documents, code structure, and key files from a project. "
+        "Produce a comprehensive synthesis in Markdown covering:\n"
+        "- **Project overview**: what it is, its purpose\n"
+        "- **Technical stack**: languages, frameworks, dependencies\n"
+        "- **Architecture**: structure, key components, patterns\n"
+        "- **Current state**: what exists, what's implemented\n"
+        "- **Key observations**: notable patterns, potential issues, strengths\n\n"
+        "Be thorough but concise. Respond in the same language as the project content."
+    )
+    project_label = f"Project: {req.project_name}\n\n" if req.project_name else ""
+
+    try:
+        synthesis = _call_llm_raw(f"{project_label}{content}", llm_config, analysis_prompt)
+        return {"synthesis": synthesis, "has_content": True}
+    except Exception as e:
+        _log.error("Project analysis error: %s", e)
+        return {"synthesis": f"Analysis error: {str(e)[:200]}", "has_content": True, "error": True}
+
+
 # ── PM AI Planning ──────────────────────────────
 
 class PMAIPlanRequest(BaseModel):
@@ -2159,31 +2829,144 @@ class PMAIPlanRequest(BaseModel):
     existing_relations: Optional[list] = None
 
 
+def _load_ai_plan_prompt() -> str:
+    """Load the AI planning system prompt from Agents/Prompts/ProjectPlannerCreateProject.md."""
+    for base in ["/project", "/app", os.path.join(os.path.dirname(__file__), "..")]:
+        path = os.path.join(base, "Agents", "Prompts", "ProjectPlannerCreateProject.md")
+        if os.path.isfile(path):
+            return open(path, encoding="utf-8").read().strip()
+    raise FileNotFoundError("Prompt file Agents/Prompts/ProjectPlannerCreateProject.md not found")
+
+
+def _get_llm_config():
+    """Read LLM provider config to find API key and model."""
+    providers = _read_config("llm_providers.json") if os.path.isfile(os.path.join(_find_config_dir(), "llm_providers.json")) else {}
+    # Also check Teams/ subfolder
+    if not providers:
+        teams_path = os.path.join(_find_config_dir(), "Teams", "llm_providers.json")
+        if os.path.isfile(teams_path):
+            try:
+                providers = json.load(open(teams_path))
+            except Exception:
+                providers = {}
+
+    # Try anthropic first, then openai
+    for provider_id in ["claude-sonnet", "claude-haiku", "gpt-4o-mini", "gpt-4o"]:
+        p = providers.get("providers", {}).get(provider_id, {})
+        env_key = p.get("env_key", "")
+        api_key = os.environ.get(env_key, "") if env_key else ""
+        if api_key:
+            return {"type": p["type"], "model": p["model"], "api_key": api_key}
+
+    # Fallback: try env vars directly
+    for env_key, ptype, model in [
+        ("ANTHROPIC_API_KEY", "anthropic", "claude-sonnet-4-5-20250929"),
+        ("OPENAI_API_KEY", "openai", "gpt-4o-mini"),
+    ]:
+        api_key = os.environ.get(env_key, "")
+        if api_key:
+            return {"type": ptype, "model": model, "api_key": api_key}
+
+    return None
+
+
+def _call_llm_for_plan(user_message: str, llm_config: dict, system_prompt: str) -> dict:
+    """Call LLM API directly and parse JSON response."""
+    import httpx
+    import re
+
+    ptype = llm_config["type"]
+    model = llm_config["model"]
+    api_key = llm_config["api_key"]
+
+    if ptype == "anthropic":
+        resp = httpx.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": model,
+                "max_tokens": 8192,
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": user_message}],
+            },
+            timeout=120,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        text = data.get("content", [{}])[0].get("text", "")
+
+    elif ptype in ("openai", "azure"):
+        base_url = "https://api.openai.com/v1" if ptype == "openai" else os.environ.get("AZURE_OPENAI_ENDPOINT", "")
+        resp = httpx.post(
+            f"{base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "content-type": "application/json",
+            },
+            json={
+                "model": model,
+                "max_tokens": 8192,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+            },
+            timeout=120,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+    else:
+        raise ValueError(f"Unsupported LLM type: {ptype}")
+
+    # Extract JSON from response (handle markdown code blocks)
+    json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
+    if json_match:
+        text = json_match.group(1)
+    # Try to find raw JSON object
+    elif not text.strip().startswith('{'):
+        brace_start = text.find('{')
+        if brace_start >= 0:
+            text = text[brace_start:]
+
+    return json.loads(text)
+
+
 @app.post("/api/pm/ai/plan")
 def pm_ai_plan(req: PMAIPlanRequest, user: TokenData = Depends(get_current_user)):
-    """Send project description to gateway for AI planning."""
-    import httpx
+    """Generate project issues using direct LLM call."""
+    llm_config = _get_llm_config()
+    if not llm_config:
+        raise HTTPException(500, "Aucune cle API LLM configuree (ANTHROPIC_API_KEY ou OPENAI_API_KEY)")
 
-    gateway_url = _get_gateway_url()
-    invoke_payload = {
-        "messages": [{"role": "user", "content": req.description}],
-        "thread_id": f"pm-plan-{req.team_id}-{int(time.time())}",
-        "project_id": f"pm-{req.team_id}",
-        "channel_id": "",
-        "direct_agent": "planner",
-    }
+    # Build user message with context
+    parts = []
+    if req.project_name:
+        parts.append(f"Project: {req.project_name}")
+    parts.append(req.description)
+    if req.existing_issues:
+        parts.append(f"\nExisting issues to refine/extend:\n{json.dumps(req.existing_issues, ensure_ascii=False, indent=2)}")
+    if req.existing_relations:
+        parts.append(f"\nExisting relations:\n{json.dumps(req.existing_relations, ensure_ascii=False, indent=2)}")
+
+    user_message = "\n".join(parts)
+
     try:
-        resp = httpx.post(f"{gateway_url}/invoke", json=invoke_payload, timeout=120)
-        if resp.status_code == 200:
-            return resp.json()
-        else:
-            raise HTTPException(resp.status_code, f"Gateway error: {resp.text[:500]}")
-    except httpx.ConnectError:
-        raise HTTPException(502, "Le service LangGraph API n'est pas accessible")
-    except HTTPException:
-        raise
+        system_prompt = _load_ai_plan_prompt()
+        result = _call_llm_for_plan(user_message, llm_config, system_prompt)
+        # Validate expected fields
+        if not isinstance(result.get("issues"), list):
+            return {"message": result.get("message", ""), "issues": [], "relations": []}
+        return result
+    except json.JSONDecodeError:
+        return {"message": "L'IA n'a pas pu generer un plan structure. Essayez avec plus de details.", "issues": [], "relations": []}
     except Exception as e:
-        raise HTTPException(500, f"Erreur: {str(e)[:300]}")
+        _log.error("AI plan error: %s", e)
+        raise HTTPException(500, f"Erreur LLM: {str(e)[:300]}")
 
 
 # ── SPA fallback ────────────────────────────────
@@ -2228,6 +3011,45 @@ def _git_last_update() -> str:
 @app.get("/api/version")
 def get_version():
     return {"version": _read_version(), "last_update": _git_last_update()}
+
+
+# ── Logs ─────────────────────────────────────────
+
+ALLOWED_LOG_SERVICES = ["langgraph-api", "langgraph-discord", "langgraph-mail", "langgraph-hitl", "langgraph-admin"]
+
+
+@app.get("/api/logs")
+def get_logs(service: str = "langgraph-api", lines: int = 200, user: TokenData = Depends(get_current_user)):
+    """Get Docker container logs."""
+    if service not in ALLOWED_LOG_SERVICES:
+        raise HTTPException(400, f"Service inconnu: {service}")
+    lines = min(max(lines, 10), 5000)
+    try:
+        r = subprocess.run(
+            ["docker", "logs", "--tail", str(lines), "--timestamps", service],
+            capture_output=True, text=True, timeout=10,
+        )
+        output = r.stdout + r.stderr
+        return {"ok": True, "service": service, "lines": output.strip().split("\n") if output.strip() else []}
+    except Exception as e:
+        return {"ok": False, "service": service, "lines": [str(e)]}
+
+
+@app.get("/api/events")
+def get_events(n: int = 100, event_type: str = "", agent_id: str = "", user: TokenData = Depends(get_current_user)):
+    """Proxy to gateway EventBus — returns recent agent events."""
+    import httpx
+    gw = _get_gateway_url()
+    params = {"n": min(n, 500)}
+    if event_type:
+        params["event_type"] = event_type
+    if agent_id:
+        params["agent_id"] = agent_id
+    try:
+        r = httpx.get(f"{gw}/events", params=params, timeout=5)
+        return r.json()
+    except Exception as e:
+        return {"events": [], "error": str(e)}
 
 
 if __name__ == "__main__":

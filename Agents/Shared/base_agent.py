@@ -199,9 +199,18 @@ class BaseAgent:
     def __init__(self):
         # Le provider peut etre defini via : env var > registry (default_llm) > default
         self.llm_provider = os.getenv(f"{self.agent_id.upper()}_LLM", self.default_llm) or None
-        self.model = os.getenv(f"{self.agent_id.upper()}_MODEL", self.default_model)
         self.temperature = float(os.getenv(f"{self.agent_id.upper()}_TEMPERATURE", str(self.default_temperature)))
         self.max_tokens = int(os.getenv(f"{self.agent_id.upper()}_MAX_TOKENS", str(self.default_max_tokens)))
+        # Resolve model name: env override > provider config > class default
+        explicit_model = os.getenv(f"{self.agent_id.upper()}_MODEL")
+        if explicit_model:
+            self.model = explicit_model
+        else:
+            from agents.shared.llm_provider import get_default_provider, get_provider_config
+            prov = self.llm_provider or get_default_provider()
+            self.model = get_provider_config(prov).get("model", self.default_model)
+            if not self.llm_provider:
+                self.llm_provider = prov
         self.system_prompt = self._load_prompt()
         self._tools = None
 
@@ -310,7 +319,7 @@ class BaseAgent:
         o = state.get("agent_outputs", {})
         # Ne garder que les outputs reussis dans le contexte
         successful = {k: v for k, v in o.items() if isinstance(v, dict) and v.get("status") == "complete"}
-        return {
+        ctx = {
             "project_phase": state.get("project_phase", "unknown"),
             "project_metadata": state.get("project_metadata", {}),
             "brief": self._extract_brief(state),
@@ -321,6 +330,23 @@ class BaseAgent:
                 for k, v in successful.items()
             },
         }
+        # Inject previous phase syntheses from filesystem
+        slug = state.get("project_slug", "")
+        if slug:
+            try:
+                from agents.shared.project_store import get_previous_syntheses, read_project_docs
+                phase = state.get("project_phase", "discovery")
+                syntheses = get_previous_syntheses(slug, phase)
+                if syntheses:
+                    ctx["previous_phases"] = syntheses
+                # For discovery phase, inject user-provided docs
+                if phase == "discovery":
+                    docs = read_project_docs(slug)
+                    if docs:
+                        ctx["project_documents"] = docs[:20000]
+            except Exception as e:
+                logger.warning(f"[{self.agent_id}] Project context injection error: {e}")
+        return ctx
 
     def parse_response(self, raw):
         c = raw.strip()

@@ -188,7 +188,7 @@ class TestPMProjects:
 
     def test_list(self, client, cur):
         cur.fetchall.side_effect = [
-            [(1, "P1", "", "Lead", "t1", "#fff", "on-track", None, None, "u", NOW, NOW)],
+            [(1, "P1", "p1", "", "Lead", "t1", "#fff", "on-track", None, None, "u", NOW, NOW)],
             [("done", 3), ("todo", 2)],
             [("Alice", "lead")],
         ]

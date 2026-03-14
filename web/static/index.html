@@ -6,7 +6,7 @@
   <title>LandGraph Admin</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/style.css?v=20260314l">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260314y">
 </head>
 <body>
   <div class="app-layout">
@@ -18,9 +18,9 @@
       </div>
 
       <div class="nav-section">Configuration</div>
-      <div class="nav-item active" data-section="secrets" onclick="showSection('secrets')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-        Secrets (.env)
+      <div class="nav-item active" data-section="dashboard" onclick="showSection('dashboard')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>
+        Dashboard
       </div>
       <div class="nav-item" data-section="teams" onclick="showSection('teams')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
@@ -30,10 +30,13 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
         Templates
       </div>
-
       <div class="nav-item" data-section="channels" onclick="showSection('channels')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
         Channels
+      </div>
+      <div class="nav-item" data-section="secrets" onclick="showSection('secrets')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        Secrets (.env)
       </div>
 
       <div class="nav-section">Outils</div>
@@ -73,8 +76,19 @@
     <main class="main-content">
       <div class="toast-container" id="toasts"></div>
 
+      <!-- DASHBOARD SECTION -->
+      <div class="section active" id="section-dashboard">
+        <div class="page-header">
+          <h2>Dashboard</h2>
+          <button class="btn btn-outline btn-sm" onclick="loadDashboard()">Rafraichir</button>
+        </div>
+        <div class="dashboard-grid" id="dashboard-content">
+          <div class="loading">Chargement...</div>
+        </div>
+      </div>
+
       <!-- SECRETS SECTION -->
-      <div class="section active" id="section-secrets">
+      <div class="section" id="section-secrets">
         <div class="page-header">
           <h2>Secrets (.env)</h2>
           <div style="display:flex;gap:0.5rem">
@@ -150,6 +164,7 @@
                 <button class="btn btn-primary btn-sm" onclick="showAddCfgProviderModal()">+ Ajouter</button>
               </div>
             </div>
+            <input type="text" class="form-control" id="cfg-llm-filter" placeholder="Filtrer providers..." oninput="filterCfgLLM()" style="margin:0.5rem 0;padding:0.4rem 0.6rem;font-size:0.85rem;width:100%;box-sizing:border-box">
             <div class="table-container" id="cfg-llm-providers-table"></div>
           </div>
           <div class="card" style="margin-top:1rem">
@@ -686,7 +701,7 @@
             <div class="form-row">
               <div class="form-group" style="flex:0.8">
                 <label>Service</label>
-                <select id="cgs-service" onchange="_onCfgGitServiceChange()">
+                <select id="cgs-service" onchange="_onGitSvcChange('configs')">
                   <option value="">-- Choisir --</option>
                   <option value="github">GitHub</option>
                   <option value="gitlab">GitLab</option>
@@ -703,25 +718,25 @@
             <div class="form-row">
               <div class="form-group">
                 <label>Login / Utilisateur</label>
-                <input id="cgs-login" placeholder="username" autocomplete="off" oninput="_checkCfgGitServiceBtns()" />
+                <input id="cgs-login" placeholder="username" autocomplete="off" oninput="_checkGitSvcBtns('configs')" />
               </div>
               <div class="form-group">
                 <label>Token d'acces</label>
-                <input id="cgs-token" type="password" placeholder="ghp_... / glpat-..." autocomplete="off" oninput="_checkCfgGitServiceBtns()" />
+                <input id="cgs-token" type="password" placeholder="ghp_... / glpat-..." autocomplete="off" oninput="_checkGitSvcBtns('configs')" />
               </div>
             </div>
             <div class="form-row" style="margin-top:0.5rem">
               <div class="form-group" style="flex:1.5">
                 <label>Nom du depot</label>
-                <input id="cgs-repo-name" placeholder="my-project" oninput="_checkCfgGitServiceBtns()" />
+                <input id="cgs-repo-name" placeholder="my-project" oninput="_checkGitSvcBtns('configs')" />
               </div>
             </div>
             <div style="display:flex;gap:0.5rem;margin-top:0.5rem;margin-bottom:0.75rem">
-              <button class="btn btn-primary btn-sm" onclick="saveCfgGitServiceConfig()">Enregistrer</button>
-              <button class="btn btn-primary btn-sm" id="cgs-btn-init" disabled onclick="cfgGitServiceInit()">Init</button>
-              <button class="btn btn-outline btn-sm" id="cgs-btn-fetch" disabled onclick="cfgGitServiceFetch()">Fetch</button>
-              <button class="btn btn-success btn-sm" id="cgs-btn-commit" disabled onclick="cfgGitServiceCommitPush()">Commit &amp; Push</button>
-              <button class="btn btn-outline btn-sm" id="cgs-btn-push" disabled onclick="cfgGitServicePush()">Push</button>
+              <button class="btn btn-primary btn-sm" onclick="_saveGitSvcConfig('configs')">Enregistrer</button>
+              <button class="btn btn-primary btn-sm" id="cgs-btn-init" disabled onclick="gitSvcInit('configs')">Init</button>
+              <button class="btn btn-outline btn-sm" id="cgs-btn-fetch" disabled onclick="gitSvcFetch('configs')">Fetch</button>
+              <button class="btn btn-success btn-sm" id="cgs-btn-commit" disabled onclick="gitSvcCommit('configs')">Commit</button>
+              <button class="btn btn-outline btn-sm" id="cgs-btn-reset" disabled onclick="gitSvcReset('configs')" style="display:none">Reset</button>
             </div>
             <p style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem">
               <b>Init</b> : cree le depot distant + initialise le depot local. &nbsp;
@@ -744,10 +759,6 @@
             <div style="margin-top:0.75rem">
               <label>Status</label>
               <div class="terminal" id="cfg-git-status" style="max-height:120px">Chargement...</div>
-            </div>
-            <div style="margin-top:0.5rem">
-              <label>Historique</label>
-              <div class="terminal" id="cfg-git-log" style="max-height:120px">Chargement...</div>
             </div>
             <div style="margin-top:0.75rem">
               <label>Versions</label>
@@ -803,6 +814,7 @@
                 <button class="btn btn-primary btn-sm" onclick="showAddTplProviderModal()">+ Ajouter</button>
               </div>
             </div>
+            <input type="text" class="form-control" id="tpl-llm-filter" placeholder="Filtrer providers..." oninput="filterTplLLM()" style="margin:0.5rem 0;padding:0.4rem 0.6rem;font-size:0.85rem;width:100%;box-sizing:border-box">
             <div class="table-container" id="tpl-llm-providers-table"></div>
           </div>
           <div class="card" style="margin-top:1rem">
@@ -876,7 +888,7 @@
             <div class="form-row">
               <div class="form-group" style="flex:0.8">
                 <label>Service</label>
-                <select id="gs-service" onchange="_onGitServiceChange()">
+                <select id="gs-service" onchange="_onGitSvcChange('shared')">
                   <option value="">-- Choisir --</option>
                   <option value="github">GitHub</option>
                   <option value="gitlab">GitLab</option>
@@ -893,32 +905,25 @@
             <div class="form-row">
               <div class="form-group">
                 <label>Login / Utilisateur</label>
-                <input id="gs-login" placeholder="username" autocomplete="off" oninput="_checkGitServiceBtns()" />
+                <input id="gs-login" placeholder="username" autocomplete="off" oninput="_checkGitSvcBtns('shared')" />
               </div>
               <div class="form-group">
                 <label>Token d'acces</label>
-                <input id="gs-token" type="password" placeholder="ghp_... / glpat-..." autocomplete="off" oninput="_checkGitServiceBtns()" />
+                <input id="gs-token" type="password" placeholder="ghp_... / glpat-..." autocomplete="off" oninput="_checkGitSvcBtns('shared')" />
               </div>
             </div>
             <div class="form-row" style="margin-top:0.5rem">
               <div class="form-group" style="flex:1.5">
                 <label>Nom du depot</label>
-                <input id="gs-repo-name" placeholder="my-project" oninput="_checkGitServiceBtns()" />
-              </div>
-              <div class="form-group" style="flex:0.8">
-                <label>Cible</label>
-                <select id="gs-repo-key">
-                  <option value="shared">Templates (Shared)</option>
-                  <option value="configs">Config</option>
-                </select>
+                <input id="gs-repo-name" placeholder="my-project" oninput="_checkGitSvcBtns('shared')" />
               </div>
             </div>
             <div style="display:flex;gap:0.5rem;margin-top:0.5rem;margin-bottom:0.75rem">
-              <button class="btn btn-primary btn-sm" onclick="saveGitServiceConfig()">Enregistrer</button>
-              <button class="btn btn-primary btn-sm" id="gs-btn-init" disabled onclick="gitServiceInit()">Init</button>
-              <button class="btn btn-outline btn-sm" id="gs-btn-fetch" disabled onclick="gitServiceFetch()">Fetch</button>
-              <button class="btn btn-success btn-sm" id="gs-btn-commit" disabled onclick="gitServiceCommitPush()">Commit &amp; Push</button>
-              <button class="btn btn-outline btn-sm" id="gs-btn-push" disabled onclick="gitServicePush()">Push</button>
+              <button class="btn btn-primary btn-sm" onclick="_saveGitSvcConfig('shared')">Enregistrer</button>
+              <button class="btn btn-primary btn-sm" id="gs-btn-init" disabled onclick="gitSvcInit('shared')">Init</button>
+              <button class="btn btn-outline btn-sm" id="gs-btn-fetch" disabled onclick="gitSvcFetch('shared')">Fetch</button>
+              <button class="btn btn-success btn-sm" id="gs-btn-commit" disabled onclick="gitSvcCommit('shared')">Commit</button>
+              <button class="btn btn-outline btn-sm" id="gs-btn-reset" disabled onclick="gitSvcReset('shared')" style="display:none">Reset</button>
             </div>
             <p style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem">
               <b>Init</b> : cree le depot distant + initialise le depot local. &nbsp;
@@ -941,10 +946,6 @@
             <div style="margin-top:0.75rem">
               <label>Status</label>
               <div class="terminal" id="tpl-git-status" style="max-height:120px">Chargement...</div>
-            </div>
-            <div style="margin-top:0.5rem">
-              <label>Historique</label>
-              <div class="terminal" id="tpl-git-log" style="max-height:120px">Chargement...</div>
             </div>
             <div style="margin-top:0.75rem">
               <label>Versions</label>
@@ -1078,7 +1079,7 @@
         <div class="page-header">
           <h2>Chat LLM</h2>
           <div style="display:flex;gap:0.5rem;align-items:center">
-            <span id="chat-provider-label" style="font-size:0.8rem;color:var(--text-secondary)"></span>
+            <select id="chat-provider-select" style="padding:0.3rem 0.5rem;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:0.8rem;max-width:350px"></select>
             <button class="btn btn-outline btn-sm" onclick="clearChat()">Effacer</button>
           </div>
         </div>
@@ -1281,7 +1282,24 @@
   <!-- MODALS -->
   <div id="modal-container"></div>
 
+  <!-- Version browser modal -->
+  <div class="modal-overlay" id="modal-version-browser">
+    <div class="vb-modal">
+      <div class="vb-header">
+        <span class="vb-title" id="vb-title">Version</span>
+        <button class="btn btn-outline btn-sm" onclick="closeVersionBrowser()">Fermer</button>
+      </div>
+      <div class="vb-body">
+        <div class="vb-sidebar" id="vb-tree"></div>
+        <div class="vb-content">
+          <div class="vb-file-path" id="vb-file-path"></div>
+          <pre class="vb-file-content" id="vb-file-content"></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="/static/js/app.js?v=20260314l"></script>
+  <script src="/static/js/app.js?v=20260314y"></script>
 </body>
 </html>

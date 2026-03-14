@@ -1,5 +1,19 @@
 /* LandGraph Admin — Custom styles */
 
+/* Dashboard */
+.dashboard-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; }
+.dash-card { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; padding: 1.2rem; }
+.dash-card-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); margin-bottom: 0.5rem; }
+.dash-card-value { font-size: 1.8rem; font-weight: 700; color: var(--text-primary); }
+.dash-card-sub { font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.25rem; }
+.dash-card-list { list-style: none; padding: 0; margin: 0.5rem 0 0; }
+.dash-card-list li { font-size: 0.85rem; padding: 0.3rem 0; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; }
+.dash-card-list li:last-child { border-bottom: none; }
+.dash-status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.dash-status-ok { background: #22c55e; }
+.dash-status-err { background: #ef4444; }
+.dash-status-warn { background: #f59e0b; }
+
 /* Spinner animation */
 .spinner {
   display: inline-block;
@@ -377,6 +391,7 @@ tr:hover { background: rgba(255,255,255,0.02); }
 }
 
 .modal.modal-wide { max-width: 950px; }
+.modal.modal-lg { max-width: 700px; }
 
 .modal-header h3 { font-size: 1.1rem; }
 
@@ -1219,6 +1234,101 @@ tr:hover { background: rgba(255,255,255,0.02); }
   border-color: #ef4444;
   color: #ef4444;
 }
+.commits-table .btn-view {
+  padding: 0.15rem 0.5rem;
+  font-size: 0.7rem;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+  margin-right: 0.3rem;
+}
+.commits-table .btn-view:hover {
+  border-color: #60a5fa;
+  color: #60a5fa;
+}
+
+/* ── Version Browser Modal ── */
+#modal-version-browser { z-index: 1100; }
+#modal-version-browser:not(.active) { display: none; }
+.vb-modal {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  width: 90vw;
+  max-width: 1100px;
+  height: 75vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.vb-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+.vb-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+.vb-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+.vb-sidebar {
+  width: 260px;
+  min-width: 200px;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  background: var(--bg-secondary);
+}
+.vb-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.vb-file-path {
+  padding: 0.4rem 0.75rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  color: #60a5fa;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  min-height: 1.6rem;
+}
+.vb-file-content {
+  flex: 1;
+  margin: 0;
+  padding: 0.75rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  color: var(--text-primary);
+  overflow: auto;
+  white-space: pre;
+  background: #0a0a0a;
+  line-height: 1.5;
+}
+.vb-item {
+  padding: 0.3rem 0.75rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+  color: var(--text-primary);
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  transition: background 0.1s;
+}
+.vb-item:hover { background: rgba(255,255,255,0.06); }
+.vb-item.selected { background: rgba(96,165,250,0.12); color: #60a5fa; }
+.vb-icon { margin-right: 0.4rem; font-size: 0.8rem; }
+.vb-dir { color: #fbbf24; }
+.vb-file { color: var(--text-secondary); }
 
 /* ── Workflow Editor (full-screen) ── */
 .modal.modal-workflow {

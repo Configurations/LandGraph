@@ -31,19 +31,19 @@ if ! docker compose ps langgraph-postgres 2>/dev/null | grep -q healthy; then
     exit 1
 fi
 
-# ── 1. Ajouter VOYAGE_API_KEY au .env ───────────────────────────────────────
+# ── 1. Configurer Ollama embeddings dans .env ──────────────────────────────
 echo "[1/6] Configuration du .env..."
-if ! grep -q "VOYAGE_API_KEY" .env; then
+if ! grep -q "OLLAMA_EMBED_MODEL" .env; then
     cat >> .env << 'EOF'
 
-# ── Embeddings (RAG) ────────────────────────
-VOYAGE_API_KEY=pa-VOTRE-CLE-VOYAGE-AI
-# Alternative gratuite : mettre EMBEDDING_MODEL=local (necessite Ollama)
-EMBEDDING_MODEL=voyage-3-large
+# ── Embeddings RAG (Ollama) ─────────────────
+OLLAMA_BASE_URL=http://host.docker.internal:11434
+OLLAMA_EMBED_MODEL=mxbai-embed-large
+EMBEDDING_DIM=1024
 EOF
-    echo "  -> Variables RAG ajoutees au .env"
-    echo "  -> PENSEZ A REMPLACER VOYAGE_API_KEY par votre vraie cle !"
-    echo "     (https://dash.voyageai.com -> API Keys)"
+    echo "  -> Variables RAG (Ollama) ajoutees au .env"
+    echo "  -> Assurez-vous qu'Ollama tourne sur l'hote avec le modele mxbai-embed-large"
+    echo "     ollama pull mxbai-embed-large"
 else
     echo "  -> Variables RAG deja presentes dans .env"
 fi
@@ -196,44 +196,31 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DATABASE_URI = os.getenv("DATABASE_URI")
-VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "voyage-3-large")
-EMBEDDING_DIM = 1024
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "mxbai-embed-large")
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
 
 
-# ── Embedding client ─────────────────────────
+# ── Embedding client (Ollama) ────────────────
 
 def get_embeddings(texts: list[str]) -> list[list[float]]:
-    """
-    Genere les embeddings pour une liste de textes.
-    Utilise Voyage AI par defaut, ou un modele local si configure.
-    """
-    if EMBEDDING_MODEL == "local":
-        import requests
-        embeddings = []
-        for text in texts:
-            resp = requests.post(
-                "http://localhost:11434/api/embeddings",
-                json={"model": "nomic-embed-text", "prompt": text},
-            )
-            embeddings.append(resp.json()["embedding"])
-        return embeddings
-    else:
-        import voyageai
-        client = voyageai.Client(api_key=VOYAGE_API_KEY)
-        result = client.embed(texts, model=EMBEDDING_MODEL, input_type="document")
-        return result.embeddings
+    """Genere les embeddings via Ollama."""
+    import requests
+    embeddings = []
+    for text in texts:
+        resp = requests.post(
+            f"{OLLAMA_BASE_URL}/api/embeddings",
+            json={"model": OLLAMA_EMBED_MODEL, "prompt": text},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        embeddings.append(resp.json()["embedding"])
+    return embeddings
 
 
 def get_query_embedding(query: str) -> list[float]:
     """Embedding optimise pour les requetes de recherche."""
-    if EMBEDDING_MODEL == "local":
-        return get_embeddings([query])[0]
-    else:
-        import voyageai
-        client = voyageai.Client(api_key=VOYAGE_API_KEY)
-        result = client.embed([query], model=EMBEDDING_MODEL, input_type="query")
-        return result.embeddings[0]
+    return get_embeddings([query])[0]
 
 
 # ── Chunking ─────────────────────────────────
@@ -445,14 +432,13 @@ echo "  -> rag_service.py cree dans agents/shared/"
 # ── 4. Installer les dependances Python ──────────────────────────────────────
 echo "[4/6] Installation des dependances Python..."
 source "${PROJECT_DIR}/.venv/bin/activate"
-pip install -q voyageai tiktoken langchain-core 2>/dev/null
-echo "  -> voyageai, tiktoken installes"
+pip install -q tiktoken langchain-core requests 2>/dev/null
+echo "  -> tiktoken, requests installes"
 
 # ── 5. Mettre a jour requirements.txt ────────────────────────────────────────
 echo "[5/6] Mise a jour de requirements.txt..."
-if ! grep -q "voyageai" "${PROJECT_DIR}/requirements.txt"; then
+if ! grep -q "tiktoken" "${PROJECT_DIR}/requirements.txt"; then
     cat >> "${PROJECT_DIR}/requirements.txt" << 'TXT'
-voyageai>=0.3.0
 tiktoken>=0.7.0
 TXT
     echo "  -> requirements.txt mis a jour"
@@ -499,13 +485,14 @@ else
     echo "  -> ATTENTION : Index HNSW non detecte (sera cree au premier INSERT)"
 fi
 
-# Test Python (index + search) si VOYAGE_API_KEY est configuree
-VOYAGE_KEY=$(grep VOYAGE_API_KEY .env | cut -d= -f2)
-if [ "${VOYAGE_KEY}" != "pa-VOTRE-CLE-VOYAGE-AI" ] && [ -n "${VOYAGE_KEY}" ]; then
-    echo ""
-    echo "  Test d'indexation et de recherche..."
+# Test Python (index + search) si Ollama est accessible
+echo ""
+echo "  Test d'indexation et de recherche..."
 
+# Verifier qu'Ollama repond
+if curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; then
     DB_PASS=$(grep POSTGRES_PASSWORD .env | cut -d= -f2)
+    OLLAMA_BASE_URL=http://localhost:11434 \
     DATABASE_URI="postgres://langgraph:${DB_PASS}@localhost:5432/langgraph?sslmode=disable" \
     python3 << 'PYTEST'
 import os
@@ -539,17 +526,12 @@ if results:
     print("")
     print("  -> Test RAG : OK")
 else:
-    print("  -> ATTENTION : Aucun resultat (verifiez la cle Voyage AI)")
+    print("  -> ATTENTION : Aucun resultat")
 PYTEST
-
 else
-    echo ""
-    echo "  -> Test Python ignore (VOYAGE_API_KEY non configuree)"
-    echo "     Configurez-la dans .env puis testez manuellement :"
-    echo "     cd ${PROJECT_DIR} && source .venv/bin/activate"
-    echo "     DB_PASS=\$(grep POSTGRES_PASSWORD .env | cut -d= -f2)"
-    echo "     DATABASE_URI=\"postgres://langgraph:\${DB_PASS}@localhost:5432/langgraph?sslmode=disable\" \\"
-    echo "     python -c \"from agents.shared.rag_service import search; print('RAG OK')\""
+    echo "  -> Test ignore : Ollama non accessible sur localhost:11434"
+    echo "     Installez Ollama : curl -fsSL https://ollama.ai/install.sh | sh"
+    echo "     Puis : ollama pull mxbai-embed-large"
 fi
 
 echo ""
@@ -564,8 +546,8 @@ echo "  - Service Python : agents/shared/rag_service.py"
 echo "  - Tools LangGraph : rag_search, rag_index"
 echo ""
 echo "  Prochaines etapes :"
-echo "  1. Si pas fait, ajoutez votre VOYAGE_API_KEY dans .env"
-echo "     nano ${PROJECT_DIR}/.env"
+echo "  1. Assurez-vous qu'Ollama tourne sur l'hote avec le modele d'embeddings :"
+echo "     ollama pull mxbai-embed-large"
 echo ""
 echo "  2. Pour tester manuellement :"
 echo "     cd ${PROJECT_DIR}"

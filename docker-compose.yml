@@ -77,6 +77,9 @@ services:
     environment:
       DATABASE_URI: ${DATABASE_URI}
       REDIS_URI: ${REDIS_URI}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # No volumes for code/config — baked into image (COPY in Dockerfile)
     # Mounting local dirs breaks case-sensitive renames (Shared → shared)
     healthcheck:
@@ -156,11 +159,14 @@ services:
         condition: service_healthy
     volumes:
       - ./config:/app/config
+      - /root/ag.flow:/root/ag.flow
+      - /var/run/docker.sock:/var/run/docker.sock
     env_file:
       - .env
     environment:
       DATABASE_URI: ${DATABASE_URI}
       LANGGRAPH_API_URL: http://langgraph-api:8000
+      AG_FLOW_ROOT: /root/ag.flow
     networks:
       - langgraph-net
 
@@ -277,7 +283,6 @@ services:
       DOCKER_PORT: 3000
     ports:
       - "0.0.0.0:3000:3000"
-      - "127.0.0.1:4317:4317"
       - "127.0.0.1:4318:4318"
     depends_on:
       openlit-clickhouse:

@@ -30,6 +30,13 @@ from agents.shared.team_resolver import get_team_for_channel, get_all_team_ids
 from agents.orchestrator import orchestrator_node, route_after_orchestrator
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+
+def _default_team() -> str:
+    """Return first configured team ID (avoids 'default' fallback errors)."""
+    ids = get_all_team_ids()
+    return ids[0] if ids else "team1"
 
 
 # Aliases — charges depuis discord.json ou fallback
@@ -62,7 +69,12 @@ ALIASES = _load_aliases()
 
 def resolve_agents(channel_id: str = ""):
     """Resout les agents pour un channel (equipe)."""
-    team_id = get_team_for_channel(channel_id) if channel_id else "default"
+    team_id = get_team_for_channel(channel_id) if channel_id else _default_team()
+    return resolve_agents_by_team(team_id)
+
+
+def resolve_agents_by_team(team_id: str):
+    """Resout les agents pour un team_id explicite."""
     canonical = get_agents(team_id)
     agent_map = dict(canonical)
     for alias, cid in ALIASES.items():
@@ -114,7 +126,11 @@ def get_checkpointer():
     global DB_CONN, CHECKPOINTER
     if CHECKPOINTER is None:
         DB_CONN = psycopg.connect(os.getenv("DATABASE_URI"), autocommit=True)
-        CHECKPOINTER = PostgresSaver(DB_CONN)
+        serde = JsonPlusSerializer(
+            allowed_msgpack_modules=[("agents.orchestrator", "DecisionType"),
+                                     ("agents.orchestrator", "ActionType")]
+        )
+        CHECKPOINTER = PostgresSaver(DB_CONN, serde=serde)
         CHECKPOINTER.setup()
     return CHECKPOINTER
 
@@ -135,10 +151,11 @@ def get_orchestrator_graph():
     return GRAPH
 
 
-def new_state(msgs, project_id, channel_id, team_id="default"):
+def new_state(msgs, project_id, channel_id, team_id="", project_slug=""):
     return {
         "messages": msgs,
         "project_id": project_id,
+        "project_slug": project_slug,
         "project_phase": "discovery",
         "project_metadata": {},
         "agent_outputs": {},
@@ -153,7 +170,7 @@ def new_state(msgs, project_id, channel_id, team_id="default"):
     }
 
 
-def load_or_create_state(thread_id, msgs, project_id, channel_id, team_id="default"):
+def load_or_create_state(thread_id, msgs, project_id, channel_id, team_id="", project_slug=""):
     """Charge le state existant ou en cree un nouveau."""
     graph = get_orchestrator_graph()
     config = {"configurable": {"thread_id": thread_id}}
@@ -167,6 +184,9 @@ def load_or_create_state(thread_id, msgs, project_id, channel_id, team_id="defau
             state["messages"] = old_msgs
             state["_discord_channel_id"] = channel_id
             state["_team_id"] = team_id
+            # Update project_slug if provided (may be set later via HITL)
+            if project_slug:
+                state["project_slug"] = project_slug
 
             outputs = list(state.get("agent_outputs", {}).keys())
             logger.info(f"State loaded for {thread_id} — {len(outputs)} outputs: {outputs}")
@@ -175,7 +195,7 @@ def load_or_create_state(thread_id, msgs, project_id, channel_id, team_id="defau
         logger.warning(f"Could not load state for {thread_id}: {e}")
 
     logger.info(f"New state for {thread_id}")
-    return new_state(msgs, project_id, channel_id, team_id)
+    return new_state(msgs, project_id, channel_id, team_id, project_slug)
 
 
 # ── Background runners ───────────────────────
@@ -192,6 +212,8 @@ async def run_single_agent(agent_id, agent_callable, state, channel_id, thread_i
             if deliverable:
                 agent_name = output.get("agent_name", agent_id)
                 await post_to_channel(channel_id, f"**{agent_name}** :\n{deliverable[:3000]}", thread_id)
+            # Persist deliverable to filesystem
+            await _persist_deliverable_to_fs(state, agent_id, output)
             # Auto-publish to Outline if enabled
             await _maybe_publish_to_outline(state, agent_id, output)
         return result
@@ -269,6 +291,9 @@ async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="defau
                 await run_agents_parallel(next_to_run, state, channel_id, thread_id, _depth + 1)
                 return  # Le recursif gere la suite
 
+        # Generate _synthesis.md when phase is complete
+        await _maybe_generate_synthesis(state, current_phase, merged)
+
         # Verifier si la phase est complete → proposer transition
         transition = can_transition(current_phase, merged, state.get("legal_alerts", []), team_id)
         if transition["allowed"]:
@@ -279,6 +304,9 @@ async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="defau
                     f"🚦 **Phase {current_phase} complete !**\n"
                     f"Transition vers **{next_phase}** possible.\n"
                     f"Repondez `approve` pour continuer ou `revise` pour corriger.", thread_id)
+                # Insert HITL request for the web console
+                await _create_hitl_phase_request(
+                    thread_id, team_id, current_phase, next_phase, merged)
             else:
                 # Auto-transition
                 state["project_phase"] = next_phase
@@ -294,6 +322,49 @@ async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="defau
 
     except Exception as e:
         logger.warning(f"Workflow auto-dispatch error: {e}")
+
+
+async def _create_hitl_phase_request(thread_id: str, team_id: str,
+                                      current_phase: str, next_phase: str,
+                                      agent_outputs: dict):
+    """Insert a phase validation request into hitl_requests for the HITL console."""
+    try:
+        uri = os.getenv("DATABASE_URI")
+        if not uri:
+            return
+        # Build deliverables summary from agent outputs
+        deliverables = {}
+        for agent_id, output in agent_outputs.items():
+            if isinstance(output, dict):
+                deliverables[agent_id] = {
+                    k: v for k, v in output.items()
+                    if k not in ("status", "confidence", "agent_id")
+                }
+            elif isinstance(output, str):
+                deliverables[agent_id] = output[:2000]
+
+        context = {
+            "type": "phase_validation",
+            "current_phase": current_phase,
+            "next_phase": next_phase,
+            "deliverables": deliverables,
+        }
+        prompt = (f"Phase '{current_phase}' terminée. "
+                  f"Validez-vous la transition vers '{next_phase}' ?")
+
+        with psycopg.connect(uri, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO project.hitl_requests
+                    (thread_id, agent_id, team_id, request_type, prompt, context, channel, status)
+                    VALUES (%s, %s, %s, 'approval', %s, %s::jsonb, 'web', 'pending')
+                """, (thread_id, "orchestrator", team_id, prompt, json.dumps(context)))
+        logger.info(f"[hitl] Phase validation request created: {current_phase} → {next_phase}")
+        bus.emit(Event("human_gate_requested", agent_id="orchestrator",
+                        thread_id=thread_id, team_id=team_id,
+                        data={"phase": current_phase, "next_phase": next_phase}))
+    except Exception as e:
+        logger.warning(f"[hitl] Failed to create phase validation request: {e}")
 
 
 async def run_orchestrated(state, decisions, channel_id, thread_id="default", canonical_agents=None):
@@ -327,6 +398,123 @@ async def run_orchestrated(state, decisions, channel_id, thread_id="default", ca
         await post_to_channel(channel_id, "Aucun agent dispatche.", thread_id)
 
 
+# ── Phase synthesis generation ────────────────
+async def _maybe_generate_synthesis(state: dict, phase: str, agent_outputs: dict):
+    """Generate _synthesis.md for the phase if project_slug is set and phase has deliverables."""
+    slug = state.get("project_slug", "")
+    if not slug:
+        return
+    try:
+        from agents.shared.project_store import read_synthesis, write_synthesis, _deliverables_dir
+        # Skip if synthesis already exists for this phase
+        if read_synthesis(slug, phase):
+            return
+        # Collect all deliverables for this phase
+        phase_deliverables = {}
+        deliv_dir = _deliverables_dir(slug, phase)
+        if not os.path.isdir(deliv_dir):
+            return
+        for fname in os.listdir(deliv_dir):
+            if fname.endswith(".md") and not fname.startswith("_"):
+                fpath = os.path.join(deliv_dir, fname)
+                try:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        phase_deliverables[fname[:-3]] = f.read()
+                except Exception:
+                    pass
+        if not phase_deliverables:
+            return
+        # Use LLM to generate synthesis
+        synthesis = await asyncio.to_thread(_generate_synthesis_llm, phase, phase_deliverables)
+        if synthesis:
+            write_synthesis(slug, phase, synthesis)
+            logger.info(f"[synthesis] Generated _synthesis.md for {slug}/{phase}")
+    except Exception as e:
+        logger.warning(f"[synthesis] Error generating synthesis for {phase}: {e}")
+
+
+def _generate_synthesis_llm(phase: str, deliverables: dict) -> str:
+    """Call LLM to condense phase deliverables into a synthesis."""
+    try:
+        from agents.shared.llm_provider import create_llm
+        from agents.shared.rate_limiter import throttled_invoke
+        llm = create_llm(provider_name=None, temperature=0.2, max_tokens=4096)
+        content = ""
+        for agent_id, text in deliverables.items():
+            content += f"\n\n## {agent_id}\n\n{text[:8000]}"
+        msgs = [
+            {"role": "system", "content": (
+                "Tu es un synthetiseur de projet. Condense les livrables de la phase en une synthese "
+                "structuree et actionnable. Garde les decisions cles, les contraintes, les risques, "
+                "et les recommandations. Format Markdown. Sois concis mais complet."
+            )},
+            {"role": "user", "content": (
+                f"Phase: {phase}\n\nLivrables des agents:\n{content}\n\n"
+                "Produis une synthese structuree de cette phase."
+            )},
+        ]
+        result = throttled_invoke(llm, msgs)
+        return result.content if isinstance(result.content, str) else str(result.content)
+    except Exception as e:
+        logger.error(f"[synthesis] LLM call failed: {e}")
+        # Fallback: concatenate without LLM
+        lines = [f"# Synthese — {phase}\n"]
+        for agent_id, text in deliverables.items():
+            lines.append(f"## {agent_id}\n\n{text[:4000]}\n")
+        return "\n".join(lines)
+
+
+# ── Filesystem deliverable persistence ────────
+async def _persist_deliverable_to_fs(state: dict, agent_id: str, output: dict):
+    """Write agent deliverable to filesystem and index in pgvector."""
+    try:
+        slug = state.get("project_slug", "")
+        if not slug:
+            return
+        phase = state.get("project_phase", "discovery")
+        from agents.shared.project_store import persist_deliverable
+        await asyncio.to_thread(persist_deliverable, slug, phase, agent_id, output)
+        # Index in pgvector (non-blocking, best-effort)
+        await _index_in_rag(state, agent_id, output)
+    except Exception as e:
+        logger.warning(f"[project_store] Persist error: {e}")
+
+
+# ── pgvector RAG indexing ─────────────────────
+async def _index_in_rag(state: dict, agent_id: str, output: dict):
+    """Index deliverable chunks in pgvector for semantic search."""
+    try:
+        from agents.shared.rag_service import index_document, DocumentMetadata
+        deliverables = output.get("deliverables", {})
+        if not deliverables:
+            text = output.get("deliverable", output.get("summary", ""))
+            if text:
+                deliverables = {"deliverable": text}
+            else:
+                return
+        phase = state.get("project_phase", "discovery")
+        project_name = state.get("project_metadata", {}).get("name", state.get("project_slug", ""))
+        # Concatenate all deliverables into one document for indexing
+        content_parts = []
+        for key, val in deliverables.items():
+            content_parts.append(f"## {key}\n\n{str(val)}")
+        content = "\n\n".join(content_parts)
+        meta = DocumentMetadata(
+            source_type="deliverable",
+            source_agent=agent_id,
+            project_name=project_name,
+            phase=phase,
+            language=state.get("project_metadata", {}).get("language", "fr"),
+        )
+        chunks = await asyncio.to_thread(index_document, content, meta)
+        if chunks:
+            logger.info(f"[rag] Indexed {chunks} chunks for {agent_id}/{phase}")
+    except ImportError:
+        pass  # rag_service deps not installed
+    except Exception as e:
+        logger.warning(f"[rag] Index error for {agent_id}: {e}")
+
+
 # ── Outline auto-publish ─────────────────────
 async def _maybe_publish_to_outline(state: dict, agent_id: str, output: dict):
     """Publish deliverables to Outline if auto-publish is enabled."""
@@ -337,8 +525,8 @@ async def _maybe_publish_to_outline(state: dict, agent_id: str, output: dict):
         deliverables = output.get("deliverables", {})
         if not deliverables:
             return
-        thread_id = state.get("project_id", "default")
-        team_id = state.get("_team_id", "default")
+        thread_id = state.get("project_id", "")
+        team_id = state.get("_team_id", "") or _default_team()
         phase = state.get("project_phase", "discovery")
         project_name = state.get("project_metadata", {}).get("name", "")
         for key, content in deliverables.items():
@@ -369,6 +557,57 @@ async def status():
         "total_agents": len(default_agents) + 1,
         "teams": teams,
     }
+
+
+class PhaseTransitionRequest(BaseModel):
+    thread_id: str
+    from_phase: str
+    to_phase: str
+
+
+@app.post("/workflow/transition")
+async def workflow_transition(req: PhaseTransitionRequest, background_tasks: BackgroundTasks):
+    """Transition de phase declenchee par la console HITL apres approbation humaine."""
+    try:
+        graph = get_orchestrator_graph()
+        config = {"configurable": {"thread_id": req.thread_id}}
+        existing = graph.get_state(config)
+        if not existing or not existing.values:
+            raise HTTPException(404, "Thread introuvable")
+        state = existing.values
+        current = state.get("project_phase", "")
+        if current != req.from_phase:
+            raise HTTPException(400, f"Phase actuelle est '{current}', pas '{req.from_phase}'")
+        state["project_phase"] = req.to_phase
+        graph.update_state(config, state)
+        logger.info(f"Phase transition (HITL approved): {req.from_phase} → {req.to_phase}")
+        bus.emit(Event("phase_transition", thread_id=req.thread_id,
+                        team_id=state.get("_team_id", _default_team()),
+                        data={"from_phase": req.from_phase, "to_phase": req.to_phase,
+                              "source": "hitl_console"}))
+
+        # Auto-dispatch first group of next phase
+        team_id = state.get("_team_id", _default_team())
+        channel_id = state.get("_channel_id", "")
+        merged = state.get("agent_outputs", {})
+        from agents.shared.workflow_engine import get_agents_to_dispatch
+        next_agents = get_agents_to_dispatch(req.to_phase, merged, team_id)
+        if next_agents:
+            canonical_agents, _, _ = resolve_agents(channel_id)
+            agents_to_run = [
+                {"agent_id": a, "agent": canonical_agents[a]}
+                for a in next_agents if a in canonical_agents
+            ]
+            if agents_to_run:
+                background_tasks.add_task(
+                    run_agents_parallel, agents_to_run, state, channel_id, req.thread_id)
+                logger.info(f"Auto-dispatching {req.to_phase} agents: {next_agents}")
+
+        return {"ok": True, "from_phase": req.from_phase, "to_phase": req.to_phase}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 @app.get("/workflow/status/{thread_id}")
@@ -402,7 +641,7 @@ async def reset(request: ResetRequest):
         graph = get_orchestrator_graph()
         config = {"configurable": {"thread_id": request.thread_id}}
         # Ecraser avec un state vierge
-        graph.update_state(config, new_state([], "default", "", "default"))
+        graph.update_state(config, new_state([], "", "", _default_team()))
         logger.info(f"State reset for {request.thread_id}")
         return {"status": "ok", "thread_id": request.thread_id}
     except Exception as e:
@@ -412,9 +651,11 @@ async def reset(request: ResetRequest):
 
 class InvokeRequest(BaseModel):
     messages: list[dict]
-    thread_id: str = "default"
-    project_id: str = "default"
+    thread_id: str = ""
+    project_id: str = ""
+    project_slug: str = ""
     channel_id: str = ""
+    team_id: str = ""
     direct_agent: str = ""
 
 class InvokeResponse(BaseModel):
@@ -430,8 +671,11 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
         channel_id = request.channel_id
         msgs = [(m.get("role", "user"), m.get("content", "")) for m in request.messages]
 
-        # Resoudre l'equipe pour ce channel
-        canonical_agents, agent_map, team_id = resolve_agents(channel_id)
+        # Resoudre l'equipe pour ce channel (ou team_id explicite)
+        if request.team_id:
+            canonical_agents, agent_map, team_id = resolve_agents_by_team(request.team_id)
+        else:
+            canonical_agents, agent_map, team_id = resolve_agents(channel_id)
         logger.info(f"Team: {team_id} ({len(canonical_agents)} agents)")
 
         # ── Mode direct ──────────────────────
@@ -448,7 +692,7 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
                 if ca is agent_callable:
                     canonical_id = cid; break
 
-            state = load_or_create_state(request.thread_id, msgs, request.project_id, channel_id, team_id)
+            state = load_or_create_state(request.thread_id, msgs, request.project_id, channel_id, team_id, request.project_slug)
 
             # Trouver le nom lisible
             agent_display = getattr(agent_callable, "agent_name", canonical_id)
@@ -469,7 +713,7 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
                 thread_id=request.thread_id, agents_dispatched=[canonical_id])
 
         # ── Mode orchestrateur ───────────────
-        state = load_or_create_state(request.thread_id, msgs, request.project_id, channel_id, team_id)
+        state = load_or_create_state(request.thread_id, msgs, request.project_id, channel_id, team_id, request.project_slug)
 
         graph = get_orchestrator_graph()
         config = {"configurable": {"thread_id": request.thread_id}}
@@ -582,7 +826,7 @@ async def delete_api_key(key_hash: str):
 # ── Outline manual publish ────────────────────
 class OutlinePublishRequest(BaseModel):
     thread_id: str
-    team_id: str = "default"
+    team_id: str = ""
     agent_id: str = ""
     phase: str = ""
     key: str = ""
@@ -625,12 +869,25 @@ async def startup():
     # ── OpenLIT auto-instrumentation ──
     try:
         import openlit
-        openlit.init(
-            otlp_endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://openlit:4318"),
-            application_name="langgraph-api",
-            environment=os.getenv("OPENLIT_ENV", "production"),
-        )
-        logger.info("OpenLIT instrumentation active")
+        import socket
+        otel_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://openlit:4318")
+        # Check connectivity before init to avoid retry spam
+        host = otel_endpoint.replace("http://", "").replace("https://", "").split(":")[0]
+        port = int(otel_endpoint.rsplit(":", 1)[-1].rstrip("/"))
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(2)
+        reachable = sock.connect_ex((host, port)) == 0
+        sock.close()
+        if not reachable:
+            logger.info(f"OpenLIT collector not reachable at {host}:{port} — skipping")
+        else:
+            openlit.init(
+                otlp_endpoint=otel_endpoint,
+                application_name="langgraph-api",
+                environment=os.getenv("OPENLIT_ENV", "production"),
+                disable_batch=True,
+            )
+            logger.info("OpenLIT instrumentation active")
     except ImportError:
         logger.info("OpenLIT SDK not installed — skipping auto-instrumentation")
     except Exception as e:
