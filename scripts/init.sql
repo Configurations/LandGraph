@@ -132,6 +132,104 @@ BEGIN
     END IF;
 END $$;
 
+-- ── Production Manager tables ────────────────────
+CREATE TABLE IF NOT EXISTS project.pm_issue_counters (
+    team_id TEXT PRIMARY KEY,
+    next_seq INTEGER DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS project.pm_projects (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    lead TEXT NOT NULL,
+    team_id TEXT NOT NULL,
+    color TEXT DEFAULT '#6366f1',
+    status TEXT DEFAULT 'on-track' CHECK (status IN ('on-track', 'at-risk', 'off-track')),
+    start_date DATE,
+    target_date DATE,
+    created_by TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS project.pm_project_members (
+    project_id INTEGER REFERENCES project.pm_projects(id) ON DELETE CASCADE,
+    user_name TEXT NOT NULL,
+    role TEXT DEFAULT 'member' CHECK (role IN ('lead', 'member')),
+    PRIMARY KEY(project_id, user_name)
+);
+
+CREATE TABLE IF NOT EXISTS project.pm_issues (
+    id TEXT PRIMARY KEY,
+    project_id INTEGER REFERENCES project.pm_projects(id) ON DELETE SET NULL,
+    title TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    status TEXT DEFAULT 'backlog' CHECK (status IN ('backlog', 'todo', 'in-progress', 'in-review', 'done')),
+    priority INTEGER DEFAULT 3 CHECK (priority BETWEEN 1 AND 4),
+    assignee TEXT,
+    team_id TEXT NOT NULL,
+    tags TEXT[] DEFAULT '{}',
+    created_by TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_pm_issues_project ON project.pm_issues(project_id);
+CREATE INDEX IF NOT EXISTS idx_pm_issues_status ON project.pm_issues(status);
+CREATE INDEX IF NOT EXISTS idx_pm_issues_team ON project.pm_issues(team_id);
+CREATE INDEX IF NOT EXISTS idx_pm_issues_assignee ON project.pm_issues(assignee);
+
+CREATE TABLE IF NOT EXISTS project.pm_issue_relations (
+    id SERIAL PRIMARY KEY,
+    type TEXT NOT NULL CHECK (type IN ('blocks', 'relates-to', 'parent', 'duplicates')),
+    source_issue_id TEXT NOT NULL REFERENCES project.pm_issues(id) ON DELETE CASCADE,
+    target_issue_id TEXT NOT NULL REFERENCES project.pm_issues(id) ON DELETE CASCADE,
+    reason TEXT DEFAULT '',
+    created_by TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(type, source_issue_id, target_issue_id)
+);
+CREATE INDEX IF NOT EXISTS idx_pm_relations_source ON project.pm_issue_relations(source_issue_id);
+CREATE INDEX IF NOT EXISTS idx_pm_relations_target ON project.pm_issue_relations(target_issue_id);
+
+CREATE TABLE IF NOT EXISTS project.pm_pull_requests (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    author TEXT NOT NULL,
+    issue_id TEXT REFERENCES project.pm_issues(id) ON DELETE SET NULL,
+    status TEXT DEFAULT 'draft' CHECK (status IN ('pending', 'approved', 'changes_requested', 'draft')),
+    additions INTEGER DEFAULT 0,
+    deletions INTEGER DEFAULT 0,
+    files INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS project.pm_inbox (
+    id SERIAL PRIMARY KEY,
+    user_email TEXT NOT NULL,
+    type TEXT NOT NULL CHECK (type IN ('mention', 'assign', 'comment', 'status', 'review', 'blocked', 'unblocked', 'dependency_added')),
+    text TEXT NOT NULL,
+    issue_id TEXT,
+    related_issue_id TEXT,
+    relation_type TEXT,
+    avatar TEXT,
+    read BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_pm_inbox_user ON project.pm_inbox(user_email, read, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS project.pm_activity (
+    id SERIAL PRIMARY KEY,
+    project_id INTEGER REFERENCES project.pm_projects(id) ON DELETE CASCADE,
+    user_name TEXT NOT NULL,
+    action TEXT NOT NULL,
+    issue_id TEXT,
+    detail TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_pm_activity_project ON project.pm_activity(project_id, created_at DESC);
+
 -- Migration: add auth_type column + allow nullable password_hash + undefined role
 DO $$
 BEGIN

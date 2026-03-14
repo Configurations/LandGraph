@@ -183,6 +183,116 @@ def _send_reset_email(to_email: str, temp_password: str):
         return False
 
 
+def _ensure_pm_tables(cur):
+    """Create Production Manager tables if they don't exist."""
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS project.pm_issue_counters (
+            team_id TEXT PRIMARY KEY,
+            next_seq INTEGER DEFAULT 1
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS project.pm_projects (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            lead TEXT NOT NULL,
+            team_id TEXT NOT NULL,
+            color TEXT DEFAULT '#6366f1',
+            status TEXT DEFAULT 'on-track' CHECK (status IN ('on-track', 'at-risk', 'off-track')),
+            start_date DATE,
+            target_date DATE,
+            created_by TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS project.pm_project_members (
+            project_id INTEGER REFERENCES project.pm_projects(id) ON DELETE CASCADE,
+            user_name TEXT NOT NULL,
+            role TEXT DEFAULT 'member' CHECK (role IN ('lead', 'member')),
+            PRIMARY KEY(project_id, user_name)
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS project.pm_issues (
+            id TEXT PRIMARY KEY,
+            project_id INTEGER REFERENCES project.pm_projects(id) ON DELETE SET NULL,
+            title TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            status TEXT DEFAULT 'backlog' CHECK (status IN ('backlog', 'todo', 'in-progress', 'in-review', 'done')),
+            priority INTEGER DEFAULT 3 CHECK (priority BETWEEN 1 AND 4),
+            assignee TEXT,
+            team_id TEXT NOT NULL,
+            tags TEXT[] DEFAULT '{}',
+            created_by TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_pm_issues_project ON project.pm_issues(project_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_pm_issues_status ON project.pm_issues(status)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_pm_issues_team ON project.pm_issues(team_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_pm_issues_assignee ON project.pm_issues(assignee)")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS project.pm_issue_relations (
+            id SERIAL PRIMARY KEY,
+            type TEXT NOT NULL CHECK (type IN ('blocks', 'relates-to', 'parent', 'duplicates')),
+            source_issue_id TEXT NOT NULL REFERENCES project.pm_issues(id) ON DELETE CASCADE,
+            target_issue_id TEXT NOT NULL REFERENCES project.pm_issues(id) ON DELETE CASCADE,
+            reason TEXT DEFAULT '',
+            created_by TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE(type, source_issue_id, target_issue_id)
+        )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_pm_relations_source ON project.pm_issue_relations(source_issue_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_pm_relations_target ON project.pm_issue_relations(target_issue_id)")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS project.pm_pull_requests (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            author TEXT NOT NULL,
+            issue_id TEXT REFERENCES project.pm_issues(id) ON DELETE SET NULL,
+            status TEXT DEFAULT 'draft' CHECK (status IN ('pending', 'approved', 'changes_requested', 'draft')),
+            additions INTEGER DEFAULT 0,
+            deletions INTEGER DEFAULT 0,
+            files INTEGER DEFAULT 0,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS project.pm_inbox (
+            id SERIAL PRIMARY KEY,
+            user_email TEXT NOT NULL,
+            type TEXT NOT NULL CHECK (type IN ('mention', 'assign', 'comment', 'status', 'review', 'blocked', 'unblocked', 'dependency_added')),
+            text TEXT NOT NULL,
+            issue_id TEXT,
+            related_issue_id TEXT,
+            relation_type TEXT,
+            avatar TEXT,
+            read BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_pm_inbox_user ON project.pm_inbox(user_email, read, created_at DESC)")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS project.pm_activity (
+            id SERIAL PRIMARY KEY,
+            project_id INTEGER REFERENCES project.pm_projects(id) ON DELETE CASCADE,
+            user_name TEXT NOT NULL,
+            action TEXT NOT NULL,
+            issue_id TEXT,
+            detail TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_pm_activity_project ON project.pm_activity(project_id, created_at DESC)")
+    logger.info("PM tables ensured")
+
+
 # ── Startup: seed admin user if none ────────────
 def _seed_admin():
     """Create default admin if no users exist. Also ensures schema is up-to-date."""
@@ -237,6 +347,8 @@ def _seed_admin():
                 AFTER INSERT ON project.hitl_chat_messages
                 FOR EACH ROW EXECUTE FUNCTION notify_hitl_chat()
             """)
+            # Ensure PM tables exist
+            _ensure_pm_tables(cur)
             cur.execute("SELECT COUNT(*) FROM project.hitl_users")
             if cur.fetchone()[0] == 0:
                 hashed = pwd_ctx.hash(_truncate_pw(password))
@@ -1094,6 +1206,973 @@ def clear_chat(team_id: str, agent_id: str, user: TokenData = Depends(get_curren
         return {"ok": True}
     finally:
         conn.close()
+
+
+# ── Production Manager (PM) ─────────────────────
+
+class PMProjectCreate(BaseModel):
+    name: str
+    description: str = ''
+    lead: str
+    team_id: str
+    color: str = '#6366f1'
+    status: str = 'on-track'
+    start_date: Optional[str] = None
+    target_date: Optional[str] = None
+    members: list[str] = []
+
+
+class PMIssueCreate(BaseModel):
+    title: str
+    description: str = ''
+    project_id: Optional[int] = None
+    status: str = 'backlog'
+    priority: int = 3
+    assignee: Optional[str] = None
+    team_id: str = ''
+    tags: list[str] = []
+
+
+class PMIssueUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None
+    priority: Optional[int] = None
+    assignee: Optional[str] = None
+    tags: Optional[list[str]] = None
+    project_id: Optional[int] = None
+
+
+class PMRelationCreate(BaseModel):
+    type: str  # blocks | relates-to | parent | duplicates
+    target_issue_id: str
+    reason: str = ''
+
+
+class PMPRCreate(BaseModel):
+    id: str
+    title: str
+    author: str
+    issue_id: Optional[str] = None
+    status: str = 'draft'
+    additions: int = 0
+    deletions: int = 0
+    files: int = 0
+
+
+# ── PM helpers ──────────────────────────────────
+
+def _next_issue_id(team_id: str, conn) -> str:
+    """Get and increment the next issue sequence number for a team."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO project.pm_issue_counters (team_id, next_seq)
+            VALUES (%s, 2)
+            ON CONFLICT (team_id) DO UPDATE SET next_seq = project.pm_issue_counters.next_seq + 1
+            RETURNING next_seq - 1
+        """, (team_id,))
+        seq = cur.fetchone()[0]
+    prefix = team_id.upper().replace(" ", "").replace("-", "")[:6]
+    return f"{prefix}-{seq:03d}"
+
+
+def _compute_blocked_flags(issues: list[dict], conn) -> list[dict]:
+    """For a list of issues, compute is_blocked, blocked_by_count, blocking_count.
+
+    An issue is blocked only if at least one of its 'blocked-by' (inverse of 'blocks')
+    relations points to an issue whose status is NOT 'done'.
+    """
+    if not issues:
+        return issues
+    issue_ids = [i["id"] for i in issues]
+    with conn.cursor() as cur:
+        # Issues blocked BY others — only count blockers that are NOT done
+        cur.execute("""
+            SELECT r.target_issue_id, COUNT(*)
+            FROM project.pm_issue_relations r
+            JOIN project.pm_issues blocker ON blocker.id = r.source_issue_id
+            WHERE r.type = 'blocks'
+              AND r.target_issue_id = ANY(%s)
+              AND blocker.status != 'done'
+            GROUP BY r.target_issue_id
+        """, (issue_ids,))
+        blocked_by = {r[0]: r[1] for r in cur.fetchall()}
+
+        # Issues this issue BLOCKS (this issue is the source of a 'blocks' relation)
+        cur.execute("""
+            SELECT source_issue_id, COUNT(*)
+            FROM project.pm_issue_relations
+            WHERE type = 'blocks' AND source_issue_id = ANY(%s)
+            GROUP BY source_issue_id
+        """, (issue_ids,))
+        blocking = {r[0]: r[1] for r in cur.fetchall()}
+
+    for issue in issues:
+        iid = issue["id"]
+        issue["blocked_by_count"] = blocked_by.get(iid, 0)
+        issue["blocking_count"] = blocking.get(iid, 0)
+        issue["is_blocked"] = issue["blocked_by_count"] > 0
+    return issues
+
+
+def _log_activity(project_id: int, user_name: str, action: str, issue_id: str, detail: str, conn):
+    """Insert an activity record."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO project.pm_activity (project_id, user_name, action, issue_id, detail)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (project_id, user_name, action, issue_id, detail))
+
+
+def _create_notification(user_email: str, notif_type: str, text: str, issue_id: str, avatar: str, conn):
+    """Insert an inbox notification."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO project.pm_inbox (user_email, type, text, issue_id, avatar)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (user_email, notif_type, text, issue_id, avatar))
+
+
+# ── PM Projects ─────────────────────────────────
+
+@app.get("/api/pm/projects")
+def pm_list_projects(user: TokenData = Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT p.id, p.name, p.description, p.lead, p.team_id, p.color,
+                       p.status, p.start_date, p.target_date, p.created_by,
+                       p.created_at, p.updated_at
+                FROM project.pm_projects p
+                ORDER BY p.created_at DESC
+            """)
+            projects = []
+            for r in cur.fetchall():
+                pid = r[0]
+                # Count issues by status
+                cur.execute("""
+                    SELECT status, COUNT(*) FROM project.pm_issues
+                    WHERE project_id = %s GROUP BY status
+                """, (pid,))
+                status_counts = {row[0]: row[1] for row in cur.fetchall()}
+                total = sum(status_counts.values())
+                done = status_counts.get("done", 0)
+                progress = round(done / total * 100) if total > 0 else 0
+
+                # Blocked / blocking counts (only count if blocker is NOT done)
+                cur.execute("""
+                    SELECT COUNT(DISTINCT r.target_issue_id)
+                    FROM project.pm_issue_relations r
+                    JOIN project.pm_issues target ON target.id = r.target_issue_id
+                    JOIN project.pm_issues blocker ON blocker.id = r.source_issue_id
+                    WHERE r.type = 'blocks' AND target.project_id = %s
+                      AND blocker.status != 'done'
+                """, (pid,))
+                blocked = cur.fetchone()[0]
+                cur.execute("""
+                    SELECT COUNT(DISTINCT r.source_issue_id)
+                    FROM project.pm_issue_relations r
+                    JOIN project.pm_issues i ON i.id = r.source_issue_id
+                    WHERE r.type = 'blocks' AND i.project_id = %s
+                """, (pid,))
+                blocking = cur.fetchone()[0]
+
+                # Members
+                cur.execute("""
+                    SELECT user_name, role FROM project.pm_project_members
+                    WHERE project_id = %s
+                """, (pid,))
+                members = [{"user_name": m[0], "role": m[1]} for m in cur.fetchall()]
+
+                projects.append({
+                    "id": pid, "name": r[1], "description": r[2], "lead": r[3],
+                    "team_id": r[4], "color": r[5], "status": r[6],
+                    "start_date": r[7].isoformat() if r[7] else None,
+                    "target_date": r[8].isoformat() if r[8] else None,
+                    "created_by": r[9],
+                    "created_at": r[10].isoformat() if r[10] else None,
+                    "updated_at": r[11].isoformat() if r[11] else None,
+                    "progress": progress,
+                    "completed_issues": done, "total_issues": total,
+                    "blocked_count": blocked, "blocking_count": blocking,
+                    "members": members,
+                })
+        return projects
+    finally:
+        conn.close()
+
+
+@app.post("/api/pm/projects")
+def pm_create_project(req: PMProjectCreate, user: TokenData = Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO project.pm_projects
+                    (name, description, lead, team_id, color, status, start_date, target_date, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (req.name, req.description, req.lead, req.team_id, req.color,
+                  req.status, req.start_date, req.target_date, user.email))
+            pid = cur.fetchone()[0]
+            # Add lead as member with role 'lead'
+            cur.execute("""
+                INSERT INTO project.pm_project_members (project_id, user_name, role)
+                VALUES (%s, %s, 'lead')
+                ON CONFLICT DO NOTHING
+            """, (pid, req.lead))
+            # Add other members
+            for m in req.members:
+                if m != req.lead:
+                    cur.execute("""
+                        INSERT INTO project.pm_project_members (project_id, user_name, role)
+                        VALUES (%s, %s, 'member')
+                        ON CONFLICT DO NOTHING
+                    """, (pid, m))
+        _log_activity(pid, user.email, "created_project", None, req.name, conn)
+        return {"ok": True, "id": pid}
+    finally:
+        conn.close()
+
+
+@app.get("/api/pm/projects/{project_id}")
+def pm_get_project(project_id: int, user: TokenData = Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, name, description, lead, team_id, color, status,
+                       start_date, target_date, created_by, created_at, updated_at
+                FROM project.pm_projects WHERE id = %s
+            """, (project_id,))
+            r = cur.fetchone()
+            if not r:
+                raise HTTPException(404, "Projet non trouve")
+
+            # Issues
+            cur.execute("""
+                SELECT id, title, description, status, priority, assignee, team_id,
+                       tags, created_by, created_at, updated_at
+                FROM project.pm_issues WHERE project_id = %s
+                ORDER BY created_at
+            """, (project_id,))
+            issues = []
+            for ir in cur.fetchall():
+                issues.append({
+                    "id": ir[0], "title": ir[1], "description": ir[2],
+                    "status": ir[3], "priority": ir[4], "assignee": ir[5],
+                    "team_id": ir[6], "tags": ir[7] or [],
+                    "created_by": ir[8],
+                    "created_at": ir[9].isoformat() if ir[9] else None,
+                    "updated_at": ir[10].isoformat() if ir[10] else None,
+                    "project_id": project_id,
+                })
+            issues = _compute_blocked_flags(issues, conn)
+
+            total = len(issues)
+            done = sum(1 for i in issues if i["status"] == "done")
+            progress = round(done / total * 100) if total > 0 else 0
+            blocked = sum(1 for i in issues if i.get("isBlocked"))
+            blocking = sum(1 for i in issues if i.get("blockingCount", 0) > 0)
+
+            # Members
+            cur.execute("""
+                SELECT user_name, role FROM project.pm_project_members
+                WHERE project_id = %s
+            """, (project_id,))
+            members = [{"user_name": m[0], "role": m[1]} for m in cur.fetchall()]
+
+        return {
+            "id": r[0], "name": r[1], "description": r[2], "lead": r[3],
+            "team_id": r[4], "color": r[5], "status": r[6],
+            "start_date": r[7].isoformat() if r[7] else None,
+            "target_date": r[8].isoformat() if r[8] else None,
+            "created_by": r[9],
+            "created_at": r[10].isoformat() if r[10] else None,
+            "updated_at": r[11].isoformat() if r[11] else None,
+            "progress": progress, "completed": done, "total": total,
+            "blocked": blocked, "blocking": blocking,
+            "members": members, "issues": issues,
+        }
+    finally:
+        conn.close()
+
+
+@app.put("/api/pm/projects/{project_id}")
+def pm_update_project(project_id: int, req: dict, user: TokenData = Depends(get_current_user)):
+    allowed = {"name", "description", "lead", "color", "status", "start_date", "target_date"}
+    updates = {k: v for k, v in req.items() if k in allowed}
+    if not updates:
+        raise HTTPException(400, "Rien a mettre a jour")
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            # Check exists
+            cur.execute("SELECT status FROM project.pm_projects WHERE id = %s", (project_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "Projet non trouve")
+            old_status = row[0]
+
+            set_parts = []
+            params = []
+            for k, v in updates.items():
+                set_parts.append(f"{k} = %s")
+                params.append(v)
+            set_parts.append("updated_at = NOW()")
+            params.append(project_id)
+            cur.execute(f"""
+                UPDATE project.pm_projects SET {', '.join(set_parts)}
+                WHERE id = %s
+            """, params)
+        if "status" in updates and updates["status"] != old_status:
+            _log_activity(project_id, user.email, "status_changed",
+                          None, f"{old_status} → {updates['status']}", conn)
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/pm/projects/{project_id}")
+def pm_delete_project(project_id: int, user: TokenData = Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM project.pm_projects WHERE id = %s", (project_id,))
+            if cur.rowcount == 0:
+                raise HTTPException(404, "Projet non trouve")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+# ── PM Issues ───────────────────────────────────
+
+@app.get("/api/pm/issues")
+def pm_list_issues(
+    team_id: Optional[str] = None,
+    project_id: Optional[int] = None,
+    status: Optional[str] = None,
+    assignee: Optional[str] = None,
+    user: TokenData = Depends(get_current_user),
+):
+    conn = get_conn()
+    try:
+        clauses = []
+        params: list = []
+        if team_id:
+            clauses.append("team_id = %s")
+            params.append(team_id)
+        if project_id is not None:
+            clauses.append("project_id = %s")
+            params.append(project_id)
+        if status:
+            clauses.append("status = %s")
+            params.append(status)
+        if assignee:
+            clauses.append("assignee = %s")
+            params.append(assignee)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT id, project_id, title, description, status, priority,
+                       assignee, team_id, tags, created_by, created_at, updated_at
+                FROM project.pm_issues
+                {where}
+                ORDER BY created_at DESC
+            """, params)
+            issues = []
+            for r in cur.fetchall():
+                issues.append({
+                    "id": r[0], "project_id": r[1], "title": r[2],
+                    "description": r[3], "status": r[4], "priority": r[5],
+                    "assignee": r[6], "team_id": r[7], "tags": r[8] or [],
+                    "created_by": r[9],
+                    "created_at": r[10].isoformat() if r[10] else None,
+                    "updated_at": r[11].isoformat() if r[11] else None,
+                })
+        issues = _compute_blocked_flags(issues, conn)
+        return issues
+    finally:
+        conn.close()
+
+
+@app.post("/api/pm/issues")
+def pm_create_issue(req: PMIssueCreate, user: TokenData = Depends(get_current_user)):
+    if not req.team_id:
+        raise HTTPException(400, "team_id requis")
+    conn = get_conn()
+    try:
+        issue_id = _next_issue_id(req.team_id, conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO project.pm_issues
+                    (id, project_id, title, description, status, priority, assignee, team_id, tags, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (issue_id, req.project_id, req.title, req.description, req.status,
+                  req.priority, req.assignee, req.team_id, req.tags, user.email))
+        if req.project_id:
+            _log_activity(req.project_id, user.email, "created_issue", issue_id, req.title, conn)
+        return {"ok": True, "id": issue_id}
+    finally:
+        conn.close()
+
+
+@app.get("/api/pm/issues/{issue_id}")
+def pm_get_issue(issue_id: str, user: TokenData = Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, project_id, title, description, status, priority,
+                       assignee, team_id, tags, created_by, created_at, updated_at
+                FROM project.pm_issues WHERE id = %s
+            """, (issue_id,))
+            r = cur.fetchone()
+            if not r:
+                raise HTTPException(404, "Issue non trouvee")
+            issue = {
+                "id": r[0], "project_id": r[1], "title": r[2],
+                "description": r[3], "status": r[4], "priority": r[5],
+                "assignee": r[6], "team_id": r[7], "tags": r[8] or [],
+                "created_by": r[9],
+                "created_at": r[10].isoformat() if r[10] else None,
+                "updated_at": r[11].isoformat() if r[11] else None,
+            }
+            # Relations where this issue is source
+            cur.execute("""
+                SELECT r.id, r.type, r.target_issue_id, r.reason, r.created_at,
+                       i.title, i.status
+                FROM project.pm_issue_relations r
+                JOIN project.pm_issues i ON i.id = r.target_issue_id
+                WHERE r.source_issue_id = %s
+            """, (issue_id,))
+            outgoing = [{"id": rel[0], "type": rel[1], "display_type": rel[1],
+                         "related_issue_id": rel[2], "reason": rel[3],
+                         "created_at": rel[4].isoformat() if rel[4] else None,
+                         "related_title": rel[5], "related_status": rel[6]}
+                        for rel in cur.fetchall()]
+            # Relations where this issue is target — compute inverse type
+            _inverse = {"blocks": "blocked-by", "parent": "sub-task",
+                        "relates-to": "relates-to", "duplicates": "duplicates"}
+            cur.execute("""
+                SELECT r.id, r.type, r.source_issue_id, r.reason, r.created_at,
+                       i.title, i.status
+                FROM project.pm_issue_relations r
+                JOIN project.pm_issues i ON i.id = r.source_issue_id
+                WHERE r.target_issue_id = %s
+            """, (issue_id,))
+            incoming = [{"id": rel[0],
+                         "type": _inverse.get(rel[1], rel[1]),
+                         "display_type": _inverse.get(rel[1], rel[1]),
+                         "related_issue_id": rel[2], "reason": rel[3],
+                         "created_at": rel[4].isoformat() if rel[4] else None,
+                         "related_title": rel[5], "related_status": rel[6]}
+                        for rel in cur.fetchall()]
+            issue["relations"] = outgoing + incoming
+        _compute_blocked_flags([issue], conn)
+        return issue
+    finally:
+        conn.close()
+
+
+@app.put("/api/pm/issues/{issue_id}")
+def pm_update_issue(issue_id: str, req: PMIssueUpdate, user: TokenData = Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT status, project_id FROM project.pm_issues WHERE id = %s", (issue_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "Issue non trouvee")
+            old_status = row[0]
+            project_id = row[1]
+
+            updates = {}
+            if req.title is not None:
+                updates["title"] = req.title
+            if req.description is not None:
+                updates["description"] = req.description
+            if req.status is not None:
+                updates["status"] = req.status
+            if req.priority is not None:
+                updates["priority"] = req.priority
+            if req.assignee is not None:
+                updates["assignee"] = req.assignee
+            if req.tags is not None:
+                updates["tags"] = req.tags
+            if req.project_id is not None:
+                updates["project_id"] = req.project_id
+                project_id = req.project_id
+
+            if not updates:
+                raise HTTPException(400, "Rien a mettre a jour")
+
+            set_parts = []
+            params = []
+            for k, v in updates.items():
+                set_parts.append(f"{k} = %s")
+                params.append(v)
+            set_parts.append("updated_at = NOW()")
+            params.append(issue_id)
+            cur.execute(f"""
+                UPDATE project.pm_issues SET {', '.join(set_parts)}
+                WHERE id = %s
+            """, params)
+
+            # Re-fetch updated issue
+            cur.execute("""
+                SELECT id, project_id, title, description, status, priority,
+                       assignee, team_id, tags, created_by, created_at, updated_at
+                FROM project.pm_issues WHERE id = %s
+            """, (issue_id,))
+            r = cur.fetchone()
+            issue = {
+                "id": r[0], "project_id": r[1], "title": r[2],
+                "description": r[3], "status": r[4], "priority": r[5],
+                "assignee": r[6], "team_id": r[7], "tags": r[8] or [],
+                "created_by": r[9],
+                "created_at": r[10].isoformat() if r[10] else None,
+                "updated_at": r[11].isoformat() if r[11] else None,
+            }
+
+        if req.status is not None and req.status != old_status and project_id:
+            _log_activity(project_id, user.email, "status_changed",
+                          issue_id, f"{old_status} → {req.status}", conn)
+
+        _compute_blocked_flags([issue], conn)
+        return issue
+    finally:
+        conn.close()
+
+
+@app.delete("/api/pm/issues/{issue_id}")
+def pm_delete_issue(issue_id: str, user: TokenData = Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM project.pm_issues WHERE id = %s", (issue_id,))
+            if cur.rowcount == 0:
+                raise HTTPException(404, "Issue non trouvee")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+class PMBulkIssuesRequest(BaseModel):
+    issues: list[PMIssueCreate]
+    project_id: int
+    team_id: str
+
+
+@app.post("/api/pm/issues/bulk")
+def pm_bulk_create_issues(req: PMBulkIssuesRequest, user: TokenData = Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        id_mapping = {}  # temp_index -> real_id
+        created_ids = []
+        for idx, issue in enumerate(req.issues):
+            issue_id = _next_issue_id(req.team_id, conn)
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO project.pm_issues
+                        (id, project_id, title, description, status, priority, assignee, team_id, tags, created_by)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (issue_id, req.project_id, issue.title, issue.description,
+                      issue.status, issue.priority, issue.assignee, req.team_id,
+                      issue.tags, user.email))
+            id_mapping[str(idx)] = issue_id
+            created_ids.append(issue_id)
+        _log_activity(req.project_id, user.email, "bulk_created_issues",
+                      None, f"{len(created_ids)} issues", conn)
+        return {"ok": True, "ids": created_ids, "id_mapping": id_mapping}
+    finally:
+        conn.close()
+
+
+# ── PM Relations ────────────────────────────────
+
+@app.get("/api/pm/issues/{issue_id}/relations")
+def pm_list_relations(issue_id: str, user: TokenData = Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            # Outgoing relations (this issue is source)
+            cur.execute("""
+                SELECT r.id, r.type, r.target_issue_id, r.reason, r.created_at,
+                       i.title, i.status
+                FROM project.pm_issue_relations r
+                JOIN project.pm_issues i ON i.id = r.target_issue_id
+                WHERE r.source_issue_id = %s
+            """, (issue_id,))
+            outgoing = [{"id": rel[0], "type": rel[1], "target_issue_id": rel[2],
+                         "reason": rel[3],
+                         "created_at": rel[4].isoformat() if rel[4] else None,
+                         "target_title": rel[5], "target_status": rel[6],
+                         "direction": "outgoing"}
+                        for rel in cur.fetchall()]
+
+            # Incoming relations (this issue is target)
+            cur.execute("""
+                SELECT r.id, r.type, r.source_issue_id, r.reason, r.created_at,
+                       i.title, i.status
+                FROM project.pm_issue_relations r
+                JOIN project.pm_issues i ON i.id = r.source_issue_id
+                WHERE r.target_issue_id = %s
+            """, (issue_id,))
+            _inv = {"blocks": "blocked-by", "parent": "sub-task",
+                    "relates-to": "relates-to", "duplicates": "duplicates"}
+            incoming = [{"id": rel[0],
+                         "type": _inv.get(rel[1], rel[1]),
+                         "source_issue_id": rel[2], "reason": rel[3],
+                         "created_at": rel[4].isoformat() if rel[4] else None,
+                         "source_title": rel[5], "source_status": rel[6],
+                         "direction": "incoming"}
+                        for rel in cur.fetchall()]
+        return outgoing + incoming
+    finally:
+        conn.close()
+
+
+@app.post("/api/pm/issues/{issue_id}/relations")
+def pm_create_relation(issue_id: str, req: PMRelationCreate, user: TokenData = Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO project.pm_issue_relations (type, source_issue_id, target_issue_id, reason, created_by)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id
+            """, (req.type, issue_id, req.target_issue_id, req.reason, user.email))
+            rel_id = cur.fetchone()[0]
+            # Log activity if issue has a project
+            cur.execute("SELECT project_id FROM project.pm_issues WHERE id = %s", (issue_id,))
+            row = cur.fetchone()
+            if row and row[0]:
+                _log_activity(row[0], user.email, "added_relation",
+                              issue_id, f"{req.type} → {req.target_issue_id}", conn)
+        return {"ok": True, "id": rel_id}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/pm/relations/{relation_id}")
+def pm_delete_relation(relation_id: int, user: TokenData = Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM project.pm_issue_relations WHERE id = %s", (relation_id,))
+            if cur.rowcount == 0:
+                raise HTTPException(404, "Relation non trouvee")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+class PMBulkRelation(BaseModel):
+    source_id: str
+    target_id: str
+    type: str
+    reason: str = ''
+
+
+class PMBulkRelationsRequest(BaseModel):
+    relations: list[PMBulkRelation]
+    id_mapping: dict[str, str] = {}
+
+
+@app.post("/api/pm/relations/bulk")
+def pm_bulk_create_relations(req: PMBulkRelationsRequest, user: TokenData = Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        created = 0
+        with conn.cursor() as cur:
+            for rel in req.relations:
+                # Map temp IDs to real IDs if mapping provided
+                source = req.id_mapping.get(rel.source_id, rel.source_id)
+                target = req.id_mapping.get(rel.target_id, rel.target_id)
+                try:
+                    cur.execute("""
+                        INSERT INTO project.pm_issue_relations (type, source_issue_id, target_issue_id, reason, created_by)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT DO NOTHING
+                    """, (rel.type, source, target, rel.reason, user.email))
+                    created += cur.rowcount
+                except Exception as e:
+                    logger.warning("Bulk relation failed: %s", e)
+        return {"ok": True, "created": created}
+    finally:
+        conn.close()
+
+
+# ── PM Pull Requests ────────────────────────────
+
+@app.get("/api/pm/reviews")
+def pm_list_reviews(status: Optional[str] = None, user: TokenData = Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            if status:
+                cur.execute("""
+                    SELECT id, title, author, issue_id, status, additions, deletions,
+                           files, created_at, updated_at
+                    FROM project.pm_pull_requests WHERE status = %s
+                    ORDER BY created_at DESC
+                """, (status,))
+            else:
+                cur.execute("""
+                    SELECT id, title, author, issue_id, status, additions, deletions,
+                           files, created_at, updated_at
+                    FROM project.pm_pull_requests
+                    ORDER BY created_at DESC
+                """)
+            return [{"id": r[0], "title": r[1], "author": r[2], "issue_id": r[3],
+                     "status": r[4], "additions": r[5], "deletions": r[6],
+                     "files": r[7],
+                     "created_at": r[8].isoformat() if r[8] else None,
+                     "updated_at": r[9].isoformat() if r[9] else None}
+                    for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+@app.post("/api/pm/reviews")
+def pm_create_review(req: PMPRCreate, user: TokenData = Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO project.pm_pull_requests (id, title, author, issue_id, status, additions, deletions, files)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, status = EXCLUDED.status, updated_at = NOW()
+            """, (req.id, req.title, req.author, req.issue_id, req.status,
+                  req.additions, req.deletions, req.files))
+        return {"ok": True, "id": req.id}
+    finally:
+        conn.close()
+
+
+@app.put("/api/pm/reviews/{pr_id}")
+def pm_update_review(pr_id: str, req: dict, user: TokenData = Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            new_status = req.get("status")
+            if not new_status:
+                raise HTTPException(400, "status requis")
+            cur.execute("""
+                UPDATE project.pm_pull_requests SET status = %s, updated_at = NOW()
+                WHERE id = %s
+            """, (new_status, pr_id))
+            if cur.rowcount == 0:
+                raise HTTPException(404, "PR non trouvee")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+# ── PM Inbox ────────────────────────────────────
+
+@app.get("/api/pm/inbox")
+def pm_inbox(user: TokenData = Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, type, text, issue_id, related_issue_id, relation_type,
+                       avatar, read, created_at
+                FROM project.pm_inbox
+                WHERE user_email = %s
+                ORDER BY created_at DESC
+                LIMIT 100
+            """, (user.email,))
+            notifs = [{"id": r[0], "type": r[1], "text": r[2], "issue_id": r[3],
+                       "related_issue_id": r[4], "relation_type": r[5],
+                       "avatar": r[6], "read": r[7],
+                       "created_at": r[8].isoformat() if r[8] else None}
+                      for r in cur.fetchall()]
+            cur.execute("""
+                SELECT COUNT(*) FROM project.pm_inbox
+                WHERE user_email = %s AND read = FALSE
+            """, (user.email,))
+            unread = cur.fetchone()[0]
+        return {"notifications": notifs, "unread": unread}
+    finally:
+        conn.close()
+
+
+@app.put("/api/pm/inbox/{notif_id}/read")
+def pm_mark_read(notif_id: int, user: TokenData = Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE project.pm_inbox SET read = TRUE
+                WHERE id = %s AND user_email = %s
+            """, (notif_id, user.email))
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.put("/api/pm/inbox/read-all")
+def pm_mark_all_read(user: TokenData = Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE project.pm_inbox SET read = TRUE
+                WHERE user_email = %s AND read = FALSE
+            """, (user.email,))
+        return {"ok": True, "updated": cur.rowcount}
+    finally:
+        conn.close()
+
+
+# ── PM Activity ─────────────────────────────────
+
+@app.get("/api/pm/projects/{project_id}/activity")
+def pm_project_activity(project_id: int, user: TokenData = Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, user_name, action, issue_id, detail, created_at
+                FROM project.pm_activity
+                WHERE project_id = %s
+                ORDER BY created_at DESC
+                LIMIT 50
+            """, (project_id,))
+            return [{"id": r[0], "user_name": r[1], "action": r[2],
+                     "issue_id": r[3], "detail": r[4],
+                     "created_at": r[5].isoformat() if r[5] else None}
+                    for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+# ── PM Pulse (metrics) ──────────────────────────
+
+@app.get("/api/pm/pulse")
+def pm_pulse(user: TokenData = Depends(get_current_user)):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            # Status distribution
+            cur.execute("""
+                SELECT status, COUNT(*) FROM project.pm_issues GROUP BY status
+            """)
+            status_dist = {r[0]: r[1] for r in cur.fetchall()}
+
+            # Team activity: per-member stats
+            cur.execute("""
+                SELECT assignee,
+                       COUNT(*) FILTER (WHERE status = 'done') as completed,
+                       COUNT(*) FILTER (WHERE status = 'in-progress') as in_progress
+                FROM project.pm_issues
+                WHERE assignee IS NOT NULL
+                GROUP BY assignee
+            """)
+            team_activity = [{"member": r[0], "completed": r[1], "inProgress": r[2]}
+                             for r in cur.fetchall()]
+
+            # Dependency health — only count if blocker is NOT done
+            cur.execute("""
+                SELECT COUNT(DISTINCT r.target_issue_id)
+                FROM project.pm_issue_relations r
+                JOIN project.pm_issues blocker ON blocker.id = r.source_issue_id
+                WHERE r.type = 'blocks' AND blocker.status != 'done'
+            """)
+            blocked_count = cur.fetchone()[0]
+            cur.execute("""
+                SELECT COUNT(DISTINCT source_issue_id) FROM project.pm_issue_relations
+                WHERE type = 'blocks'
+            """)
+            blocking_count = cur.fetchone()[0]
+            # Chains of depth >= 2 (A blocks B blocks C)
+            cur.execute("""
+                SELECT COUNT(DISTINCT r1.source_issue_id)
+                FROM project.pm_issue_relations r1
+                JOIN project.pm_issue_relations r2 ON r1.target_issue_id = r2.source_issue_id
+                WHERE r1.type = 'blocks' AND r2.type = 'blocks'
+            """)
+            chains = cur.fetchone()[0]
+
+            # Bottlenecks: issues that block the most others
+            cur.execute("""
+                SELECT r.source_issue_id, i.title, i.status, i.assignee,
+                       COUNT(*) as impact
+                FROM project.pm_issue_relations r
+                JOIN project.pm_issues i ON i.id = r.source_issue_id
+                WHERE r.type = 'blocks'
+                GROUP BY r.source_issue_id, i.title, i.status, i.assignee
+                ORDER BY impact DESC
+                LIMIT 10
+            """)
+            bottlenecks = [{"id": r[0], "title": r[1], "status": r[2],
+                            "assignee": r[3], "impact": r[4]}
+                           for r in cur.fetchall()]
+
+            # Team activity enrichment: name, total, completed, active
+            team_members = [{"name": t["member"], "total": t["completed"] + t["inProgress"],
+                             "completed": t["completed"], "active": t["inProgress"]}
+                            for t in team_activity]
+
+        return {
+            "status_distribution": status_dist,
+            "team_activity": team_members,
+            "dependency_health": {
+                "blocked": blocked_count,
+                "blocking": blocking_count,
+                "chains": chains,
+                "bottlenecks": bottlenecks,
+            },
+            "velocity": {"value": "—", "sub": "calculated at runtime"},
+            "burndown": {"value": "—", "sub": "calculated at runtime"},
+            "cycle_time": {"value": "—", "sub": "calculated at runtime"},
+            "throughput": {"value": "—", "sub": "calculated at runtime"},
+        }
+    finally:
+        conn.close()
+
+
+# ── PM AI Planning ──────────────────────────────
+
+class PMAIPlanRequest(BaseModel):
+    description: str
+    project_name: Optional[str] = ''
+    project_id: Optional[int] = None
+    team_id: str = ''
+    existing_issues: Optional[list] = None
+    existing_relations: Optional[list] = None
+
+
+@app.post("/api/pm/ai/plan")
+def pm_ai_plan(req: PMAIPlanRequest, user: TokenData = Depends(get_current_user)):
+    """Send project description to gateway for AI planning."""
+    import httpx
+
+    gateway_url = _get_gateway_url()
+    invoke_payload = {
+        "messages": [{"role": "user", "content": req.description}],
+        "thread_id": f"pm-plan-{req.team_id}-{int(time.time())}",
+        "project_id": f"pm-{req.team_id}",
+        "channel_id": "",
+        "direct_agent": "planner",
+    }
+    try:
+        resp = httpx.post(f"{gateway_url}/invoke", json=invoke_payload, timeout=120)
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            raise HTTPException(resp.status_code, f"Gateway error: {resp.text[:500]}")
+    except httpx.ConnectError:
+        raise HTTPException(502, "Le service LangGraph API n'est pas accessible")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Erreur: {str(e)[:300]}")
 
 
 # ── SPA fallback ────────────────────────────────

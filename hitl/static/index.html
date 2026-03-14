@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>HITL Console</title>
+  <title>Production Manager</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/style.css?v=3">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260314p">
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
@@ -15,7 +15,7 @@
   <div class="login-overlay" id="login-screen">
     <div class="login-box">
       <div class="login-logo">&#x2B21;</div>
-      <div class="login-title">HITL Console</div>
+      <div class="login-title">Production Manager</div>
       <div class="login-sub">Connecte-toi a ton espace team</div>
       <div class="login-error" id="login-error"></div>
       <div class="form-group">
@@ -28,14 +28,14 @@
       </div>
       <button class="btn btn-primary" style="width:100%;letter-spacing:2px" onclick="doLogin()">CONNEXION</button>
       <div style="display:flex;align-items:center;gap:10px;margin:14px 0 6px">
-        <hr style="flex:1;border:none;border-top:1px solid var(--border)"/>
-        <span style="font-size:9px;color:var(--text-muted);letter-spacing:1px">OU</span>
-        <hr style="flex:1;border:none;border-top:1px solid var(--border)"/>
+        <hr style="flex:1;border:none;border-top:1px solid var(--border-subtle)"/>
+        <span style="font-size:9px;color:var(--text-tertiary);letter-spacing:1px">OU</span>
+        <hr style="flex:1;border:none;border-top:1px solid var(--border-subtle)"/>
       </div>
       <div id="google-signin-btn" style="display:flex;justify-content:center"></div>
       <div style="text-align:center;margin-top:14px">
-        <span style="font-size:10px;color:var(--text-muted)">Pas encore de compte ?</span>
-        <a style="font-size:10px;color:var(--accent-light);cursor:pointer;margin-left:4px" onclick="showRegister()">Inscription</a>
+        <span style="font-size:10px;color:var(--text-tertiary)">Pas encore de compte ?</span>
+        <a style="font-size:10px;color:var(--accent-blue);cursor:pointer;margin-left:4px" onclick="showRegister()">Inscription</a>
       </div>
       <div class="version-tag" id="login-version"></div>
     </div>
@@ -46,12 +46,12 @@
     <div class="login-box">
       <div class="login-logo">&#x2B21;</div>
       <div class="login-title">Inscription</div>
-      <div class="login-sub">Cree ton compte HITL</div>
+      <div class="login-sub">Cree ton compte</div>
       <div class="login-error" id="register-error"></div>
       <div class="form-group">
         <div class="form-label">EMAIL</div>
         <input class="form-input" id="reg-email" placeholder="you@company.com" />
-        <div id="reg-email-hint" style="font-size:9px;color:var(--text-muted);margin-top:4px"></div>
+        <div id="reg-email-hint" style="font-size:9px;color:var(--text-tertiary);margin-top:4px"></div>
       </div>
       <div class="form-group">
         <div class="form-label">CULTURE</div>
@@ -66,7 +66,7 @@
       </div>
       <button class="btn btn-primary" style="width:100%;letter-spacing:2px" onclick="doRegister()">CREER MON COMPTE</button>
       <div style="text-align:center;margin-top:14px">
-        <a style="font-size:10px;color:var(--accent-light);cursor:pointer" onclick="showLogin()">Retour a la connexion</a>
+        <a style="font-size:10px;color:var(--accent-blue);cursor:pointer" onclick="showLogin()">Retour a la connexion</a>
       </div>
       <div class="version-tag" id="register-version"></div>
     </div>
@@ -77,25 +77,36 @@
 
   <!-- Main app (hidden until login) -->
   <div class="app-layout" id="app" style="display:none">
-    <div class="top-bar">
-      <div class="top-bar-dot"></div>
-      <span class="top-bar-title">HITL CONSOLE <span id="topbar-version" class="version-tag" style="margin:0;font-size:8px;opacity:0.5"></span></span>
-      <div class="top-bar-right">
-        <span class="top-bar-user" id="top-user"></span>
-        <button class="top-bar-logout" onclick="doLogout()">LOGOUT</button>
+    <!-- PM Sidebar -->
+    <div class="pm-sidebar" id="pm-sidebar">
+      <div class="sidebar-workspace-header" id="sidebar-toggle">
+        <div class="sidebar-workspace-icon">P</div>
+        <span class="sidebar-label">Production</span>
       </div>
+
+      <div class="sidebar-search">
+        <span class="sidebar-search-icon">&#x1F50D;</span>
+        <input type="text" placeholder="Search..." id="global-search" />
+        <span class="sidebar-search-kbd">&#x2318;K</span>
+      </div>
+
+      <div class="sidebar-section-label">Navigation</div>
+      <div id="sidebar-nav"></div>
+
+      <div class="sidebar-section-label">Workspace</div>
+      <div id="sidebar-workspace"></div>
+
+      <div class="sidebar-section-label" id="sidebar-teams-label">Teams</div>
+      <div id="sidebar-teams"></div>
+
+      <div class="sidebar-user" id="sidebar-user"></div>
+      <div class="sidebar-version" id="app-version"></div>
     </div>
-    <div class="main-layout">
-      <div class="sidebar">
-        <div class="sidebar-section">FRONTEND</div>
-        <button class="sidebar-item active" data-view="inbox" onclick="switchView('inbox')">
-          Inbox <span class="sidebar-badge" id="badge-pending" style="display:none">0</span>
-        </button>
-        <button class="sidebar-item" data-view="agents" onclick="switchView('agents')">Agents</button>
-        <button class="sidebar-item" data-view="members" onclick="switchView('members')">Membres</button>
-        <div class="version-tag sidebar-version" id="app-version"></div>
-      </div>
-      <div class="content" id="content">
+
+    <!-- Main content area -->
+    <div class="pm-main">
+      <div class="pm-header" id="pm-header"></div>
+      <div class="pm-content" id="pm-content">
         <div class="loading">Chargement...</div>
       </div>
     </div>
@@ -131,6 +142,84 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js?v=3"></script>
+  <!-- Modal: create issue -->
+  <div class="modal-overlay" id="modal-create-issue">
+    <div class="modal" style="width:440px">
+      <div class="modal-title">New Issue</div>
+      <div class="form-group">
+        <div class="form-label">Title <span class="required">*</span></div>
+        <input class="form-input" id="issue-title" placeholder="Issue title" />
+      </div>
+      <div class="form-group">
+        <div class="form-label">Description</div>
+        <textarea class="form-input" id="issue-description" rows="3" placeholder="Description..." style="resize:vertical"></textarea>
+      </div>
+      <div style="display:flex;gap:12px">
+        <div class="form-group" style="flex:1">
+          <div class="form-label">Priority</div>
+          <select class="form-input" id="issue-priority">
+            <option value="1">P1 - Critical</option>
+            <option value="2">P2 - High</option>
+            <option value="3" selected>P3 - Medium</option>
+            <option value="4">P4 - Low</option>
+          </select>
+        </div>
+        <div class="form-group" style="flex:1">
+          <div class="form-label">Status</div>
+          <select class="form-input" id="issue-status">
+            <option value="backlog">Backlog</option>
+            <option value="todo" selected>Todo</option>
+            <option value="in-progress">In Progress</option>
+            <option value="in-review">In Review</option>
+            <option value="done">Done</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <div class="form-label">Assignee</div>
+        <input class="form-input" id="issue-assignee" placeholder="Name" />
+      </div>
+      <div class="form-group">
+        <div class="form-label">Tags (comma-separated)</div>
+        <input class="form-input" id="issue-tags" placeholder="bug, feature, ..." />
+      </div>
+      <input type="hidden" id="issue-project-id" />
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeModal('modal-create-issue')">Cancel</button>
+        <button class="btn btn-primary" onclick="doCreateIssue()">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: add relation -->
+  <div class="modal-overlay" id="modal-add-relation">
+    <div class="modal" style="width:400px">
+      <div class="modal-title">Add Dependency</div>
+      <div class="form-group">
+        <div class="form-label">Type</div>
+        <select class="form-input" id="rel-type">
+          <option value="blocks">Blocks</option>
+          <option value="relates-to">Relates to</option>
+          <option value="parent">Parent of</option>
+          <option value="duplicates">Duplicates</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <div class="form-label">Target Issue ID</div>
+        <input class="form-input" id="rel-target" placeholder="e.g. ENG-003" />
+      </div>
+      <div class="form-group">
+        <div class="form-label">Reason</div>
+        <input class="form-input" id="rel-reason" placeholder="Why?" />
+      </div>
+      <input type="hidden" id="rel-source" />
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeModal('modal-add-relation')">Cancel</button>
+        <button class="btn btn-primary" onclick="doAddRelation()">Add</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js?v=20260314p"></script>
 </body>
 </html>

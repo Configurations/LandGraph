@@ -1,6 +1,7 @@
 # Maquette — Application de Gestion de Production
 
 Les psécifications qui suivent sont à intégrer dans l'application existante. cela veut dire qu'un certains nombre de choses sont déjà en place dans l'application. il s'agit de les réutiliser de facon intéligente.
+Les spcecifications sont à mettre dans la partie hitl.
 
 > Spécification détaillée de chaque écran pour le développement.
 > Style visuel : inspiré de Linear — dark mode, haute densité, typographie monospace, animations subtiles.
