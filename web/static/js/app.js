@@ -2078,21 +2078,50 @@ function showGitCommitModal(prefix) {
   `);
 }
 
-async function gitCommit() {
+async function gitCommit(force) {
   const msg = document.getElementById('git-commit-msg').value.trim();
   if (!msg) { toast('Message requis', 'error'); return; }
   try {
-    const data = await api(`/api/git/${_gitCommitRepoKey}/commit`, { method: 'POST', body: { message: msg } });
+    const data = await api(`/api/git/${_gitCommitRepoKey}/commit`, { method: 'POST', body: { message: msg, force: !!force } });
+    if (!data.ok && data.non_fast_forward) {
+      showModal(`
+        <div class="modal-header">
+          <h3>Push rejete</h3>
+          <button class="btn-icon" onclick="closeModal()">&times;</button>
+        </div>
+        <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:1rem">Le depot distant a des commits plus recents. Voulez-vous forcer le push et ecraser la version distante avec votre version locale ?</p>
+        <input type="hidden" id="git-commit-msg" value="${escHtml(msg)}" />
+        <div class="modal-actions">
+          <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+          <button class="btn btn-danger" onclick="gitCommit(true)">Forcer l'envoi</button>
+        </div>
+      `);
+      return;
+    }
     toast(data.message || 'Erreur', data.ok ? 'success' : 'error');
     closeModal();
     loadRepoGit(_gitCommitPrefix);
   } catch (e) { toast(e.message, 'error'); }
 }
 
-async function repoGitPushOnly(prefix) {
+async function repoGitPushOnly(prefix, force) {
   const repoKey = GIT_REPOS[prefix];
   try {
-    const data = await api(`/api/git/${repoKey}/push`, { method: 'POST' });
+    const data = await api(`/api/git/${repoKey}/push`, { method: 'POST', body: { force: !!force } });
+    if (!data.ok && data.non_fast_forward) {
+      showModal(`
+        <div class="modal-header">
+          <h3>Push rejete</h3>
+          <button class="btn-icon" onclick="closeModal()">&times;</button>
+        </div>
+        <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:1rem">Le depot distant a des commits plus recents. Voulez-vous forcer le push et ecraser la version distante avec votre version locale ?</p>
+        <div class="modal-actions">
+          <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+          <button class="btn btn-danger" onclick="closeModal();repoGitPushOnly('${prefix}', true)">Forcer l'envoi</button>
+        </div>
+      `);
+      return;
+    }
     toast(data.message || 'Erreur', data.ok ? 'success' : 'error');
     loadRepoGit(prefix);
   } catch (e) { toast(e.message, 'error'); }
@@ -2531,12 +2560,57 @@ async function showCfgWorkflow(dir) {
   openWorkflowEditor(dir, '/api/workflow', 'Configs/Teams');
 }
 
+let _hitlUsersList = [];
+async function _loadHitlUsers(force) {
+  if (_hitlUsersList.length && !force) return;
+  try { _hitlUsersList = await api('/api/hitl/users'); } catch { _hitlUsersList = []; }
+}
+function _userSelectOptions(selectedEmail) {
+  return `<option value="">-- Selectionner --</option>` +
+    _hitlUsersList.filter(u => u.is_active).map(u =>
+      `<option value="${escHtml(u.email)}" ${u.email === selectedEmail ? 'selected' : ''}>${escHtml(u.display_name || u.email)} (${escHtml(u.email)})</option>`
+    ).join('');
+}
+function _renderMemberRows(container, members) {
+  container.innerHTML = '';
+  if (!members.length) members = [''];
+  members.forEach((email, i) => {
+    const isLast = i === members.length - 1;
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:4px';
+    row.innerHTML = `<select class="team-member-select" style="flex:1">${_userSelectOptions(email)}</select>` +
+      (isLast
+        ? `<button type="button" class="btn-icon" onclick="_addMemberRow(this)" title="Ajouter">+</button>`
+        : `<button type="button" class="btn-icon" onclick="this.parentElement.remove()" title="Supprimer" style="color:var(--text-secondary)">&#x1F5D1;</button>`);
+    container.appendChild(row);
+  });
+}
+function _addMemberRow(btn) {
+  const container = btn.closest('.team-members-list');
+  // Replace + with trash on current last row
+  const rows = container.querySelectorAll('div');
+  const lastRow = rows[rows.length - 1];
+  const lastBtn = lastRow.querySelector('button');
+  lastBtn.outerHTML = `<button type="button" class="btn-icon" onclick="this.parentElement.remove()" title="Supprimer" style="color:var(--text-secondary)">&#x1F5D1;</button>`;
+  // Add new row with +
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:4px';
+  row.innerHTML = `<select class="team-member-select" style="flex:1">${_userSelectOptions('')}</select>` +
+    `<button type="button" class="btn-icon" onclick="_addMemberRow(this)" title="Ajouter">+</button>`;
+  container.appendChild(row);
+}
+function _collectMembers() {
+  return Array.from(document.querySelectorAll('.team-member-select'))
+    .map(s => s.value).filter(Boolean);
+}
+
 async function showAddTeamModal() {
-  // Load templates to offer as options
-  try {
-    const data = await api('/api/templates');
-    templatesData = data.templates || [];
-  } catch (e) { templatesData = []; }
+  // Load templates and users in parallel
+  const [tplRes] = await Promise.allSettled([
+    api('/api/templates').then(d => { templatesData = d.templates || []; }),
+    _loadHitlUsers(),
+  ]);
+  if (tplRes.status === 'rejected') templatesData = [];
   const dirOpts = templatesData.map(tp => `<option value="${escHtml(tp.id)}">${escHtml(tp.name || tp.id)} (${tp.agent_count} agents)</option>`).join('');
   showModal(`
     <div class="modal-header">
@@ -2568,17 +2642,27 @@ async function showAddTeamModal() {
     </div>
     <div class="form-group">
       <label>Channels Discord (un par ligne)</label>
-      <textarea id="team-channels" rows="3" placeholder="1234567890"></textarea>
+      <textarea id="team-channels" rows="2" placeholder="1234567890" style="resize:vertical;min-height:auto"></textarea>
+    </div>
+    <div class="form-group">
+      <label>Membres</label>
+      <div class="team-members-list" id="team-members-list"></div>
     </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
       <button class="btn btn-primary" onclick="addTeam()">Enregistrer</button>
     </div>
   `);
+  _renderMemberRows(document.getElementById('team-members-list'), ['']);
 }
 
-function editTeam(idx) {
+async function editTeam(idx) {
   const t = teamsData[idx];
+  await _loadHitlUsers(true);
+  // Find existing members for this team from HITL users data
+  const existingMembers = _hitlUsersList
+    .filter(u => (u.teams || []).some(tm => tm.team_id === t.id))
+    .map(u => u.email);
   const agentIds = Object.keys(t.agents || {});
   const orchOpts = `<option value="">-- Aucun --</option>` +
     agentIds.map(aid => `<option value="${escHtml(aid)}" ${(t.orchestrator || '') === aid ? 'selected' : ''}>${escHtml((t.agents[aid] || {}).name || aid)} (${escHtml(aid)})</option>`).join('');
@@ -2609,13 +2693,18 @@ function editTeam(idx) {
     </div>
     <div class="form-group">
       <label>Channels Discord (un par ligne)</label>
-      <textarea id="team-channels" rows="3">${(t.discord_channels || []).join('\n')}</textarea>
+      <textarea id="team-channels" rows="2" style="resize:vertical;min-height:auto">${(t.discord_channels || []).join('\n')}</textarea>
+    </div>
+    <div class="form-group">
+      <label>Membres</label>
+      <div class="team-members-list" id="team-members-list"></div>
     </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
       <button class="btn btn-primary" onclick="saveTeam('${escHtml(t.id)}')">Enregistrer</button>
     </div>
   `);
+  _renderMemberRows(document.getElementById('team-members-list'), existingMembers.length ? existingMembers : ['']);
 }
 
 async function addTeam() {
@@ -2633,6 +2722,7 @@ async function addTeam() {
       directory,
       discord_channels: channels,
       template,
+      members: _collectMembers(),
     }});
     toast('Equipe ajoutee', 'success');
     closeModal();
@@ -2655,6 +2745,7 @@ async function saveTeam(id) {
       directory,
       discord_channels: channels,
       orchestrator,
+      members: _collectMembers(),
     }});
     toast('Equipe mise a jour', 'success');
     closeModal();
@@ -6937,31 +7028,62 @@ async function editUser(uid) {
   document.getElementById('modal-user').style.display = 'flex';
 }
 
+let _allTeamsList = [];
+async function _loadAllTeams() {
+  try { const data = await api('/api/teams'); _allTeamsList = data.teams || []; } catch { _allTeamsList = []; }
+}
+function _teamSelectOptions(selectedId) {
+  return `<option value="">-- Selectionner --</option>` +
+    _allTeamsList.map(t =>
+      `<option value="${escHtml(t.id)}" ${t.id === selectedId ? 'selected' : ''}>${escHtml(t.name || t.id)}</option>`
+    ).join('');
+}
+function _renderTeamRows(container, teamIds) {
+  container.innerHTML = '';
+  if (!teamIds.length) teamIds = [''];
+  teamIds.forEach((tid, i) => {
+    const isLast = i === teamIds.length - 1;
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:4px';
+    row.innerHTML = `<select class="user-team-select" style="flex:1">${_teamSelectOptions(tid)}</select>` +
+      (isLast
+        ? `<button type="button" class="btn-icon" onclick="_addTeamRow(this)" title="Ajouter">+</button>`
+        : `<button type="button" class="btn-icon" onclick="this.parentElement.remove()" title="Supprimer" style="color:var(--text-secondary)">&#x1F5D1;</button>`);
+    container.appendChild(row);
+  });
+}
+function _addTeamRow(btn) {
+  const container = btn.closest('#user-teams-checkboxes');
+  const rows = container.querySelectorAll('div');
+  const lastRow = rows[rows.length - 1];
+  const lastBtn = lastRow.querySelector('button');
+  lastBtn.outerHTML = `<button type="button" class="btn-icon" onclick="this.parentElement.remove()" title="Supprimer" style="color:var(--text-secondary)">&#x1F5D1;</button>`;
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:4px';
+  row.innerHTML = `<select class="user-team-select" style="flex:1">${_teamSelectOptions('')}</select>` +
+    `<button type="button" class="btn-icon" onclick="_addTeamRow(this)" title="Ajouter">+</button>`;
+  container.appendChild(row);
+}
+function _collectUserTeams() {
+  return Array.from(document.querySelectorAll('.user-team-select'))
+    .map(s => s.value).filter(Boolean);
+}
+
 async function populateTeamCheckboxes(selectedIds) {
+  await _loadAllTeams();
   const container = document.getElementById('user-teams-checkboxes');
-  // Load teams from config
-  let allTeams = [];
-  try {
-    const data = await api('/api/teams');
-    allTeams = data.teams || [];
-  } catch { allTeams = []; }
-  if (allTeams.length === 0) {
+  if (_allTeamsList.length === 0) {
     container.innerHTML = '<span style="color:var(--text-secondary);font-size:0.8rem">Aucune equipe configuree</span>';
     return;
   }
-  container.innerHTML = allTeams.map(t => {
-    const checked = selectedIds.includes(t.id) ? 'checked' : '';
-    return `<label style="display:flex;align-items:center;gap:0.3rem;font-size:0.85rem;cursor:pointer;padding:3px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg-secondary)">
-      <input type="checkbox" value="${escHtml(t.id)}" ${checked} /> ${escHtml(t.name || t.id)}
-    </label>`;
-  }).join('');
+  _renderTeamRows(container, selectedIds.length ? selectedIds : ['']);
 }
 
 async function saveUser() {
   const email = document.getElementById('user-email').value.trim();
   const display_name = document.getElementById('user-name').value.trim();
   const role = document.getElementById('user-role').value;
-  const teams = Array.from(document.querySelectorAll('#user-teams-checkboxes input:checked')).map(cb => cb.value);
+  const teams = _collectUserTeams();
 
   if (!editingUserId && !email) { toast('Email requis', 'error'); return; }
 

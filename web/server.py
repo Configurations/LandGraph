@@ -2136,6 +2136,30 @@ class TeamEntry(BaseModel):
     discord_channels: list[str] = []
     template: str = ""
     orchestrator: str = ""
+    members: list[str] = []  # list of user emails to grant access
+
+
+def _sync_team_members(team_id: str, member_emails: list[str]):
+    """Sync hitl_team_members for team_id: set exactly the given emails."""
+    uri = _env_dict().get("DATABASE_URI", "")
+    if not uri or not member_emails:
+        return
+    import psycopg
+    conn = psycopg.connect(uri, autocommit=True)
+    try:
+        with conn.cursor() as cur:
+            # Remove existing members for this team
+            cur.execute("DELETE FROM project.hitl_team_members WHERE team_id = %s", (team_id,))
+            # Add new members
+            for email in member_emails:
+                cur.execute(
+                    """INSERT INTO project.hitl_team_members (user_id, team_id, role)
+                       SELECT id, %s, 'member' FROM project.hitl_users WHERE email = %s
+                       ON CONFLICT (user_id, team_id) DO NOTHING""",
+                    (team_id, email),
+                )
+    finally:
+        conn.close()
 
 
 def _ensure_team_folder(team_id: str, directory: str = "", template: str = ""):
@@ -2176,9 +2200,21 @@ async def add_team(team_id: str, entry: TeamEntry):
     }
     if entry.orchestrator:
         team_data["orchestrator"] = entry.orchestrator
-    teams.append(team_data)
     _ensure_team_folder(team_id, directory, entry.template)
+    # Auto-detect orchestrator from template if not explicitly set
+    if not entry.orchestrator and entry.template:
+        registry_file = TEAMS_DIR / (directory or team_id) / "agents_registry.json"
+        if registry_file.exists():
+            reg = _read_json(registry_file)
+            agents = reg.get("agents", {})
+            for aid, acfg in agents.items():
+                if isinstance(acfg, dict) and acfg.get("type") == "orchestrator":
+                    team_data["orchestrator"] = aid
+                    break
+    teams.append(team_data)
     _write_teams_list(teams)
+    if entry.members:
+        _sync_team_members(team_id, entry.members)
     return {"ok": True}
 
 
@@ -2203,6 +2239,7 @@ async def update_team(team_id: str, entry: TeamEntry):
     if not found:
         raise HTTPException(404, f"Equipe '{team_id}' introuvable")
     _write_teams_list(teams)
+    _sync_team_members(team_id, entry.members)
     return {"ok": True}
 
 
@@ -2214,6 +2251,16 @@ async def delete_team(team_id: str):
     if not deleted:
         raise HTTPException(404, f"Equipe '{team_id}' introuvable")
     _write_teams_list(new_teams)
+    # Remove all team memberships from DB
+    uri = _env_dict().get("DATABASE_URI", "")
+    if uri:
+        import psycopg
+        conn = psycopg.connect(uri, autocommit=True)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM project.hitl_team_members WHERE team_id = %s", (team_id,))
+        finally:
+            conn.close()
     # Clean up the team directory
     directory = deleted[0].get("directory", team_id)
     team_dir = TEAMS_DIR / directory
@@ -3046,6 +3093,7 @@ async def git_pull(repo_key: str):
 
 class GitCommitRequest(BaseModel):
     message: str
+    force: bool = False
 
 
 @app.post("/api/git/{repo_key}/commit")
@@ -3076,14 +3124,18 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
         if commit_r.returncode != 0 and not nothing:
             return {"ok": False, "message": commit_r.stderr[:300] or commit_r.stdout[:300]}
 
-        # 3. Push (never --force)
+        # 3. Push
         if repo_path:
-            push_r = subprocess.run(["git", "push", "origin", branch], cwd=str(target_dir),
+            push_cmd = ["git", "push", "origin", branch]
+            if req.force:
+                push_cmd = ["git", "push", "--force", "origin", branch]
+            push_r = subprocess.run(push_cmd, cwd=str(target_dir),
                                     capture_output=True, text=True, timeout=60, env=git_env)
             stderr = _git_sanitize(push_r.stderr, login, password)
             if push_r.returncode != 0:
-                if "non-fast-forward" in stderr:
-                    return {"ok": False, "message": "Push rejete: le depot distant a des commits plus recents. Faites un Pull d'abord."}
+                rejected = any(hint in stderr for hint in ("non-fast-forward", "fetch first", "rejected", "failed to push"))
+                if rejected:
+                    return {"ok": False, "non_fast_forward": True, "message": "Le depot distant contient des commits plus recents que votre version locale."}
                 return {"ok": False, "message": f"Push echoue: {stderr[:300]}"}
 
         if nothing:
@@ -3095,11 +3147,14 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
         raise HTTPException(500, str(e))
 
 
+class GitPushRequest(BaseModel):
+    force: bool = False
+
 @app.post("/api/git/{repo_key}/push")
-async def git_push_only(repo_key: str):
-    """Push local commits to remote. Never force push."""
+async def git_push_only(repo_key: str, req: GitPushRequest = GitPushRequest()):
+    """Push local commits to remote."""
     target_dir = _get_repo_dir(repo_key)
-    log.info("Git push (%s)", repo_key)
+    log.info("Git push (%s, force=%s)", repo_key, req.force)
     try:
         git_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
         cfg = _get_repo_cfg(repo_key)
@@ -3107,12 +3162,16 @@ async def git_push_only(repo_key: str):
         password = cfg.get("password", "").strip()
         branch = _git_detect_branch(target_dir)
 
-        result = subprocess.run(["git", "push", "origin", branch], cwd=str(target_dir),
+        push_cmd = ["git", "push", "origin", branch]
+        if req.force:
+            push_cmd = ["git", "push", "--force", "origin", branch]
+        result = subprocess.run(push_cmd, cwd=str(target_dir),
                                 capture_output=True, text=True, timeout=60, env=git_env)
         stderr = _git_sanitize(result.stderr, login, password)
         if result.returncode != 0:
-            if "non-fast-forward" in stderr:
-                return {"ok": False, "message": "Push rejete: le depot distant a des commits plus recents. Faites un Pull d'abord."}
+            rejected = any(hint in stderr for hint in ("non-fast-forward", "fetch first", "rejected", "failed to push"))
+            if rejected:
+                return {"ok": False, "non_fast_forward": True, "message": "Le depot distant contient des commits plus recents que votre version locale."}
             return {"ok": False, "message": f"Push echoue: {stderr[:300]}"}
         return {"ok": True, "message": "Push effectue"}
     except Exception as e:

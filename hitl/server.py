@@ -718,11 +718,22 @@ def get_me(user: TokenData = Depends(get_current_user)):
 # ── Teams ───────────────────────────────────────
 @app.get("/api/teams")
 def list_teams(user: TokenData = Depends(get_current_user)):
-    """Return teams the user has access to, enriched with names from teams.json."""
+    """Return teams the user has access to, enriched with names from teams.json.
+    Only returns teams that exist in both hitl_team_members AND teams.json config."""
     all_teams = {t["id"]: t for t in _load_teams()}
+    # Re-read actual team memberships from DB (JWT may be stale)
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT team_id FROM project.hitl_team_members WHERE user_id = %s", (user.user_id,))
+            db_teams = {r[0] for r in cur.fetchall()}
+    finally:
+        conn.close()
     result = []
-    for tid in user.teams:
-        info = all_teams.get(tid, {})
+    for tid in db_teams:
+        if tid not in all_teams:
+            continue  # team no longer exists in config — skip
+        info = all_teams[tid]
         result.append({
             "id": tid,
             "name": info.get("name", tid),
