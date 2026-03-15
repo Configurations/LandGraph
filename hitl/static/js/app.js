@@ -3150,6 +3150,33 @@ let chatMessages = [];
 let chatLoading = false;
 let _agentsLoading = false;
 
+function _renderAgentsGrid(agents, runningAgents) {
+  let html = '<div class="agents-grid" style="padding:20px">';
+  agents.forEach(a => {
+    const hasActivity = !!a.last_activity;
+    const isOrch = a.type === 'orchestrator';
+    const isRunning = runningAgents.has(a.id);
+    html += `<div class="card agent-card ${isOrch ? 'agent-card-orch' : ''}" style="position:relative" data-agent-id="${esc(a.id)}" onclick="openAgentChat('${esc(a.id)}', '${esc(a.name)}', '${esc(a.llm)}')">
+      ${isRunning ? '<span class="agent-heartbeat" style="position:absolute;top:8px;right:10px" title="En cours d\'execution">\u2764</span>' : ''}
+      <div class="card-row" style="align-items:center">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="status-dot ${hasActivity ? 'online' : 'offline'}"></span>
+          <span style="font-size:12px;font-weight:${isOrch ? '700' : '400'}">${esc(a.name)}</span>
+          <span class="tag tag-accent">${esc(a.id)}</span>
+        </div>
+        <span class="card-time">${a.last_activity ? timeAgo(a.last_activity) : ''}</span>
+      </div>
+      <div class="agent-stats">
+        <span>questions <span class="val">${a.total}</span></span>
+        <span>pending <span class="${a.pending > 0 ? 'val-warn' : 'val'}">${a.pending}</span></span>
+      </div>
+    </div>`;
+  });
+  html += '</div>';
+  return html;
+}
+
+let _lastAgents = [];
 async function loadAgents() {
   if (_agentsLoading) return;
   _agentsLoading = true;
@@ -3160,45 +3187,43 @@ async function loadAgents() {
     activeAgent = null;
   }
   try {
-    const [agents, eventsData] = await Promise.all([
-      api(`/api/teams/${activeTeam}/agents`),
-      api('/api/events?n=200').catch(() => ({ events: [] })),
-    ]);
-    const runningAgents = new Set();
-    const agentEvts = (eventsData.events || []);
-    const agentState = {};
-    agentEvts.forEach(e => {
-      if (!e.agent_id) return;
-      if (e.event === 'agent_start') agentState[e.agent_id] = true;
-      else if (e.event === 'agent_complete' || e.event === 'agent_error') delete agentState[e.agent_id];
-    });
-    Object.keys(agentState).forEach(id => runningAgents.add(id));
-    if (runningAgents.size > 0) console.log('[agents] running:', [...runningAgents]);
-
+    // Load agents first (fast — local file + DB query)
+    const agents = await api(`/api/teams/${activeTeam}/agents`);
     agents.sort((a, b) => a.type === 'orchestrator' ? -1 : b.type === 'orchestrator' ? 1 : a.name.localeCompare(b.name));
-    let html = '<div class="agents-grid" style="padding:20px">';
-    agents.forEach(a => {
-      const hasActivity = !!a.last_activity;
-      const isOrch = a.type === 'orchestrator';
-      const isRunning = runningAgents.has(a.id);
-      html += `<div class="card agent-card ${isOrch ? 'agent-card-orch' : ''}" style="position:relative" onclick="openAgentChat('${esc(a.id)}', '${esc(a.name)}', '${esc(a.llm)}')">
-        ${isRunning ? '<span class="agent-heartbeat" style="position:absolute;top:8px;right:10px" title="En cours d\'execution">\u2764</span>' : ''}
-        <div class="card-row" style="align-items:center">
-          <div style="display:flex;align-items:center;gap:8px">
-            <span class="status-dot ${hasActivity ? 'online' : 'offline'}"></span>
-            <span style="font-size:12px;font-weight:${isOrch ? '700' : '400'}">${esc(a.name)}</span>
-            <span class="tag tag-accent">${esc(a.id)}</span>
-          </div>
-          <span class="card-time">${a.last_activity ? timeAgo(a.last_activity) : ''}</span>
-        </div>
-        <div class="agent-stats">
-          <span>questions <span class="val">${a.total}</span></span>
-          <span>pending <span class="${a.pending > 0 ? 'val-warn' : 'val'}">${a.pending}</span></span>
-        </div>
-      </div>`;
-    });
-    html += '</div>';
+    _lastAgents = agents;
+
+    // Render immediately with no heartbeats
+    const html = _renderAgentsGrid(agents, new Set());
     if (content.innerHTML !== html) content.innerHTML = html;
+
+    // Then fetch events in background (may be slow if gateway is busy)
+    api('/api/events?n=200').then(eventsData => {
+      const agentState = {};
+      (eventsData.events || []).forEach(e => {
+        if (!e.agent_id) return;
+        if (e.event === 'agent_start') agentState[e.agent_id] = true;
+        else if (e.event === 'agent_complete' || e.event === 'agent_error') delete agentState[e.agent_id];
+      });
+      const runningAgents = new Set(Object.keys(agentState));
+      if (runningAgents.size > 0) {
+        // Update heartbeats in-place without full re-render
+        document.querySelectorAll('.agent-card[data-agent-id]').forEach(card => {
+          const aid = card.dataset.agentId;
+          const existing = card.querySelector('.agent-heartbeat');
+          if (runningAgents.has(aid) && !existing) {
+            const span = document.createElement('span');
+            span.className = 'agent-heartbeat';
+            span.style.cssText = 'position:absolute;top:8px;right:10px';
+            span.title = "En cours d'execution";
+            span.textContent = '\u2764';
+            card.appendChild(span);
+          } else if (!runningAgents.has(aid) && existing) {
+            existing.remove();
+          }
+        });
+      }
+    }).catch(() => {});
+
     startViewRefresh(loadAgents, 15000);
   } catch (e) { if (!isRefresh) content.innerHTML = `<div class="empty-state">${esc(e.message)}</div>`; }
   finally { _agentsLoading = false; }
