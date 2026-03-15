@@ -2003,7 +2003,7 @@ async function renderProjectWorkflowTab(project, wfStatus) {
                 </div>
               </div>
               ${d.remarks ? `<div style="margin-top:4px;margin-bottom:4px;padding:8px;background:var(--bg-active);border-left:3px solid var(--accent-orange);border-radius:0 4px 4px 0;font-size:10px;color:var(--text-tertiary)"><div style="font-size:9px;font-weight:600;color:var(--accent-orange);margin-bottom:4px">REMARQUES PRECEDENTES</div>${renderMarkdown(d.remarks)}</div>` : ''}
-              <div id="${uid}-view" class="md-content" style="max-height:500px;overflow:auto;background:var(--bg-tertiary);padding:12px;border-radius:4px;margin-top:4px">${renderMarkdown(d.content)}</div>
+              <div id="${uid}-view" class="md-content" style="max-height:500px;overflow:auto;background:var(--bg-tertiary);padding:12px;border-radius:4px;margin-top:4px">${_renderDelivContent(d.content)}</div>
             </details>`;
           } else {
             html += `<div style="font-size:11px;padding:4px 0;display:flex;align-items:center;gap:6px;color:var(--text-quaternary)">
@@ -2024,7 +2024,7 @@ async function renderProjectWorkflowTab(project, wfStatus) {
               <span style="font-weight:500;color:var(--accent-blue)">${esc(d.agent_name)}</span>
               <span style="color:var(--text-quaternary);font-size:10px">${esc(d.agent_id)}</span>
             </summary>
-            <div class="md-content" style="max-height:500px;overflow:auto;background:var(--bg-tertiary);padding:12px;border-radius:4px;margin-top:4px">${renderMarkdown(d.content)}</div>
+            <div class="md-content" style="max-height:500px;overflow:auto;background:var(--bg-tertiary);padding:12px;border-radius:4px;margin-top:4px">${_renderDelivContent(d.content)}</div>
           </details>`;
         });
       } else {
@@ -2047,7 +2047,7 @@ async function renderProjectWorkflowTab(project, wfStatus) {
               </div>
             </div>
             ${d.remarks ? `<div style="margin-top:4px;margin-bottom:4px;padding:8px;background:var(--bg-active);border-left:3px solid var(--accent-orange);border-radius:0 4px 4px 0;font-size:10px;color:var(--text-tertiary)"><div style="font-size:9px;font-weight:600;color:var(--accent-orange);margin-bottom:4px">REMARQUES PRECEDENTES</div>${renderMarkdown(d.remarks)}</div>` : ''}
-            <div id="${uid}-view" class="md-content" style="max-height:500px;overflow:auto;background:var(--bg-tertiary);padding:12px;border-radius:4px;margin-top:4px">${renderMarkdown(d.content)}</div>
+            <div id="${uid}-view" class="md-content" style="max-height:500px;overflow:auto;background:var(--bg-tertiary);padding:12px;border-radius:4px;margin-top:4px">${_renderDelivContent(d.content)}</div>
           </details>`;
         });
       }
@@ -2884,6 +2884,39 @@ function toggleGroup(groupId) {
   const hidden = group.style.display === 'none';
   group.style.display = hidden ? 'block' : 'none';
   if (arrow) arrow.innerHTML = hidden ? '&#x25BC;' : '&#x25B6;';
+}
+
+function _renderDelivContent(text) {
+  // Render deliverable .md file content — try to detect and format JSON blocks
+  if (!text) return '';
+  const s = text.trim();
+  // Pure JSON content (no markdown wrapper)
+  if (s.startsWith('{') || s.startsWith('[')) {
+    try { return jsonToHtml(JSON.parse(s)); } catch (_) {}
+  }
+  // Markdown file with embedded JSON sections — extract JSON after ## headings
+  // Split by ## headers and render each section
+  const sections = s.split(/^##\s+/m);
+  if (sections.length > 1) {
+    let html = '';
+    // First section is the preamble (# heading, metadata, ---)
+    html += renderMarkdown(sections[0]);
+    for (let i = 1; i < sections.length; i++) {
+      const nl = sections[i].indexOf('\n');
+      const heading = nl >= 0 ? sections[i].substring(0, nl).trim() : sections[i].trim();
+      const body = nl >= 0 ? sections[i].substring(nl + 1).trim() : '';
+      html += `<div style="font-size:14px;font-weight:600;color:var(--text-primary);margin:16px 0 8px">${esc(heading.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()))}</div>`;
+      if (body) {
+        // Try JSON parse on body
+        if (body.startsWith('{') || body.startsWith('[')) {
+          try { html += jsonToHtml(JSON.parse(body)); continue; } catch (_) {}
+        }
+        html += _renderDelivValue(body);
+      }
+    }
+    return html;
+  }
+  return renderMarkdown(text);
 }
 
 function _renderDelivValue(val) {

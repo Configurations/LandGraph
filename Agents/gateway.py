@@ -211,13 +211,9 @@ async def run_single_agent(agent_id, agent_callable, state, channel_id, thread_i
             asyncio.to_thread(agent_callable, dict(state)), timeout=2100)
         state["agent_outputs"] = result.get("agent_outputs", state.get("agent_outputs", {}))
         logger.info(f"[bg] {agent_id} done")
-        # Post agent output to channel/HITL
+        # Persist agent output (base_agent already posts to channel)
         output = result.get("agent_outputs", {}).get(agent_id, {})
         if output and isinstance(output, dict):
-            deliverable = output.get("deliverable", output.get("summary", ""))
-            if deliverable:
-                agent_name = output.get("agent_name", agent_id)
-                await post_to_channel(channel_id, f"**{agent_name}** :\n{deliverable[:3000]}", thread_id)
             # Persist deliverable to filesystem
             await _persist_deliverable_to_fs(state, agent_id, output)
             # Auto-publish to Outline if enabled
