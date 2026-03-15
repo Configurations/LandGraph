@@ -367,7 +367,9 @@ class BaseAgent:
             if len(ps) > 15000:
                 ps = ps[:15000] + "\n...(tronque)"
             uc += f"Precedents:\n```json\n{ps}\n```\n\n"
-        uc += f"Instruction: {instruction}\n\nReponds UNIQUEMENT en JSON valide."
+        lang = context.get("project_metadata", {}).get("language", "fr")
+        lang_label = {"fr": "français", "en": "English", "es": "español", "de": "Deutsch"}.get(lang, lang)
+        uc += f"Instruction: {instruction}\n\nReponds UNIQUEMENT en JSON valide. Redige tout le contenu en {lang_label}."
         msgs = [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": uc},
@@ -406,7 +408,9 @@ class BaseAgent:
             if len(ps) > 15000:
                 ps = ps[:15000] + "\n...(tronque)"
             uc += f"Precedents:\n```json\n{ps}\n```\n\n"
-        uc += f"Instruction: {instruction}"
+        lang = context.get("project_metadata", {}).get("language", "fr")
+        lang_label = {"fr": "français", "en": "English", "es": "español", "de": "Deutsch"}.get(lang, lang)
+        uc += f"Instruction: {instruction}\n\nRedige tout le contenu en {lang_label}."
 
         msgs = [
             {"role": "system", "content": self.system_prompt},

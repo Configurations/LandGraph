@@ -1,4 +1,4 @@
-/* LandGraph Admin — Frontend */
+/* ag.flow Admin — Frontend */
 
 // ── State ──────────────────────────────────────────
 let envEntries = [];
@@ -2876,7 +2876,7 @@ async function loadOutlineConfig() {
   try {
     _outlineData = await api('/api/outline-config');
     document.getElementById('outline-enabled').checked = _outlineData.enabled || false;
-    document.getElementById('outline-collection-prefix').value = _outlineData.collection_prefix || 'LandGraph';
+    document.getElementById('outline-collection-prefix').value = _outlineData.collection_prefix || 'ag.flow';
     document.getElementById('outline-url-env').value = _outlineData.url_env || 'OUTLINE_URL';
     document.getElementById('outline-api-key-env').value = _outlineData.api_key_env || 'OUTLINE_API_KEY';
 
@@ -2903,7 +2903,7 @@ async function saveOutlineConfig() {
     enabled: document.getElementById('outline-enabled').checked,
     url_env: document.getElementById('outline-url-env').value || 'OUTLINE_URL',
     api_key_env: document.getElementById('outline-api-key-env').value || 'OUTLINE_API_KEY',
-    collection_prefix: document.getElementById('outline-collection-prefix').value || 'LandGraph',
+    collection_prefix: document.getElementById('outline-collection-prefix').value || 'ag.flow',
     phase_labels: _outlineData.phase_labels || {},
     auto_publish: {
       enabled: document.getElementById('outline-auto-publish').checked,

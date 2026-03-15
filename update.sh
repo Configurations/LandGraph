@@ -5,4 +5,4 @@ if [[ ! "$BRANCH" =~ ^(dev|uat|main)$ ]]; then
     exit 1
 fi
 
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/${BRANCH}/scripts/Infra/02-install-langgraph.sh)" _ "${BRANCH}"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/ag.flow/refs/heads/${BRANCH}/scripts/Infra/02-install-langgraph.sh)" _ "${BRANCH}"

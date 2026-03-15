@@ -1,4 +1,4 @@
-"""LandGraph Admin — FastAPI backend."""
+"""ag.flow Admin — FastAPI backend."""
 import csv
 import hashlib
 import hmac
@@ -26,7 +26,7 @@ for _vp in ["/project/.version", str(Path(__file__).resolve().parent.parent / ".
     if os.path.isfile(_vp):
         _version = open(_vp).read().strip()
         break
-_log.info("LandGraph version: %s", _version)
+_log.info("ag.flow version: %s", _version)
 from fastapi import Body, FastAPI, HTTPException, Request, UploadFile
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
@@ -50,7 +50,7 @@ if DOCKER_MODE:
         capture_output=True, timeout=5
     )
     subprocess.run(
-        ["git", "config", "--global", "user.name", os.environ.get("GIT_USER_NAME", "LandGraph Admin")],
+        ["git", "config", "--global", "user.name", os.environ.get("GIT_USER_NAME", "ag.flow Admin")],
         capture_output=True, timeout=5
     )
     # Generate .gitignore if missing
@@ -113,7 +113,7 @@ log = logging.getLogger("landgraph-admin")
 
 log.info("DOCKER_MODE=%s  ENV_FILE=%s  CONFIGS=%s  PROMPTS=%s", DOCKER_MODE, ENV_FILE, CONFIGS, PROMPTS)
 
-app = FastAPI(title="LandGraph Admin")
+app = FastAPI(title="ag.flow Admin")
 _AUTH_SECRET = secrets.token_hex(32)  # session signing key (regenerated on restart)
 
 # ── JSON helpers (needed early for restore) ───────
@@ -1472,7 +1472,7 @@ async def get_outline_config():
     if not OUTLINE_FILE.exists():
         return {
             "enabled": False, "url_env": "OUTLINE_URL", "api_key_env": "OUTLINE_API_KEY",
-            "collection_prefix": "LandGraph", "phase_labels": {},
+            "collection_prefix": "ag.flow", "phase_labels": {},
             "auto_publish": {"enabled": False, "deliverables": {}},
         }
     return _read_json(OUTLINE_FILE)
@@ -3752,7 +3752,7 @@ def _send_welcome_email(to_email: str, temp_password: str, reset_url: str):
     use_ssl = smtp_cfg.get("use_ssl", False)
     use_tls = smtp_cfg.get("use_tls", True)
     from_address = smtp_cfg.get("from_address", "") or smtp_user
-    from_name = smtp_cfg.get("from_name", "LandGraph")
+    from_name = smtp_cfg.get("from_name", "ag.flow")
 
     # Resolve password from env var
     password_env = smtp_cfg.get("password_env", "SMTP_PASSWORD")
@@ -3795,7 +3795,7 @@ def _send_welcome_email(to_email: str, temp_password: str, reset_url: str):
         default_link = f"{reset_url}/reset-password?mail={quote(to_email)}&pwd={quote(temp_password)}"
         html = f"""\
 <html><body style="font-family:sans-serif;color:#333">
-<h2>Bienvenue sur LandGraph</h2>
+<h2>Bienvenue sur ag.flow</h2>
 <p>Un compte a ete cree pour vous (<code>{to_email}</code>).</p>
 <p>Votre mot de passe temporaire : <code style="background:#f0f0f0;padding:4px 8px;border-radius:4px;font-size:1.1em">{temp_password}</code></p>
 <p>Cliquez sur le lien ci-dessous pour definir votre mot de passe :</p>

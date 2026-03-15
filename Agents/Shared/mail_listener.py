@@ -29,10 +29,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelna
 
 for _vp in ["/project/.version", os.path.join(os.path.dirname(__file__), "..", ".version")]:
     if os.path.isfile(_vp):
-        logger.info("LandGraph version: %s", open(_vp).read().strip())
+        logger.info("ag.flow version: %s", open(_vp).read().strip())
         break
 else:
-    logger.info("LandGraph version: dev")
+    logger.info("ag.flow version: dev")
 
 # ── Config ───────────────────────────────────
 def _load_mail_config() -> dict:

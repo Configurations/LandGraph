@@ -39,7 +39,7 @@ Plateforme multi-agents IA auto-hebergee sur Proxmox (VM ou LXC). 13 agents spec
 
 Trois scripts sequentiels. Chaque script se telecharge et s'execute en une commande.
 
-> **Base URL** : `https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/`
+> **Base URL** : `https://raw.githubusercontent.com/Configurations/ag.flow/refs/heads/main/scripts/Infra/`
 
 ### Etape 0 — Creer le container/VM
 
@@ -47,10 +47,10 @@ Trois scripts sequentiels. Chaque script se telecharge et s'execute en une comma
 
 ```bash
 # Option A — Creer un container LXC (recommande)
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/00-create-lxc.sh)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/ag.flow/refs/heads/main/scripts/Infra/00-create-lxc.sh)"
 
 # Option B — Configurer un LXC existant pour Docker
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/00-prepare-existing-lxc4Docker.sh)" _ <CTID>
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/ag.flow/refs/heads/main/scripts/Infra/00-prepare-existing-lxc4Docker.sh)" _ <CTID>
 ```
 
 | Parametre | Valeur par defaut  |
@@ -65,7 +65,7 @@ bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGrap
 **Ou** : SSH sur la VM/LXC Ubuntu.
 
 ```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/01-install-docker.sh)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/ag.flow/refs/heads/main/scripts/Infra/01-install-docker.sh)"
 ```
 
 Installe Docker Engine + Compose, configure les logs, active UFW (ports 8123, 8080, 3000 en reseau local), et installe **Caddy** comme reverse proxy HTTP (port 80). **Se reconnecter apres execution** (groupe docker).
@@ -87,10 +87,10 @@ La config Caddy est dans `/etc/caddy/Caddyfile`. Pour ajouter un domaine, dupliq
 
 ```bash
 # Depuis main (defaut)
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/02-install-langgraph.sh)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/ag.flow/refs/heads/main/scripts/Infra/02-install-langgraph.sh)"
 
 # Depuis une branche specifique (dev, uat, main)
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/dev/scripts/Infra/02-install-langgraph.sh)" _ dev
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/ag.flow/refs/heads/dev/scripts/Infra/02-install-langgraph.sh)" _ dev
 ```
 
 Ce script deploie le socle complet :
@@ -121,7 +121,7 @@ Ce script deploie le socle complet :
 ### Etape 3 (optionnel) — RAG
 
 ```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/LandGraph/refs/heads/main/scripts/Infra/03-install-rag.sh)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/Configurations/ag.flow/refs/heads/main/scripts/Infra/03-install-rag.sh)"
 ```
 
 Ajoute la couche RAG (embeddings Voyage AI + pgvector). Necessite une cle Voyage AI (gratuit 50M tokens/mois).
@@ -264,7 +264,7 @@ Quand vous creez une nouvelle equipe depuis le dashboard admin, vous pouvez choi
 
 ### Exemple de template : DevProject
 
-Un template pour projet de developpement logiciel (13 agents, 5 phases) est disponible separement dans le depot [Configurations/LandGraph-Templates](https://github.com/Configurations/LandGraph-Templates). Pour l'utiliser, telechargez-le dans `Shared/Teams/DevProject/`.
+Un template pour projet de developpement logiciel (13 agents, 5 phases) est disponible separement dans le depot [Configurations/ag.flow-Templates](https://github.com/Configurations/ag.flow-Templates). Pour l'utiliser, telechargez-le dans `Shared/Teams/DevProject/`.
 
 ### Creer son propre template
 
@@ -541,7 +541,7 @@ Dans le dashboard admin (port 8080), onglet **Utilisateurs** :
 
 ## MCP Server — agents comme tools
 
-Chaque agent LandGraph est exposable comme tool MCP via SSE. Un client MCP externe (Claude Desktop, autre plateforme) peut appeler vos agents directement.
+Chaque agent ag.flow est exposable comme tool MCP via SSE. Un client MCP externe (Claude Desktop, autre plateforme) peut appeler vos agents directement.
 
 ```
 Endpoint:  GET http://<IP>:8123/mcp/{team_id}/sse

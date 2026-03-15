@@ -256,7 +256,12 @@ function simpleMarkdown(text) {
 async function api(url, opts = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(url, { headers, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
+  let res;
+  try {
+    res = await fetch(url, { headers, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
+  } catch (netErr) {
+    throw new Error('Failed to fetch');
+  }
   const isAuthRoute = url.startsWith('/api/auth/');
   if (res.status === 401 && !isAuthRoute) { doLogout(); throw new Error('Session expired'); }
   if (!res.ok) {
@@ -539,33 +544,44 @@ let _wsRetryCount = 0;
 function connectWS() {
   if (!activeTeam || !token) return;
   _wsIntentionalClose = true;
-  if (ws) ws.close();
+  if (ws) { try { ws.close(); } catch (_) {} }
   _wsIntentionalClose = false;
-  _wsRetryCount = 0;
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${proto}//${location.host}/api/teams/${activeTeam}/ws?token=${token}`);
+  const url = `${proto}//${location.host}/api/teams/${activeTeam}/ws?token=${token}`;
+  try {
+    ws = new WebSocket(url);
+  } catch (e) {
+    console.warn('[ws] WebSocket create failed:', e);
+    _wsRetryCount++;
+    if (_wsRetryCount <= 10) setTimeout(connectWS, Math.min(5000 * _wsRetryCount, 30000));
+    return;
+  }
   ws.onopen = () => { _wsRetryCount = 0; };
   ws.onmessage = (e) => {
-    const evt = JSON.parse(e.data);
-    if (evt.type === 'new_question') {
-      const d = evt.data || {};
-      const isApproval = d.request_type === 'approval';
-      const title = isApproval ? 'Validation requise' : 'Nouvelle question';
-      const body = `${d.agent_id || 'Agent'}: ${d.prompt || ''}`.substring(0, 120);
-      showBrowserNotif(title, body);
-      playNotifSound();
-      toast(`${title} — ${d.agent_id || ''}`, 'info');
-      refreshHitlBadge();
-      if (activeView === 'hitl-inbox') loadHitlInbox();
-    }
-    if (evt.type === 'question_answered') {
-      refreshHitlBadge();
-      if (activeView === 'hitl-inbox') loadHitlInbox();
-    }
-    if (evt.type === 'pm_inbox') {
-      refreshInboxBadge();
-      if (activeView === 'pm-inbox') loadPmInbox();
-    }
+    try {
+      const evt = JSON.parse(e.data);
+      // Server keepalive ping — respond with pong
+      if (evt.type === 'ping') { try { ws.send(JSON.stringify({type:'pong'})); } catch(_){} return; }
+      if (evt.type === 'new_question') {
+        const d = evt.data || {};
+        const isApproval = d.request_type === 'approval';
+        const title = isApproval ? 'Validation requise' : 'Nouvelle question';
+        const body = `${d.agent_id || 'Agent'}: ${d.prompt || ''}`.substring(0, 120);
+        showBrowserNotif(title, body);
+        playNotifSound();
+        toast(`${title} — ${d.agent_id || ''}`, 'info');
+        refreshHitlBadge();
+        if (activeView === 'hitl-inbox') loadHitlInbox();
+      }
+      if (evt.type === 'question_answered') {
+        refreshHitlBadge();
+        if (activeView === 'hitl-inbox') loadHitlInbox();
+      }
+      if (evt.type === 'pm_inbox') {
+        refreshInboxBadge();
+        if (activeView === 'pm-inbox') loadPmInbox();
+      }
+    } catch (_) {}
   };
   ws.onerror = () => { /* handled by onclose */ };
   ws.onclose = (e) => {
@@ -2958,32 +2974,48 @@ function _renderDelivValue(val) {
 }
 
 async function openHitlQuestion(qid) {
-  const content = document.getElementById('pm-content');
-  content.innerHTML = '<div class="loading">Loading...</div>';
+  // Load question data
+  let q;
   try {
-    const q = await api(`/api/questions/${qid}`);
-    const options = (q.context && q.context.options) ? q.context.options : [];
-    let _dlvCount = 0;
+    q = await api(`/api/questions/${qid}`);
+  } catch (e) {
+    _showSystemDown(e.message); return;
+  }
 
-    let html = `<div class="breadcrumb" style="padding:20px 20px 0">
-      <a onclick="loadHitlInbox()">HITL</a><span>/</span><span class="current">${esc(q.agent_id)}</span>
-    </div>
-    <div style="padding:20px">
-      <div class="question-box">
-        <div class="question-label">QUESTION FROM ${esc(q.agent_id).toUpperCase()}</div>
-        <div class="question-text">${esc(q.prompt)}</div>
-        <div class="question-meta">
-          <span>thread: <span>${esc(q.thread_id || '—')}</span></span>
-          <span>type: <span>${esc(q.request_type)}</span></span>
-          <span>received: <span style="color:var(--accent-yellow)">${timeAgo(q.created_at)} ago</span></span>
+  const options = (q.context && q.context.options) ? q.context.options : [];
+  const isApproval = q.request_type === 'approval';
+  const isPending = q.status === 'pending';
+  let _dlvCount = 0;
+
+  // Build modal
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay active';
+  overlay.id = 'hitl-question-modal';
+
+  const iconClass = isApproval ? 'mq-icon-approval' : 'mq-icon-question';
+  const iconChar = isApproval ? '&#x2714;' : '&#x2753;';
+  const titleText = isApproval ? 'Validation requise' : 'Question de ' + (q.agent_id || 'agent');
+  const projectTag = q.project_slug ? `<span style="color:var(--accent-blue)">${esc(q.project_name || q.project_slug)}</span>` : '';
+
+  let html = `<div class="modal modal-question">
+    <div class="mq-header">
+      <div class="mq-icon ${iconClass}">${iconChar}</div>
+      <div class="mq-header-text">
+        <div class="mq-title">${esc(titleText)}</div>
+        <div class="mq-subtitle">
+          <span>${esc(q.agent_id)}</span>
+          <span>${esc(q.request_type)}</span>
+          ${projectTag}
+          <span style="color:var(--accent-yellow)">${timeAgo(q.created_at)}</span>
         </div>
-      </div>`;
+      </div>
+      <button class="mq-close" onclick="closeQuestionModal()" title="Fermer">&times;</button>
+    </div>
+    <div class="mq-body">
+      <div class="mq-prompt">${esc(q.prompt)}</div>`;
 
     // Phase validation: show deliverables individually with per-deliverable approve/reject
     if (q.context && q.context.type === 'phase_validation') {
-      const isPending = q.status === 'pending';
-      const isApproval = q.request_type === 'approval';
-      // Collect all deliverable keys for tracking
       _dlvCount = 0;
       html += `<div class="card" style="margin-top:12px">
         <div class="question-label">PHASE ${esc(q.context.current_phase || '').toUpperCase()} &#x2192; ${esc(q.context.next_phase || '').toUpperCase()}</div>`;
@@ -3056,9 +3088,9 @@ async function openHitlQuestion(qid) {
       html += '</div>';
     }
 
-    if (q.status === 'pending') {
+    if (isPending) {
       if (options.length > 0) {
-        html += '<div class="options-section"><div class="options-label">PROPOSED ANSWERS</div><div class="options-grid">';
+        html += '<div class="mq-divider">Reponses proposees</div><div class="options-grid" style="margin-bottom:14px">';
         options.forEach((opt, i) => {
           const label = typeof opt === 'object' ? (opt.label || opt.value || JSON.stringify(opt)) : String(opt);
           const value = typeof opt === 'object' ? (opt.value || opt.label || JSON.stringify(opt)) : String(opt);
@@ -3067,35 +3099,62 @@ async function openHitlQuestion(qid) {
             <span class="option-text">${esc(label)}</span>
           </button>`;
         });
-        html += '</div></div>';
+        html += '</div>';
       }
-      html += `<div class="free-answer-section"><div class="options-label">FREE ANSWER</div>
-        <textarea class="reply-area" id="hitl-reply-text" placeholder="Type your response..."></textarea>
-      </div>
-      <div class="reply-actions">
-        <button class="btn btn-primary" onclick="submitHitlAnswer('${q.id}', 'answer')">SEND</button>
-        ${q.request_type === 'approval' ? `
-          <button class="btn btn-approve" onclick="submitHitlAnswer('${q.id}', 'approve')">&#x2713; APPROVE</button>
-          <button class="btn btn-reject" onclick="submitHitlAnswer('${q.id}', 'reject')">&#x2717; REJECT</button>
+      html += `<div class="mq-divider">Votre reponse</div>
+        <textarea class="mq-reply-area" id="hitl-reply-text" placeholder="Ecrivez votre reponse..."></textarea>`;
+    } else {
+      html += `<div class="card" style="margin-top:12px">
+        <div class="question-label">REPONSE (${esc(q.status).toUpperCase()})</div>
+        <div style="font-size:12px;color:var(--text-primary);margin-top:4px">${esc(q.response || '—')}</div>
+        <div style="font-size:9px;color:var(--text-tertiary);margin-top:6px">par ${esc(q.reviewer || '—')} via ${esc(q.response_channel || '—')} &bull; ${timeAgo(q.answered_at)}</div>
+      </div>`;
+    }
+
+    html += '</div>'; // close mq-body
+
+    // Footer with actions
+    if (isPending) {
+      html += `<div class="mq-footer">
+        <span class="mq-hint">Echap pour fermer</span>
+        <button class="btn btn-outline" onclick="closeQuestionModal()">Annuler</button>
+        <button class="btn btn-primary" onclick="submitHitlAnswer('${q.id}', 'answer')">Envoyer</button>
+        ${isApproval ? `
+          <button class="btn btn-approve" onclick="submitHitlAnswer('${q.id}', 'approve')">&#x2713; Approuver</button>
+          <button class="btn btn-reject" onclick="submitHitlAnswer('${q.id}', 'reject')">&#x2717; Rejeter</button>
         ` : ''}
       </div>`;
     } else {
-      html += `<div class="card" style="margin-top:12px">
-        <div class="question-label">RESPONSE (${esc(q.status)})</div>
-        <div style="font-size:12px;color:var(--text-primary);margin-top:4px">${esc(q.response || '—')}</div>
-        <div style="font-size:9px;color:var(--text-tertiary);margin-top:6px">by ${esc(q.reviewer || '—')} via ${esc(q.response_channel || '—')} &#x2022; ${timeAgo(q.answered_at)} ago</div>
+      html += `<div class="mq-footer">
+        <span class="mq-hint"></span>
+        <button class="btn btn-outline" onclick="closeQuestionModal()">Fermer</button>
       </div>`;
     }
-    html += '</div>';
-    content.innerHTML = html;
+
+    html += '</div>'; // close modal-question
+    overlay.innerHTML = html;
+
+    // Close on backdrop click
+    overlay.addEventListener('click', e => { if (e.target === overlay) closeQuestionModal(); });
+
+    // Close on Escape
+    const escHandler = e => { if (e.key === 'Escape') { closeQuestionModal(); document.removeEventListener('keydown', escHandler); } };
+    document.addEventListener('keydown', escHandler);
+
+    document.body.appendChild(overlay);
+
     // Initialize per-deliverable verdict tracking
     if (_dlvCount > 0) {
       window._dlvVerdicts = {};
       window._dlvTotal = _dlvCount;
     }
     const ta = document.getElementById('hitl-reply-text');
-    if (ta) ta.focus();
-  } catch (e) { content.innerHTML = `<div class="empty-state">${esc(e.message)}</div>`; }
+    if (ta) setTimeout(() => ta.focus(), 100);
+}
+
+function closeQuestionModal() {
+  const m = document.getElementById('hitl-question-modal');
+  if (m) m.remove();
 }
 
 // Per-deliverable verdict tracking
@@ -3161,18 +3220,78 @@ async function submitDlvVerdicts(qid, action) {
   try {
     await api(`/api/questions/${qid}/answer`, { method: 'POST', body: { response, action } });
     toast(action === 'approve' ? 'Tous approuves' : 'Rejets soumis');
+    closeQuestionModal();
     loadHitlInbox();
-  } catch (e) { toast(e.message, 'error'); }
+  } catch (e) { _handleSubmitError(e, qid, action); }
 }
 
 async function submitHitlAnswer(qid, action) {
   const response = document.getElementById('hitl-reply-text')?.value || '';
-  if (action === 'answer' && !response.trim()) { toast('Response is empty', 'error'); return; }
+  if (action === 'answer' && !response.trim()) { toast('La reponse est vide', 'error'); return; }
   try {
     await api(`/api/questions/${qid}/answer`, { method: 'POST', body: { response, action } });
-    toast(action === 'approve' ? 'Approved' : action === 'reject' ? 'Rejected' : 'Response sent');
+    const msgs = { approve: 'Approuve', reject: 'Rejete', answer: 'Reponse envoyee' };
+    toast(msgs[action] || 'Envoye');
+    closeQuestionModal();
     loadHitlInbox();
-  } catch (e) { toast(e.message, 'error'); }
+  } catch (e) { _handleSubmitError(e, qid, action); }
+}
+
+function _handleSubmitError(err, qid, action) {
+  const msg = err.message || '';
+  // Detect network / system down errors
+  if (msg === 'Failed to fetch' || msg.includes('NetworkError') || msg.includes('ECONNREFUSED') || msg.includes('502') || msg.includes('503')) {
+    _showSystemDown(msg);
+  } else {
+    toast(msg, 'error');
+  }
+}
+
+function _showSystemDown(detail) {
+  // Remove existing system-down modal if any
+  const existing = document.getElementById('system-down-modal');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay active';
+  overlay.id = 'system-down-modal';
+  overlay.innerHTML = `<div class="modal modal-system-down">
+    <div class="msd-icon">&#x26A0;</div>
+    <div class="msd-title">Systeme non disponible</div>
+    <div class="msd-text">
+      Le serveur ne repond pas. Les agents sont peut-etre arretes.<br>
+      Votre reponse n'a pas ete envoyee.
+    </div>
+    <div class="msd-actions">
+      <button class="btn btn-outline" onclick="document.getElementById('system-down-modal').remove()">Fermer</button>
+      <button class="btn btn-primary" id="msd-retry-btn" onclick="_retrySystemCheck()">Verifier la connexion</button>
+    </div>
+    <div class="msd-status" id="msd-status"><span class="msd-pulse"></span>Deconnecte</div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function _retrySystemCheck() {
+  const statusEl = document.getElementById('msd-status');
+  const retryBtn = document.getElementById('msd-retry-btn');
+  if (statusEl) statusEl.innerHTML = '<span class="spinner" style="width:10px;height:10px;margin-right:6px"></span>Verification...';
+  if (retryBtn) retryBtn.disabled = true;
+  try {
+    const res = await fetch('/health', { signal: AbortSignal.timeout(5000) });
+    if (res.ok) {
+      if (statusEl) statusEl.innerHTML = '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--accent-green);margin-right:6px"></span>Connecte';
+      toast('Connexion retablie', 'success');
+      setTimeout(() => {
+        const m = document.getElementById('system-down-modal');
+        if (m) m.remove();
+      }, 800);
+    } else {
+      if (statusEl) statusEl.innerHTML = '<span class="msd-pulse"></span>Serveur en erreur (' + res.status + ')';
+    }
+  } catch (_) {
+    if (statusEl) statusEl.innerHTML = '<span class="msd-pulse"></span>Toujours deconnecte';
+  }
+  if (retryBtn) retryBtn.disabled = false;
 }
 
 // ══════════════════════════════════════════════════
@@ -3493,6 +3612,28 @@ async function loadDeliverables() {
 }
 
 let currentDelivSlug = '';
+
+function _splitDeliverableContent(content) {
+  // Split a deliverable .md into individual deliverables by ## headings
+  // Returns [{key, title, body}]
+  const items = [];
+  const sections = content.split(/^##\s+/m);
+  // sections[0] is the preamble (# heading, metadata, ---)
+  const preamble = sections[0] || '';
+  if (sections.length <= 1) {
+    // No ## sections — single block
+    items.push({ key: '_all', title: '', body: content });
+    return items;
+  }
+  for (let i = 1; i < sections.length; i++) {
+    const nl = sections[i].indexOf('\n');
+    const key = nl >= 0 ? sections[i].substring(0, nl).trim() : sections[i].trim();
+    const body = nl >= 0 ? sections[i].substring(nl + 1).trim() : '';
+    items.push({ key, title: key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), body });
+  }
+  return items;
+}
+
 async function loadProjectDeliverables() {
   const slug = document.getElementById('deliv-project')?.value;
   currentDelivSlug = slug || '';
@@ -3509,65 +3650,171 @@ async function loadProjectDeliverables() {
     }
     let html = '';
     for (const phase of phases) {
-      html += `<div style="margin-bottom:24px">
+      // Split each agent's content into individual deliverable entries
+      let delivEntries = [];
+      for (const agent of phase.agents) {
+        const items = _splitDeliverableContent(agent.content);
+        items.forEach(item => {
+          delivEntries.push({
+            agent_id: agent.agent_id,
+            agent_name: agent.agent_name,
+            key: item.key,
+            title: item.title || agent.agent_name,
+            body: item.body,
+            remarks: agent.remarks,
+            fullContent: agent.content,
+          });
+        });
+      }
+
+      // Group deliverables by agent (collapsible groups like Questions inbox)
+      const grouped = {};
+      delivEntries.forEach(d => {
+        if (!grouped[d.agent_id]) grouped[d.agent_id] = { name: d.agent_name, remarks: d.remarks, entries: [] };
+        grouped[d.agent_id].entries.push(d);
+      });
+
+      html += `<div class="inbox-agent-group" style="margin-bottom:20px">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
           <span class="tag tag-accent" style="font-size:12px;padding:4px 12px">${esc(phase.phase).toUpperCase()}</span>
-          <span style="font-size:11px;color:var(--text-tertiary)">${phase.agents.length} livrable${phase.agents.length > 1 ? 's' : ''}</span>
+          <span style="font-size:11px;color:var(--text-tertiary)">${delivEntries.length} livrable${delivEntries.length > 1 ? 's' : ''}</span>
         </div>`;
-      for (const agent of phase.agents) {
-        const uid = `dlv-${esc(phase.phase)}-${esc(agent.agent_id)}`;
-        html += `<div class="card dlv-accordion" id="${uid}-card" style="margin-bottom:12px">
-          <div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="toggleDelivAccordion('${uid}-card')">
-            <span class="dlv-accordion-arrow" style="font-size:10px;color:var(--text-quaternary);transition:transform 0.2s">&#x25B6;</span>
-            <span class="tag tag-accent">${esc(agent.agent_id)}</span>
-            <span style="font-size:12px;color:var(--text-secondary);font-weight:500">${esc(agent.agent_name)}</span>
-            ${agent.remarks ? '<span style="font-size:9px;color:var(--accent-orange);margin-left:4px" title="Remarques">&#x1F4AC;</span>' : ''}
-            <span class="dlv-remark-btn" style="margin-left:auto;font-size:10px;color:var(--text-tertiary);cursor:pointer;padding:3px 8px;border:1px solid var(--border-subtle);border-radius:4px" onclick="event.stopPropagation();toggleRemarkForm('${uid}')">&#x1F4AC; Faire une remarque</span>
+
+      for (const [agentId, group] of Object.entries(grouped)) {
+        const groupUid = `dlvg-${esc(phase.phase)}-${esc(agentId)}`;
+        html += `<div class="inbox-agent-group">
+          <div class="inbox-agent-header" onclick="toggleGroup('${groupUid}')">
+            <div class="inbox-agent-left">
+              <span class="inbox-agent-arrow" id="arrow-${groupUid}">&#x25BC;</span>
+              <span class="tag tag-accent">${esc(agentId)}</span>
+              <span style="font-size:11px;color:var(--text-secondary);font-weight:500">${esc(group.name)}</span>
+              <span class="inbox-agent-count">${group.entries.length} livrable${group.entries.length > 1 ? 's' : ''}</span>
+              ${group.remarks ? '<span style="font-size:9px;color:var(--accent-orange);margin-left:4px" title="Remarques">&#x1F4AC;</span>' : ''}
+              <span style="margin-left:auto;font-size:10px;color:var(--text-tertiary);cursor:pointer;padding:3px 8px;border:1px solid var(--border-subtle);border-radius:4px" onclick="event.stopPropagation();toggleRemarkForm('${groupUid}')">&#x1F4AC; Remarque</span>
+            </div>
           </div>
-          <div class="dlv-accordion-body" style="display:none;margin-top:10px" onclick="event.stopPropagation()">
-            <div id="${uid}-remark" style="display:none;margin-bottom:10px;background:var(--bg-active);border:1px solid var(--accent-orange)33;border-radius:6px;padding:12px">
+          <div class="inbox-agent-questions" id="group-${groupUid}">
+            <div id="${groupUid}-remark" style="display:none;margin:6px 0 10px;background:var(--bg-active);border:1px solid var(--accent-orange)33;border-radius:6px;padding:12px">
               <div style="font-size:10px;font-weight:600;color:var(--accent-orange);letter-spacing:0.5px;margin-bottom:8px">REMARQUE A L'AGENT</div>
-              <textarea id="${uid}-remark-text" class="form-input" style="width:100%;min-height:100px;font-size:11px;font-family:inherit;background:var(--bg-tertiary);resize:vertical;line-height:1.5" placeholder="Decrivez ce que l'agent doit corriger ou ameliorer..."></textarea>
+              <textarea id="${groupUid}-remark-text" class="form-input" style="width:100%;min-height:100px;font-size:11px;font-family:inherit;background:var(--bg-tertiary);resize:vertical;line-height:1.5" placeholder="Decrivez ce que l'agent doit corriger ou ameliorer..."></textarea>
               <div style="display:flex;gap:6px;margin-top:8px;justify-content:flex-end">
-                <button class="btn btn-outline" style="font-size:10px;padding:4px 12px" onclick="event.stopPropagation();toggleRemarkForm('${uid}')">Annuler</button>
-                <button class="btn btn-primary" style="font-size:10px;padding:4px 12px;background:var(--accent-orange);border-color:var(--accent-orange)" onclick="event.stopPropagation();submitRemark('${uid}','${esc(currentDelivSlug)}','${esc(phase.phase)}','${esc(agent.agent_id)}','${esc(delivTeamId)}')">Soumettre a l'agent</button>
+                <button class="btn btn-outline" style="font-size:10px;padding:4px 12px" onclick="event.stopPropagation();toggleRemarkForm('${groupUid}')">Annuler</button>
+                <button class="btn btn-primary" style="font-size:10px;padding:4px 12px;background:var(--accent-orange);border-color:var(--accent-orange)" onclick="event.stopPropagation();submitRemark('${groupUid}','${esc(currentDelivSlug)}','${esc(phase.phase)}','${esc(agentId)}','${esc(delivTeamId)}')">Soumettre a l'agent</button>
               </div>
             </div>
-            ${agent.remarks ? `<div style="margin-bottom:10px;padding:10px;background:var(--bg-active);border-left:3px solid var(--accent-orange);border-radius:0 4px 4px 0;font-size:10px;color:var(--text-tertiary)"><div style="font-size:9px;font-weight:600;color:var(--accent-orange);margin-bottom:4px">REMARQUES PRECEDENTES</div>${renderMarkdown(agent.remarks)}</div>` : ''}
-            <div class="md-content" style="max-height:600px;overflow:auto;background:var(--bg-secondary);padding:12px;border-radius:4px">${renderMarkdown(agent.content)}</div>
-          </div>
-        </div>`;
+            ${group.remarks ? `<div style="margin:4px 0 8px;padding:10px;background:var(--bg-active);border-left:3px solid var(--accent-orange);border-radius:0 4px 4px 0;font-size:10px;color:var(--text-tertiary)"><div style="font-size:9px;font-weight:600;color:var(--accent-orange);margin-bottom:4px">REMARQUES PRECEDENTES</div>${renderMarkdown(group.remarks)}</div>` : ''}`;
+
+        for (const d of group.entries) {
+          const displayTitle = d.key === '_all' ? d.agent_name : d.title;
+          html += `<div class="card" style="cursor:pointer;margin-bottom:4px" onclick="openDelivModal('${esc(phase.phase)}','${esc(agentId)}','${esc(d.key)}','${esc(currentDelivSlug)}')">
+            <div class="card-row">
+              <div style="flex:1;min-width:0">
+                <div class="card-tags">
+                  <span class="tag tag-green">${esc(phase.phase).toUpperCase()}</span>
+                </div>
+                <div class="card-question">${esc(displayTitle)}</div>
+              </div>
+            </div>
+          </div>`;
+        }
+        html += '</div></div>';
       }
       html += '</div>';
     }
     container.innerHTML = html;
+
+    // Store data for modal access
+    window._delivData = data;
   } catch (e) { container.innerHTML = `<div class="empty-state">${esc(e.message)}</div>`; }
 }
 
-function toggleDelivAccordion(cardId) {
-  const card = document.getElementById(cardId);
-  if (!card) return;
-  const body = card.querySelector('.dlv-accordion-body');
-  const arrow = card.querySelector('.dlv-accordion-arrow');
-  if (!body) return;
-  const isOpen = body.style.display !== 'none';
-  if (isOpen) {
-    // Close this one
-    body.style.display = 'none';
-    if (arrow) arrow.style.transform = '';
+function openDelivModal(phase, agentId, key, slug) {
+  // Find the deliverable data
+  const data = window._delivData;
+  if (!data) return;
+  const phaseData = (data.phases || []).find(p => p.phase === phase);
+  if (!phaseData) return;
+  const agentData = phaseData.agents.find(a => a.agent_id === agentId);
+  if (!agentData) return;
+
+  // Extract the specific deliverable section
+  let bodyHtml = '';
+  if (key === '_all') {
+    bodyHtml = _renderDelivContent(agentData.content);
   } else {
-    // Close all others first
-    document.querySelectorAll('.dlv-accordion').forEach(other => {
-      const ob = other.querySelector('.dlv-accordion-body');
-      const oa = other.querySelector('.dlv-accordion-arrow');
-      if (ob) ob.style.display = 'none';
-      if (oa) oa.style.transform = '';
+    const items = _splitDeliverableContent(agentData.content);
+    const item = items.find(i => i.key === key);
+    bodyHtml = item ? _renderDelivContent(item.body) : _renderDelivContent(agentData.content);
+  }
+
+  const displayTitle = key === '_all' ? agentData.agent_name : key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  const delivTeamId = data.team_id || 'team1';
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay active';
+  overlay.id = 'deliv-detail-modal';
+
+  overlay.innerHTML = `<div class="modal modal-question">
+    <div class="mq-header">
+      <div class="mq-icon mq-icon-question">&#x1F4C4;</div>
+      <div class="mq-header-text">
+        <div class="mq-title">${esc(displayTitle)}</div>
+        <div class="mq-subtitle">
+          <span>${esc(agentId)}</span>
+          <span>${esc(agentData.agent_name)}</span>
+          <span style="color:var(--accent-blue)">${esc(phase)}</span>
+        </div>
+      </div>
+      <button class="mq-close" onclick="document.getElementById('deliv-detail-modal').remove()" title="Fermer">&times;</button>
+    </div>
+    <div class="mq-body">
+      ${agentData.remarks ? `<div style="margin-bottom:12px;padding:10px;background:var(--bg-active);border-left:3px solid var(--accent-orange);border-radius:0 4px 4px 0;font-size:10px;color:var(--text-tertiary)"><div style="font-size:9px;font-weight:600;color:var(--accent-orange);margin-bottom:4px">REMARQUES PRECEDENTES</div>${renderMarkdown(agentData.remarks)}</div>` : ''}
+      <div class="md-content" style="line-height:1.6">${bodyHtml}</div>
+      <div class="mq-divider">Retour a l'agent</div>
+      <textarea class="mq-reply-area" id="deliv-remark-text" placeholder="Decrivez ce que l'agent doit corriger ou ameliorer..."></textarea>
+    </div>
+    <div class="mq-footer">
+      <span class="mq-hint">Echap pour fermer</span>
+      <button class="btn btn-outline" onclick="document.getElementById('deliv-detail-modal').remove()">Fermer</button>
+      <button class="btn btn-primary" style="background:var(--accent-orange)" onclick="_submitRemarkFromModal('${esc(slug)}','${esc(phase)}','${esc(agentId)}','${esc(delivTeamId)}')">Soumettre la remarque</button>
+    </div>
+  </div>`;
+
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  const escHandler = e => { if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escHandler); } };
+  document.addEventListener('keydown', escHandler);
+  document.body.appendChild(overlay);
+}
+
+async function _submitRemarkFromModal(slug, phase, agentId, teamId) {
+  const ta = document.getElementById('deliv-remark-text');
+  if (!ta) return;
+  const remark = ta.value.trim();
+  if (!remark) { toast('La remarque ne peut pas etre vide', 'error'); return; }
+
+  // Disable button during submit
+  const btn = ta.closest('.modal-question').querySelector('.mq-footer .btn-primary');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Envoi...'; }
+
+  try {
+    const res = await api(`/api/projects/${encodeURIComponent(slug)}/deliverables/${encodeURIComponent(phase)}/${encodeURIComponent(agentId)}/remark`, {
+      method: 'POST', body: { remark, team_id: teamId || 'team1' }
     });
-    // Open this one
-    body.style.display = '';
-    if (arrow) arrow.style.transform = 'rotate(90deg)';
+    if (res.ok) {
+      toast('Remarque soumise — l\'agent va produire une version revisee', 'success');
+      document.getElementById('deliv-detail-modal')?.remove();
+      loadProjectDeliverables();
+    } else {
+      toast(res.error || 'Erreur', 'error');
+      if (btn) { btn.disabled = false; btn.textContent = 'Soumettre la remarque'; }
+    }
+  } catch (e) {
+    _handleSubmitError(e);
+    if (btn) { btn.disabled = false; btn.textContent = 'Soumettre la remarque'; }
   }
 }
+
+// toggleDelivAccordion removed — deliverables now use modal popups
 
 function toggleRemarkForm(uid) {
   const el = document.getElementById(uid + '-remark');

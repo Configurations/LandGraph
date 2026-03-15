@@ -1,4 +1,4 @@
-/* LandGraph Admin — Custom styles */
+/* ag.flow Admin — Custom styles */
 
 /* Dashboard */
 .dashboard-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; }

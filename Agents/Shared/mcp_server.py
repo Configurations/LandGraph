@@ -1,4 +1,4 @@
-"""MCP SSE Server — expose LandGraph agents as MCP tools per team."""
+"""MCP SSE Server — expose ag.flow agents as MCP tools per team."""
 import asyncio
 import json
 import logging

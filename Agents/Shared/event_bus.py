@@ -1,4 +1,4 @@
-"""EventBus — Observabilite centralisee pour LandGraph.
+"""EventBus — Observabilite centralisee pour ag.flow.
 
 Pattern pub/sub : les composants emettent des events, les handlers les consomment.
 Handlers inclus : Langfuse (si configure), Webhooks (si configure), ring buffer (toujours).
@@ -261,13 +261,13 @@ class EventBus:
                 payload = json.dumps(event.to_dict(), default=str)
                 headers = dict(wh.get("headers", {}))
                 headers["Content-Type"] = "application/json"
-                headers["X-LandGraph-Event"] = event.event_type
+                headers["X-AgFlow-Event"] = event.event_type
 
                 # Signature HMAC si secret configure
                 secret = wh.get("secret", "")
                 if secret:
                     sig = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
-                    headers["X-LandGraph-Signature"] = f"sha256={sig}"
+                    headers["X-AgFlow-Signature"] = f"sha256={sig}"
 
                 try:
                     r = requests.post(url, data=payload, headers=headers, timeout=10)

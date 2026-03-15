@@ -1,4 +1,4 @@
-"""Fixtures partagees pour les tests LandGraph."""
+"""Fixtures partagees pour les tests ag.flow."""
 import json
 import os
 import sys

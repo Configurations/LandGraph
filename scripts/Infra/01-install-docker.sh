@@ -100,7 +100,7 @@ apt-get install -y -qq caddy
 # Generate Caddyfile — multi-host reverse proxy (HTTP)
 # Le SSL est gere par Cloudflare Tunnel en front — pas besoin de TLS ici.
 cat > /etc/caddy/Caddyfile << 'CADDYEOF'
-# ── LandGraph Reverse Proxy ──────────────────────────
+# ── ag.flow Reverse Proxy ──────────────────────────
 # Caddy ecoute en HTTP sur le port 80.
 # Cloudflare Tunnel gere le SSL cote navigateur.
 #

@@ -28,7 +28,7 @@ def tmp_admin_env(tmp_path):
     # .env
     env_file = project / ".env"
     env_file.write_text(
-        "# LandGraph\n"
+        "# ag.flow\n"
         "WEB_ADMIN_USERNAME=admin\n"
         "WEB_ADMIN_PASSWORD=secret123\n"
         "ANTHROPIC_API_KEY=sk-ant-test\n"

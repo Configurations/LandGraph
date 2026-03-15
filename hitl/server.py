@@ -1,4 +1,5 @@
 """HITL Console — Standalone FastAPI app for Human-In-The-Loop management."""
+import asyncio
 import json
 import logging
 import os
@@ -10,10 +11,10 @@ _log = logging.getLogger(__name__)
 try:
     for _vp in ["/project/.version", "/app/.version", os.path.join(os.path.dirname(__file__), "..", ".version")]:
         if os.path.isfile(_vp):
-            _log.info("LandGraph version: %s", open(_vp).read().strip())
+            _log.info("ag.flow version: %s", open(_vp).read().strip())
             break
     else:
-        _log.info("LandGraph version: dev (no .version file)")
+        _log.info("ag.flow version: dev (no .version file)")
 except Exception:
     pass
 from contextlib import asynccontextmanager
@@ -119,7 +120,7 @@ def _send_reset_email(to_email: str, temp_password: str):
     use_ssl = smtp_cfg.get("use_ssl", False)
     use_tls = smtp_cfg.get("use_tls", True)
     from_address = smtp_cfg.get("from_address", "") or smtp_user
-    from_name = smtp_cfg.get("from_name", "LandGraph")
+    from_name = smtp_cfg.get("from_name", "ag.flow")
 
     password_env = smtp_cfg.get("password_env", "SMTP_PASSWORD")
     smtp_password = os.getenv(password_env, "")
@@ -157,7 +158,7 @@ def _send_reset_email(to_email: str, temp_password: str):
         default_link = f"{hitl_host}/reset-password?mail={quote(to_email)}&pwd={quote(temp_password)}"
         html = f"""\
 <html><body style="font-family:sans-serif;color:#333">
-<h2>Bienvenue sur LandGraph</h2>
+<h2>Bienvenue sur ag.flow</h2>
 <p>Un compte a ete cree pour vous (<code>{to_email}</code>).</p>
 <p>Votre mot de passe temporaire : <code style="background:#f0f0f0;padding:4px 8px;border-radius:4px;font-size:1.1em">{temp_password}</code></p>
 <p>Cliquez sur le lien ci-dessous pour definir votre mot de passe :</p>
@@ -416,7 +417,6 @@ def _load_teams() -> list[dict]:
     return []
 
 
-import asyncio
 import threading
 
 _pg_listener_stop = threading.Event()
@@ -1414,23 +1414,39 @@ async def ws_team(websocket: WebSocket, team_id: str):
         await websocket.close(code=4003, reason="Forbidden")
         return
     await websocket.accept()
+    logger.info(f"[ws] Connected: team={team_id} user={user.email}")
     _ws_connections.setdefault(team_id, []).append(websocket)
     _ws_chat_subs.setdefault(team_id, {})[websocket] = None
     try:
         while True:
-            raw = await websocket.receive_text()
+            # Wait for client message with timeout (keepalive)
+            try:
+                raw = await asyncio.wait_for(websocket.receive_text(), timeout=45)
+            except asyncio.TimeoutError:
+                # Send ping to keep connection alive
+                try:
+                    await websocket.send_json({"type": "ping"})
+                except Exception:
+                    break
+                continue
             # Handle client commands
             try:
                 msg = json.loads(raw)
+                if msg.get("type") == "pong":
+                    continue
                 if msg.get("type") == "watch_chat":
-                    # Subscribe to a specific agent's chat
                     _ws_chat_subs[team_id][websocket] = msg.get("agent_id")
                 elif msg.get("type") == "unwatch_chat":
                     _ws_chat_subs[team_id][websocket] = None
             except (json.JSONDecodeError, KeyError):
                 pass
     except WebSocketDisconnect:
-        _ws_connections[team_id].remove(websocket)
+        logger.info(f"[ws] Disconnected: team={team_id} user={user.email}")
+    except Exception as e:
+        logger.warning(f"[ws] Error: team={team_id} user={user.email}: {e}")
+    finally:
+        if websocket in _ws_connections.get(team_id, []):
+            _ws_connections[team_id].remove(websocket)
         _ws_chat_subs.get(team_id, {}).pop(websocket, None)
 
 

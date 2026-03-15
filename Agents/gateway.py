@@ -18,10 +18,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelna
 # Log version at startup
 for _vp in ["/project/.version", os.path.join(os.path.dirname(__file__), "..", ".version")]:
     if os.path.isfile(_vp):
-        logger.info("LandGraph version: %s", open(_vp).read().strip())
+        logger.info("ag.flow version: %s", open(_vp).read().strip())
         break
 else:
-    logger.info("LandGraph version: dev")
+    logger.info("ag.flow version: dev")
 
 app = FastAPI(title="LangGraph Multi-Agent API", version="0.6.0")
 
@@ -151,13 +151,31 @@ def get_orchestrator_graph():
     return GRAPH
 
 
+def _read_project_language(project_slug):
+    """Read language from .project file on disk."""
+    if not project_slug:
+        return "fr"
+    ag_flow_root = os.environ.get("AG_FLOW_ROOT", "/root/ag.flow")
+    dot_project = os.path.join(ag_flow_root, "projects", project_slug, ".project")
+    try:
+        if os.path.isfile(dot_project):
+            with open(dot_project, encoding="utf-8") as f:
+                for line in f:
+                    if line.strip().startswith("language:"):
+                        return line.split(":", 1)[1].strip()
+    except Exception:
+        pass
+    return "fr"
+
+
 def new_state(msgs, project_id, channel_id, team_id="", project_slug=""):
+    lang = _read_project_language(project_slug)
     return {
         "messages": msgs,
         "project_id": project_id,
         "project_slug": project_slug,
         "project_phase": "discovery",
-        "project_metadata": {},
+        "project_metadata": {"language": lang},
         "agent_outputs": {},
         "legal_alerts": [],
         "decision_history": [],
@@ -187,6 +205,11 @@ def load_or_create_state(thread_id, msgs, project_id, channel_id, team_id="", pr
             # Update project_slug if provided (may be set later via HITL)
             if project_slug:
                 state["project_slug"] = project_slug
+            # Ensure language is set in project_metadata
+            meta = state.get("project_metadata", {})
+            if not meta.get("language"):
+                meta["language"] = _read_project_language(project_slug or state.get("project_slug", ""))
+                state["project_metadata"] = meta
 
             outputs = list(state.get("agent_outputs", {}).keys())
             logger.info(f"State loaded for {thread_id} — {len(outputs)} outputs: {outputs}")
