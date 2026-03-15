@@ -927,6 +927,27 @@ a:hover { text-decoration: underline; }
   to { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes heartbeat {
+  0%, 100% { transform: scale(1); opacity: 0.7; }
+  25% { transform: scale(1.3); opacity: 1; }
+  50% { transform: scale(1); opacity: 0.7; }
+  75% { transform: scale(1.2); opacity: 0.9; }
+}
+.agent-heartbeat {
+  display: inline-block;
+  color: #ef4444;
+  font-size: 14px;
+  animation: heartbeat 1.5s ease-in-out infinite;
+}
+
+@keyframes wf-pulse {
+  0%, 100% { border-left-color: var(--accent-blue); box-shadow: 0 0 0 0 rgba(99,102,241,0); }
+  50% { border-left-color: #818cf8; box-shadow: -4px 0 12px 0 rgba(99,102,241,0.25); }
+}
+.wf-phase-active {
+  animation: wf-pulse 2.5s ease-in-out infinite;
+}
+
 /* Cascade stagger utility — apply via JS with style="animation-delay: Xms" */
 .stagger-in { animation: fadeSlideIn 0.3s ease both; }
 
@@ -947,7 +968,46 @@ a:hover { text-decoration: underline; }
 .log-debug { color: #06b6d4; }
 .log-dim { opacity: 0.35; }
 
-/* ══ 33. Version Tag ═══════════════════════ */
+/* ══ 33. Markdown Content ═════════════════ */
+.md-content {
+  font-size: 11px; color: var(--text-secondary); line-height: 1.6;
+}
+.md-content h1 { font-size: 16px; color: var(--text-primary); margin: 12px 0 6px; font-weight: 700; }
+.md-content h2 { font-size: 14px; color: var(--text-primary); margin: 10px 0 4px; font-weight: 600; }
+.md-content h3 { font-size: 12px; color: var(--text-primary); margin: 8px 0 4px; font-weight: 600; }
+.md-content p  { margin: 4px 0; }
+.md-content ul { margin: 4px 0 4px 16px; }
+.md-content li { margin: 2px 0; }
+.md-content hr { border: none; border-top: 1px solid var(--border-subtle); margin: 8px 0; }
+.md-content strong { color: var(--text-primary); font-weight: 600; }
+.md-content code { background: var(--bg-active); padding: 1px 4px; border-radius: 3px; font-size: 10px; }
+
+.md-table {
+  width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 11px;
+}
+.md-table th {
+  text-align: left; padding: 6px 10px; border-bottom: 2px solid var(--border-strong);
+  color: var(--text-primary); font-weight: 600; font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.md-table td {
+  padding: 5px 10px; border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+.md-table tr:hover td { background: var(--bg-hover); }
+
+.dlv-remark-btn:hover { color: var(--accent-blue) !important; border-color: var(--accent-blue) !important; }
+
+.dep-tooltip {
+  display: none; position: fixed; z-index: 9999;
+  background: var(--bg-secondary); color: var(--text-primary);
+  border: 1px solid var(--border-strong); border-radius: 6px;
+  padding: 10px 14px; font-size: 11px; line-height: 1.6;
+  max-width: 300px; pointer-events: none;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+}
+
+/* ══ 34. Version Tag ═══════════════════════ */
 .version-tag {
   font-size: 9px; color: var(--text-quaternary); text-align: center;
   margin-top: 12px; letter-spacing: 0.5px; opacity: 0.7;

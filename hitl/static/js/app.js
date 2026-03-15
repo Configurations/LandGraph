@@ -14,6 +14,15 @@ let selectedProject = null;
 let sidebarCollapsed = false;
 let createProjectState = { step: 1, name: '', team: '', language: '', startDate: '', targetDate: '', sourceMode: 'new', slug: '', projectUuid: '', repoUrl: '', repoCloned: false, uploadedDocs: [], analyzedUrls: [], importResult: null, aiIssues: [], aiRelations: [], aiDescription: '', chatMessages: [] };
 
+let _viewRefreshId = null;
+function startViewRefresh(fn, intervalMs = 10000) {
+  stopViewRefresh();
+  _viewRefreshId = setInterval(fn, intervalMs);
+}
+function stopViewRefresh() {
+  if (_viewRefreshId) { clearInterval(_viewRefreshId); _viewRefreshId = null; }
+}
+
 // ── SVG Icons ────────────────────────────────────
 const Icons = {
   inbox: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="2 8 2 14 14 14 14 8"/><polyline points="5 5 8 8 11 5"/><line x1="8" y1="2" x2="8" y2="8"/></svg>',
@@ -41,6 +50,154 @@ const Icons = {
 
 // ── Helpers ──────────────────────────────────────
 function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+function renderMarkdown(text) {
+  if (!text) return '';
+  const lines = text.split('\n');
+  let html = '';
+  let inTable = false;
+  let inList = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+
+    // Horizontal rule
+    if (/^---+$/.test(line.trim())) {
+      if (inList) { html += '</ul>'; inList = false; }
+      if (inTable) { html += '</tbody></table></div>'; inTable = false; }
+      html += '<hr style="border:none;border-top:1px solid var(--border-subtle);margin:12px 0">';
+      continue;
+    }
+
+    // Table row
+    if (line.trim().startsWith('|') && line.trim().endsWith('|')) {
+      const cells = line.trim().slice(1, -1).split('|').map(c => c.trim());
+      // Check if separator row
+      if (cells.every(c => /^-+$/.test(c))) continue;
+      if (!inTable) {
+        if (inList) { html += '</ul>'; inList = false; }
+        html += '<div style="overflow-x:auto;margin:8px 0"><table class="md-table"><thead><tr>';
+        cells.forEach(c => { html += `<th>${esc(c)}</th>`; });
+        html += '</tr></thead><tbody>';
+        inTable = true;
+      } else {
+        html += '<tr>';
+        cells.forEach(c => { html += `<td>${esc(c)}</td>`; });
+        html += '</tr>';
+      }
+      continue;
+    }
+    if (inTable) { html += '</tbody></table></div>'; inTable = false; }
+
+    // Headers
+    const hMatch = line.match(/^(#{1,4})\s+(.+)/);
+    if (hMatch) {
+      if (inList) { html += '</ul>'; inList = false; }
+      const level = hMatch[1].length;
+      const sizes = { 1: '16px', 2: '14px', 3: '12px', 4: '11px' };
+      const margins = { 1: '20px 0 10px', 2: '16px 0 8px', 3: '12px 0 6px', 4: '10px 0 4px' };
+      html += `<div style="font-size:${sizes[level]};font-weight:600;color:var(--text-primary);margin:${margins[level]}">${escInline(hMatch[2])}</div>`;
+      continue;
+    }
+
+    // List item
+    if (/^\s*[-*]\s+/.test(line)) {
+      if (!inList) { html += '<ul style="margin:4px 0 4px 16px;padding:0">'; inList = true; }
+      const content = line.replace(/^\s*[-*]\s+/, '');
+      html += `<li style="font-size:11px;color:var(--text-secondary);margin:2px 0;line-height:1.5">${escInline(content)}</li>`;
+      continue;
+    }
+    if (inList && line.trim() === '') { html += '</ul>'; inList = false; continue; }
+    if (inList && !/^\s/.test(line)) { html += '</ul>'; inList = false; }
+
+    // Empty line
+    if (line.trim() === '') {
+      html += '<div style="height:6px"></div>';
+      continue;
+    }
+
+    // Detect JSON block (line starts with { or [)
+    const trimmed = line.trim();
+    if ((trimmed.startsWith('{') || trimmed.startsWith('[')) && trimmed.length > 2) {
+      // Collect multiline JSON — scan ahead for complete JSON
+      let jsonStr = trimmed;
+      let depth = 0;
+      for (const ch of trimmed) { if (ch === '{' || ch === '[') depth++; if (ch === '}' || ch === ']') depth--; }
+      let j = i + 1;
+      while (depth > 0 && j < lines.length) {
+        jsonStr += '\n' + lines[j];
+        for (const ch of lines[j]) { if (ch === '{' || ch === '[') depth++; if (ch === '}' || ch === ']') depth--; }
+        j++;
+      }
+      i = j - 1; // skip consumed lines
+      try {
+        const parsed = JSON.parse(jsonStr);
+        html += jsonToHtml(parsed);
+        continue;
+      } catch (_) {
+        // Not valid JSON — fall through to paragraph
+      }
+    }
+
+    // Regular paragraph
+    html += `<div style="font-size:11px;color:var(--text-secondary);line-height:1.6">${escInline(line)}</div>`;
+  }
+  if (inList) html += '</ul>';
+  if (inTable) html += '</tbody></table></div>';
+  return html;
+}
+
+function jsonToHtml(obj, depth) {
+  depth = depth || 0;
+  if (Array.isArray(obj)) {
+    if (obj.length > 0 && typeof obj[0] === 'object' && !Array.isArray(obj[0])) {
+      // Array of objects → table
+      const keys = []; obj.forEach(item => Object.keys(item).forEach(k => { if (!keys.includes(k)) keys.push(k); }));
+      let h = '<div style="overflow-x:auto;margin:8px 0"><table class="md-table"><thead><tr>';
+      keys.forEach(k => { h += `<th>${esc(k.replace(/_/g, ' '))}</th>`; });
+      h += '</tr></thead><tbody>';
+      obj.forEach(item => {
+        h += '<tr>';
+        keys.forEach(k => {
+          const v = item[k];
+          h += `<td>${v !== undefined && v !== null ? (typeof v === 'object' ? jsonToHtml(v, depth + 1) : esc(String(v))) : ''}</td>`;
+        });
+        h += '</tr>';
+      });
+      h += '</tbody></table></div>';
+      return h;
+    }
+    // Simple array → list
+    let h = '<ul style="margin:4px 0 4px 16px">';
+    obj.forEach(item => {
+      h += `<li style="font-size:11px;color:var(--text-secondary);margin:2px 0">${typeof item === 'object' ? jsonToHtml(item, depth + 1) : esc(String(item))}</li>`;
+    });
+    return h + '</ul>';
+  }
+  if (typeof obj === 'object' && obj !== null) {
+    let h = '';
+    for (const [k, v] of Object.entries(obj)) {
+      const label = k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      if (typeof v === 'object' && v !== null) {
+        h += `<div style="margin:${depth > 0 ? '4' : '10'}px 0 4px;font-size:${depth > 0 ? '11' : '12'}px;font-weight:600;color:var(--text-primary)">${esc(label)}</div>`;
+        h += `<div style="margin-left:${Math.min(depth, 2) * 12}px">${jsonToHtml(v, depth + 1)}</div>`;
+      } else {
+        h += `<div style="font-size:11px;color:var(--text-secondary);margin:2px 0"><strong style="color:var(--text-primary)">${esc(label)}</strong>: ${esc(String(v))}</div>`;
+      }
+    }
+    return h;
+  }
+  return esc(String(obj));
+}
+
+function escInline(s) {
+  // Escape HTML then render inline markdown: **bold**, `code`, *italic*
+  let out = esc(s);
+  out = out.replace(/\*\*(.+?)\*\*/g, '<strong style="color:var(--text-primary)">$1</strong>');
+  out = out.replace(/`(.+?)`/g, '<code style="background:var(--bg-tertiary);padding:1px 4px;border-radius:3px;font-size:10px">$1</code>');
+  out = out.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
+  return out;
+}
 
 function toast(msg, type = 'success') {
   const c = document.getElementById('toasts');
@@ -294,18 +451,96 @@ async function onLoggedIn() {
   if (teams.length > 0) activeTeam = teams[0].id;
   buildSidebar();
   connectWS();
+  requestNotifPermission();
+  refreshHitlBadge();
   switchView('pm-inbox');
 }
 
+// ── Notifications ────────────────────────────────
+function requestNotifPermission() {
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+}
+
+function showBrowserNotif(title, body) {
+  if ('Notification' in window && Notification.permission === 'granted') {
+    const n = new Notification(title, { body, icon: '/static/ag_flow_logo.svg' });
+    n.onclick = () => { window.focus(); n.close(); };
+    setTimeout(() => n.close(), 10000);
+  }
+}
+
+function playNotifSound() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = 800;
+    gain.gain.value = 0.15;
+    osc.start();
+    osc.stop(ctx.currentTime + 0.15);
+    setTimeout(() => {
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.connect(gain2);
+      gain2.connect(ctx.destination);
+      osc2.frequency.value = 1000;
+      gain2.gain.value = 0.15;
+      osc2.start();
+      osc2.stop(ctx.currentTime + 0.15);
+    }, 180);
+  } catch (e) { /* audio not available */ }
+}
+
+function updateHitlBadge(count) {
+  const badge = document.getElementById('hitl-badge');
+  if (badge) {
+    if (count > 0) {
+      badge.textContent = count;
+      badge.style.display = 'inline-block';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+}
+
+async function refreshHitlBadge() {
+  try {
+    const stats = await api(`/api/teams/${activeTeam}/questions/stats`);
+    updateHitlBadge(stats.pending || 0);
+  } catch (e) { /* ignore */ }
+}
+
 // ── WebSocket ────────────────────────────────────
+let _wsIntentionalClose = false;
+let _wsRetryCount = 0;
 function connectWS() {
   if (!activeTeam || !token) return;
+  _wsIntentionalClose = true;
   if (ws) ws.close();
+  _wsIntentionalClose = false;
+  _wsRetryCount = 0;
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}/api/teams/${activeTeam}/ws?token=${token}`);
+  ws.onopen = () => { _wsRetryCount = 0; };
   ws.onmessage = (e) => {
     const evt = JSON.parse(e.data);
-    if (evt.type === 'new_question' || evt.type === 'question_answered') {
+    if (evt.type === 'new_question') {
+      const d = evt.data || {};
+      const isApproval = d.request_type === 'approval';
+      const title = isApproval ? 'Validation requise' : 'Nouvelle question';
+      const body = `${d.agent_id || 'Agent'}: ${d.prompt || ''}`.substring(0, 120);
+      showBrowserNotif(title, body);
+      playNotifSound();
+      toast(`${title} — ${d.agent_id || ''}`, 'info');
+      refreshHitlBadge();
+      if (activeView === 'hitl-inbox') loadHitlInbox();
+    }
+    if (evt.type === 'question_answered') {
+      refreshHitlBadge();
       if (activeView === 'hitl-inbox') loadHitlInbox();
     }
     if (evt.type === 'pm_inbox') {
@@ -313,7 +548,14 @@ function connectWS() {
       if (activeView === 'pm-inbox') loadPmInbox();
     }
   };
-  ws.onclose = () => { setTimeout(connectWS, 5000); };
+  ws.onerror = () => { /* handled by onclose */ };
+  ws.onclose = () => {
+    if (_wsIntentionalClose) return;
+    _wsRetryCount++;
+    if (_wsRetryCount > 10) return; // stop after 10 retries
+    const delay = Math.min(5000 * _wsRetryCount, 30000);
+    setTimeout(connectWS, delay);
+  };
 }
 
 // ── Sidebar ──────────────────────────────────────
@@ -336,6 +578,7 @@ function buildSidebar() {
   // Workspace items
   const wsItems = [
     { id: 'pm-projects', label: 'Projects', icon: Icons.projects },
+    { id: 'logs', label: 'Logs', icon: Icons.logs },
   ];
   document.getElementById('sidebar-workspace').innerHTML = wsItems.map(item =>
     `<button class="sidebar-item" data-view="${item.id}" onclick="switchView('${item.id}')">
@@ -352,14 +595,11 @@ function buildSidebar() {
       <span class="icon">${Icons.hitl}</span><span class="sidebar-label">Questions</span>
       <span class="badge" id="hitl-badge" style="display:none">0</span>
     </button>
-    <button class="sidebar-item" data-view="threads" onclick="switchView('threads')">
-      <span class="icon">${Icons.pulse}</span><span class="sidebar-label">Threads</span>
+    <button class="sidebar-item" data-view="deliverables" onclick="switchView('deliverables')">
+      <span class="icon">${Icons.projects}</span><span class="sidebar-label">Livrables</span>
     </button>
     <button class="sidebar-item" data-view="activity" onclick="switchView('activity')">
       <span class="icon">${Icons.activity || '⚡'}</span><span class="sidebar-label">Activité</span>
-    </button>
-    <button class="sidebar-item" data-view="logs" onclick="switchView('logs')">
-      <span class="icon">${Icons.logs}</span><span class="sidebar-label">Logs</span>
     </button>`;
   const teamsLabel = document.getElementById('sidebar-teams-label');
   teamsLabel.parentNode.insertBefore(hitlSection, teamsLabel);
@@ -448,6 +688,7 @@ function switchTeamView(teamId, view) {
 
 // ── Navigation ───────────────────────────────────
 function switchView(view) {
+  stopViewRefresh();
   activeView = view;
   selectedIssue = null;
   document.querySelectorAll('.sidebar-item').forEach(el => {
@@ -466,6 +707,7 @@ function switchView(view) {
   else if (view === 'hitl-inbox') { renderHeader('HITL Questions'); loadHitlInbox(); }
   else if (view === 'agents') { renderHeader('Agents'); loadAgents(); }
   else if (view === 'members') { renderHeader('Members', false, false, true); loadMembers(); }
+  else if (view === 'deliverables') { renderHeader('Livrables'); loadDeliverables(); }
   else if (view === 'threads') { renderHeader('Threads'); loadThreads(); }
   else if (view === 'activity') { renderHeader('Activité agents'); loadActivity(); }
   else if (view === 'logs') { renderHeader('Logs'); loadLogs(); }
@@ -1119,25 +1361,135 @@ async function loadProjectDetail() {
     });
     html += '</div>';
 
-    // Tabs
-    html += renderTabBar(['Issues', 'Dependencies', 'Team', 'Activity'], ['issues', 'dependencies', 'team', 'activity'], projectDetailTab, 'projectDetailTab', 'loadProjectDetail');
+    // Tabs — switch calls switchProjectTab instead of full reload
+    html += renderTabBar(['Issues', 'Dependencies', 'Team', 'Activity', 'Workflow'], ['issues', 'dependencies', 'team', 'activity', 'workflow'], projectDetailTab, 'projectDetailTab', 'switchProjectTab');
     html += '</div>';
 
-    // Tab content
-    html += '<div style="flex:1;overflow:auto;display:flex">';
-    if (projectDetailTab === 'issues') {
-      html += renderProjectIssuesTab(issues);
-    } else if (projectDetailTab === 'dependencies') {
-      html += await renderProjectDependenciesTab(issues);
-    } else if (projectDetailTab === 'team') {
-      html += await renderProjectTeamTab(project, issues);
-    } else if (projectDetailTab === 'activity') {
-      html += await renderProjectActivityTab(project.id);
-    }
-    html += '</div>';
+    // Tab content container — only this part refreshes
+    html += '<div id="project-tab-content" style="flex:1;overflow:auto;display:flex"></div>';
 
     content.innerHTML = html;
+
+    // Store project context for tab refresh
+    window._projectCtx = { project, issues, wfStatus };
+
+    // Render initial tab content
+    await _renderTabInto(document.getElementById('project-tab-content'), projectDetailTab, project, issues, wfStatus, false);
+
+    // Auto-refresh for dynamic tabs — only refreshes tab content
+    // Start at 12s; will auto-adapt to 8s (agents running) or 60s (idle) after first refresh
+    if (projectDetailTab === 'workflow' || projectDetailTab === 'activity' || projectDetailTab === 'dependencies') {
+      window._currentRefreshInterval = 12000;
+      startViewRefresh(refreshTabContent, 12000);
+    }
   } catch (e) { content.innerHTML = `<div class="empty-state">${esc(e.message)}</div>`; }
+}
+
+async function refreshTabContent() {
+  const container = document.getElementById('project-tab-content');
+  if (!container || !selectedProject) return;
+  try {
+    const project = await api(`/api/pm/projects/${selectedProject}`);
+    const issues = await api(`/api/pm/issues?project_id=${selectedProject}`);
+    let wfStatus = null;
+    try { wfStatus = await api(`/api/pm/projects/${selectedProject}/workflow-status?team_id=${encodeURIComponent(project.team_id || 'team1')}`); } catch (_) {}
+    window._projectCtx = { project, issues, wfStatus };
+    await _renderTabInto(container, projectDetailTab, project, issues, wfStatus, true);
+
+    // Adaptive refresh rate: fast (8s) when agents running, slow (60s) when idle
+    const hasRunning = window._agentsRunning;
+    const interval = hasRunning ? 8000 : 60000;
+    if (window._currentRefreshInterval !== interval) {
+      window._currentRefreshInterval = interval;
+      startViewRefresh(refreshTabContent, interval);
+    }
+  } catch (e) { /* silent refresh failure */ }
+}
+
+async function _renderTabInto(container, tab, project, issues, wfStatus, isRefresh) {
+  let html = '';
+  if (tab === 'issues') {
+    html = renderProjectIssuesTab(issues);
+  } else if (tab === 'dependencies') {
+    html = await renderProjectDependenciesTab(issues);
+  } else if (tab === 'team') {
+    html = await renderProjectTeamTab(project, issues);
+  } else if (tab === 'activity') {
+    html = await renderProjectActivityTab(project.id);
+  } else if (tab === 'workflow') {
+    html = await renderProjectWorkflowTab(project, wfStatus);
+  }
+
+  // On refresh: compare text content to decide if DOM update is needed
+  // We compare text-only (no tags) because browsers normalize innerHTML differently
+  if (isRefresh) {
+    const _tmp = document.createElement('div');
+    _tmp.innerHTML = html;
+    if (container.textContent === _tmp.textContent) return;
+  }
+
+  // Preserve open details & active remark forms before re-render
+  const openDetails = new Set();
+  const activeRemarks = {};
+  if (isRefresh) {
+    container.querySelectorAll('details[open]').forEach(d => {
+      const sum = d.querySelector('summary');
+      if (sum) openDetails.add(sum.textContent.trim());
+    });
+    // Capture open remark forms (id ends with -remark)
+    container.querySelectorAll('[id$="-remark"]').forEach(el => {
+      if (el.style.display !== 'none') {
+        const ta = el.querySelector('textarea');
+        if (ta) activeRemarks[el.id] = ta.value;
+      }
+    });
+  }
+
+  container.innerHTML = html;
+
+  // Restore state after re-render
+  if (isRefresh) {
+    if (openDetails.size > 0) {
+      container.querySelectorAll('details').forEach(d => {
+        const sum = d.querySelector('summary');
+        if (sum && openDetails.has(sum.textContent.trim())) d.open = true;
+      });
+    }
+    for (const [id, val] of Object.entries(activeRemarks)) {
+      const remarkEl = document.getElementById(id);
+      if (remarkEl) {
+        remarkEl.style.display = '';
+        const ta = remarkEl.querySelector('textarea');
+        if (ta) ta.value = val;
+      }
+    }
+  }
+}
+
+async function switchProjectTab() {
+  stopViewRefresh();
+  const container = document.getElementById('project-tab-content');
+  const ctx = window._projectCtx;
+  if (!container || !ctx) { loadProjectDetail(); return; }
+  // Re-highlight active tab
+  container.closest('.pm-content, #pm-content')?.querySelectorAll('.tab-item').forEach(btn => {
+    const val = btn.getAttribute('onclick')?.match(/'(\w+)'/)?.[1];
+    btn.classList.toggle('active', val === projectDetailTab);
+  });
+  // Refresh data for dynamic tabs
+  if (projectDetailTab === 'workflow' || projectDetailTab === 'activity' || projectDetailTab === 'dependencies') {
+    try {
+      ctx.issues = await api(`/api/pm/issues?project_id=${selectedProject}`);
+      if (projectDetailTab === 'workflow') {
+        try { ctx.wfStatus = await api(`/api/pm/projects/${selectedProject}/workflow-status?team_id=${encodeURIComponent(ctx.project.team_id || 'team1')}`); } catch (_) {}
+      }
+    } catch (_) {}
+  }
+  await _renderTabInto(container, projectDetailTab, ctx.project, ctx.issues, ctx.wfStatus, false);
+  if (projectDetailTab === 'workflow' || projectDetailTab === 'activity' || projectDetailTab === 'dependencies') {
+    window._currentRefreshInterval = 12000;
+    startViewRefresh(refreshTabContent, 12000);
+  }
 }
 
 function renderProjectIssuesTab(issues) {
@@ -1200,11 +1552,22 @@ async function renderProjectDependenciesTab(issues) {
   // Nodes
   nodes.forEach(node => {
     const strokeColor = node.is_blocked ? 'var(--accent-red)' : (STATUS_COLORS[node.status] || 'var(--text-quaternary)');
-    html += `<g>
+    const phaseLabel = node.phase ? node.phase.toUpperCase() : '';
+    const priorityLabel = ['', 'P1', 'P2', 'P3', 'P4'][node.priority] || '';
+    const tooltipHtml = [
+      `<strong>${esc(node.id)}</strong>: ${esc(node.title)}`,
+      `<span style="color:${STATUS_COLORS[node.status] || 'var(--text-tertiary)'}">${STATUS_LABELS[node.status] || node.status}</span>`,
+      node.phase ? `Phase: <span style="color:var(--accent-blue)">${esc(node.phase)}</span>` : '',
+      node.assignee ? `Assignee: ${esc(node.assignee)}` : '',
+      `Priority: ${priorityLabel}`,
+      node.description ? `<span style="color:var(--text-tertiary)">${esc(node.description.slice(0, 120))}</span>` : '',
+    ].filter(Boolean).join('<br>');
+    html += `<g class="dep-node" style="cursor:pointer" onclick="openIssueDetail('${esc(node.id)}')" onmouseenter="showDepTooltip(event, '${btoa(encodeURIComponent(tooltipHtml))}')" onmouseleave="hideDepTooltip()">
       <rect x="${node.x}" y="${node.y}" width="100" height="36" rx="6" fill="var(--bg-tertiary)" stroke="${strokeColor}" stroke-width="${node.is_blocked ? 1.5 : 1}"/>
       ${node.is_blocked ? `<rect x="${node.x}" y="${node.y}" width="100" height="36" rx="6" fill="var(--accent-red)" opacity="0.06"/>` : ''}
       <text x="${node.x + 10}" y="${node.y + 15}" font-size="10" font-weight="600" fill="var(--text-quaternary)" font-family="inherit">${esc(node.id)}</text>
       <text x="${node.x + 10}" y="${node.y + 27}" font-size="9" fill="${node.is_blocked ? 'var(--accent-red)' : 'var(--text-secondary)'}" font-family="inherit">${esc(node.title.length > 14 ? node.title.slice(0, 14) + '...' : node.title)}</text>
+      ${phaseLabel ? `<text x="${node.x + 92}" y="${node.y + 12}" font-size="7" fill="var(--accent-blue)" text-anchor="end" font-family="inherit" opacity="0.7">${phaseLabel}</text>` : ''}
     </g>`;
   });
 
@@ -1214,6 +1577,26 @@ async function renderProjectDependenciesTab(issues) {
     <div style="display:flex;align-items:center;gap:6px"><div style="width:10px;height:10px;border-radius:3px;border:1.5px solid var(--accent-red);background:rgba(239,85,85,0.1)"></div><span>Blocked issue</span></div>
   </div></div>`;
   return html;
+}
+
+function showDepTooltip(evt, encoded) {
+  let tip = document.getElementById('dep-tooltip');
+  if (!tip) {
+    tip = document.createElement('div');
+    tip.id = 'dep-tooltip';
+    tip.className = 'dep-tooltip';
+    document.body.appendChild(tip);
+  }
+  tip.innerHTML = decodeURIComponent(atob(encoded));
+  tip.style.display = 'block';
+  const x = evt.clientX + 12;
+  const y = evt.clientY + 12;
+  tip.style.left = Math.min(x, window.innerWidth - 320) + 'px';
+  tip.style.top = Math.min(y, window.innerHeight - 150) + 'px';
+}
+function hideDepTooltip() {
+  const tip = document.getElementById('dep-tooltip');
+  if (tip) tip.style.display = 'none';
 }
 
 async function renderProjectTeamTab(project, issues) {
@@ -1283,26 +1666,319 @@ async function renderProjectTeamTab(project, issues) {
 }
 
 async function renderProjectActivityTab(projectId) {
+  const typeIcons = {
+    agent_start: '\u25B6', agent_complete: '\u2713', agent_error: '\u2717', agent_dispatch: '\u2192',
+    llm_call_start: '\u25C7', llm_call_end: '\u25C6', tool_call: '\u2699',
+    phase_transition: '\u2B24', human_gate_requested: '?', human_gate_responded: '!',
+  };
+  const typeColors = {
+    agent_start: 'var(--accent-blue)', agent_complete: '#22c55e', agent_error: '#ef4444',
+    agent_dispatch: 'var(--accent-purple, #a78bfa)', phase_transition: 'var(--accent-blue)',
+    human_gate_requested: 'var(--accent-orange)', human_gate_responded: '#22c55e',
+    tool_call: '#f59e0b',
+  };
+
   try {
-    const activity = await api(`/api/pm/projects/${projectId}/activity`);
-    let html = '<div style="flex:1;padding:24px"><div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:16px">Recent Activity</div>';
-    html += '<div class="timeline"><div class="timeline-line"></div>';
-    activity.forEach((event, i) => {
-      html += `<div class="timeline-event stagger-in" style="animation-delay:${i * 60}ms">
-        <div class="timeline-dot"></div>
-        <div class="timeline-text">
-          <span class="timeline-user">${esc(event.user_name)}</span>
-          <span>${esc(event.action)}</span>
-          ${event.issue_id ? `<span class="timeline-issue">${esc(event.issue_id)}</span>` : ''}
-          ${event.detail ? `<span class="timeline-detail"> &#x2014; ${esc(event.detail)}</span>` : ''}
-        </div>
-        <div class="timeline-time">${timeAgo(event.created_at)}</div>
-      </div>`;
+    // Fetch both sources in parallel
+    const [pmActivity, eventsData] = await Promise.all([
+      api(`/api/pm/projects/${projectId}/activity`).catch(() => []),
+      api('/api/events?n=200').catch(() => ({ events: [] })),
+    ]);
+
+    // Normalize PM activity into unified format
+    const unified = (pmActivity || []).map(e => ({
+      ts: new Date(e.created_at).getTime(),
+      type: 'pm',
+      icon: '\u25CF',
+      color: 'var(--text-secondary)',
+      actor: e.user_name || '',
+      label: e.action || '',
+      detail: [e.issue_id, e.detail].filter(Boolean).join(' \u2014 '),
+      time: e.created_at,
+    }));
+
+    // Normalize agent events — filter by thread if possible
+    const threadPrefix = `project-team`;
+    for (const e of (eventsData.events || [])) {
+      let detail = '';
+      const d = e.data || {};
+      if (e.event === 'agent_start') detail = d.task ? d.task.slice(0, 80) : '';
+      else if (e.event === 'agent_complete') detail = d.status || '';
+      else if (e.event === 'agent_error') detail = (d.error || '').slice(0, 100);
+      else if (e.event === 'agent_dispatch') detail = d.agents ? d.agents.join(', ') : '';
+      else if (e.event === 'phase_transition') detail = `${d.from_phase || d.from || '?'} \u2192 ${d.to_phase || d.to || '?'}`;
+      else if (e.event === 'human_gate_requested') detail = d.summary || '';
+      else if (e.event === 'human_gate_responded') detail = d.approved ? 'approved' : 'rejected';
+      else if (e.event === 'llm_call_start' || e.event === 'llm_call_end') continue; // skip noisy LLM events
+      else if (e.event === 'pipeline_step_start' || e.event === 'pipeline_step_end') continue;
+
+      unified.push({
+        ts: new Date(e.timestamp).getTime(),
+        type: 'agent',
+        icon: typeIcons[e.event] || '\u00B7',
+        color: typeColors[e.event] || 'var(--text-tertiary)',
+        actor: e.agent_id || '',
+        label: e.event || '',
+        detail,
+        time: e.timestamp,
+      });
+    }
+
+    // Sort by timestamp descending (most recent first)
+    unified.sort((a, b) => b.ts - a.ts);
+    const items = unified.slice(0, 100);
+
+    // Detect agents "in flight" — started but not completed/errored
+    const agentEvents = (eventsData.events || []);
+    const agentState = {};
+    // Process chronologically (events are oldest-first from API)
+    agentEvents.forEach(e => {
+      if (!e.agent_id) return;
+      if (e.event === 'agent_start') agentState[e.agent_id] = { since: e.timestamp };
+      else if (e.event === 'agent_complete' || e.event === 'agent_error') delete agentState[e.agent_id];
     });
-    if (activity.length === 0) html += '<div class="empty-state">No activity yet</div>';
-    html += '</div></div>';
+    // Cross-check with workflow status — if wfStatus says agent is complete, remove from pending
+    const wfCtx = window._projectCtx?.wfStatus;
+    if (wfCtx && wfCtx.phases) {
+      Object.values(wfCtx.phases).forEach(ph => {
+        if (ph.agents) Object.entries(ph.agents).forEach(([aid, a]) => {
+          if (a.status === 'complete' || a.status === 'error') delete agentState[aid];
+        });
+      });
+    }
+    const pendingAgents = Object.entries(agentState);
+
+    let html = '<div style="flex:1;padding:24px">';
+
+    // Pending agents banner
+    if (pendingAgents.length > 0) {
+      html += '<div class="wf-phase-active" style="border-left:4px solid var(--accent-blue);background:var(--accent-blue-dim, rgba(99,102,241,0.08));border-radius:6px;padding:12px 16px;margin-bottom:16px">';
+      html += '<div style="font-size:10px;font-weight:600;color:var(--accent-blue);letter-spacing:1px;margin-bottom:8px">EN ATTENTE DE RETOUR</div>';
+      html += '<div style="display:flex;flex-wrap:wrap;gap:8px">';
+      pendingAgents.forEach(([agentId, info]) => {
+        const elapsed = info.since ? timeAgo(info.since) : '';
+        html += `<div style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:6px;background:var(--accent-blue-dim, rgba(99,102,241,0.12));border:1px solid rgba(99,102,241,0.2)">
+          <span style="color:var(--accent-blue);font-size:11px">\u25B6</span>
+          <span style="font-size:11px;color:var(--text-primary);font-weight:500">${esc(agentId)}</span>
+          <span style="font-size:9px;color:var(--text-tertiary)">${elapsed}</span>
+        </div>`;
+      });
+      html += '</div></div>';
+    }
+
+    html += '<div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:16px">Activit\u00E9 r\u00E9cente</div>';
+
+    if (items.length === 0) {
+      html += '<div class="empty-state">Aucune activit\u00E9</div>';
+    } else {
+      html += '<div style="display:flex;flex-direction:column;gap:2px;font-family:\'JetBrains Mono\',monospace;font-size:11px">';
+      items.forEach(item => {
+        const time = item.time ? new Date(item.time).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
+        const date = item.time ? new Date(item.time).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }) : '';
+        const badge = item.type === 'agent'
+          ? `<span style="font-size:9px;padding:1px 4px;border-radius:3px;background:var(--accent-blue-dim, rgba(99,102,241,0.1));color:var(--accent-blue)">AGENT</span>`
+          : `<span style="font-size:9px;padding:1px 4px;border-radius:3px;background:var(--bg-tertiary);color:var(--text-tertiary)">PM</span>`;
+        html += `<div style="display:flex;gap:8px;padding:4px 0;border-bottom:1px solid var(--border-subtle);align-items:center">
+          <span style="color:var(--text-quaternary);min-width:35px;font-size:10px">${date}</span>
+          <span style="color:var(--text-quaternary);min-width:55px">${time}</span>
+          ${badge}
+          <span style="color:${item.color};min-width:14px;text-align:center">${item.icon}</span>
+          <span style="color:var(--accent-blue);min-width:110px;font-weight:500">${esc(item.actor)}</span>
+          <span style="color:${item.color};min-width:100px">${esc(item.label)}</span>
+          <span style="color:var(--text-secondary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.detail)}</span>
+        </div>`;
+      });
+      html += '</div>';
+    }
+    html += '</div>';
     return html;
   } catch (e) { return `<div class="empty-state">${esc(e.message)}</div>`; }
+}
+
+// ══════════════════════════════════════════════════
+// WORKFLOW TAB
+// ══════════════════════════════════════════════════
+async function renderProjectWorkflowTab(project, wfStatus) {
+  const WF_PHASES = [
+    { key: 'discovery', label: 'Discovery', icon: '\u{1F50D}' },
+    { key: 'design', label: 'Design', icon: '\u{1F3A8}' },
+    { key: 'build', label: 'Build', icon: '\u{1F6E0}' },
+    { key: 'ship', label: 'Ship', icon: '\u{1F680}' },
+    { key: 'iterate', label: 'Iterate', icon: '\u{1F504}' },
+  ];
+  const slug = project.slug || '';
+  const teamId = project.team_id || 'team1';
+  const currentPhase = wfStatus && !wfStatus.error ? (wfStatus.current_phase || 'discovery') : null;
+  const phaseData = wfStatus ? (wfStatus.phases || {}) : {};
+
+  // Fetch deliverables + events in parallel
+  let delivData = { phases: [] };
+  let eventsData = { events: [] };
+  await Promise.all([
+    slug ? api(`/api/projects/${encodeURIComponent(slug)}/deliverables`).then(d => delivData = d).catch(() => {}) : Promise.resolve(),
+    api('/api/events?n=200').then(d => eventsData = d).catch(() => {}),
+  ]);
+  const delivByPhase = {};
+  (delivData.phases || []).forEach(p => { delivByPhase[p.phase] = p.agents; });
+
+  // Detect running agents from events (chronological order)
+  const _runState = {};
+  (eventsData.events || []).forEach(e => {
+    if (!e.agent_id) return;
+    if (e.event === 'agent_start') _runState[e.agent_id] = true;
+    else if (e.event === 'agent_complete' || e.event === 'agent_error') delete _runState[e.agent_id];
+  });
+  // Cross-check: if wfStatus says agent is complete, trust it over events
+  if (phaseData) {
+    Object.values(phaseData).forEach(ph => {
+      if (ph.agents) Object.entries(ph.agents).forEach(([aid, a]) => {
+        if (a.status === 'complete' || a.status === 'error') delete _runState[aid];
+      });
+    });
+  }
+  const runningFromEvents = new Set(Object.keys(_runState));
+  window._agentsRunning = runningFromEvents.size > 0;
+
+  let html = '<div style="flex:1;overflow:auto;padding:24px">';
+
+  if (!currentPhase) {
+    html += '<div class="empty-state">Workflow non lance. Cliquez sur "Lancer les agents" pour demarrer.</div></div>';
+    return html;
+  }
+
+  // Phase cards
+  WF_PHASES.forEach((ph, idx) => {
+    const phaseIdx = WF_PHASES.findIndex(p => p.key === currentPhase);
+    const isDone = idx < phaseIdx;
+    const isCurrent = ph.key === currentPhase;
+    const isPending = idx > phaseIdx;
+    const pd = phaseData[ph.key];
+    const deliverables = delivByPhase[ph.key] || [];
+
+    // Status — use workflow engine's phase.complete flag when available
+    const phaseComplete = pd && pd.complete;
+    let statusLabel, statusColor, statusBg, borderColor;
+    if (isDone || (isCurrent && phaseComplete)) {
+      statusLabel = 'TERMINEE'; statusColor = '#22c55e'; statusBg = '#22c55e12'; borderColor = '#22c55e33';
+    } else if (isCurrent) {
+      statusLabel = 'EN COURS'; statusColor = 'var(--accent-blue)'; statusBg = 'var(--accent-blue-dim, rgba(99,102,241,0.08))'; borderColor = 'var(--accent-blue)';
+    } else {
+      statusLabel = 'A VENIR'; statusColor = 'var(--text-quaternary)'; statusBg = 'var(--bg-secondary)'; borderColor = 'var(--border-subtle)';
+    }
+
+    // Pulse when agents are actively running — but NOT if phase is complete
+    const wfRunning = !phaseComplete && pd && pd.agents && Object.values(pd.agents).some(a => a.status === 'running' || a.status === 'in_progress');
+    const evtRunning = !phaseComplete && pd && pd.agents && Object.keys(pd.agents).some(id => runningFromEvents.has(id));
+    const hasRunning = isCurrent && !phaseComplete && (wfRunning || evtRunning);
+    html += `<div class="card ${hasRunning ? 'wf-phase-active' : ''}" style="margin-bottom:16px;border-left:4px solid ${borderColor};background:${statusBg}">`;
+
+    // Phase header
+    html += `<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <span style="font-size:18px">${ph.icon}</span>
+      <span style="font-size:13px;font-weight:600;color:var(--text-primary);letter-spacing:0.5px">${ph.label.toUpperCase()}</span>
+      <span style="font-size:10px;font-weight:500;padding:2px 8px;border-radius:4px;background:${statusColor}18;color:${statusColor}">${statusLabel}</span>`;
+
+    // Reset button (only for done or current phases)
+    if (isDone || isCurrent) {
+      html += `<button class="btn btn-outline" style="margin-left:auto;font-size:10px;padding:3px 10px;color:var(--accent-red);border-color:var(--accent-red)" onclick="resetPhase(${project.id},'${esc(teamId)}','${esc(ph.key)}')">Reset</button>`;
+    }
+    html += '</div>';
+
+    // Agents
+    if (pd && pd.agents) {
+      const groups = {};
+      Object.entries(pd.agents).forEach(([aid, a]) => {
+        const g = a.group || 'A';
+        if (!groups[g]) groups[g] = [];
+        groups[g].push({ id: aid, ...a });
+      });
+      const sortedGroups = Object.keys(groups).sort();
+
+      sortedGroups.forEach((gKey, gi) => {
+        const gAgents = groups[gKey];
+        if (sortedGroups.length > 1) {
+          const allDone = gAgents.every(a => a.status === 'complete');
+          const gColor = allDone ? '#22c55e' : 'var(--text-quaternary)';
+          html += `<div style="font-size:9px;color:${gColor};font-weight:600;margin-bottom:4px;letter-spacing:1px">GROUPE ${esc(gKey)}</div>`;
+        }
+        html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">';
+        gAgents.forEach(a => {
+          let sIcon, sColor, sBg;
+          if (a.status === 'complete') { sIcon = '&#x2713;'; sColor = '#22c55e'; sBg = '#22c55e18'; }
+          else if (a.status === 'running' || a.status === 'in_progress') { sIcon = '&#x25B6;'; sColor = 'var(--accent-blue)'; sBg = 'var(--accent-blue-dim)'; }
+          else if (a.status === 'error') { sIcon = '&#x2717;'; sColor = 'var(--accent-red)'; sBg = 'var(--accent-red)18'; }
+          else { sIcon = '&#x25CB;'; sColor = 'var(--text-quaternary)'; sBg = 'var(--bg-tertiary)'; }
+          html += `<div style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:6px;background:${sBg};border:1px solid ${sColor}22">
+            <span style="color:${sColor};font-size:11px">${sIcon}</span>
+            <span style="font-size:11px;color:var(--text-primary)">${esc(a.name)}</span>
+            ${a.required ? '<span style="font-size:8px;color:var(--accent-orange);font-weight:600">REQ</span>' : ''}
+          </div>`;
+        });
+        html += '</div>';
+        if (gi < sortedGroups.length - 1) {
+          html += '<div style="text-align:center;color:var(--text-quaternary);font-size:10px;margin:2px 0 6px">&#x25BC;</div>';
+        }
+      });
+    }
+
+    // Deliverables from filesystem
+    if (deliverables.length > 0) {
+      html += '<div style="margin-top:10px;border-top:1px solid var(--border-subtle);padding-top:10px">';
+      html += '<div style="font-size:10px;font-weight:600;color:var(--text-tertiary);letter-spacing:0.5px;margin-bottom:8px">LIVRABLES</div>';
+      deliverables.forEach(d => {
+        const uid = `wf-dlv-${esc(ph.key)}-${esc(d.agent_id)}`;
+        html += `<details style="margin-bottom:6px">
+          <summary style="font-size:11px;color:var(--accent-blue);cursor:pointer;padding:4px 0;display:flex;align-items:center;gap:6px">
+            <span style="color:#22c55e;font-size:10px">&#x2713;</span>
+            <span style="font-weight:500">${esc(d.agent_name)}</span>
+            <span style="color:var(--text-quaternary);font-size:10px">${esc(d.agent_id)}</span>
+            <span class="dlv-remark-btn" style="margin-left:auto;font-size:9px;color:var(--text-tertiary);cursor:pointer;padding:2px 6px;border:1px solid var(--border-subtle);border-radius:3px" onclick="event.stopPropagation();toggleRemarkForm('${uid}')">&#x1F4AC; remarque</span>
+          </summary>
+          <div id="${uid}-remark" style="display:none;margin-top:4px;margin-bottom:8px;background:var(--bg-active);border:1px solid var(--accent-orange)33;border-radius:4px;padding:10px">
+            <div style="font-size:9px;font-weight:600;color:var(--accent-orange);letter-spacing:0.5px;margin-bottom:6px">REMARQUE A L'AGENT</div>
+            <textarea id="${uid}-remark-text" class="form-input" style="width:100%;min-height:80px;font-size:11px;font-family:inherit;background:var(--bg-tertiary);resize:vertical;line-height:1.5" placeholder="Decrivez ce que l'agent doit corriger ou ameliorer..."></textarea>
+            <div style="display:flex;gap:6px;margin-top:6px;justify-content:flex-end">
+              <button class="btn btn-outline" style="font-size:10px;padding:3px 10px" onclick="toggleRemarkForm('${uid}')">Annuler</button>
+              <button class="btn btn-primary" style="font-size:10px;padding:3px 10px;background:var(--accent-orange);border-color:var(--accent-orange)" onclick="submitRemark('${uid}','${esc(slug)}','${esc(ph.key)}','${esc(d.agent_id)}','${esc(teamId)}')">Soumettre</button>
+            </div>
+          </div>
+          ${d.remarks ? `<div style="margin-top:4px;margin-bottom:4px;padding:8px;background:var(--bg-active);border-left:3px solid var(--accent-orange);border-radius:0 4px 4px 0;font-size:10px;color:var(--text-tertiary)"><div style="font-size:9px;font-weight:600;color:var(--accent-orange);margin-bottom:4px">REMARQUES PRECEDENTES</div>${renderMarkdown(d.remarks)}</div>` : ''}
+          <div id="${uid}-view" class="md-content" style="max-height:500px;overflow:auto;background:var(--bg-tertiary);padding:12px;border-radius:4px;margin-top:4px">${renderMarkdown(d.content)}</div>
+        </details>`;
+      });
+      html += '</div>';
+    }
+
+    html += '</div>';
+  });
+
+  // Reset total
+  html += `<div style="text-align:right;margin-top:8px">
+    <button class="btn btn-outline" style="font-size:10px;padding:4px 12px;color:var(--accent-red);border-color:var(--accent-red)" onclick="resetPhase(${project.id},'${esc(teamId)}','discovery')">Reset total (toutes les phases)</button>
+  </div>`;
+
+  html += '</div>';
+  return html;
+}
+
+async function resetPhase(projectId, teamId, phase) {
+  const phaseOrder = ['discovery', 'design', 'build', 'ship', 'iterate'];
+  const idx = phaseOrder.indexOf(phase);
+  const phasesToReset = phaseOrder.slice(idx).map(p => p.toUpperCase()).join(', ');
+  if (!confirm(`Reinitialiser ${phasesToReset} ?\n\nLes livrables et outputs seront supprimes.`)) return;
+  try {
+    const res = await api(`/api/pm/projects/${projectId}/reset-phase`, {
+      method: 'POST',
+      body: { phase, team_id: teamId },
+    });
+    if (res.ok || res.phases_reset) {
+      showToast(`Phases reinitialisees: ${(res.phases_reset || []).join(', ')}`, 'success');
+    } else {
+      showToast(res.error || 'Erreur', 'error');
+    }
+  } catch (e) { showToast(e.message, 'error'); }
+  // Always reload to reflect filesystem changes
+  loadProjectDetail();
 }
 
 // ══════════════════════════════════════════════════
@@ -1951,7 +2627,7 @@ async function doCreateProject(launchWorkflow = false) {
     if (s.aiIssues.length > 0) {
       await api('/api/pm/issues/bulk', { method: 'POST', body: {
         project_id: project.id, team_id: s.team,
-        issues: s.aiIssues.map(i => ({ title: i.title, description: i.description || '', priority: i.priority || 3, status: i.status || 'todo', tags: i.tags || [] })),
+        issues: s.aiIssues.map(i => ({ title: i.title, description: i.description || '', priority: i.priority || 3, status: i.status || 'todo', phase: i.phase || '', tags: i.tags || [] })),
       }});
     }
 
@@ -2130,14 +2806,10 @@ async function openHitlQuestion(qid) {
         html += `<div style="margin-top:10px">
           <div style="font-size:10px;color:var(--accent-blue);letter-spacing:1px;margin-bottom:4px">${esc(agentId).toUpperCase()}</div>`;
         if (typeof data === 'string') {
-          html += `<pre style="font-size:11px;color:var(--text-secondary);white-space:pre-wrap;max-height:300px;overflow:auto;background:var(--bg-secondary);padding:8px;border-radius:4px">${esc(data)}</pre>`;
+          html += renderDeliverable(agentId, data);
         } else {
           for (const [key, val] of Object.entries(data)) {
-            const preview = typeof val === 'object' ? JSON.stringify(val, null, 2) : String(val);
-            html += `<details style="margin-bottom:6px">
-              <summary style="font-size:11px;color:var(--text-primary);cursor:pointer">${esc(key)}</summary>
-              <pre style="font-size:10px;color:var(--text-secondary);white-space:pre-wrap;max-height:300px;overflow:auto;background:var(--bg-secondary);padding:8px;border-radius:4px;margin-top:4px">${esc(preview.substring(0, 5000))}</pre>
-            </details>`;
+            html += renderDeliverable(key, val);
           }
         }
         html += '</div>';
@@ -2201,16 +2873,44 @@ let chatLoading = false;
 
 async function loadAgents() {
   const content = document.getElementById('pm-content');
-  content.innerHTML = '<div class="loading">Loading...</div>';
-  activeAgent = null;
+  const isRefresh = content.querySelector('.agents-grid') !== null;
+  if (!isRefresh) {
+    content.innerHTML = '<div class="loading">Loading...</div>';
+    activeAgent = null;
+  }
   try {
-    const agents = await api(`/api/teams/${activeTeam}/agents`);
+    const [agents, eventsData] = await Promise.all([
+      api(`/api/teams/${activeTeam}/agents`),
+      api('/api/events?n=200').catch(() => ({ events: [] })),
+    ]);
+    // Detect running agents from events
+    const runningAgents = new Set();
+    const agentEvts = (eventsData.events || []);
+    const agentState = {};
+    agentEvts.forEach(e => {
+      if (!e.agent_id) return;
+      if (e.event === 'agent_start') agentState[e.agent_id] = true;
+      else if (e.event === 'agent_complete' || e.event === 'agent_error') delete agentState[e.agent_id];
+    });
+    // Cross-check with workflow status — if wfStatus says agent is complete, don't show as running
+    const _wfCtx = window._projectCtx?.wfStatus;
+    if (_wfCtx && _wfCtx.phases) {
+      Object.values(_wfCtx.phases).forEach(ph => {
+        if (ph.agents) Object.entries(ph.agents).forEach(([aid, a]) => {
+          if (a.status === 'complete' || a.status === 'error') delete agentState[aid];
+        });
+      });
+    }
+    Object.keys(agentState).forEach(id => runningAgents.add(id));
+
     agents.sort((a, b) => a.type === 'orchestrator' ? -1 : b.type === 'orchestrator' ? 1 : a.name.localeCompare(b.name));
     let html = '<div class="agents-grid" style="padding:20px">';
     agents.forEach(a => {
       const hasActivity = !!a.last_activity;
       const isOrch = a.type === 'orchestrator';
-      html += `<div class="card agent-card ${isOrch ? 'agent-card-orch' : ''}" onclick="openAgentChat('${esc(a.id)}', '${esc(a.name)}', '${esc(a.llm)}')">
+      const isRunning = runningAgents.has(a.id);
+      html += `<div class="card agent-card ${isOrch ? 'agent-card-orch' : ''}" style="position:relative" onclick="openAgentChat('${esc(a.id)}', '${esc(a.name)}', '${esc(a.llm)}')">
+        ${isRunning ? '<span class="agent-heartbeat" style="position:absolute;top:8px;right:10px" title="En cours d\'execution">\u2764</span>' : ''}
         <div class="card-row" style="align-items:center">
           <div style="display:flex;align-items:center;gap:8px">
             <span class="status-dot ${hasActivity ? 'online' : 'offline'}"></span>
@@ -2226,11 +2926,13 @@ async function loadAgents() {
       </div>`;
     });
     html += '</div>';
-    content.innerHTML = html;
-  } catch (e) { content.innerHTML = `<div class="empty-state">${esc(e.message)}</div>`; }
+    if (content.innerHTML !== html) content.innerHTML = html;
+    startViewRefresh(loadAgents, 8000);
+  } catch (e) { if (!isRefresh) content.innerHTML = `<div class="empty-state">${esc(e.message)}</div>`; }
 }
 
 async function openAgentChat(agentId, agentName, agentLlm) {
+  stopViewRefresh();
   activeAgent = { id: agentId, name: agentName, llm: agentLlm || '' };
   const content = document.getElementById('pm-content');
   content.innerHTML = `
@@ -2435,6 +3137,137 @@ async function loadVersion() {
 let logAllLines = [];
 let logAutoRefreshId = null;
 let logService = 'langgraph-api';
+// ── Deliverables ────────────────────────────────
+async function loadDeliverables() {
+  const content = document.getElementById('pm-content');
+  content.innerHTML = '<div class="loading">Chargement des projets...</div>';
+  try {
+    const projects = await api('/api/projects');
+    if (!projects.length) {
+      content.innerHTML = '<div class="empty-state">Aucun projet avec des livrables</div>';
+      return;
+    }
+    let html = '<div style="padding:20px">';
+    html += '<div class="form-group"><div class="form-label">PROJET</div><select class="form-input" id="deliv-project" onchange="loadProjectDeliverables()">';
+    projects.forEach(p => {
+      html += `<option value="${esc(p.slug)}">${esc(p.slug)} (${p.phases.length} phase${p.phases.length > 1 ? 's' : ''})</option>`;
+    });
+    html += '</select></div>';
+    html += '<div id="deliv-content"></div>';
+    html += '</div>';
+    content.innerHTML = html;
+    if (projects.length > 0) loadProjectDeliverables();
+  } catch (e) { content.innerHTML = `<div class="empty-state">${esc(e.message)}</div>`; }
+}
+
+let currentDelivSlug = '';
+async function loadProjectDeliverables() {
+  const slug = document.getElementById('deliv-project')?.value;
+  currentDelivSlug = slug || '';
+  const container = document.getElementById('deliv-content');
+  if (!slug || !container) return;
+  container.innerHTML = '<div class="loading">Chargement des livrables...</div>';
+  try {
+    const data = await api(`/api/projects/${encodeURIComponent(slug)}/deliverables`);
+    const phases = data.phases || [];
+    const delivTeamId = data.team_id || 'team1';
+    if (!phases.length) {
+      container.innerHTML = '<div class="empty-state">Aucun livrable pour ce projet</div>';
+      return;
+    }
+    let html = '';
+    for (const phase of phases) {
+      html += `<div style="margin-bottom:24px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+          <span class="tag tag-accent" style="font-size:12px;padding:4px 12px">${esc(phase.phase).toUpperCase()}</span>
+          <span style="font-size:11px;color:var(--text-tertiary)">${phase.agents.length} livrable${phase.agents.length > 1 ? 's' : ''}</span>
+        </div>`;
+      for (const agent of phase.agents) {
+        const uid = `dlv-${esc(phase.phase)}-${esc(agent.agent_id)}`;
+        html += `<div class="card dlv-accordion" id="${uid}-card" style="margin-bottom:12px;cursor:pointer" onclick="toggleDelivAccordion('${uid}-card')">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="dlv-accordion-arrow" style="font-size:10px;color:var(--text-quaternary);transition:transform 0.2s">&#x25B6;</span>
+            <span class="tag tag-accent">${esc(agent.agent_id)}</span>
+            <span style="font-size:12px;color:var(--text-secondary);font-weight:500">${esc(agent.agent_name)}</span>
+            ${agent.remarks ? '<span style="font-size:9px;color:var(--accent-orange);margin-left:4px" title="Remarques">&#x1F4AC;</span>' : ''}
+            <span class="dlv-remark-btn" style="margin-left:auto;font-size:10px;color:var(--text-tertiary);cursor:pointer;padding:3px 8px;border:1px solid var(--border-subtle);border-radius:4px" onclick="event.stopPropagation();toggleRemarkForm('${uid}')">&#x1F4AC; Faire une remarque</span>
+          </div>
+          <div class="dlv-accordion-body" style="display:none;margin-top:10px">
+            <div id="${uid}-remark" style="display:none;margin-bottom:10px;background:var(--bg-active);border:1px solid var(--accent-orange)33;border-radius:6px;padding:12px">
+              <div style="font-size:10px;font-weight:600;color:var(--accent-orange);letter-spacing:0.5px;margin-bottom:8px">REMARQUE A L'AGENT</div>
+              <textarea id="${uid}-remark-text" class="form-input" style="width:100%;min-height:100px;font-size:11px;font-family:inherit;background:var(--bg-tertiary);resize:vertical;line-height:1.5" placeholder="Decrivez ce que l'agent doit corriger ou ameliorer..."></textarea>
+              <div style="display:flex;gap:6px;margin-top:8px;justify-content:flex-end">
+                <button class="btn btn-outline" style="font-size:10px;padding:4px 12px" onclick="event.stopPropagation();toggleRemarkForm('${uid}')">Annuler</button>
+                <button class="btn btn-primary" style="font-size:10px;padding:4px 12px;background:var(--accent-orange);border-color:var(--accent-orange)" onclick="event.stopPropagation();submitRemark('${uid}','${esc(currentDelivSlug)}','${esc(phase.phase)}','${esc(agent.agent_id)}','${esc(delivTeamId)}')">Soumettre a l'agent</button>
+              </div>
+            </div>
+            ${agent.remarks ? `<div style="margin-bottom:10px;padding:10px;background:var(--bg-active);border-left:3px solid var(--accent-orange);border-radius:0 4px 4px 0;font-size:10px;color:var(--text-tertiary)"><div style="font-size:9px;font-weight:600;color:var(--accent-orange);margin-bottom:4px">REMARQUES PRECEDENTES</div>${renderMarkdown(agent.remarks)}</div>` : ''}
+            <div class="md-content" style="max-height:600px;overflow:auto;background:var(--bg-secondary);padding:12px;border-radius:4px">${renderMarkdown(agent.content)}</div>
+          </div>
+        </div>`;
+      }
+      html += '</div>';
+    }
+    container.innerHTML = html;
+  } catch (e) { container.innerHTML = `<div class="empty-state">${esc(e.message)}</div>`; }
+}
+
+function toggleDelivAccordion(cardId) {
+  const card = document.getElementById(cardId);
+  if (!card) return;
+  const body = card.querySelector('.dlv-accordion-body');
+  const arrow = card.querySelector('.dlv-accordion-arrow');
+  if (!body) return;
+  const isOpen = body.style.display !== 'none';
+  if (isOpen) {
+    // Close this one
+    body.style.display = 'none';
+    if (arrow) arrow.style.transform = '';
+  } else {
+    // Close all others first
+    document.querySelectorAll('.dlv-accordion').forEach(other => {
+      const ob = other.querySelector('.dlv-accordion-body');
+      const oa = other.querySelector('.dlv-accordion-arrow');
+      if (ob) ob.style.display = 'none';
+      if (oa) oa.style.transform = '';
+    });
+    // Open this one
+    body.style.display = '';
+    if (arrow) arrow.style.transform = 'rotate(90deg)';
+  }
+}
+
+function toggleRemarkForm(uid) {
+  const el = document.getElementById(uid + '-remark');
+  if (!el) return;
+  const visible = el.style.display !== 'none';
+  el.style.display = visible ? 'none' : '';
+  if (!visible) {
+    const ta = document.getElementById(uid + '-remark-text');
+    if (ta) ta.focus();
+  }
+}
+
+async function submitRemark(uid, slug, phase, agentId, teamId) {
+  const ta = document.getElementById(uid + '-remark-text');
+  if (!ta) return;
+  const remark = ta.value.trim();
+  if (!remark) { showToast('La remarque ne peut pas etre vide', 'error'); return; }
+  try {
+    const res = await api(`/api/projects/${encodeURIComponent(slug)}/deliverables/${encodeURIComponent(phase)}/${encodeURIComponent(agentId)}/remark`, {
+      method: 'POST', body: { remark, team_id: teamId || 'team1' }
+    });
+    if (res.ok) {
+      showToast('Remarque soumise — l\'agent va produire une version revisee', 'success');
+      ta.value = '';
+      const remarkEl = document.getElementById(uid + '-remark');
+      if (remarkEl) remarkEl.style.display = 'none';
+    } else {
+      showToast(res.error || 'Erreur', 'error');
+    }
+  } catch (e) { showToast(e.message || 'Erreur', 'error'); }
+}
+
 // ── Threads ─────────────────────────────────────
 async function loadThreads() {
   const content = document.getElementById('pm-content');

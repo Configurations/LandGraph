@@ -53,7 +53,10 @@ _hitl_cfg = _load_hitl_config()
 _auth_cfg = _hitl_cfg.get("auth", {})
 _google_cfg = _hitl_cfg.get("google_oauth", {})
 
-JWT_SECRET = os.getenv("HITL_JWT_SECRET", os.getenv("MCP_SECRET", "change-me-hitl-secret"))
+_jwt_raw = os.getenv("HITL_JWT_SECRET", os.getenv("MCP_SECRET", "change-me-hitl-secret"))
+# Ensure key is at least 32 bytes for HS256 (RFC 7518 §3.2)
+import hashlib as _hl
+JWT_SECRET = _jwt_raw if len(_jwt_raw) >= 32 else _hl.sha256(_jwt_raw.encode()).hexdigest()
 JWT_EXPIRE_HOURS = int(_auth_cfg.get("jwt_expire_hours", 24))
 GOOGLE_ENABLED = _google_cfg.get("enabled", False)
 GOOGLE_CLIENT_ID = _google_cfg.get("client_id", "")
@@ -353,6 +356,32 @@ def _seed_admin():
                 AFTER INSERT ON project.hitl_chat_messages
                 FOR EACH ROW EXECUTE FUNCTION notify_hitl_chat()
             """)
+            # PG NOTIFY trigger for new HITL requests (phase validation, questions)
+            cur.execute("""
+                CREATE OR REPLACE FUNCTION notify_hitl_request() RETURNS trigger AS $$
+                BEGIN
+                    PERFORM pg_notify('hitl_request', json_build_object(
+                        'id', NEW.id,
+                        'team_id', NEW.team_id,
+                        'agent_id', NEW.agent_id,
+                        'thread_id', NEW.thread_id,
+                        'request_type', NEW.request_type,
+                        'prompt', LEFT(NEW.prompt, 500),
+                        'status', NEW.status,
+                        'created_at', NEW.created_at
+                    )::text);
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+            """)
+            cur.execute("""
+                DROP TRIGGER IF EXISTS hitl_request_notify ON project.hitl_requests
+            """)
+            cur.execute("""
+                CREATE TRIGGER hitl_request_notify
+                AFTER INSERT ON project.hitl_requests
+                FOR EACH ROW EXECUTE FUNCTION notify_hitl_request()
+            """)
             # Ensure PM tables exist
             _ensure_pm_tables(cur)
             cur.execute("SELECT COUNT(*) FROM project.hitl_users")
@@ -399,7 +428,8 @@ def _pg_listen_loop():
         try:
             conn = psycopg.connect(DATABASE_URI, autocommit=True)
             conn.execute("LISTEN hitl_chat")
-            logger.info("[pg-listen] Listening on 'hitl_chat' channel")
+            conn.execute("LISTEN hitl_request")
+            logger.info("[pg-listen] Listening on 'hitl_chat' + 'hitl_request' channels")
             while not _pg_listener_stop.is_set():
                 # poll with timeout so we can check the stop flag
                 for notify in conn.notifies(timeout=2):
@@ -407,9 +437,10 @@ def _pg_listen_loop():
                         payload = json.loads(notify.payload)
                         team_id = payload.get("team_id", "")
                         agent_id = payload.get("agent_id", "")
-                        thread_id = payload.get("thread_id", "")
-                        # Dispatch to WebSocket subscribers
-                        _dispatch_chat_event(team_id, agent_id, payload)
+                        if notify.channel == "hitl_request":
+                            _dispatch_hitl_request_event(team_id, payload)
+                        else:
+                            _dispatch_chat_event(team_id, agent_id, payload)
                     except Exception as e:
                         logger.warning(f"[pg-listen] Bad payload: {e}")
             conn.close()
@@ -445,6 +476,32 @@ async def _async_dispatch_chat(team_id: str, agent_id: str, payload: dict):
     for ws in list(_ws_connections.get(team_id, [])):
         try:
             await ws.send_json({"type": "chat_activity", "agent_id": agent_id})
+        except Exception:
+            pass
+
+
+def _dispatch_hitl_request_event(team_id: str, payload: dict):
+    """Called from PG listener thread — notify WS clients of new HITL request."""
+    loop = _event_loop
+    if loop and loop.is_running():
+        asyncio.run_coroutine_threadsafe(_async_dispatch_hitl_request(team_id, payload), loop)
+
+
+async def _async_dispatch_hitl_request(team_id: str, payload: dict):
+    """Send new_question event to all WS clients in this team."""
+    event = {
+        "type": "new_question",
+        "data": {
+            "id": payload.get("id"),
+            "agent_id": payload.get("agent_id", ""),
+            "request_type": payload.get("request_type", ""),
+            "prompt": payload.get("prompt", ""),
+            "thread_id": payload.get("thread_id", ""),
+        }
+    }
+    for ws in list(_ws_connections.get(team_id, [])):
+        try:
+            await ws.send_json(event)
         except Exception:
             pass
 
@@ -933,6 +990,228 @@ def list_threads(user: TokenData = Depends(get_current_user)):
         conn.close()
 
 
+# ── Deliverables (filesystem) ─────────────────
+PROJECTS_ROOT = os.path.join(os.environ.get("AG_FLOW_ROOT", "/root/ag.flow"), "projects")
+
+PHASE_ORDER = ["discovery", "design", "build", "ship", "iterate"]
+
+
+@app.get("/api/projects")
+def list_projects(user: TokenData = Depends(get_current_user)):
+    """List projects that have deliverables on disk."""
+    if not os.path.isdir(PROJECTS_ROOT):
+        return []
+    projects = []
+    for slug in sorted(os.listdir(PROJECTS_ROOT)):
+        project_dir = os.path.join(PROJECTS_ROOT, slug)
+        if not os.path.isdir(project_dir):
+            continue
+        deliv_dir = os.path.join(project_dir, "deliverables")
+        phases = []
+        if os.path.isdir(deliv_dir):
+            phases = [p for p in PHASE_ORDER if os.path.isdir(os.path.join(deliv_dir, p))]
+        projects.append({"slug": slug, "phases": phases})
+    return projects
+
+
+@app.get("/api/projects/{slug}/deliverables")
+def get_project_deliverables(slug: str, user: TokenData = Depends(get_current_user)):
+    """Read deliverable markdown files from disk."""
+    import re as _re
+    # Sanitize slug
+    safe = _re.sub(r'[^a-z0-9_-]', '', slug.lower())
+    deliv_root = os.path.join(PROJECTS_ROOT, safe, "deliverables")
+    if not os.path.isdir(deliv_root):
+        return {"phases": [], "team_id": ""}
+    # Look up team_id from pm_projects
+    _team_id = ""
+    try:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT team_id FROM project.pm_projects WHERE slug = %s LIMIT 1", (safe,))
+                row = cur.fetchone()
+                if row:
+                    _team_id = row[0]
+    except Exception:
+        pass
+    result = []
+    for phase in PHASE_ORDER:
+        phase_dir = os.path.join(deliv_root, phase)
+        if not os.path.isdir(phase_dir):
+            continue
+        agents = []
+        for fname in sorted(os.listdir(phase_dir)):
+            if not fname.endswith(".md") or fname.startswith("_") or fname.endswith("_remarks.md"):
+                continue
+            fpath = os.path.join(phase_dir, fname)
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+            except Exception:
+                content = ""
+            agent_id = fname[:-3]  # remove .md
+            # Extract agent name from first heading: "# Agent Name"
+            agent_name = agent_id
+            for line in content.split("\n"):
+                if line.startswith("# "):
+                    agent_name = line[2:].strip()
+                    break
+            # Read associated remarks if they exist
+            remarks = ""
+            remarks_path = os.path.join(phase_dir, f"{agent_id}_remarks.md")
+            if os.path.isfile(remarks_path):
+                try:
+                    with open(remarks_path, "r", encoding="utf-8", errors="replace") as f:
+                        remarks = f.read()
+                except Exception:
+                    pass
+            agents.append({
+                "agent_id": agent_id,
+                "agent_name": agent_name,
+                "content": content,
+                "remarks": remarks,
+            })
+        if agents:
+            result.append({"phase": phase, "agents": agents})
+    return {"phases": result, "team_id": _team_id}
+
+
+@app.post("/api/projects/{slug}/deliverables/{phase}/{agent_id}/remark")
+def post_deliverable_remark(slug: str, phase: str, agent_id: str, body: dict, user: TokenData = Depends(get_current_user)):
+    """Submit a human remark on a deliverable — saves remark and re-invokes the agent."""
+    import re as _re, httpx
+    from datetime import datetime, timezone
+    safe_slug = _re.sub(r'[^a-z0-9_-]', '', slug.lower())
+    safe_phase = _re.sub(r'[^a-z0-9_-]', '', phase.lower())
+    safe_agent = _re.sub(r'[^a-z0-9_-]', '', agent_id.lower())
+    if safe_phase not in PHASE_ORDER:
+        raise HTTPException(400, f"Invalid phase: {phase}")
+    remark = (body.get("remark") or "").strip()
+    if not remark:
+        raise HTTPException(400, "Remark cannot be empty")
+    team_id = body.get("team_id", "team1")
+
+    deliv_dir = os.path.join(PROJECTS_ROOT, safe_slug, "deliverables", safe_phase)
+    deliv_path = os.path.join(deliv_dir, f"{safe_agent}.md")
+    if not os.path.isfile(deliv_path):
+        raise HTTPException(404, "Deliverable not found")
+
+    # 1. Read current deliverable
+    with open(deliv_path, "r", encoding="utf-8", errors="replace") as f:
+        current_deliverable = f.read()
+
+    # 2. Append remark to _remarks file
+    remarks_path = os.path.join(deliv_dir, f"{safe_agent}_remarks.md")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    remark_block = f"\n---\n\n**{user.email}** — {now}\n\n{remark}\n"
+    with open(remarks_path, "a", encoding="utf-8") as f:
+        f.write(remark_block)
+
+    # 3. Read all remarks for context
+    with open(remarks_path, "r", encoding="utf-8", errors="replace") as f:
+        all_remarks = f.read()
+
+    # 4. Re-invoke the agent via gateway with remark context
+    # Find project_id from DB
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM project.pm_projects WHERE slug = %s", (safe_slug,))
+            row = cur.fetchone()
+            project_id = f"pm-{team_id}-{row[0]}" if row else ""
+    finally:
+        conn.close()
+
+    thread_id = f"project-{team_id}-{row[0]}" if row else f"remark-{safe_slug}"
+    gw = _get_gateway_url()
+    task_message = (
+        f"Tu as precedemment produit le livrable suivant pour la phase '{safe_phase}'.\n\n"
+        f"--- LIVRABLE ACTUEL ---\n{current_deliverable}\n--- FIN LIVRABLE ---\n\n"
+        f"--- REMARQUES HUMAINES ---\n{all_remarks}\n--- FIN REMARQUES ---\n\n"
+        f"Derniere remarque de l'humain :\n{remark}\n\n"
+        f"Produis une version revisee du livrable en tenant compte de TOUTES les remarques. "
+        f"Le nouveau livrable remplace l'ancien. Conserve la meme structure et le meme format."
+    )
+    try:
+        resp = httpx.post(f"{gw}/invoke", json={
+            "messages": [{"role": "user", "content": task_message}],
+            "thread_id": thread_id,
+            "project_id": project_id,
+            "project_slug": safe_slug,
+            "team_id": team_id,
+            "direct_agent": safe_agent,
+        }, headers={"Content-Type": "application/json"}, timeout=10)
+        gw_result = resp.json() if resp.status_code == 200 else {"error": f"Gateway {resp.status_code}"}
+    except Exception as e:
+        gw_result = {"error": str(e)[:200]}
+
+    return {"ok": True, "remark_saved": True, "agent_invoked": "error" not in gw_result, "gateway": gw_result}
+
+
+@app.get("/api/projects/{slug}/deliverables/{phase}/{agent_id}/remarks")
+def get_deliverable_remarks(slug: str, phase: str, agent_id: str, user: TokenData = Depends(get_current_user)):
+    """Read remarks for a deliverable."""
+    import re as _re
+    safe_slug = _re.sub(r'[^a-z0-9_-]', '', slug.lower())
+    safe_phase = _re.sub(r'[^a-z0-9_-]', '', phase.lower())
+    safe_agent = _re.sub(r'[^a-z0-9_-]', '', agent_id.lower())
+    remarks_path = os.path.join(PROJECTS_ROOT, safe_slug, "deliverables", safe_phase, f"{safe_agent}_remarks.md")
+    if not os.path.isfile(remarks_path):
+        return {"remarks": ""}
+    with open(remarks_path, "r", encoding="utf-8", errors="replace") as f:
+        return {"remarks": f.read()}
+
+
+# ── Workflow → Issues sync ────────────────────
+@app.post("/api/pm/sync-workflow")
+def pm_sync_workflow(body: dict, user: TokenData = Depends(get_current_user)):
+    """Sync issue statuses based on workflow phase and agent activity.
+    Called internally or manually to align issues with workflow state.
+    Body: { project_id, phase, agents_running: [agent_id, ...], agents_done: [agent_id, ...] }
+    """
+    project_id = body.get("project_id")
+    phase = body.get("phase", "")
+    agents_running = body.get("agents_running", [])
+    agents_done = body.get("agents_done", [])
+    if not project_id or not phase:
+        raise HTTPException(400, "project_id and phase required")
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            # Issues in this phase (or without phase) that are backlog → move to todo
+            cur.execute("""
+                UPDATE project.pm_issues SET status = 'todo', updated_at = NOW()
+                WHERE project_id = %s AND (phase = %s OR phase IS NULL OR phase = '') AND status = 'backlog'
+            """, (project_id, phase))
+
+            # Also assign the phase to issues that don't have one yet
+            cur.execute("""
+                UPDATE project.pm_issues SET phase = %s
+                WHERE project_id = %s AND (phase IS NULL OR phase = '') AND status IN ('todo', 'in-progress')
+            """, (phase, project_id))
+
+            # Issues assigned to running agents → in-progress
+            if agents_running:
+                cur.execute("""
+                    UPDATE project.pm_issues SET status = 'in-progress', updated_at = NOW()
+                    WHERE project_id = %s AND (phase = %s OR phase IS NULL OR phase = '') AND status IN ('backlog', 'todo')
+                      AND assignee = ANY(%s)
+                """, (project_id, phase, agents_running))
+
+            # Issues assigned to done agents → in-review
+            if agents_done:
+                cur.execute("""
+                    UPDATE project.pm_issues SET status = 'in-review', updated_at = NOW()
+                    WHERE project_id = %s AND (phase = %s OR phase IS NULL OR phase = '') AND status IN ('backlog', 'todo', 'in-progress')
+                      AND assignee = ANY(%s)
+                """, (project_id, phase, agents_done))
+
+        return {"ok": True, "phase": phase}
+    finally:
+        conn.close()
+
+
 # ── Agents (from registry) ─────────────────────
 @app.get("/api/teams/{team_id}/agents")
 def list_agents(team_id: str, user: TokenData = Depends(get_current_user)):
@@ -1342,6 +1621,7 @@ class PMIssueCreate(BaseModel):
     description: str = ''
     project_id: Optional[int] = None
     status: str = 'backlog'
+    phase: Optional[str] = None
     priority: int = 3
     assignee: Optional[str] = None
     team_id: str = ''
@@ -1623,8 +1903,14 @@ def pm_pause_workflow(project_id: int, req: PauseWorkflowRequest, user: TokenDat
             httpx.post(f"{_get_gateway_url()}/reset", json={"thread_id": thread_id}, timeout=10)
         except Exception:
             pass
-        _log_activity(project_id, user.email, "paused_workflow", None, "Workflow mis en pause", conn)
+        try:
+            _log_activity(project_id, user.email, "paused_workflow", None, "Workflow mis en pause", conn)
+        except Exception as e:
+            logger.warning(f"Failed to log pause activity: {e}")
         return {"ok": True}
+    except Exception as e:
+        logger.error(f"Pause workflow error: {e}")
+        raise HTTPException(500, str(e))
     finally:
         conn.close()
 
@@ -1643,6 +1929,64 @@ def pm_workflow_status(project_id: int, team_id: str = "team1", user: TokenData 
         return {"error": "Gateway not reachable"}
     except Exception as e:
         return {"error": str(e)[:200]}
+
+
+@app.post("/api/pm/projects/{project_id}/reset-phase")
+def pm_reset_phase(project_id: int, body: dict, user: TokenData = Depends(get_current_user)):
+    """Reset a phase and all downstream phases: delete deliverables, cancel HITL requests, update gateway state."""
+    import httpx
+    if user.role not in ("admin", "member"):
+        raise HTTPException(403, "Access denied")
+    phase = body.get("phase", "")
+    team_id = body.get("team_id", "team1")
+    if not phase:
+        raise HTTPException(400, "Missing phase")
+
+    phase_order = ["discovery", "design", "build", "ship", "iterate"]
+    try:
+        phase_idx = phase_order.index(phase)
+    except ValueError:
+        raise HTTPException(400, f"Unknown phase: {phase}")
+    phases_to_reset = phase_order[phase_idx:]
+
+    # 1. Get project slug for deliverables path
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT slug FROM project.pm_projects WHERE id = %s", (project_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "Project not found")
+            slug = row[0]
+
+            # 2. Delete deliverable files for reset phases
+            for p in phases_to_reset:
+                phase_dir = os.path.join(PROJECTS_ROOT, slug, "deliverables", p)
+                if os.path.isdir(phase_dir):
+                    import shutil
+                    shutil.rmtree(phase_dir)
+
+            # 3. Cancel pending HITL requests for these phases
+            thread_id = f"project-{team_id}-{project_id}"
+            cur.execute("""
+                UPDATE project.hitl_requests SET status = 'cancelled'
+                WHERE thread_id = %s AND status = 'pending'
+                  AND context::text LIKE ANY(%s)
+            """, (thread_id, [f'%"current_phase": "{p}"%' for p in phases_to_reset]))
+    finally:
+        conn.close()
+
+    # 4. Reset gateway state phase back
+    gw = _get_gateway_url()
+    try:
+        thread_id = f"project-{team_id}-{project_id}"
+        resp = httpx.post(f"{gw}/workflow/reset-phase",
+                          json={"thread_id": thread_id, "phase": phase}, timeout=10)
+        gw_result = resp.json() if resp.status_code == 200 else {"error": f"Gateway {resp.status_code}"}
+    except Exception as e:
+        gw_result = {"error": str(e)[:200]}
+
+    return {"ok": True, "phases_reset": phases_to_reset, "gateway": gw_result}
 
 
 @app.get("/api/pm/projects/{project_id}")
@@ -1786,7 +2130,7 @@ def pm_list_issues(
         with conn.cursor() as cur:
             cur.execute(f"""
                 SELECT id, project_id, title, description, status, priority,
-                       assignee, team_id, tags, created_by, created_at, updated_at
+                       assignee, team_id, tags, created_by, created_at, updated_at, phase
                 FROM project.pm_issues
                 {where}
                 ORDER BY created_at DESC
@@ -1800,6 +2144,7 @@ def pm_list_issues(
                     "created_by": r[9],
                     "created_at": r[10].isoformat() if r[10] else None,
                     "updated_at": r[11].isoformat() if r[11] else None,
+                    "phase": r[12],
                 })
         issues = _compute_blocked_flags(issues, conn)
         return issues
@@ -1817,10 +2162,10 @@ def pm_create_issue(req: PMIssueCreate, user: TokenData = Depends(get_current_us
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO project.pm_issues
-                    (id, project_id, title, description, status, priority, assignee, team_id, tags, created_by)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    (id, project_id, title, description, status, phase, priority, assignee, team_id, tags, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (issue_id, req.project_id, req.title, req.description, req.status,
-                  req.priority, req.assignee, req.team_id, req.tags, user.email))
+                  req.phase, req.priority, req.assignee, req.team_id, req.tags, user.email))
         if req.project_id:
             _log_activity(req.project_id, user.email, "created_issue", issue_id, req.title, conn)
         return {"ok": True, "id": issue_id}
@@ -1835,7 +2180,7 @@ def pm_get_issue(issue_id: str, user: TokenData = Depends(get_current_user)):
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT id, project_id, title, description, status, priority,
-                       assignee, team_id, tags, created_by, created_at, updated_at
+                       assignee, team_id, tags, created_by, created_at, updated_at, phase
                 FROM project.pm_issues WHERE id = %s
             """, (issue_id,))
             r = cur.fetchone()
@@ -1848,6 +2193,7 @@ def pm_get_issue(issue_id: str, user: TokenData = Depends(get_current_user)):
                 "created_by": r[9],
                 "created_at": r[10].isoformat() if r[10] else None,
                 "updated_at": r[11].isoformat() if r[11] else None,
+                "phase": r[12],
             }
             # Relations where this issue is source
             cur.execute("""
@@ -1986,10 +2332,10 @@ def pm_bulk_create_issues(req: PMBulkIssuesRequest, user: TokenData = Depends(ge
             with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO project.pm_issues
-                        (id, project_id, title, description, status, priority, assignee, team_id, tags, created_by)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        (id, project_id, title, description, status, phase, priority, assignee, team_id, tags, created_by)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (issue_id, req.project_id, issue.title, issue.description,
-                      issue.status, issue.priority, issue.assignee, req.team_id,
+                      issue.status, issue.phase, issue.priority, issue.assignee, req.team_id,
                       issue.tags, user.email))
             id_mapping[str(idx)] = issue_id
             created_ids.append(issue_id)

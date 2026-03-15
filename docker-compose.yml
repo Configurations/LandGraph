@@ -80,6 +80,8 @@ services:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    volumes:
+      - /root/ag.flow:/root/ag.flow
     # No volumes for code/config — baked into image (COPY in Dockerfile)
     # Mounting local dirs breaks case-sensitive renames (Shared → shared)
     healthcheck:

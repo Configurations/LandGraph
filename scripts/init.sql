@@ -246,3 +246,15 @@ BEGIN
         ALTER TABLE project.hitl_users ADD CONSTRAINT hitl_users_auth_type_check CHECK (auth_type IN ('local', 'google'));
     END IF;
 END $$;
+
+-- Migration: add phase column to pm_issues
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'project' AND table_name = 'pm_issues' AND column_name = 'phase'
+    ) THEN
+        ALTER TABLE project.pm_issues ADD COLUMN phase TEXT;
+        CREATE INDEX idx_pm_issues_phase ON project.pm_issues(phase);
+    END IF;
+END $$;

@@ -10,6 +10,7 @@ Return ONLY valid JSON with this structure:
       "description": "What needs to be done",
       "priority": 1-4 (1=critical, 4=low),
       "status": "backlog",
+      "phase": "discovery|design|build|ship|iterate",
       "tags": ["tag1", "tag2"],
       "assignee": ""
     }
@@ -27,6 +28,7 @@ Return ONLY valid JSON with this structure:
 
 Rules:
 - Create 5-15 issues covering the full scope
+- Assign each issue to a phase: discovery (analysis, legal, requirements), design (UX, architecture, planning), build (development, testing), ship (deployment, docs), iterate (improvements)
 - Use meaningful tags (backend, frontend, mobile, infra, design, api, database, auth, testing, docs)
 - Set realistic priorities
 - Add relations (blocks, relates-to) where dependencies exist

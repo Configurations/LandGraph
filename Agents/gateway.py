@@ -246,6 +246,9 @@ async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="defau
     except Exception as e:
         logger.error(f"Could not save state for {thread_id}: {e}")
 
+    # Sync issue statuses with workflow
+    await _sync_issues_with_workflow(state, agents_to_run, merged)
+
     # Message de fin
     if len(agents_to_run) > 1:
         names = []
@@ -465,6 +468,47 @@ def _generate_synthesis_llm(phase: str, deliverables: dict) -> str:
 
 
 # ── Filesystem deliverable persistence ────────
+async def _sync_issues_with_workflow(state: dict, agents_to_run: list, merged: dict):
+    """Sync PM issue statuses based on workflow agent activity."""
+    try:
+        raw_pid = state.get("project_id", "")
+        # Extract numeric PM project ID from "pm-team1-3" format
+        if not raw_pid or not raw_pid.startswith("pm-"):
+            return
+        parts = raw_pid.split("-")
+        if len(parts) < 3:
+            return
+        try:
+            project_id = int(parts[-1])
+        except ValueError:
+            return
+        phase = state.get("project_phase", "discovery")
+        agents_running = [a["agent_id"] for a in agents_to_run
+                          if merged.get(a["agent_id"], {}).get("status") not in ("complete", "blocked", "error")]
+        agents_done = [a["agent_id"] for a in agents_to_run
+                       if merged.get(a["agent_id"], {}).get("status") == "complete"]
+        hitl_url = os.environ.get("HITL_URL", "http://langgraph-hitl:8090")
+        import httpx
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(f"{hitl_url}/api/pm/sync-workflow", json={
+                "project_id": project_id,
+                "phase": phase,
+                "agents_running": agents_running,
+                "agents_done": agents_done,
+            }, headers={"Authorization": f"Bearer {_get_internal_token()}"})
+    except Exception as e:
+        logger.debug(f"[sync] Issue sync skipped: {e}")
+
+
+def _get_internal_token():
+    """Generate a minimal internal JWT for service-to-service calls."""
+    import jwt, hashlib
+    raw = os.environ.get("HITL_JWT_SECRET", os.environ.get("MCP_SECRET", "dev"))
+    # Ensure key is at least 32 bytes for HS256 (RFC 7518 §3.2)
+    secret = raw if len(raw) >= 32 else hashlib.sha256(raw.encode()).hexdigest()
+    return jwt.encode({"sub": "system", "email": "system@internal", "role": "admin", "teams": []}, secret, algorithm="HS256")
+
+
 async def _persist_deliverable_to_fs(state: dict, agent_id: str, output: dict):
     """Write agent deliverable to filesystem and index in pgvector."""
     try:
@@ -631,6 +675,36 @@ async def workflow_status(thread_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/workflow/deliverables/{thread_id}")
+async def workflow_deliverables(thread_id: str):
+    """Retourne les livrables (agent_outputs) d'un thread."""
+    try:
+        graph = get_orchestrator_graph()
+        config = {"configurable": {"thread_id": thread_id}}
+        existing = graph.get_state(config)
+        if not existing or not existing.values:
+            return {"error": "Thread introuvable"}
+        state = existing.values
+        outputs = state.get("agent_outputs", {})
+        return {
+            "thread_id": thread_id,
+            "phase": state.get("project_phase", "discovery"),
+            "project_name": state.get("project_metadata", {}).get("name", ""),
+            "deliverables": {
+                agent_id: {
+                    "agent_name": out.get("agent_name", agent_id) if isinstance(out, dict) else agent_id,
+                    "status": out.get("status", "unknown") if isinstance(out, dict) else "complete",
+                    "confidence": out.get("confidence", 0) if isinstance(out, dict) else 0,
+                    "timestamp": out.get("timestamp", "") if isinstance(out, dict) else "",
+                    "content": out.get("deliverables", out) if isinstance(out, dict) else out,
+                }
+                for agent_id, out in outputs.items()
+            },
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 class ResetRequest(BaseModel):
     thread_id: str
 
@@ -647,6 +721,48 @@ async def reset(request: ResetRequest):
     except Exception as e:
         logger.error(f"Reset error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class PhaseResetRequest(BaseModel):
+    thread_id: str
+    phase: str
+
+@app.post("/workflow/reset-phase")
+async def reset_phase(request: PhaseResetRequest):
+    """Reset workflow state to a given phase, clearing outputs from that phase onward."""
+    phase_order = ["discovery", "design", "build", "ship", "iterate"]
+    try:
+        phase_idx = phase_order.index(request.phase)
+    except ValueError:
+        raise HTTPException(400, f"Unknown phase: {request.phase}")
+    try:
+        graph = get_orchestrator_graph()
+        config = {"configurable": {"thread_id": request.thread_id}}
+        existing = graph.get_state(config)
+        if not existing or not existing.values:
+            raise HTTPException(404, "Thread not found")
+        state = existing.values
+        # Remove agent_outputs for reset phases
+        from agents.shared.workflow_engine import load_workflow
+        team_id = state.get("_team_id", _default_team())
+        wf = load_workflow(team_id)
+        phases_to_clear = phase_order[phase_idx:]
+        agents_to_clear = set()
+        for pid in phases_to_clear:
+            pconf = wf.get("phases", {}).get(pid, {})
+            agents_to_clear.update(pconf.get("agents", {}).keys())
+        outputs = state.get("agent_outputs", {})
+        for aid in agents_to_clear:
+            outputs.pop(aid, None)
+        state["agent_outputs"] = outputs
+        state["project_phase"] = request.phase
+        graph.update_state(config, state)
+        logger.info(f"Phase reset to {request.phase} for {request.thread_id} — cleared {len(agents_to_clear)} agent outputs")
+        return {"ok": True, "phase": request.phase, "cleared_agents": list(agents_to_clear)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 class InvokeRequest(BaseModel):
