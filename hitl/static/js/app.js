@@ -642,10 +642,6 @@ function buildSidebar() {
         <button class="sidebar-item sidebar-sub-item" data-view="agents" data-team-view="${esc(t.id)}" onclick="switchTeamView('${esc(t.id)}','agents')">
           <span class="icon">${Icons.agents}</span><span class="sidebar-label">Agents</span>
         </button>
-        <button class="sidebar-item sidebar-sub-item" data-view="hitl-inbox" data-team-view="${esc(t.id)}" onclick="switchTeamView('${esc(t.id)}','hitl-inbox')">
-          <span class="icon">${Icons.hitl}</span><span class="sidebar-label">Questions</span>
-          <span class="badge hitl-team-badge" data-team-badge="${esc(t.id)}" style="display:none">0</span>
-        </button>
         <button class="sidebar-item sidebar-sub-item" data-view="deliverables" data-team-view="${esc(t.id)}" onclick="switchTeamView('${esc(t.id)}','deliverables')">
           <span class="icon">${Icons.projects}</span><span class="sidebar-label">Livrables</span>
         </button>
@@ -1894,9 +1890,13 @@ async function renderProjectWorkflowTab(project, wfStatus) {
     return html;
   }
 
-  // Phase cards
-  WF_PHASES.forEach((ph, idx) => {
-    const phaseIdx = WF_PHASES.findIndex(p => p.key === currentPhase);
+  // Phase cards — current phase on top, completed phases below (newest first)
+  const phaseIdx = WF_PHASES.findIndex(p => p.key === currentPhase);
+  const visiblePhases = WF_PHASES.filter((_, idx) => idx <= phaseIdx);
+  // Reverse: current first, then most recently completed, then oldest
+  visiblePhases.reverse();
+  visiblePhases.forEach((ph) => {
+    const idx = WF_PHASES.indexOf(ph);
     const isDone = idx < phaseIdx;
     const isCurrent = ph.key === currentPhase;
     const isPending = idx > phaseIdx;
@@ -2008,7 +2008,7 @@ async function renderProjectWorkflowTab(project, wfStatus) {
                 <span style="color:var(--text-secondary);font-size:10px">${esc(agentId)}</span>
                 ${_typeTag(dDef.type)}
                 ${dDef.required ? '<span style="font-size:8px;color:var(--accent-orange);font-weight:600">REQ</span>' : '<span style="font-size:8px;color:var(--text-quaternary)">OPT</span>'}
-                <span class="dlv-remark-btn" style="margin-left:auto;font-size:9px;color:var(--text-tertiary);cursor:pointer;padding:2px 6px;border:1px solid var(--border-subtle);border-radius:3px" onclick="event.stopPropagation();toggleRemarkForm('${uid}')">&#x1F4AC; remarque</span>
+                <span class="dlv-remark-btn" style="margin-left:auto;font-size:9px;color:var(--text-tertiary);cursor:pointer;padding:2px 6px;border:1px solid var(--border-subtle);border-radius:3px" onclick="event.preventDefault();event.stopPropagation();toggleRemarkForm('${uid}')">&#x1F4AC; remarque</span>
               </summary>
               <div id="${uid}-remark" style="display:none;margin-top:4px;margin-bottom:8px;background:var(--bg-active);border:1px solid var(--accent-orange)33;border-radius:4px;padding:10px">
                 <div style="font-size:9px;font-weight:600;color:var(--accent-orange);letter-spacing:0.5px;margin-bottom:6px">REMARQUE A L'AGENT</div>
@@ -2052,7 +2052,7 @@ async function renderProjectWorkflowTab(project, wfStatus) {
               <span style="color:#22c55e;font-size:10px">&#x2713;</span>
               <span style="font-weight:500;color:var(--accent-blue)">${esc(d.agent_name)}</span>
               <span style="color:var(--text-quaternary);font-size:10px">${esc(d.agent_id)}</span>
-              <span class="dlv-remark-btn" style="margin-left:auto;font-size:9px;color:var(--text-tertiary);cursor:pointer;padding:2px 6px;border:1px solid var(--border-subtle);border-radius:3px" onclick="event.stopPropagation();toggleRemarkForm('${uid}')">&#x1F4AC; remarque</span>
+              <span class="dlv-remark-btn" style="margin-left:auto;font-size:9px;color:var(--text-tertiary);cursor:pointer;padding:2px 6px;border:1px solid var(--border-subtle);border-radius:3px" onclick="event.preventDefault();event.stopPropagation();toggleRemarkForm('${uid}')">&#x1F4AC; remarque</span>
             </summary>
             <div id="${uid}-remark" style="display:none;margin-top:4px;margin-bottom:8px;background:var(--bg-active);border:1px solid var(--accent-orange)33;border-radius:4px;padding:10px">
               <div style="font-size:9px;font-weight:600;color:var(--accent-orange);letter-spacing:0.5px;margin-bottom:6px">REMARQUE A L'AGENT</div>
@@ -2794,7 +2794,69 @@ async function doCreateProject(launchWorkflow = false) {
 }
 
 async function launchWorkflow(projectId, teamId, slug) {
-  if (!confirm('Lancer les agents sur ce projet ?')) return;
+  // Find project name from context
+  const ctx = window._projectCtx;
+  const projectName = ctx && ctx.project ? ctx.project.name : slug || 'ce projet';
+
+  const confirmed = await new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay active';
+
+    const modal = document.createElement('div');
+    modal.className = 'modal modal-question';
+    modal.style.width = 'min(480px, 90vw)';
+
+    // Header
+    const header = document.createElement('div');
+    header.className = 'mq-header';
+    header.innerHTML = '<div class="mq-icon" style="background:rgba(99,102,241,0.12);color:var(--accent-blue);font-size:20px">&#x26A1;</div>'
+      + '<div class="mq-header-text">'
+      + '<div class="mq-title">Lancer les agents</div>'
+      + '<div class="mq-subtitle"><span>' + esc(projectName) + '</span><span style="color:var(--accent-blue)">Phase Discovery</span></div>'
+      + '</div>';
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'mq-close';
+    closeBtn.innerHTML = '&times;';
+    closeBtn.onclick = () => { overlay.remove(); resolve(false); };
+    header.appendChild(closeBtn);
+    modal.appendChild(header);
+
+    // Body
+    const body = document.createElement('div');
+    body.className = 'mq-body';
+    body.style.padding = '20px 24px';
+    body.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);line-height:1.7">'
+      + '<p style="margin:0 0 12px">Les agents vont demarrer le workflow sur la phase <strong style="color:var(--accent-blue)">Discovery</strong>.</p>'
+      + '<div style="background:var(--bg-tertiary);border:1px solid var(--border-subtle);border-radius:6px;padding:12px;font-size:11px">'
+      + '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px"><span style="color:var(--accent-blue)">&#x25B6;</span> <strong>Requirements Analyst</strong> — analyse des besoins</div>'
+      + '<div style="display:flex;align-items:center;gap:6px"><span style="color:var(--accent-blue)">&#x25B6;</span> <strong>Legal Advisor</strong> — audit reglementaire</div>'
+      + '</div>'
+      + '</div>';
+    modal.appendChild(body);
+
+    // Footer
+    const footer = document.createElement('div');
+    footer.className = 'mq-footer';
+    const btnCancel = document.createElement('button');
+    btnCancel.className = 'btn btn-outline';
+    btnCancel.textContent = 'Annuler';
+    btnCancel.onclick = () => { overlay.remove(); resolve(false); };
+    const btnLaunch = document.createElement('button');
+    btnLaunch.className = 'btn btn-primary';
+    btnLaunch.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:12px';
+    btnLaunch.innerHTML = '&#x26A1; Lancer les agents';
+    btnLaunch.onclick = () => { overlay.remove(); resolve(true); };
+    footer.appendChild(btnCancel);
+    footer.appendChild(btnLaunch);
+    modal.appendChild(footer);
+
+    overlay.appendChild(modal);
+    overlay.addEventListener('click', e => { if (e.target === overlay) { overlay.remove(); resolve(false); } });
+    document.addEventListener('keydown', function esc(e) { if (e.key === 'Escape') { overlay.remove(); resolve(false); document.removeEventListener('keydown', esc); } });
+    document.body.appendChild(overlay);
+  });
+
+  if (!confirmed) return;
   try {
     const res = await api('/api/pm/projects/launch-workflow', { method: 'POST', body: {
       project_id: projectId, team_id: teamId, slug: slug, phase: 'discovery',
@@ -2808,7 +2870,7 @@ async function launchWorkflow(projectId, teamId, slug) {
 }
 
 async function pauseWorkflow(projectId, teamId) {
-  if (!confirm('Mettre le workflow en pause ?')) return;
+  if (!await confirmModal('Mettre le workflow en pause ? Les agents en cours termineront leur tache.')) return;
   try {
     const res = await api(`/api/pm/projects/${projectId}/pause-workflow`, { method: 'POST', body: { team_id: teamId } });
     if (res.ok) {
@@ -2908,7 +2970,15 @@ function _renderDelivContent(text) {
   const s = text.trim();
   // Pure JSON content (no markdown wrapper)
   if (s.startsWith('{') || s.startsWith('[')) {
-    try { return jsonToHtml(JSON.parse(s)); } catch (_) {}
+    try {
+      let parsed = JSON.parse(s);
+      // Unwrap single-key object wrapper (e.g. {"regulatory_audit": {...}} → render inner object directly)
+      if (typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const keys = Object.keys(parsed);
+        if (keys.length === 1 && typeof parsed[keys[0]] === 'object') parsed = parsed[keys[0]];
+      }
+      return jsonToHtml(parsed);
+    } catch (_) {}
   }
   // Markdown file with embedded JSON sections — extract JSON after ## headings
   // Split by ## headers and render each section
@@ -2925,7 +2995,16 @@ function _renderDelivContent(text) {
       if (body) {
         // Try JSON parse on body
         if (body.startsWith('{') || body.startsWith('[')) {
-          try { html += jsonToHtml(JSON.parse(body)); continue; } catch (_) {}
+          try {
+            let parsed = JSON.parse(body);
+            // Unwrap single-key wrapper that matches the heading (e.g. ## regulatory_audit → {"regulatory_audit": {...}})
+            if (typeof parsed === 'object' && !Array.isArray(parsed)) {
+              const keys = Object.keys(parsed);
+              if (keys.length === 1 && keys[0] === heading) parsed = parsed[keys[0]];
+            }
+            html += jsonToHtml(parsed);
+            continue;
+          } catch (_) {}
         }
         html += _renderDelivValue(body);
       }
@@ -3654,7 +3733,9 @@ async function loadProjectDeliverables() {
       let delivEntries = [];
       for (const agent of phase.agents) {
         const items = _splitDeliverableContent(agent.content);
+        const agentVerdicts = agent.verdicts || {};
         items.forEach(item => {
+          const kv = agentVerdicts[item.key] || {};
           delivEntries.push({
             agent_id: agent.agent_id,
             agent_name: agent.agent_name,
@@ -3663,6 +3744,7 @@ async function loadProjectDeliverables() {
             body: item.body,
             remarks: agent.remarks,
             fullContent: agent.content,
+            verdict: kv.verdict || '',
           });
         });
       }
@@ -3683,15 +3765,17 @@ async function loadProjectDeliverables() {
       for (const [agentId, group] of Object.entries(grouped)) {
         const groupUid = `dlvg-${esc(phase.phase)}-${esc(agentId)}`;
         html += `<div class="inbox-agent-group">
-          <div class="inbox-agent-header" onclick="toggleGroup('${groupUid}')">
-            <div class="inbox-agent-left">
-              <span class="inbox-agent-arrow" id="arrow-${groupUid}">&#x25BC;</span>
-              <span class="tag tag-accent">${esc(agentId)}</span>
-              <span style="font-size:11px;color:var(--text-secondary);font-weight:500">${esc(group.name)}</span>
-              <span class="inbox-agent-count">${group.entries.length} livrable${group.entries.length > 1 ? 's' : ''}</span>
-              ${group.remarks ? '<span style="font-size:9px;color:var(--accent-orange);margin-left:4px" title="Remarques">&#x1F4AC;</span>' : ''}
-              <span style="margin-left:auto;font-size:10px;color:var(--text-tertiary);cursor:pointer;padding:3px 8px;border:1px solid var(--border-subtle);border-radius:4px" onclick="event.stopPropagation();toggleRemarkForm('${groupUid}')">&#x1F4AC; Remarque</span>
+          <div style="display:flex;align-items:center;gap:0">
+            <div class="inbox-agent-header" style="flex:1;min-width:0" onclick="toggleGroup('${groupUid}')">
+              <div class="inbox-agent-left">
+                <span class="inbox-agent-arrow" id="arrow-${groupUid}">&#x25BC;</span>
+                <span class="tag tag-accent">${esc(agentId)}</span>
+                <span style="font-size:11px;color:var(--text-secondary);font-weight:500">${esc(group.name)}</span>
+                <span class="inbox-agent-count">${group.entries.length} livrable${group.entries.length > 1 ? 's' : ''}</span>
+                ${group.remarks ? '<span style="font-size:9px;color:var(--accent-orange);margin-left:4px" title="Remarques">&#x1F4AC;</span>' : ''}
+              </div>
             </div>
+            <span style="font-size:10px;color:var(--text-tertiary);cursor:pointer;padding:3px 8px;border:1px solid var(--border-subtle);border-radius:4px;white-space:nowrap" onclick="toggleRemarkForm('${groupUid}')">&#x1F4AC; Remarque</span>
           </div>
           <div class="inbox-agent-questions" id="group-${groupUid}">
             <div id="${groupUid}-remark" style="display:none;margin:6px 0 10px;background:var(--bg-active);border:1px solid var(--accent-orange)33;border-radius:6px;padding:12px">
@@ -3706,13 +3790,19 @@ async function loadProjectDeliverables() {
 
         for (const d of group.entries) {
           const displayTitle = d.key === '_all' ? d.agent_name : d.title;
+          let vBadge = '';
+          if (d.verdict === 'approved') vBadge = '<span style="font-size:9px;color:var(--accent-green);font-weight:600;margin-left:auto;white-space:nowrap">&#x2713; Approuve</span>';
+          else if (d.verdict === 'rejected') vBadge = '<span style="font-size:9px;color:var(--accent-red);font-weight:600;margin-left:auto;white-space:nowrap">&#x2717; Rejete</span>';
           html += `<div class="card" style="cursor:pointer;margin-bottom:4px" onclick="openDelivModal('${esc(phase.phase)}','${esc(agentId)}','${esc(d.key)}','${esc(currentDelivSlug)}')">
             <div class="card-row">
-              <div style="flex:1;min-width:0">
-                <div class="card-tags">
-                  <span class="tag tag-green">${esc(phase.phase).toUpperCase()}</span>
+              <div style="flex:1;min-width:0;display:flex;align-items:center;gap:8px">
+                <div style="flex:1;min-width:0">
+                  <div class="card-tags">
+                    <span class="tag tag-green">${esc(phase.phase).toUpperCase()}</span>
+                  </div>
+                  <div class="card-question">${esc(displayTitle)}</div>
                 </div>
-                <div class="card-question">${esc(displayTitle)}</div>
+                ${vBadge}
               </div>
             </div>
           </div>`;
@@ -3729,13 +3819,15 @@ async function loadProjectDeliverables() {
 }
 
 function openDelivModal(phase, agentId, key, slug) {
+  // Remove any existing modal first
+  document.getElementById('deliv-detail-modal')?.remove();
   // Find the deliverable data
   const data = window._delivData;
-  if (!data) return;
+  if (!data) { console.error('openDelivModal: no _delivData'); toast('Donnees non chargees — rechargez les livrables', 'error'); return; }
   const phaseData = (data.phases || []).find(p => p.phase === phase);
-  if (!phaseData) return;
+  if (!phaseData) { console.error('openDelivModal: phase not found', phase); return; }
   const agentData = phaseData.agents.find(a => a.agent_id === agentId);
-  if (!agentData) return;
+  if (!agentData) { console.error('openDelivModal: agent not found', agentId); return; }
 
   // Extract the specific deliverable section
   let bodyHtml = '';
@@ -3749,36 +3841,86 @@ function openDelivModal(phase, agentId, key, slug) {
 
   const displayTitle = key === '_all' ? agentData.agent_name : key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   const delivTeamId = data.team_id || 'team1';
+  // Per-key verdict lookup
+  const keyVerdict = (agentData.verdicts || {})[key] || {};
+  const v = keyVerdict.verdict || '';
+  const vBy = keyVerdict.by || '';
+  const vAt = keyVerdict.at || '';
+
+  // Verdict badge
+  let verdictBadge = '';
+  if (v === 'approved') verdictBadge = `<span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:600;color:var(--accent-green);background:rgba(62,207,142,0.1);border:1px solid rgba(62,207,142,0.3);padding:2px 10px;border-radius:4px">&#x2713; Approuve par ${esc(vBy)} &bull; ${timeAgo(vAt)}</span>`;
+  else if (v === 'rejected') verdictBadge = `<span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:600;color:var(--accent-red);background:rgba(239,85,85,0.1);border:1px solid rgba(239,85,85,0.3);padding:2px 10px;border-radius:4px">&#x2717; Rejete par ${esc(vBy)} &bull; ${timeAgo(vAt)}</span>`;
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay active';
   overlay.id = 'deliv-detail-modal';
 
-  overlay.innerHTML = `<div class="modal modal-question">
-    <div class="mq-header">
-      <div class="mq-icon mq-icon-question">&#x1F4C4;</div>
-      <div class="mq-header-text">
-        <div class="mq-title">${esc(displayTitle)}</div>
-        <div class="mq-subtitle">
-          <span>${esc(agentId)}</span>
-          <span>${esc(agentData.agent_name)}</span>
-          <span style="color:var(--accent-blue)">${esc(phase)}</span>
-        </div>
-      </div>
-      <button class="mq-close" onclick="document.getElementById('deliv-detail-modal').remove()" title="Fermer">&times;</button>
-    </div>
-    <div class="mq-body">
-      ${agentData.remarks ? `<div style="margin-bottom:12px;padding:10px;background:var(--bg-active);border-left:3px solid var(--accent-orange);border-radius:0 4px 4px 0;font-size:10px;color:var(--text-tertiary)"><div style="font-size:9px;font-weight:600;color:var(--accent-orange);margin-bottom:4px">REMARQUES PRECEDENTES</div>${renderMarkdown(agentData.remarks)}</div>` : ''}
-      <div class="md-content" style="line-height:1.6">${bodyHtml}</div>
-      <div class="mq-divider">Retour a l'agent</div>
-      <textarea class="mq-reply-area" id="deliv-remark-text" placeholder="Decrivez ce que l'agent doit corriger ou ameliorer..."></textarea>
-    </div>
-    <div class="mq-footer">
-      <span class="mq-hint">Echap pour fermer</span>
-      <button class="btn btn-outline" onclick="document.getElementById('deliv-detail-modal').remove()">Fermer</button>
-      <button class="btn btn-primary" style="background:var(--accent-orange)" onclick="_submitRemarkFromModal('${esc(slug)}','${esc(phase)}','${esc(agentId)}','${esc(delivTeamId)}')">Soumettre la remarque</button>
-    </div>
-  </div>`;
+  // Build modal shell (without dynamic content to avoid template literal issues with backticks/dollar signs)
+  const iconClass = v === 'approved' ? 'mq-icon-approval' : v === 'rejected' ? 'mq-icon-error' : 'mq-icon-question';
+  const remarksHtml = agentData.remarks
+    ? '<div style="margin-bottom:12px;padding:10px;background:var(--bg-active);border-left:3px solid var(--accent-orange);border-radius:0 4px 4px 0;font-size:10px;color:var(--text-tertiary)"><div style="font-size:9px;font-weight:600;color:var(--accent-orange);margin-bottom:4px">REMARQUES PRECEDENTES</div>' + renderMarkdown(agentData.remarks) + '</div>'
+    : '';
+
+  const modal = document.createElement('div');
+  modal.className = 'modal modal-question';
+
+  // Header
+  const header = document.createElement('div');
+  header.className = 'mq-header';
+  header.innerHTML = '<div class="mq-icon ' + iconClass + '">&#x1F4C4;</div>'
+    + '<div class="mq-header-text"><div class="mq-title">' + esc(displayTitle) + '</div>'
+    + '<div class="mq-subtitle"><span>' + esc(agentId) + '</span><span>' + esc(agentData.agent_name) + '</span>'
+    + '<span style="color:var(--accent-blue)">' + esc(phase) + '</span>' + verdictBadge + '</div></div>';
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'mq-close';
+  closeBtn.title = 'Fermer';
+  closeBtn.innerHTML = '&times;';
+  closeBtn.onclick = () => overlay.remove();
+  header.appendChild(closeBtn);
+  modal.appendChild(header);
+
+  // Body
+  const body = document.createElement('div');
+  body.className = 'mq-body';
+  body.innerHTML = remarksHtml
+    + '<div class="md-content" style="line-height:1.6"></div>'
+    + '<div class="mq-divider">Remarque a l\'agent</div>'
+    + '<textarea class="mq-reply-area" id="deliv-remark-text" placeholder="Si le livrable doit etre corrige, decrivez ici ce qu\'il faut changer..."></textarea>'
+    + '<div id="deliv-modal-status" style="display:none;margin-top:10px;padding:12px;border-radius:6px;font-size:11px;text-align:center"></div>';
+  // Inject rendered content safely via DOM (avoids template literal issues with backticks)
+  body.querySelector('.md-content').innerHTML = bodyHtml;
+  modal.appendChild(body);
+
+  // Footer
+  const footer = document.createElement('div');
+  footer.className = 'mq-footer';
+  footer.id = 'deliv-modal-footer';
+  footer.innerHTML = '<span class="mq-hint">Echap pour fermer</span>';
+  const btnClose = document.createElement('button');
+  btnClose.className = 'btn btn-outline';
+  btnClose.textContent = 'Fermer';
+  btnClose.onclick = () => overlay.remove();
+  const btnApprove = document.createElement('button');
+  btnApprove.className = 'btn btn-approve';
+  btnApprove.innerHTML = '&#x2713; Approuver';
+  btnApprove.onclick = () => _delivVerdict(slug, phase, agentId, key, 'approved');
+  const btnReject = document.createElement('button');
+  btnReject.className = 'btn btn-reject';
+  btnReject.innerHTML = '&#x2717; Rejeter';
+  btnReject.onclick = () => _delivVerdict(slug, phase, agentId, key, 'rejected');
+  const btnReturn = document.createElement('button');
+  btnReturn.className = 'btn btn-primary';
+  btnReturn.style.background = 'var(--accent-orange)';
+  btnReturn.textContent = 'Retourner a l\'agent';
+  btnReturn.onclick = () => _submitRemarkFromModal(slug, phase, agentId, delivTeamId);
+  footer.appendChild(btnClose);
+  footer.appendChild(btnApprove);
+  footer.appendChild(btnReject);
+  footer.appendChild(btnReturn);
+  modal.appendChild(footer);
+
+  overlay.appendChild(modal);
 
   overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
   const escHandler = e => { if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escHandler); } };
@@ -3786,31 +3928,67 @@ function openDelivModal(phase, agentId, key, slug) {
   document.body.appendChild(overlay);
 }
 
+async function _delivVerdict(slug, phase, agentId, key, verdict) {
+  try {
+    await api(`/api/projects/${encodeURIComponent(slug)}/deliverables/${encodeURIComponent(phase)}/${encodeURIComponent(agentId)}/verdict`, {
+      method: 'POST', body: { verdict, key: key || '_all' }
+    });
+    toast(verdict === 'approved' ? 'Livrable approuve' : 'Livrable rejete');
+    document.getElementById('deliv-detail-modal')?.remove();
+    loadProjectDeliverables();
+  } catch (e) { _handleSubmitError(e); }
+}
+
 async function _submitRemarkFromModal(slug, phase, agentId, teamId) {
   const ta = document.getElementById('deliv-remark-text');
   if (!ta) return;
   const remark = ta.value.trim();
-  if (!remark) { toast('La remarque ne peut pas etre vide', 'error'); return; }
+  if (!remark) { toast('Ecrivez une remarque avant de retourner a l\'agent', 'error'); return; }
 
-  // Disable button during submit
-  const btn = ta.closest('.modal-question').querySelector('.mq-footer .btn-primary');
-  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Envoi...'; }
+  // Disable footer buttons, show status
+  const footer = document.getElementById('deliv-modal-footer');
+  const statusEl = document.getElementById('deliv-modal-status');
+  if (footer) footer.querySelectorAll('button').forEach(b => b.disabled = true);
+  if (statusEl) {
+    statusEl.style.display = '';
+    statusEl.style.background = 'rgba(91,141,239,0.08)';
+    statusEl.style.color = 'var(--accent-blue)';
+    statusEl.innerHTML = '<span class="spinner" style="margin-right:8px"></span>Remarque envoyee — l\'agent travaille sur la correction...';
+  }
 
   try {
     const res = await api(`/api/projects/${encodeURIComponent(slug)}/deliverables/${encodeURIComponent(phase)}/${encodeURIComponent(agentId)}/remark`, {
       method: 'POST', body: { remark, team_id: teamId || 'team1' }
     });
-    if (res.ok) {
-      toast('Remarque soumise — l\'agent va produire une version revisee', 'success');
-      document.getElementById('deliv-detail-modal')?.remove();
-      loadProjectDeliverables();
+    if (res.ok || res.remark_saved) {
+      if (res.agent_invoked) {
+        if (statusEl) {
+          statusEl.style.background = 'rgba(62,207,142,0.08)';
+          statusEl.style.color = 'var(--accent-green)';
+          statusEl.innerHTML = '&#x2713; Remarque soumise — l\'agent produit une version revisee. Le livrable sera mis a jour automatiquement.';
+        }
+        toast('Remarque envoyee — correction en cours', 'success');
+        setTimeout(() => {
+          document.getElementById('deliv-detail-modal')?.remove();
+          loadProjectDeliverables();
+        }, 2000);
+      } else {
+        if (statusEl) {
+          statusEl.style.background = 'rgba(240,160,80,0.08)';
+          statusEl.style.color = 'var(--accent-orange)';
+          statusEl.innerHTML = '&#x26A0; Remarque sauvegardee mais l\'agent n\'a pas pu etre relance : ' + esc((res.gateway || {}).error || 'erreur inconnue');
+        }
+        if (footer) footer.querySelectorAll('button').forEach(b => b.disabled = false);
+      }
     } else {
       toast(res.error || 'Erreur', 'error');
-      if (btn) { btn.disabled = false; btn.textContent = 'Soumettre la remarque'; }
+      if (footer) footer.querySelectorAll('button').forEach(b => b.disabled = false);
+      if (statusEl) statusEl.style.display = 'none';
     }
   } catch (e) {
     _handleSubmitError(e);
-    if (btn) { btn.disabled = false; btn.textContent = 'Soumettre la remarque'; }
+    if (footer) footer.querySelectorAll('button').forEach(b => b.disabled = false);
+    if (statusEl) statusEl.style.display = 'none';
   }
 }
 

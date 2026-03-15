@@ -83,8 +83,10 @@ services:
     volumes:
       - /root/ag.flow:/root/ag.flow
       - ./config:/app/config
+      - ./Shared/Agents:/app/shared_agents:ro
     # Code baked into image (COPY in Dockerfile) — mounting breaks case-sensitive renames (Shared → shared)
     # Config mounted as volume so registry/prompts/workflow changes don't require rebuild
+    # Shared/Agents mounted as /app/shared_agents for agent prompt fallback
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -296,6 +298,7 @@ services:
         condition: service_healthy
     volumes:
       - /opt/langgraph-data/openlit:/app/client/data
+      - ./config/otel-collector-config.yaml:/etc/otel/otel-collector-config.yaml:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000"]
       interval: 10s

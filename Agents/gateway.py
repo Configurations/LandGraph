@@ -1026,7 +1026,7 @@ async def startup():
         else:
             openlit.init(
                 otlp_endpoint=otel_endpoint,
-                application_name="langgraph-api",
+                application_name="ag.flow",
                 environment=os.getenv("OPENLIT_ENV", "production"),
                 disable_batch=True,
             )

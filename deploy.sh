@@ -137,10 +137,11 @@ REMOTE_CLEAN
     log "Uploading Shared/mcp_catalog.csv ..."
     scp $SCP_OPTS "$LOCAL_DIR/Shared/Teams/mcp_catalog.csv" "${SSH_TARGET}:${REMOTE_DIR}/Shared/Teams/mcp_catalog.csv"
 
-    # Seed config/ with global JSON files if they don't exist yet on remote
+    # Seed config/ with global config files if they don't exist yet on remote
     # These are needed by Dockerfiles (COPY config/) and by the app at runtime
     log "Seeding config files (skip existing) ..."
-    for f in "$LOCAL_DIR"/config/*.json; do
+    for f in "$LOCAL_DIR"/config/*.json "$LOCAL_DIR"/config/*.yaml "$LOCAL_DIR"/config/*.yml; do
+        [[ -f "$f" ]] || continue
         fname=$(basename "$f")
         ssh $SSH_OPTS "${SSH_TARGET}" "test -f ${REMOTE_DIR}/config/${fname}" \
             || scp $SCP_OPTS "$f" "${SSH_TARGET}:${REMOTE_DIR}/config/${fname}"

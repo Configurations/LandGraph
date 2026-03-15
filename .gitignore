@@ -12,5 +12,6 @@ git.json
 *.egg-info/
 .deploy.*.env
 .version
-config/
+config/*
+!config/otel-collector-config.yaml
 Shared/

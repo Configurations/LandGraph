@@ -218,13 +218,21 @@ class BaseAgent:
         from agents.shared.team_resolver import find_team_file
         team_id = getattr(self, 'team_id', 'default')
 
-        # Chercher dans le dossier de l'equipe
+        # 1. Chercher dans le dossier de l'equipe (config/Teams/<team>/<prompt>.md)
         path = find_team_file(team_id, self.prompt_filename)
         if path:
             logger.info(f"[{self.agent_id}] Prompt: {path}")
             return open(path).read()
 
+        # 2. Fallback vers Shared/Agents/<agent_id>/prompt.md (mounted as /app/shared_agents)
+        for base in ['/app/shared_agents', '/app/Shared/Agents', 'Shared/Agents']:
+            shared_path = os.path.join(base, self.agent_id, 'prompt.md')
+            if os.path.exists(shared_path):
+                logger.info(f"[{self.agent_id}] Prompt (shared): {shared_path}")
+                return open(shared_path).read()
+
         # Fallback minimal
+        logger.warning(f"[{self.agent_id}] No prompt file found — using fallback")
         return f"Tu es {self.agent_name}. JSON: {{agent_id, status, confidence, deliverables}}"
 
     def get_llm(self):
@@ -350,11 +358,41 @@ class BaseAgent:
 
     def parse_response(self, raw):
         c = raw.strip()
+        # Extract from code blocks
         if "```json" in c:
             c = c.split("```json")[1].split("```")[0].strip()
         elif "```" in c:
             c = c.split("```")[1].split("```")[0].strip()
-        return json.loads(c)
+        # Try direct parse
+        try:
+            return json.loads(c)
+        except json.JSONDecodeError:
+            pass
+        # Fallback: find first { or [ and parse from there
+        for ch in ['{', '[']:
+            idx = c.find(ch)
+            if idx >= 0:
+                try:
+                    return json.loads(c[idx:])
+                except json.JSONDecodeError:
+                    pass
+        # Fallback: try from raw (skip any preamble text before JSON)
+        for ch in ['{', '[']:
+            idx = raw.find(ch)
+            if idx >= 0:
+                try:
+                    return json.loads(raw[idx:])
+                except json.JSONDecodeError:
+                    # Try trimming trailing text after last } or ]
+                    closing = '}' if ch == '{' else ']'
+                    ridx = raw.rfind(closing)
+                    if ridx > idx:
+                        try:
+                            return json.loads(raw[idx:ridx + 1])
+                        except json.JSONDecodeError:
+                            pass
+        # Nothing worked
+        raise json.JSONDecodeError("No valid JSON found in response", raw[:200], 0)
 
     # ── Appels LLM ───────────────────────────────────────────────────────────
 

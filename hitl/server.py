@@ -1051,6 +1051,16 @@ def get_project_deliverables(slug: str, user: TokenData = Depends(get_current_us
                     _team_id = row[0]
     except Exception:
         pass
+    # Load verdicts
+    verdicts_path = os.path.join(deliv_root, "_verdicts.json")
+    verdicts = {}
+    if os.path.isfile(verdicts_path):
+        try:
+            with open(verdicts_path, "r", encoding="utf-8") as f:
+                verdicts = json.load(f)
+        except Exception:
+            pass
+
     result = []
     for phase in PHASE_ORDER:
         phase_dir = os.path.join(deliv_root, phase)
@@ -1082,15 +1092,62 @@ def get_project_deliverables(slug: str, user: TokenData = Depends(get_current_us
                         remarks = f.read()
                 except Exception:
                     pass
+            # Collect per-key verdicts for this agent
+            prefix = f"{phase}/{agent_id}/"
+            agent_verdicts = {}
+            for vk, vv in verdicts.items():
+                if vk.startswith(prefix):
+                    dkey = vk[len(prefix):]
+                    agent_verdicts[dkey] = vv
+                elif vk == f"{phase}/{agent_id}":
+                    # Legacy format (no key) — treat as _all
+                    agent_verdicts["_all"] = vv
             agents.append({
                 "agent_id": agent_id,
                 "agent_name": agent_name,
                 "content": content,
                 "remarks": remarks,
+                "verdicts": agent_verdicts,
             })
         if agents:
             result.append({"phase": phase, "agents": agents})
     return {"phases": result, "team_id": _team_id}
+
+
+@app.post("/api/projects/{slug}/deliverables/{phase}/{agent_id}/verdict")
+def post_deliverable_verdict(slug: str, phase: str, agent_id: str, body: dict, user: TokenData = Depends(get_current_user)):
+    """Set verdict (approved/rejected) on a deliverable."""
+    import re as _re
+    from datetime import datetime, timezone
+    safe_slug = _re.sub(r'[^a-z0-9_-]', '', slug.lower())
+    safe_phase = _re.sub(r'[^a-z0-9_-]', '', phase.lower())
+    safe_agent = _re.sub(r'[^a-z0-9_-]', '', agent_id.lower())
+    verdict = body.get("verdict", "")
+    deliv_key = body.get("key", "_all")  # individual deliverable key within the agent's file
+    if verdict not in ("approved", "rejected"):
+        raise HTTPException(400, "verdict must be 'approved' or 'rejected'")
+    if safe_phase not in PHASE_ORDER:
+        raise HTTPException(400, f"Invalid phase: {phase}")
+    deliv_root = os.path.join(PROJECTS_ROOT, safe_slug, "deliverables")
+    deliv_path = os.path.join(deliv_root, safe_phase, f"{safe_agent}.md")
+    if not os.path.isfile(deliv_path):
+        raise HTTPException(404, "Deliverable not found")
+
+    verdicts_path = os.path.join(deliv_root, "_verdicts.json")
+    verdicts = {}
+    if os.path.isfile(verdicts_path):
+        try:
+            with open(verdicts_path, "r", encoding="utf-8") as f:
+                verdicts = json.load(f)
+        except Exception:
+            pass
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Store per deliverable key: "phase/agent_id/key"
+    verdict_key = f"{safe_phase}/{safe_agent}/{deliv_key}"
+    verdicts[verdict_key] = {"verdict": verdict, "by": user.email, "at": now}
+    with open(verdicts_path, "w", encoding="utf-8") as f:
+        json.dump(verdicts, f, indent=2, ensure_ascii=False)
+    return {"ok": True, "verdict": verdict}
 
 
 @app.post("/api/projects/{slug}/deliverables/{phase}/{agent_id}/remark")
