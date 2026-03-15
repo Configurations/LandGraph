@@ -171,7 +171,7 @@ def new_state(msgs, project_id, channel_id, team_id="", project_slug=""):
 
 
 def load_or_create_state(thread_id, msgs, project_id, channel_id, team_id="", project_slug=""):
-    """Charge le state existant ou en cree un nouveau."""
+    """Charge le state existant ou en cree un nouveau. (sync — appeler via to_thread)"""
     graph = get_orchestrator_graph()
     config = {"configurable": {"thread_id": thread_id}}
 
@@ -196,6 +196,12 @@ def load_or_create_state(thread_id, msgs, project_id, channel_id, team_id="", pr
 
     logger.info(f"New state for {thread_id}")
     return new_state(msgs, project_id, channel_id, team_id, project_slug)
+
+
+async def load_or_create_state_async(thread_id, msgs, project_id, channel_id, team_id="", project_slug=""):
+    """Async wrapper — ne bloque pas l'event loop."""
+    return await asyncio.to_thread(
+        load_or_create_state, thread_id, msgs, project_id, channel_id, team_id, project_slug)
 
 
 # ── Background runners ───────────────────────
@@ -241,7 +247,7 @@ async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="defau
     try:
         graph = get_orchestrator_graph()
         config = {"configurable": {"thread_id": thread_id}}
-        graph.update_state(config, state)
+        await asyncio.to_thread(graph.update_state, config, state)
         logger.info(f"State saved for {thread_id} — {len(merged)} outputs: {list(merged.keys())}")
     except Exception as e:
         logger.error(f"Could not save state for {thread_id}: {e}")
@@ -314,7 +320,7 @@ async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="defau
                 # Auto-transition
                 state["project_phase"] = next_phase
                 try:
-                    graph.update_state(config, state)
+                    await asyncio.to_thread(graph.update_state, config, state)
                     logger.info(f"Auto-transition: {current_phase} → {next_phase}")
                 except Exception:
                     pass
@@ -615,7 +621,7 @@ async def workflow_transition(req: PhaseTransitionRequest, background_tasks: Bac
     try:
         graph = get_orchestrator_graph()
         config = {"configurable": {"thread_id": req.thread_id}}
-        existing = graph.get_state(config)
+        existing = await asyncio.to_thread(graph.get_state, config)
         if not existing or not existing.values:
             raise HTTPException(404, "Thread introuvable")
         state = existing.values
@@ -623,7 +629,7 @@ async def workflow_transition(req: PhaseTransitionRequest, background_tasks: Bac
         if current != req.from_phase:
             raise HTTPException(400, f"Phase actuelle est '{current}', pas '{req.from_phase}'")
         state["project_phase"] = req.to_phase
-        graph.update_state(config, state)
+        await asyncio.to_thread(graph.update_state, config, state)
         logger.info(f"Phase transition (HITL approved): {req.from_phase} → {req.to_phase}")
         bus.emit(Event("phase_transition", thread_id=req.thread_id,
                         team_id=state.get("_team_id", _default_team()),
@@ -661,7 +667,7 @@ async def workflow_status(thread_id: str):
     try:
         graph = get_orchestrator_graph()
         config = {"configurable": {"thread_id": thread_id}}
-        existing = graph.get_state(config)
+        existing = await asyncio.to_thread(graph.get_state, config)
         if not existing or not existing.values:
             return {"error": "Thread introuvable"}
         state = existing.values
@@ -681,7 +687,7 @@ async def workflow_deliverables(thread_id: str):
     try:
         graph = get_orchestrator_graph()
         config = {"configurable": {"thread_id": thread_id}}
-        existing = graph.get_state(config)
+        existing = await asyncio.to_thread(graph.get_state, config)
         if not existing or not existing.values:
             return {"error": "Thread introuvable"}
         state = existing.values
@@ -715,7 +721,7 @@ async def reset(request: ResetRequest):
         graph = get_orchestrator_graph()
         config = {"configurable": {"thread_id": request.thread_id}}
         # Ecraser avec un state vierge
-        graph.update_state(config, new_state([], "", "", _default_team()))
+        await asyncio.to_thread(graph.update_state, config, new_state([], "", "", _default_team()))
         logger.info(f"State reset for {request.thread_id}")
         return {"status": "ok", "thread_id": request.thread_id}
     except Exception as e:
@@ -738,7 +744,7 @@ async def reset_phase(request: PhaseResetRequest):
     try:
         graph = get_orchestrator_graph()
         config = {"configurable": {"thread_id": request.thread_id}}
-        existing = graph.get_state(config)
+        existing = await asyncio.to_thread(graph.get_state, config)
         if not existing or not existing.values:
             raise HTTPException(404, "Thread not found")
         state = existing.values
@@ -756,7 +762,7 @@ async def reset_phase(request: PhaseResetRequest):
             outputs.pop(aid, None)
         state["agent_outputs"] = outputs
         state["project_phase"] = request.phase
-        graph.update_state(config, state)
+        await asyncio.to_thread(graph.update_state, config, state)
         logger.info(f"Phase reset to {request.phase} for {request.thread_id} — cleared {len(agents_to_clear)} agent outputs")
         return {"ok": True, "phase": request.phase, "cleared_agents": list(agents_to_clear)}
     except HTTPException:
@@ -808,7 +814,7 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
                 if ca is agent_callable:
                     canonical_id = cid; break
 
-            state = load_or_create_state(request.thread_id, msgs, request.project_id, channel_id, team_id, request.project_slug)
+            state = await load_or_create_state_async(request.thread_id, msgs, request.project_id, channel_id, team_id, request.project_slug)
 
             # Trouver le nom lisible
             agent_display = getattr(agent_callable, "agent_name", canonical_id)
@@ -829,11 +835,11 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
                 thread_id=request.thread_id, agents_dispatched=[canonical_id])
 
         # ── Mode orchestrateur ───────────────
-        state = load_or_create_state(request.thread_id, msgs, request.project_id, channel_id, team_id, request.project_slug)
+        state = await load_or_create_state_async(request.thread_id, msgs, request.project_id, channel_id, team_id, request.project_slug)
 
         graph = get_orchestrator_graph()
         config = {"configurable": {"thread_id": request.thread_id}}
-        result = graph.invoke(state, config)
+        result = await asyncio.to_thread(graph.invoke, state, config)
 
         decisions = result.get("decision_history", [])
 
