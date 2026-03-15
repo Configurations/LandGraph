@@ -841,7 +841,9 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
         config = {"configurable": {"thread_id": request.thread_id}}
         result = await asyncio.to_thread(graph.invoke, state, config)
 
-        decisions = result.get("decision_history", [])
+        all_decisions = result.get("decision_history", [])
+        # Only act on the LAST decision (current invoke), not the full history
+        decisions = all_decisions[-1:] if all_decisions else []
 
         agents_dispatched = []
         output_parts = []
@@ -854,7 +856,7 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
             dtype = d.get("decision_type", "unknown")
             conf = d.get("confidence", 0)
             reasoning = d.get("reasoning", "")[:200]
-            output_parts.append(f"**Decision {i}** : {dtype} (confiance: {conf})\n{reasoning}")
+            output_parts.append(f"**Decision** : {dtype} (confiance: {conf})\n{reasoning}")
             for a in d.get("actions", []):
                 if isinstance(a, dict) and a.get("action") == "dispatch_agent":
                     t = a.get("target", "")
