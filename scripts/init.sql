@@ -145,7 +145,7 @@ CREATE TABLE IF NOT EXISTS project.pm_projects (
     lead TEXT NOT NULL,
     team_id TEXT NOT NULL,
     color TEXT DEFAULT '#6366f1',
-    status TEXT DEFAULT 'on-track' CHECK (status IN ('on-track', 'at-risk', 'off-track')),
+    status TEXT DEFAULT 'on-track' CHECK (status IN ('on-track', 'at-risk', 'off-track', 'paused', 'completed')),
     start_date DATE,
     target_date DATE,
     created_by TEXT,
