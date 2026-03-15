@@ -1603,8 +1603,23 @@ async function renderProjectTeamTab(project, issues) {
   const members = project.members || [];
   const teamId = project.team_id || activeTeam;
   let agents = [];
-  try { agents = await api(`/api/teams/${teamId}/agents`); } catch (e) { console.warn('Failed to load agents for', teamId, e); }
+  let eventsData = { events: [] };
+  try {
+    [agents, eventsData] = await Promise.all([
+      api(`/api/teams/${teamId}/agents`),
+      api('/api/events?n=200').catch(() => ({ events: [] })),
+    ]);
+  } catch (e) { console.warn('Failed to load agents for', teamId, e); }
   const teamName = teams.find(t => t.id === teamId)?.name || teamId;
+
+  // Detect running agents from events
+  const _teamRunState = {};
+  (eventsData.events || []).forEach(e => {
+    if (!e.agent_id) return;
+    if (e.event === 'agent_start') _teamRunState[e.agent_id] = true;
+    else if (e.event === 'agent_complete' || e.event === 'agent_error') delete _teamRunState[e.agent_id];
+  });
+  const runningInTeam = new Set(Object.keys(_teamRunState));
 
   let html = '<div style="flex:1;padding:24px;overflow:auto">';
 
@@ -1614,7 +1629,9 @@ async function renderProjectTeamTab(project, issues) {
   agents.sort((a, b) => a.type === 'orchestrator' ? -1 : b.type === 'orchestrator' ? 1 : a.name.localeCompare(b.name));
   agents.forEach((a, i) => {
     const isOrch = a.type === 'orchestrator';
-    html += `<div class="metric-card stagger-in" style="animation-delay:${i * 50}ms;padding:10px 14px;cursor:pointer" onclick="openAgentChat('${esc(a.id)}', '${esc(a.name)}', '${esc(a.llm)}')">
+    const isRunning = runningInTeam.has(a.id);
+    html += `<div class="metric-card stagger-in" style="animation-delay:${i * 50}ms;padding:10px 14px;cursor:pointer;position:relative" onclick="openAgentChat('${esc(a.id)}', '${esc(a.name)}', '${esc(a.llm)}')">
+      ${isRunning ? '<span class="agent-heartbeat" style="position:absolute;top:6px;right:8px" title="En cours d\u0027execution">\u2764</span>' : ''}
       <div style="display:flex;align-items:center;gap:8px">
         <span class="status-dot ${a.last_activity ? 'online' : 'offline'}"></span>
         <span style="font-size:12px;font-weight:${isOrch ? '700' : '500'}">${esc(a.name)}</span>
@@ -2883,7 +2900,8 @@ async function loadAgents() {
       api(`/api/teams/${activeTeam}/agents`),
       api('/api/events?n=200').catch(() => ({ events: [] })),
     ]);
-    // Detect running agents from events
+    // Detect running agents from events (no wfStatus cross-check here —
+    // this is the global Agents view, events are the authoritative source)
     const runningAgents = new Set();
     const agentEvts = (eventsData.events || []);
     const agentState = {};
@@ -2892,16 +2910,8 @@ async function loadAgents() {
       if (e.event === 'agent_start') agentState[e.agent_id] = true;
       else if (e.event === 'agent_complete' || e.event === 'agent_error') delete agentState[e.agent_id];
     });
-    // Cross-check with workflow status — if wfStatus says agent is complete, don't show as running
-    const _wfCtx = window._projectCtx?.wfStatus;
-    if (_wfCtx && _wfCtx.phases) {
-      Object.values(_wfCtx.phases).forEach(ph => {
-        if (ph.agents) Object.entries(ph.agents).forEach(([aid, a]) => {
-          if (a.status === 'complete' || a.status === 'error') delete agentState[aid];
-        });
-      });
-    }
     Object.keys(agentState).forEach(id => runningAgents.add(id));
+    if (runningAgents.size > 0) console.log('[agents] running:', [...runningAgents]);
 
     agents.sort((a, b) => a.type === 'orchestrator' ? -1 : b.type === 'orchestrator' ? 1 : a.name.localeCompare(b.name));
     let html = '<div class="agents-grid" style="padding:20px">';
