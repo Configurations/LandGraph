@@ -408,7 +408,7 @@ def _seed_admin():
 
 def _load_teams() -> list[dict]:
     """Load teams from teams.json."""
-    for path in ["/app/config/Teams/teams.json", "config/Teams/teams.json"]:
+    for path in ["/app/config/teams.json", "/app/config/Teams/teams.json", "config/teams.json", "config/Teams/teams.json"]:
         if os.path.exists(path):
             with open(path) as f:
                 data = json.load(f)
@@ -3449,7 +3449,7 @@ def get_events(n: int = 100, event_type: str = "", agent_id: str = "", user: Tok
     if agent_id:
         params["agent_id"] = agent_id
     try:
-        r = httpx.get(f"{gw}/events", params=params, timeout=5)
+        r = httpx.get(f"{gw}/events", params=params, timeout=3)
         return r.json()
     except Exception as e:
         return {"events": [], "error": str(e)}

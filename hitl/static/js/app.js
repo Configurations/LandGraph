@@ -2077,12 +2077,12 @@ async function resetPhase(projectId, teamId, phase) {
       body: { phase, team_id: teamId },
     });
     if (res.ok || res.phases_reset) {
-      showToast(`Phases reinitialisees: ${(res.phases_reset || []).join(', ')}`, 'success');
+      toast(`Phases reinitialisees: ${(res.phases_reset || []).join(', ')}`, 'success');
       if (res.gateway?.error) console.warn('[reset] gateway error:', res.gateway.error);
     } else {
-      showToast(res.error || 'Erreur', 'error');
+      toast(res.error || 'Erreur', 'error');
     }
-  } catch (e) { showToast(e.message, 'error'); }
+  } catch (e) { toast(e.message, 'error'); }
   // Clear cached project context and wait briefly for gateway state propagation
   window._projectCtx = null;
   await new Promise(r => setTimeout(r, 500));
@@ -3148,8 +3148,11 @@ async function submitHitlAnswer(qid, action) {
 let activeAgent = null;
 let chatMessages = [];
 let chatLoading = false;
+let _agentsLoading = false;
 
 async function loadAgents() {
+  if (_agentsLoading) return;
+  _agentsLoading = true;
   const content = document.getElementById('pm-content');
   const isRefresh = content.querySelector('.agents-grid') !== null;
   if (!isRefresh) {
@@ -3161,8 +3164,6 @@ async function loadAgents() {
       api(`/api/teams/${activeTeam}/agents`),
       api('/api/events?n=200').catch(() => ({ events: [] })),
     ]);
-    // Detect running agents from events (no wfStatus cross-check here —
-    // this is the global Agents view, events are the authoritative source)
     const runningAgents = new Set();
     const agentEvts = (eventsData.events || []);
     const agentState = {};
@@ -3198,8 +3199,9 @@ async function loadAgents() {
     });
     html += '</div>';
     if (content.innerHTML !== html) content.innerHTML = html;
-    startViewRefresh(loadAgents, 8000);
+    startViewRefresh(loadAgents, 15000);
   } catch (e) { if (!isRefresh) content.innerHTML = `<div class="empty-state">${esc(e.message)}</div>`; }
+  finally { _agentsLoading = false; }
 }
 
 async function openAgentChat(agentId, agentName, agentLlm) {

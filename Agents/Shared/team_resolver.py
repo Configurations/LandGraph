@@ -56,12 +56,8 @@ def get_teams_config() -> dict:
     global _teams_config
     if _teams_config is not None:
         return _teams_config
-    teams_dir = get_teams_dir()
-    if not teams_dir:
-        _teams_config = {"teams": []}
-        return _teams_config
-    path = os.path.join(teams_dir, "teams.json")
-    if not os.path.exists(path):
+    path = find_global_file("teams.json")
+    if not path:
         _teams_config = {"teams": []}
         return _teams_config
     with open(path) as f:

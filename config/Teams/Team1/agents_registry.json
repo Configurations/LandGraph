@@ -82,6 +82,13 @@
       "temperature": 0.3,
       "max_tokens": 32768,
       "prompt": "docs_writer.md"
+    },
+    "orchestrator": {
+      "name": "Orchestrateur",
+      "temperature": 0.2,
+      "max_tokens": 4096,
+      "prompt": "orchestrator.md",
+      "type": "orchestrator"
     }
   }
 }

@@ -84,11 +84,11 @@ else:
 
 load_dotenv(ENV_FILE, override=False)
 
-MCP_SERVERS_FILE = TEAMS_DIR / "mcp_servers.json"
+MCP_SERVERS_FILE = CONFIGS / "mcp_servers.json"
 MCP_ACCESS_FILE = TEAMS_DIR / "agent_mcp_access.json"
 MCP_CATALOG_FILE = SCRIPTS / "Infra" / "mcp_catalog.csv" if not DOCKER_MODE else SHARED_DIR / "Teams" / "mcp_catalog.csv"
-LLM_PROVIDERS_FILE = TEAMS_DIR / "llm_providers.json"
-TEAMS_FILE = TEAMS_DIR / "teams.json"
+LLM_PROVIDERS_FILE = CONFIGS / "llm_providers.json"
+TEAMS_FILE = CONFIGS / "teams.json"
 SHARED_GIT_FILE = SHARED_DIR / "git.json"
 CONFIGS_GIT_FILE = CONFIGS / "git.json"
 GIT_SERVICE_FILE = CONFIGS / "git_service.json"        # Templates scope
