@@ -82,8 +82,9 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - /root/ag.flow:/root/ag.flow
-    # No volumes for code/config — baked into image (COPY in Dockerfile)
-    # Mounting local dirs breaks case-sensitive renames (Shared → shared)
+      - ./config:/app/config
+    # Code baked into image (COPY in Dockerfile) — mounting breaks case-sensitive renames (Shared → shared)
+    # Config mounted as volume so registry/prompts/workflow changes don't require rebuild
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -106,6 +107,8 @@ services:
       - .env
     environment:
       LANGGRAPH_API_URL: http://langgraph-api:8000
+    volumes:
+      - ./config:/app/config
     networks:
       - langgraph-net
 
@@ -122,6 +125,8 @@ services:
       - .env
     environment:
       LANGGRAPH_API_URL: http://langgraph-api:8000
+    volumes:
+      - ./config:/app/config
     networks:
       - langgraph-net
 

@@ -174,10 +174,20 @@ def get_workflow_status(current_phase: str, agent_outputs: dict, team_id: str = 
                 "status": output.get("status", "pending"),
                 "group": aconf.get("parallel_group", "A"),
             }
+        # Deliverable definitions from Workflow.json
+        deliv_defs = {}
+        for dk, dv in pconf.get("deliverables", {}).items():
+            deliv_defs[dk] = {
+                "agent": dv.get("agent", ""),
+                "required": dv.get("required", False),
+                "type": dv.get("type", ""),
+                "description": dv.get("description", dk),
+            }
         status["phases"][pid] = {
             "name": pconf.get("name", pid), "order": pconf.get("order", 0),
             "complete": check["complete"], "current": pid == current_phase,
             "agents": agents_status,
             "missing": check.get("missing_agents", []) + check.get("missing_deliverables", []),
+            "deliverable_defs": deliv_defs,
         }
     return status

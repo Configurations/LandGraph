@@ -18,11 +18,11 @@
         }
       },
       "deliverables": {
-        "prd": {"agent": "requirements_analyst", "required": true, "description": "Product Requirements Document"},
-        "user_stories": {"agent": "requirements_analyst", "required": true, "description": "User Stories INVEST avec criteres d'acceptation"},
-        "moscow_matrix": {"agent": "requirements_analyst", "required": true, "description": "Priorisation MoSCoW"},
-        "regulatory_audit": {"agent": "legal_advisor", "required": true, "description": "Audit reglementaire (RGPD, etc.)"},
-        "alerts": {"agent": "legal_advisor", "required": true, "description": "Alertes juridiques (info/warning/critical)"}
+        "prd": {"agent": "requirements_analyst", "required": true, "type": "documentation", "description": "Product Requirements Document"},
+        "user_stories": {"agent": "requirements_analyst", "required": true, "type": "documentation", "description": "User Stories INVEST avec criteres d'acceptation"},
+        "moscow_matrix": {"agent": "requirements_analyst", "required": true, "type": "documentation", "description": "Priorisation MoSCoW"},
+        "regulatory_audit": {"agent": "legal_advisor", "required": true, "type": "documentation", "description": "Audit reglementaire (RGPD, etc.)"},
+        "alerts": {"agent": "legal_advisor", "required": true, "type": "documentation", "description": "Alertes juridiques (info/warning/critical)"}
       },
       "exit_conditions": {
         "all_deliverables_complete": true,
@@ -59,15 +59,15 @@
         }
       },
       "deliverables": {
-        "wireframes": {"agent": "ux_designer", "required": true, "description": "Wireframes et mockups"},
-        "design_tokens": {"agent": "ux_designer", "required": false, "description": "Design system tokens"},
-        "wcag_audit": {"agent": "ux_designer", "required": false, "description": "Rapport accessibilite WCAG"},
-        "adrs": {"agent": "architect", "required": true, "description": "Architecture Decision Records"},
-        "c4_diagrams": {"agent": "architect", "required": true, "description": "Diagrammes C4 (context, container, component)"},
-        "openapi_specs": {"agent": "architect", "required": true, "description": "Specifications OpenAPI"},
-        "sprint_backlog": {"agent": "planner", "required": true, "description": "Sprint backlog avec estimations"},
-        "roadmap": {"agent": "planner", "required": true, "description": "Roadmap projet"},
-        "risk_register": {"agent": "planner", "required": false, "description": "Registre des risques"}
+        "wireframes": {"agent": "ux_designer", "required": true, "type": "design", "description": "Wireframes et mockups"},
+        "design_tokens": {"agent": "ux_designer", "required": false, "type": "design", "description": "Design system tokens"},
+        "wcag_audit": {"agent": "ux_designer", "required": false, "type": "documentation", "description": "Rapport accessibilite WCAG"},
+        "adrs": {"agent": "architect", "required": true, "type": "documentation", "description": "Architecture Decision Records"},
+        "c4_diagrams": {"agent": "architect", "required": true, "type": "documentation", "description": "Diagrammes C4 (context, container, component)"},
+        "openapi_specs": {"agent": "architect", "required": true, "type": "documentation", "description": "Specifications OpenAPI"},
+        "sprint_backlog": {"agent": "planner", "required": true, "type": "documentation", "description": "Sprint backlog avec estimations"},
+        "roadmap": {"agent": "planner", "required": true, "type": "documentation", "description": "Roadmap projet"},
+        "risk_register": {"agent": "planner", "required": false, "type": "documentation", "description": "Registre des risques"}
       },
       "exit_conditions": {
         "all_deliverables_complete": true,
@@ -112,12 +112,12 @@
         }
       },
       "deliverables": {
-        "code_review": {"agent": "lead_dev", "required": true, "description": "Review croisee du code"},
-        "frontend_code": {"agent": "dev_frontend_web", "required": false, "description": "Code frontend"},
-        "backend_code": {"agent": "dev_backend_api", "required": false, "description": "Code backend + API"},
-        "mobile_code": {"agent": "dev_mobile", "required": false, "description": "Code mobile"},
-        "test_report": {"agent": "qa_engineer", "required": true, "description": "Rapport de tests"},
-        "qa_verdict": {"agent": "qa_engineer", "required": true, "description": "Verdict Go/NoGo"}
+        "code_review": {"agent": "lead_dev", "required": true, "type": "code", "description": "Review croisee du code"},
+        "frontend_code": {"agent": "dev_frontend_web", "required": false, "type": "code", "description": "Code frontend"},
+        "backend_code": {"agent": "dev_backend_api", "required": false, "type": "code", "description": "Code backend + API"},
+        "mobile_code": {"agent": "dev_mobile", "required": false, "type": "code", "description": "Code mobile"},
+        "test_report": {"agent": "qa_engineer", "required": true, "type": "documentation", "description": "Rapport de tests"},
+        "qa_verdict": {"agent": "qa_engineer", "required": true, "type": "documentation", "description": "Verdict Go/NoGo"}
       },
       "exit_conditions": {
         "all_deliverables_complete": true,
@@ -149,11 +149,11 @@
         }
       },
       "deliverables": {
-        "ci_cd": {"agent": "devops_engineer", "required": true, "description": "Pipeline CI/CD operationnel"},
-        "staging_ok": {"agent": "devops_engineer", "required": true, "description": "Staging deploye + health checks OK"},
-        "prod_deploy": {"agent": "devops_engineer", "required": true, "description": "Production deployee"},
-        "documentation": {"agent": "docs_writer", "required": true, "description": "Documentation publiee"},
-        "legal_docs": {"agent": "legal_advisor", "required": false, "description": "CGU, politique confidentialite"}
+        "ci_cd": {"agent": "devops_engineer", "required": true, "type": "code", "description": "Pipeline CI/CD operationnel"},
+        "staging_ok": {"agent": "devops_engineer", "required": true, "type": "code", "description": "Staging deploye + health checks OK"},
+        "prod_deploy": {"agent": "devops_engineer", "required": true, "type": "code", "description": "Production deployee"},
+        "documentation": {"agent": "docs_writer", "required": true, "type": "documentation", "description": "Documentation publiee"},
+        "legal_docs": {"agent": "legal_advisor", "required": false, "type": "documentation", "description": "CGU, politique confidentialite"}
       },
       "exit_conditions": {
         "all_deliverables_complete": true,
@@ -179,8 +179,8 @@
         }
       },
       "deliverables": {
-        "feedback_analysis": {"agent": "requirements_analyst", "required": true, "description": "Analyse des retours"},
-        "next_sprint": {"agent": "planner", "required": true, "description": "Backlog du prochain sprint"}
+        "feedback_analysis": {"agent": "requirements_analyst", "required": true, "type": "documentation", "description": "Analyse des retours"},
+        "next_sprint": {"agent": "planner", "required": true, "type": "documentation", "description": "Backlog du prochain sprint"}
       },
       "exit_conditions": {
         "all_deliverables_complete": true,

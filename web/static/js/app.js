@@ -2301,6 +2301,11 @@ function renderTeams() {
           ${a.type ? `<span class="tag tag-gray">${escHtml(a.type)}</span>` : ''}
           ${a.delivers_docs ? '<span class="tag tag-purple">Documentation</span>' : ''}
           ${a.delivers_code ? '<span class="tag tag-purple">Code</span>' : ''}
+          ${a.delivers_design ? '<span class="tag tag-purple">Maquette / Design</span>' : ''}
+          ${a.delivers_automation ? '<span class="tag tag-purple">Automatisme</span>' : ''}
+          ${a.delivers_tasklist ? '<span class="tag tag-purple">Liste de taches</span>' : ''}
+          ${a.delivers_specs ? '<span class="tag tag-purple">Specifications</span>' : ''}
+          ${a.delivers_contract ? '<span class="tag tag-purple">Contrat</span>' : ''}
         </div>
         ${mcpList.length ? `<div class="agent-meta">
           ${mcpList.map(m => `<span class="tag tag-green">${escHtml(m)}</span>`).join('')}
@@ -2448,6 +2453,11 @@ async function editCfgAgent(dir, agentId) {
   const delivTags = [
     a.delivers_docs ? '<span class="tag tag-purple">Documentation</span>' : '',
     a.delivers_code ? '<span class="tag tag-purple">Code</span>' : '',
+    a.delivers_design ? '<span class="tag tag-purple">Maquette / Design</span>' : '',
+    a.delivers_automation ? '<span class="tag tag-purple">Automatisme</span>' : '',
+    a.delivers_tasklist ? '<span class="tag tag-purple">Liste de taches</span>' : '',
+    a.delivers_specs ? '<span class="tag tag-purple">Specifications</span>' : '',
+    a.delivers_contract ? '<span class="tag tag-purple">Contrat</span>' : '',
   ].filter(Boolean).join('') || '<span style="color:var(--text-secondary);font-size:0.85rem">Aucun</span>';
 
   const promptRaw = a.prompt_content || '';
@@ -3846,6 +3856,21 @@ async function selectSharedAgent(id) {
           <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;cursor:pointer">
             <input type="checkbox" id="sa-delivers-code" ${agent.delivers_code ? 'checked' : ''} /> Code
           </label>
+          <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;cursor:pointer">
+            <input type="checkbox" id="sa-delivers-design" ${agent.delivers_design ? 'checked' : ''} /> Maquette / Design
+          </label>
+          <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;cursor:pointer">
+            <input type="checkbox" id="sa-delivers-automation" ${agent.delivers_automation ? 'checked' : ''} /> Automatisme
+          </label>
+          <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;cursor:pointer">
+            <input type="checkbox" id="sa-delivers-tasklist" ${agent.delivers_tasklist ? 'checked' : ''} /> Liste de taches
+          </label>
+          <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;cursor:pointer">
+            <input type="checkbox" id="sa-delivers-specs" ${agent.delivers_specs ? 'checked' : ''} /> Specifications
+          </label>
+          <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;cursor:pointer">
+            <input type="checkbox" id="sa-delivers-contract" ${agent.delivers_contract ? 'checked' : ''} /> Contrat
+          </label>
         </div>
       </div>
       <div style="text-align:right;margin-top:1rem">
@@ -3991,10 +4016,15 @@ async function saveSharedAgent(id) {
   const mcp_access = [...document.querySelectorAll('#sa-mcp-tags input[type=checkbox]:checked')].map(cb => cb.value);
   const delivers_docs = document.getElementById('sa-delivers-docs')?.checked || false;
   const delivers_code = document.getElementById('sa-delivers-code')?.checked || false;
+  const delivers_design = document.getElementById('sa-delivers-design')?.checked || false;
+  const delivers_automation = document.getElementById('sa-delivers-automation')?.checked || false;
+  const delivers_tasklist = document.getElementById('sa-delivers-tasklist')?.checked || false;
+  const delivers_specs = document.getElementById('sa-delivers-specs')?.checked || false;
+  const delivers_contract = document.getElementById('sa-delivers-contract')?.checked || false;
   if (!name) { toast('Nom requis', 'error'); return; }
   try {
     await api(`/api/shared-agents/${encodeURIComponent(id)}`, { method: 'PUT', body: {
-      id, name, description, llm, temperature, max_tokens, mcp_access, prompt_content, delivers_docs, delivers_code
+      id, name, description, llm, temperature, max_tokens, mcp_access, prompt_content, delivers_docs, delivers_code, delivers_design, delivers_automation, delivers_tasklist, delivers_specs, delivers_contract
     }});
     toast('Agent sauvegarde', 'success');
     // Update dropdown + filter input without reloading detail (preserves active tab)
@@ -4836,6 +4866,11 @@ async function editTplAgent(dir, agentId) {
   const delivTags = [
     a.delivers_docs ? '<span class="tag tag-purple">Documentation</span>' : '',
     a.delivers_code ? '<span class="tag tag-purple">Code</span>' : '',
+    a.delivers_design ? '<span class="tag tag-purple">Maquette / Design</span>' : '',
+    a.delivers_automation ? '<span class="tag tag-purple">Automatisme</span>' : '',
+    a.delivers_tasklist ? '<span class="tag tag-purple">Liste de taches</span>' : '',
+    a.delivers_specs ? '<span class="tag tag-purple">Specifications</span>' : '',
+    a.delivers_contract ? '<span class="tag tag-purple">Contrat</span>' : '',
   ].filter(Boolean).join('') || '<span style="color:var(--text-secondary);font-size:0.85rem">Aucun</span>';
 
   const promptRaw = a.prompt_content || '';
@@ -5180,6 +5215,14 @@ async function openWorkflowEditor(dir, apiBase, label) {
     const designBase = apiBase.replace('/workflow', '/workflow-design');
     let design = {};
     try { design = await api(`${designBase}/${encodeURIComponent(dir)}`); } catch {}
+    // Load shared agent capabilities (delivers_docs/code/design)
+    let agentCaps = {};
+    try {
+      const sa = await api('/api/shared-agents');
+      (sa.agents || []).forEach(a => {
+        agentCaps[a.id] = { documentation: !!a.delivers_docs, code: !!a.delivers_code, design: !!a.delivers_design, automation: !!a.delivers_automation, tasklist: !!a.delivers_tasklist, specs: !!a.delivers_specs, contract: !!a.delivers_contract };
+      });
+    } catch {}
     const data = (raw && Object.keys(raw).length) ? raw : { phases: {}, transitions: [], parallel_groups: { description: '', order: ['A','B','C'] }, rules: {} };
     _wf = {
       dir, apiBase, designBase, label,
@@ -5190,6 +5233,7 @@ async function openWorkflowEditor(dir, apiBase, label) {
       dragOffset: { x: 0, y: 0 },
       linking: null,
       linkMouse: null,
+      agentCaps,
     };
     _wfCalcPositions();
     _wfOpenEditorUI();
@@ -5269,7 +5313,11 @@ function wfRender() {
           <div class="wf-mini-label">Agents (${agentIds.length})</div>
           <div class="wf-mini-list">${agentIds.map(a => `<span class="wf-mini-chip${(p.agents[a]||{}).required?' required':''}">${escHtml(a)}</span>`).join('')}</div>
           <div class="wf-mini-label">Livrables (${delIds.length})</div>
-          <div class="wf-mini-list">${delIds.map(d => `<span class="wf-mini-chip${(p.deliverables[d]||{}).required?' required':''}">${escHtml(d)}</span>`).join('')}</div>
+          <div class="wf-mini-list">${delIds.map(d => {
+            const dd = p.deliverables[d]||{};
+            const tc = {documentation:'#8b5cf6',code:'#3b82f6',design:'#ec4899',automation:'#f59e0b',tasklist:'#10b981',specs:'#06b6d4',contract:'#f97316'}[dd.type]||'';
+            return `<span class="wf-mini-chip${dd.required?' required':''}"${tc?` style="border-left:3px solid ${tc}"`:''} title="${escHtml(dd.type||'')}">${escHtml(d)}</span>`;
+          }).join('')}</div>
         </div>
         <div class="wf-anchor wf-anchor-left" data-side="left" onmousedown="wfLinkStart(event,'${id}','left')"></div>
         <div class="wf-anchor wf-anchor-top" data-side="top" onmousedown="wfLinkStart(event,'${id}','top')"></div>
@@ -5481,8 +5529,22 @@ function _wfRenderPhaseProps(el, phaseId) {
 
   // Deliverables — inline editable blocks
   const agentIds = Object.keys(agents);
+  const WF_ALL_DELIV_TYPES = [
+    { value: 'documentation', label: 'Documentation', cap: 'documentation' },
+    { value: 'code', label: 'Code', cap: 'code' },
+    { value: 'design', label: 'Maquette / Design', cap: 'design' },
+    { value: 'automation', label: 'Automatisme', cap: 'automation' },
+    { value: 'tasklist', label: 'Liste de taches', cap: 'tasklist' },
+    { value: 'specs', label: 'Specifications', cap: 'specs' },
+    { value: 'contract', label: 'Contrat', cap: 'contract' },
+  ];
   let delsHtml = Object.entries(deliverables).map(([id, d]) => {
     const agOpts = agentIds.map(a => `<option value="${escHtml(a)}" ${a===d.agent?'selected':''}>${a}</option>`).join('');
+    // Filter types by agent capabilities
+    const caps = (_wf.agentCaps || {})[d.agent];
+    const hasCaps = caps && (caps.documentation || caps.code || caps.design || caps.automation || caps.tasklist || caps.specs || caps.contract);
+    const availTypes = hasCaps ? WF_ALL_DELIV_TYPES.filter(t => caps[t.cap]) : WF_ALL_DELIV_TYPES;
+    const typeOpts = '<option value="">-- Type --</option>' + availTypes.map(t => `<option value="${t.value}" ${t.value===(d.type||'')?'selected':''}>${t.label}</option>`).join('');
     const colKey = `${phaseId}:del:${id}`;
     const collapsed = _wf._collapsed && _wf._collapsed[colKey];
     return `<div class="wf-inline-block${collapsed ? ' collapsed' : ''}">
@@ -5495,6 +5557,7 @@ function _wfRenderPhaseProps(el, phaseId) {
         <input placeholder="Description" value="${escHtml(d.description || '')}" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','description',this.value)" />
         <div style="display:flex;gap:0.3rem">
           <select style="flex:1" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','agent',this.value)">${agOpts}</select>
+          <select style="width:110px" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','type',this.value)">${typeOpts}</select>
           <select style="width:80px" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','required',this.value==='true')">
             <option value="true" ${d.required?'selected':''}>Requis</option><option value="false" ${!d.required?'selected':''}>Opt</option>
           </select>
@@ -5988,6 +6051,7 @@ function wfAddDeliverable(phaseId) {
   _wf.data.phases[phaseId].deliverables[id] = {
     description: '',
     agent: agentIds[0],
+    type: '',
     required: true
   };
   wfRender();
@@ -5998,6 +6062,13 @@ function _wfSetDelField(phaseId, delId, field, val) {
   const d = _wf.data.phases[phaseId]?.deliverables?.[delId];
   if (!d) return;
   d[field] = val;
+  // When agent changes, reset type if the new agent doesn't support it
+  if (field === 'agent' && d.type) {
+    const caps = (_wf.agentCaps || {})[val];
+    const hasCaps = caps && (caps.documentation || caps.code || caps.design || caps.automation || caps.tasklist || caps.specs || caps.contract);
+    if (hasCaps && !caps[d.type]) d.type = '';
+    wfRenderProps();
+  }
 }
 
 function wfRemoveDeliverable(phaseId, delId) {

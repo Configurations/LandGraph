@@ -818,20 +818,23 @@ def list_questions(
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            clauses = ["team_id = %s"]
+            clauses = ["h.team_id = %s"]
             params: list = [team_id]
             if status and status != "all":
-                clauses.append("status = %s")
+                clauses.append("h.status = %s")
                 params.append(status)
             where = "WHERE " + " AND ".join(clauses)
             cur.execute(f"""
-                SELECT id, thread_id, agent_id, team_id, request_type, prompt,
-                       context, channel, status, response, reviewer,
-                       response_channel, created_at, answered_at, expires_at,
-                       reminded_at, COALESCE(remind_count, 0)
-                FROM project.hitl_requests
+                SELECT h.id, h.thread_id, h.agent_id, h.team_id, h.request_type, h.prompt,
+                       h.context, h.channel, h.status, h.response, h.reviewer,
+                       h.response_channel, h.created_at, h.answered_at, h.expires_at,
+                       h.reminded_at, COALESCE(h.remind_count, 0),
+                       p.slug, p.name
+                FROM project.hitl_requests h
+                LEFT JOIN project.pm_projects p
+                  ON h.thread_id = 'project-' || h.team_id || '-' || p.id::text
                 {where}
-                ORDER BY created_at DESC
+                ORDER BY h.created_at DESC
                 LIMIT %s
             """, (*params, limit))
             rows = cur.fetchall()
@@ -874,11 +877,15 @@ def get_question(question_id: str, user: TokenData = Depends(get_current_user)):
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, thread_id, agent_id, team_id, request_type, prompt,
-                       context, channel, status, response, reviewer,
-                       response_channel, created_at, answered_at, expires_at,
-                       reminded_at, COALESCE(remind_count, 0)
-                FROM project.hitl_requests WHERE id = %s
+                SELECT h.id, h.thread_id, h.agent_id, h.team_id, h.request_type, h.prompt,
+                       h.context, h.channel, h.status, h.response, h.reviewer,
+                       h.response_channel, h.created_at, h.answered_at, h.expires_at,
+                       h.reminded_at, COALESCE(h.remind_count, 0),
+                       p.slug, p.name
+                FROM project.hitl_requests h
+                LEFT JOIN project.pm_projects p
+                  ON h.thread_id = 'project-' || h.team_id || '-' || p.id::text
+                WHERE h.id = %s
             """, (question_id,))
             row = cur.fetchone()
             if not row:
@@ -1001,6 +1008,16 @@ def list_projects(user: TokenData = Depends(get_current_user)):
     """List projects that have deliverables on disk."""
     if not os.path.isdir(PROJECTS_ROOT):
         return []
+    # Build slug→team_id map from DB
+    slug_team = {}
+    try:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT slug, team_id FROM project.pm_projects")
+                for row in cur.fetchall():
+                    slug_team[row[0]] = row[1]
+    except Exception:
+        pass
     projects = []
     for slug in sorted(os.listdir(PROJECTS_ROOT)):
         project_dir = os.path.join(PROJECTS_ROOT, slug)
@@ -1010,7 +1027,7 @@ def list_projects(user: TokenData = Depends(get_current_user)):
         phases = []
         if os.path.isdir(deliv_dir):
             phases = [p for p in PHASE_ORDER if os.path.isdir(os.path.join(deliv_dir, p))]
-        projects.append({"slug": slug, "phases": phases})
+        projects.append({"slug": slug, "phases": phases, "team_id": slug_team.get(slug, "")})
     return projects
 
 
@@ -1123,8 +1140,24 @@ def post_deliverable_remark(slug: str, phase: str, agent_id: str, body: dict, us
         conn.close()
 
     thread_id = f"project-{team_id}-{row[0]}" if row else f"remark-{safe_slug}"
+
+    # Read project language from .project file
+    project_lang = ""
+    dot_project_path = os.path.join(PROJECTS_ROOT, safe_slug, ".project")
+    if os.path.isfile(dot_project_path):
+        try:
+            for line in open(dot_project_path, encoding="utf-8"):
+                if line.strip().startswith("language:"):
+                    project_lang = line.split(":", 1)[1].strip()
+                    break
+        except Exception:
+            pass
+    lang_names = {"fr": "français", "en": "English", "es": "español", "de": "Deutsch", "it": "italiano", "pt": "português"}
+    lang_instruction = f"IMPORTANT : Rédige l'intégralité du livrable en **{lang_names.get(project_lang, project_lang)}**.\n\n" if project_lang else ""
+
     gw = _get_gateway_url()
     task_message = (
+        f"{lang_instruction}"
         f"Tu as precedemment produit le livrable suivant pour la phase '{safe_phase}'.\n\n"
         f"--- LIVRABLE ACTUEL ---\n{current_deliverable}\n--- FIN LIVRABLE ---\n\n"
         f"--- REMARQUES HUMAINES ---\n{all_remarks}\n--- FIN REMARQUES ---\n\n"
@@ -1368,14 +1401,16 @@ _ws_connections: dict[str, list[WebSocket]] = {}
 
 @app.websocket("/api/teams/{team_id}/ws")
 async def ws_team(websocket: WebSocket, team_id: str):
-    # Auth via query param
+    # Auth via query param — must accept before close per WebSocket spec
     token = websocket.query_params.get("token", "")
     try:
         user = decode_token(token)
     except HTTPException:
+        await websocket.accept()
         await websocket.close(code=4001, reason="Unauthorized")
         return
     if team_id not in user.teams and user.role != "admin":
+        await websocket.accept()
         await websocket.close(code=4003, reason="Forbidden")
         return
     await websocket.accept()
@@ -1412,7 +1447,7 @@ def _question_row(r) -> dict:
     ctx = r[6]
     if isinstance(ctx, str):
         ctx = json.loads(ctx or "{}")
-    return {
+    row = {
         "id": str(r[0]),
         "thread_id": r[1],
         "agent_id": r[2],
@@ -1431,6 +1466,11 @@ def _question_row(r) -> dict:
         "reminded_at": r[15].isoformat() if r[15] else None,
         "remind_count": r[16] or 0,
     }
+    # Optional project info from JOIN (indices 17, 18)
+    if len(r) > 17:
+        row["project_slug"] = r[17] or ""
+        row["project_name"] = r[18] or ""
+    return row
 
 
 # ── Password reset ────────────────────────────────
@@ -1950,6 +1990,7 @@ def pm_reset_phase(project_id: int, body: dict, user: TokenData = Depends(get_cu
     phases_to_reset = phase_order[phase_idx:]
 
     # 1. Get project slug for deliverables path
+    cancelled_count = 0
     conn = get_conn()
     try:
         with conn.cursor() as cur:
@@ -1966,15 +2007,31 @@ def pm_reset_phase(project_id: int, body: dict, user: TokenData = Depends(get_cu
                     import shutil
                     shutil.rmtree(phase_dir)
 
-            # 3. Cancel pending HITL requests for these phases
+            # 3. Cancel pending HITL requests for reset phases (+ any for the thread if full reset)
             thread_id = f"project-{team_id}-{project_id}"
-            cur.execute("""
-                UPDATE project.hitl_requests SET status = 'cancelled'
-                WHERE thread_id = %s AND status = 'pending'
-                  AND context::text LIKE ANY(%s)
-            """, (thread_id, [f'%"current_phase": "{p}"%' for p in phases_to_reset]))
+            if phase == "discovery":
+                # Full reset — cancel ALL pending requests for this thread
+                cur.execute("""
+                    UPDATE project.hitl_requests SET status = 'cancelled'
+                    WHERE thread_id = %s AND status = 'pending'
+                """, (thread_id,))
+            else:
+                cur.execute("""
+                    UPDATE project.hitl_requests SET status = 'cancelled'
+                    WHERE thread_id = %s AND status = 'pending'
+                      AND context::text LIKE ANY(%s)
+                """, (thread_id, [f'%"current_phase": "{p}"%' for p in phases_to_reset]))
+            cancelled_count = cur.rowcount
     finally:
         conn.close()
+
+    # 3b. Notify WS clients if questions were cancelled (so HITL badge updates)
+    if cancelled_count and cancelled_count > 0:
+        loop = _event_loop
+        if loop and loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                notify_team(team_id, {"type": "question_answered"}), loop
+            )
 
     # 4. Reset gateway state phase back
     gw = _get_gateway_url()

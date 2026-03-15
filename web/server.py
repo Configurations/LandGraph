@@ -766,6 +766,11 @@ class AgentConfig(BaseModel):
     team_id: str = "default"
     delivers_docs: bool | None = None
     delivers_code: bool | None = None
+    delivers_design: bool | None = None
+    delivers_automation: bool | None = None
+    delivers_tasklist: bool | None = None
+    delivers_specs: bool | None = None
+    delivers_contract: bool | None = None
 
 
 @app.post("/api/agents")
@@ -1200,6 +1205,11 @@ class SharedAgentEntry(BaseModel):
     unassign_content: str | None = None
     delivers_docs: bool | None = None
     delivers_code: bool | None = None
+    delivers_design: bool | None = None
+    delivers_automation: bool | None = None
+    delivers_tasklist: bool | None = None
+    delivers_specs: bool | None = None
+    delivers_contract: bool | None = None
 
 
 def _list_shared_agents() -> list[dict]:
@@ -1262,6 +1272,11 @@ async def create_shared_agent(entry: SharedAgentEntry):
         "mcp_access": entry.mcp_access or [],
         "delivers_docs": entry.delivers_docs or False,
         "delivers_code": entry.delivers_code or False,
+        "delivers_design": entry.delivers_design or False,
+        "delivers_automation": entry.delivers_automation or False,
+        "delivers_tasklist": entry.delivers_tasklist or False,
+        "delivers_specs": entry.delivers_specs or False,
+        "delivers_contract": entry.delivers_contract or False,
     }
     (agent_dir / "agent.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
     # Default prompt from Agents/Prompts/New.md
@@ -1297,6 +1312,16 @@ async def update_shared_agent(agent_id: str, entry: SharedAgentEntry):
         cfg["delivers_docs"] = entry.delivers_docs
     if entry.delivers_code is not None:
         cfg["delivers_code"] = entry.delivers_code
+    if entry.delivers_design is not None:
+        cfg["delivers_design"] = entry.delivers_design
+    if entry.delivers_automation is not None:
+        cfg["delivers_automation"] = entry.delivers_automation
+    if entry.delivers_tasklist is not None:
+        cfg["delivers_tasklist"] = entry.delivers_tasklist
+    if entry.delivers_specs is not None:
+        cfg["delivers_specs"] = entry.delivers_specs
+    if entry.delivers_contract is not None:
+        cfg["delivers_contract"] = entry.delivers_contract
     (agent_dir / "agent.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
     if entry.prompt_content is not None:
         (agent_dir / "prompt.md").write_text(entry.prompt_content, encoding="utf-8")

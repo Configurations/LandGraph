@@ -116,8 +116,32 @@ function renderMarkdown(text) {
       continue;
     }
 
-    // Detect JSON block (line starts with { or [)
     const trimmed = line.trim();
+
+    // Skip tool call metadata lines (e.g. "Name: rag_index", "Arguments:")
+    if (/^(Name|Arguments)\s*:/.test(trimmed)) continue;
+
+    // Detect JSON embedded after "Content:" prefix (tool call output)
+    const contentMatch = trimmed.match(/^(?:Content|Arguments|content):\s*(\{.+)/);
+    if (contentMatch) {
+      let jsonStr = contentMatch[1];
+      let depth = 0;
+      for (const ch of jsonStr) { if (ch === '{' || ch === '[') depth++; if (ch === '}' || ch === ']') depth--; }
+      let j = i + 1;
+      while (depth > 0 && j < lines.length) {
+        jsonStr += '\n' + lines[j];
+        for (const ch of lines[j]) { if (ch === '{' || ch === '[') depth++; if (ch === '}' || ch === ']') depth--; }
+        j++;
+      }
+      i = j - 1;
+      try {
+        const parsed = JSON.parse(jsonStr);
+        html += jsonToHtml(parsed);
+        continue;
+      } catch (_) { /* fall through */ }
+    }
+
+    // Detect JSON block (line starts with { or [)
     if ((trimmed.startsWith('{') || trimmed.startsWith('[')) && trimmed.length > 2) {
       // Collect multiline JSON — scan ahead for complete JSON
       let jsonStr = trimmed;
@@ -507,12 +531,7 @@ function updateHitlBadge(count) {
   }
 }
 
-async function refreshHitlBadge() {
-  try {
-    const stats = await api(`/api/teams/${activeTeam}/questions/stats`);
-    updateHitlBadge(stats.pending || 0);
-  } catch (e) { /* ignore */ }
-}
+// refreshHitlBadge defined below (after teams loaded)
 
 // ── WebSocket ────────────────────────────────────
 let _wsIntentionalClose = false;
@@ -549,8 +568,14 @@ function connectWS() {
     }
   };
   ws.onerror = () => { /* handled by onclose */ };
-  ws.onclose = () => {
+  ws.onclose = (e) => {
     if (_wsIntentionalClose) return;
+    // Auth failure — token expired or invalid, force re-login
+    if (e.code === 4001 || e.code === 4003) {
+      console.warn('[ws] auth failed, redirecting to login');
+      doLogout();
+      return;
+    }
     _wsRetryCount++;
     if (_wsRetryCount > 10) return; // stop after 10 retries
     const delay = Math.min(5000 * _wsRetryCount, 30000);
@@ -587,24 +612,7 @@ function buildSidebar() {
     </button>`
   ).join('');
 
-  // HITL section
-  const hitlSection = document.createElement('div');
-  hitlSection.innerHTML = `
-    <div class="sidebar-section-label">HITL</div>
-    <button class="sidebar-item" data-view="hitl-inbox" onclick="switchView('hitl-inbox')">
-      <span class="icon">${Icons.hitl}</span><span class="sidebar-label">Questions</span>
-      <span class="badge" id="hitl-badge" style="display:none">0</span>
-    </button>
-    <button class="sidebar-item" data-view="deliverables" onclick="switchView('deliverables')">
-      <span class="icon">${Icons.projects}</span><span class="sidebar-label">Livrables</span>
-    </button>
-    <button class="sidebar-item" data-view="activity" onclick="switchView('activity')">
-      <span class="icon">${Icons.activity || '⚡'}</span><span class="sidebar-label">Activité</span>
-    </button>`;
-  const teamsLabel = document.getElementById('sidebar-teams-label');
-  teamsLabel.parentNode.insertBefore(hitlSection, teamsLabel);
-
-  // Teams with sub-items (Agents, Members)
+  // Teams with sub-items (Agents, Members, Questions)
   document.getElementById('sidebar-teams').innerHTML = teams.map(t => {
     const isActive = t.id === activeTeam;
     return `<div class="sidebar-team-group" data-team-group="${esc(t.id)}">
@@ -617,6 +625,16 @@ function buildSidebar() {
       <div class="sidebar-team-sub" style="display:${isActive ? 'block' : 'none'}">
         <button class="sidebar-item sidebar-sub-item" data-view="agents" data-team-view="${esc(t.id)}" onclick="switchTeamView('${esc(t.id)}','agents')">
           <span class="icon">${Icons.agents}</span><span class="sidebar-label">Agents</span>
+        </button>
+        <button class="sidebar-item sidebar-sub-item" data-view="hitl-inbox" data-team-view="${esc(t.id)}" onclick="switchTeamView('${esc(t.id)}','hitl-inbox')">
+          <span class="icon">${Icons.hitl}</span><span class="sidebar-label">Questions</span>
+          <span class="badge hitl-team-badge" data-team-badge="${esc(t.id)}" style="display:none">0</span>
+        </button>
+        <button class="sidebar-item sidebar-sub-item" data-view="deliverables" data-team-view="${esc(t.id)}" onclick="switchTeamView('${esc(t.id)}','deliverables')">
+          <span class="icon">${Icons.projects}</span><span class="sidebar-label">Livrables</span>
+        </button>
+        <button class="sidebar-item sidebar-sub-item" data-view="activity" data-team-view="${esc(t.id)}" onclick="switchTeamView('${esc(t.id)}','activity')">
+          <span class="icon">${Icons.activity || '\u26A1'}</span><span class="sidebar-label">Activité</span>
         </button>
         <button class="sidebar-item sidebar-sub-item" data-view="members" data-team-view="${esc(t.id)}" onclick="switchTeamView('${esc(t.id)}','members')">
           <span class="icon">${Icons.members}</span><span class="sidebar-label">Members</span>
@@ -704,12 +722,12 @@ function switchView(view) {
   else if (view === 'pm-projects') { renderHeader('Projects', false, true); loadPmProjects(); }
   else if (view === 'project-detail') { loadProjectDetail(); }
   else if (view === 'create-project') { loadCreateProject(); }
-  else if (view === 'hitl-inbox') { renderHeader('HITL Questions'); loadHitlInbox(); }
+  else if (view === 'hitl-inbox') { renderHeader(`Questions — ${activeTeam}`); loadHitlInbox(); }
   else if (view === 'agents') { renderHeader('Agents'); loadAgents(); }
   else if (view === 'members') { renderHeader('Members', false, false, true); loadMembers(); }
-  else if (view === 'deliverables') { renderHeader('Livrables'); loadDeliverables(); }
+  else if (view === 'deliverables') { renderHeader(`Livrables — ${activeTeam}`); loadDeliverables(); }
   else if (view === 'threads') { renderHeader('Threads'); loadThreads(); }
-  else if (view === 'activity') { renderHeader('Activité agents'); loadActivity(); }
+  else if (view === 'activity') { renderHeader(`Activité — ${activeTeam}`); loadActivity(); }
   else if (view === 'logs') { renderHeader('Logs'); loadLogs(); }
 }
 
@@ -736,9 +754,19 @@ async function refreshInboxBadge() {
 
 async function refreshHitlBadge() {
   try {
-    const stats = await api(`/api/teams/${activeTeam}/questions/stats`);
-    const badge = document.getElementById('hitl-badge');
-    if (badge) { badge.textContent = stats.pending; badge.style.display = stats.pending > 0 ? '' : 'none'; }
+    const teamIds = teams.length > 0 ? teams.map(t => t.id) : [activeTeam];
+    const allStats = await Promise.all(teamIds.map(tid =>
+      api(`/api/teams/${tid}/questions/stats`).catch(() => ({ pending: 0 }))
+    ));
+    // Update per-team badges
+    allStats.forEach((s, i) => {
+      const tid = teamIds[i];
+      const badge = document.querySelector(`.hitl-team-badge[data-team-badge="${tid}"]`);
+      if (badge) {
+        badge.textContent = s.pending || 0;
+        badge.style.display = (s.pending || 0) > 0 ? '' : 'none';
+      }
+    });
   } catch (e) { /* ignore */ }
 }
 
@@ -1746,6 +1774,8 @@ async function renderProjectActivityTab(projectId) {
     const items = unified.slice(0, 100);
 
     // Detect agents "in flight" — started but not completed/errored
+    // Events are the real-time source of truth (no wfStatus cross-check —
+    // wfStatus can be stale when an agent is re-invoked after a remark)
     const agentEvents = (eventsData.events || []);
     const agentState = {};
     // Process chronologically (events are oldest-first from API)
@@ -1754,15 +1784,6 @@ async function renderProjectActivityTab(projectId) {
       if (e.event === 'agent_start') agentState[e.agent_id] = { since: e.timestamp };
       else if (e.event === 'agent_complete' || e.event === 'agent_error') delete agentState[e.agent_id];
     });
-    // Cross-check with workflow status — if wfStatus says agent is complete, remove from pending
-    const wfCtx = window._projectCtx?.wfStatus;
-    if (wfCtx && wfCtx.phases) {
-      Object.values(wfCtx.phases).forEach(ph => {
-        if (ph.agents) Object.entries(ph.agents).forEach(([aid, a]) => {
-          if (a.status === 'complete' || a.status === 'error') delete agentState[aid];
-        });
-      });
-    }
     const pendingAgents = Object.entries(agentState);
 
     let html = '<div style="flex:1;padding:24px">';
@@ -1845,14 +1866,8 @@ async function renderProjectWorkflowTab(project, wfStatus) {
     if (e.event === 'agent_start') _runState[e.agent_id] = true;
     else if (e.event === 'agent_complete' || e.event === 'agent_error') delete _runState[e.agent_id];
   });
-  // Cross-check: if wfStatus says agent is complete, trust it over events
-  if (phaseData) {
-    Object.values(phaseData).forEach(ph => {
-      if (ph.agents) Object.entries(ph.agents).forEach(([aid, a]) => {
-        if (a.status === 'complete' || a.status === 'error') delete _runState[aid];
-      });
-    });
-  }
+  // No wfStatus cross-check — events are real-time truth
+  // (wfStatus can be stale when agent is re-invoked after a remark)
   const runningFromEvents = new Set(Object.keys(_runState));
   window._agentsRunning = runningFromEvents.size > 0;
 
@@ -1872,8 +1887,13 @@ async function renderProjectWorkflowTab(project, wfStatus) {
     const pd = phaseData[ph.key];
     const deliverables = delivByPhase[ph.key] || [];
 
-    // Status — use workflow engine's phase.complete flag when available
-    const phaseComplete = pd && pd.complete;
+    // Check if any agent in this phase is running (events override wfStatus)
+    const wfRunning = pd && pd.agents && Object.values(pd.agents).some(a => a.status === 'running' || a.status === 'in_progress');
+    const evtRunning = pd && pd.agents && Object.keys(pd.agents).some(id => runningFromEvents.has(id));
+    const anyRunning = isCurrent && (wfRunning || evtRunning);
+
+    // Status — phase is not complete if any agent is still running
+    const phaseComplete = pd && pd.complete && !anyRunning;
     let statusLabel, statusColor, statusBg, borderColor;
     if (isDone || (isCurrent && phaseComplete)) {
       statusLabel = 'TERMINEE'; statusColor = '#22c55e'; statusBg = '#22c55e12'; borderColor = '#22c55e33';
@@ -1883,10 +1903,7 @@ async function renderProjectWorkflowTab(project, wfStatus) {
       statusLabel = 'A VENIR'; statusColor = 'var(--text-quaternary)'; statusBg = 'var(--bg-secondary)'; borderColor = 'var(--border-subtle)';
     }
 
-    // Pulse when agents are actively running — but NOT if phase is complete
-    const wfRunning = !phaseComplete && pd && pd.agents && Object.values(pd.agents).some(a => a.status === 'running' || a.status === 'in_progress');
-    const evtRunning = !phaseComplete && pd && pd.agents && Object.keys(pd.agents).some(id => runningFromEvents.has(id));
-    const hasRunning = isCurrent && !phaseComplete && (wfRunning || evtRunning);
+    const hasRunning = anyRunning;
     html += `<div class="card ${hasRunning ? 'wf-phase-active' : ''}" style="margin-bottom:16px;border-left:4px solid ${borderColor};background:${statusBg}">`;
 
     // Phase header
@@ -1920,15 +1937,17 @@ async function renderProjectWorkflowTab(project, wfStatus) {
         }
         html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">';
         gAgents.forEach(a => {
+          const isRunning = runningFromEvents.has(a.id) || a.status === 'running' || a.status === 'in_progress';
           let sIcon, sColor, sBg;
-          if (a.status === 'complete') { sIcon = '&#x2713;'; sColor = '#22c55e'; sBg = '#22c55e18'; }
-          else if (a.status === 'running' || a.status === 'in_progress') { sIcon = '&#x25B6;'; sColor = 'var(--accent-blue)'; sBg = 'var(--accent-blue-dim)'; }
+          if (isRunning) { sIcon = '&#x25B6;'; sColor = 'var(--accent-blue)'; sBg = 'var(--accent-blue-dim)'; }
+          else if (a.status === 'complete') { sIcon = '&#x2713;'; sColor = '#22c55e'; sBg = '#22c55e18'; }
           else if (a.status === 'error') { sIcon = '&#x2717;'; sColor = 'var(--accent-red)'; sBg = 'var(--accent-red)18'; }
           else { sIcon = '&#x25CB;'; sColor = 'var(--text-quaternary)'; sBg = 'var(--bg-tertiary)'; }
-          html += `<div style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:6px;background:${sBg};border:1px solid ${sColor}22">
+          html += `<div style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:6px;background:${sBg};border:1px solid ${sColor}22;position:relative">
             <span style="color:${sColor};font-size:11px">${sIcon}</span>
             <span style="font-size:11px;color:var(--text-primary)">${esc(a.name)}</span>
             ${a.required ? '<span style="font-size:8px;color:var(--accent-orange);font-weight:600">REQ</span>' : ''}
+            ${isRunning ? '<span class="agent-heartbeat" style="font-size:12px;margin-left:4px" title="En cours">&#x2764;</span>' : ''}
           </div>`;
         });
         html += '</div>';
@@ -1938,31 +1957,100 @@ async function renderProjectWorkflowTab(project, wfStatus) {
       });
     }
 
-    // Deliverables from filesystem
-    if (deliverables.length > 0) {
+    // Deliverables — show all expected deliverables from workflow definition
+    const defs = pd && pd.deliverable_defs ? pd.deliverable_defs : {};
+    const delivByAgent = {};
+    deliverables.forEach(d => { delivByAgent[d.agent_id] = d; });
+    const hasDefs = Object.keys(defs).length > 0;
+    const hasDelivs = deliverables.length > 0;
+    if (hasDefs || hasDelivs) {
       html += '<div style="margin-top:10px;border-top:1px solid var(--border-subtle);padding-top:10px">';
       html += '<div style="font-size:10px;font-weight:600;color:var(--text-tertiary);letter-spacing:0.5px;margin-bottom:8px">LIVRABLES</div>';
-      deliverables.forEach(d => {
-        const uid = `wf-dlv-${esc(ph.key)}-${esc(d.agent_id)}`;
-        html += `<details style="margin-bottom:6px">
-          <summary style="font-size:11px;color:var(--accent-blue);cursor:pointer;padding:4px 0;display:flex;align-items:center;gap:6px">
-            <span style="color:#22c55e;font-size:10px">&#x2713;</span>
-            <span style="font-weight:500">${esc(d.agent_name)}</span>
-            <span style="color:var(--text-quaternary);font-size:10px">${esc(d.agent_id)}</span>
-            <span class="dlv-remark-btn" style="margin-left:auto;font-size:9px;color:var(--text-tertiary);cursor:pointer;padding:2px 6px;border:1px solid var(--border-subtle);border-radius:3px" onclick="event.stopPropagation();toggleRemarkForm('${uid}')">&#x1F4AC; remarque</span>
-          </summary>
-          <div id="${uid}-remark" style="display:none;margin-top:4px;margin-bottom:8px;background:var(--bg-active);border:1px solid var(--accent-orange)33;border-radius:4px;padding:10px">
-            <div style="font-size:9px;font-weight:600;color:var(--accent-orange);letter-spacing:0.5px;margin-bottom:6px">REMARQUE A L'AGENT</div>
-            <textarea id="${uid}-remark-text" class="form-input" style="width:100%;min-height:80px;font-size:11px;font-family:inherit;background:var(--bg-tertiary);resize:vertical;line-height:1.5" placeholder="Decrivez ce que l'agent doit corriger ou ameliorer..."></textarea>
-            <div style="display:flex;gap:6px;margin-top:6px;justify-content:flex-end">
-              <button class="btn btn-outline" style="font-size:10px;padding:3px 10px" onclick="toggleRemarkForm('${uid}')">Annuler</button>
-              <button class="btn btn-primary" style="font-size:10px;padding:3px 10px;background:var(--accent-orange);border-color:var(--accent-orange)" onclick="submitRemark('${uid}','${esc(slug)}','${esc(ph.key)}','${esc(d.agent_id)}','${esc(teamId)}')">Soumettre</button>
+      if (hasDefs) {
+        // Type tag helper
+        const _typeTag = (t) => {
+          if (!t) return '';
+          const colors = { documentation: '#8b5cf6', code: '#3b82f6', design: '#ec4899', automation: '#f59e0b', tasklist: '#10b981', specs: '#06b6d4', contract: '#f97316' };
+          const labels = { documentation: 'DOC', code: 'CODE', design: 'DESIGN', automation: 'AUTO', tasklist: 'TACHES', specs: 'SPECS', contract: 'CONTRAT' };
+          const c = colors[t] || 'var(--text-quaternary)';
+          return `<span style="font-size:8px;font-weight:600;color:${c};padding:1px 5px;border:1px solid ${c}44;border-radius:3px">${labels[t] || t.toUpperCase()}</span>`;
+        };
+        // Show each expected deliverable from Workflow.json
+        const shownAgents = new Set();
+        for (const [dKey, dDef] of Object.entries(defs)) {
+          const agentId = dDef.agent || '';
+          const d = delivByAgent[agentId];
+          const done = !!d;
+          shownAgents.add(agentId);
+          const prettyKey = dDef.description || dKey.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+          const uid = `wf-dlv-${esc(ph.key)}-${esc(dKey)}`;
+          if (done) {
+            html += `<details style="margin-bottom:6px">
+              <summary style="font-size:11px;cursor:pointer;padding:4px 0;display:flex;align-items:center;gap:6px">
+                <span style="color:#22c55e;font-size:10px">&#x2713;</span>
+                <span style="font-weight:500;color:var(--accent-blue)">${esc(prettyKey)}</span>
+                <span style="color:var(--text-secondary);font-size:10px">${esc(agentId)}</span>
+                ${_typeTag(dDef.type)}
+                ${dDef.required ? '<span style="font-size:8px;color:var(--accent-orange);font-weight:600">REQ</span>' : '<span style="font-size:8px;color:var(--text-quaternary)">OPT</span>'}
+                <span class="dlv-remark-btn" style="margin-left:auto;font-size:9px;color:var(--text-tertiary);cursor:pointer;padding:2px 6px;border:1px solid var(--border-subtle);border-radius:3px" onclick="event.stopPropagation();toggleRemarkForm('${uid}')">&#x1F4AC; remarque</span>
+              </summary>
+              <div id="${uid}-remark" style="display:none;margin-top:4px;margin-bottom:8px;background:var(--bg-active);border:1px solid var(--accent-orange)33;border-radius:4px;padding:10px">
+                <div style="font-size:9px;font-weight:600;color:var(--accent-orange);letter-spacing:0.5px;margin-bottom:6px">REMARQUE A L'AGENT</div>
+                <textarea id="${uid}-remark-text" class="form-input" style="width:100%;min-height:80px;font-size:11px;font-family:inherit;background:var(--bg-tertiary);resize:vertical;line-height:1.5" placeholder="Decrivez ce que l'agent doit corriger ou ameliorer..."></textarea>
+                <div style="display:flex;gap:6px;margin-top:6px;justify-content:flex-end">
+                  <button class="btn btn-outline" style="font-size:10px;padding:3px 10px" onclick="toggleRemarkForm('${uid}')">Annuler</button>
+                  <button class="btn btn-primary" style="font-size:10px;padding:3px 10px;background:var(--accent-orange);border-color:var(--accent-orange)" onclick="submitRemark('${uid}','${esc(slug)}','${esc(ph.key)}','${esc(agentId)}','${esc(teamId)}')">Soumettre</button>
+                </div>
+              </div>
+              ${d.remarks ? `<div style="margin-top:4px;margin-bottom:4px;padding:8px;background:var(--bg-active);border-left:3px solid var(--accent-orange);border-radius:0 4px 4px 0;font-size:10px;color:var(--text-tertiary)"><div style="font-size:9px;font-weight:600;color:var(--accent-orange);margin-bottom:4px">REMARQUES PRECEDENTES</div>${renderMarkdown(d.remarks)}</div>` : ''}
+              <div id="${uid}-view" class="md-content" style="max-height:500px;overflow:auto;background:var(--bg-tertiary);padding:12px;border-radius:4px;margin-top:4px">${renderMarkdown(d.content)}</div>
+            </details>`;
+          } else {
+            html += `<div style="font-size:11px;padding:4px 0;display:flex;align-items:center;gap:6px;color:var(--text-quaternary)">
+              <span style="font-size:10px">&#x25CB;</span>
+              <span>${esc(prettyKey)}</span>
+              <span style="font-size:10px;color:var(--text-secondary)">${esc(agentId)}</span>
+              ${_typeTag(dDef.type)}
+              ${dDef.required ? '<span style="font-size:8px;color:var(--accent-orange);font-weight:600">REQ</span>' : '<span style="font-size:8px">OPT</span>'}
+            </div>`;
+          }
+        }
+        // Show any filesystem deliverables not in defs (edge case)
+        deliverables.filter(d => !shownAgents.has(d.agent_id)).forEach(d => {
+          const uid = `wf-dlv-${esc(ph.key)}-${esc(d.agent_id)}`;
+          html += `<details style="margin-bottom:6px">
+            <summary style="font-size:11px;cursor:pointer;padding:4px 0;display:flex;align-items:center;gap:6px">
+              <span style="color:#22c55e;font-size:10px">&#x2713;</span>
+              <span style="font-weight:500;color:var(--accent-blue)">${esc(d.agent_name)}</span>
+              <span style="color:var(--text-quaternary);font-size:10px">${esc(d.agent_id)}</span>
+            </summary>
+            <div class="md-content" style="max-height:500px;overflow:auto;background:var(--bg-tertiary);padding:12px;border-radius:4px;margin-top:4px">${renderMarkdown(d.content)}</div>
+          </details>`;
+        });
+      } else {
+        // No workflow defs — fallback to filesystem deliverables only
+        deliverables.forEach(d => {
+          const uid = `wf-dlv-${esc(ph.key)}-${esc(d.agent_id)}`;
+          html += `<details style="margin-bottom:6px">
+            <summary style="font-size:11px;cursor:pointer;padding:4px 0;display:flex;align-items:center;gap:6px">
+              <span style="color:#22c55e;font-size:10px">&#x2713;</span>
+              <span style="font-weight:500;color:var(--accent-blue)">${esc(d.agent_name)}</span>
+              <span style="color:var(--text-quaternary);font-size:10px">${esc(d.agent_id)}</span>
+              <span class="dlv-remark-btn" style="margin-left:auto;font-size:9px;color:var(--text-tertiary);cursor:pointer;padding:2px 6px;border:1px solid var(--border-subtle);border-radius:3px" onclick="event.stopPropagation();toggleRemarkForm('${uid}')">&#x1F4AC; remarque</span>
+            </summary>
+            <div id="${uid}-remark" style="display:none;margin-top:4px;margin-bottom:8px;background:var(--bg-active);border:1px solid var(--accent-orange)33;border-radius:4px;padding:10px">
+              <div style="font-size:9px;font-weight:600;color:var(--accent-orange);letter-spacing:0.5px;margin-bottom:6px">REMARQUE A L'AGENT</div>
+              <textarea id="${uid}-remark-text" class="form-input" style="width:100%;min-height:80px;font-size:11px;font-family:inherit;background:var(--bg-tertiary);resize:vertical;line-height:1.5" placeholder="Decrivez ce que l'agent doit corriger ou ameliorer..."></textarea>
+              <div style="display:flex;gap:6px;margin-top:6px;justify-content:flex-end">
+                <button class="btn btn-outline" style="font-size:10px;padding:3px 10px" onclick="toggleRemarkForm('${uid}')">Annuler</button>
+                <button class="btn btn-primary" style="font-size:10px;padding:3px 10px;background:var(--accent-orange);border-color:var(--accent-orange)" onclick="submitRemark('${uid}','${esc(slug)}','${esc(ph.key)}','${esc(d.agent_id)}','${esc(teamId)}')">Soumettre</button>
+              </div>
             </div>
-          </div>
-          ${d.remarks ? `<div style="margin-top:4px;margin-bottom:4px;padding:8px;background:var(--bg-active);border-left:3px solid var(--accent-orange);border-radius:0 4px 4px 0;font-size:10px;color:var(--text-tertiary)"><div style="font-size:9px;font-weight:600;color:var(--accent-orange);margin-bottom:4px">REMARQUES PRECEDENTES</div>${renderMarkdown(d.remarks)}</div>` : ''}
-          <div id="${uid}-view" class="md-content" style="max-height:500px;overflow:auto;background:var(--bg-tertiary);padding:12px;border-radius:4px;margin-top:4px">${renderMarkdown(d.content)}</div>
-        </details>`;
-      });
+            ${d.remarks ? `<div style="margin-top:4px;margin-bottom:4px;padding:8px;background:var(--bg-active);border-left:3px solid var(--accent-orange);border-radius:0 4px 4px 0;font-size:10px;color:var(--text-tertiary)"><div style="font-size:9px;font-weight:600;color:var(--accent-orange);margin-bottom:4px">REMARQUES PRECEDENTES</div>${renderMarkdown(d.remarks)}</div>` : ''}
+            <div id="${uid}-view" class="md-content" style="max-height:500px;overflow:auto;background:var(--bg-tertiary);padding:12px;border-radius:4px;margin-top:4px">${renderMarkdown(d.content)}</div>
+          </details>`;
+        });
+      }
       html += '</div>';
     }
 
@@ -1990,12 +2078,18 @@ async function resetPhase(projectId, teamId, phase) {
     });
     if (res.ok || res.phases_reset) {
       showToast(`Phases reinitialisees: ${(res.phases_reset || []).join(', ')}`, 'success');
+      if (res.gateway?.error) console.warn('[reset] gateway error:', res.gateway.error);
     } else {
       showToast(res.error || 'Erreur', 'error');
     }
   } catch (e) { showToast(e.message, 'error'); }
-  // Always reload to reflect filesystem changes
-  loadProjectDetail();
+  // Clear cached project context and wait briefly for gateway state propagation
+  window._projectCtx = null;
+  await new Promise(r => setTimeout(r, 500));
+  await loadProjectDetail();
+  // Refresh HITL badge + inbox — cancelled questions should no longer count as pending
+  refreshHitlBadge();
+  if (activeView === 'hitl-inbox') loadHitlInbox();
 }
 
 // ══════════════════════════════════════════════════
@@ -2738,8 +2832,6 @@ async function loadHitlInbox() {
       api(`/api/teams/${activeTeam}/questions?status=${hitlFilter === 'all' ? '' : hitlFilter}&limit=50`),
       api(`/api/teams/${activeTeam}/questions/stats`),
     ]);
-    const badge = document.getElementById('hitl-badge');
-    if (badge) { badge.textContent = stats.pending; badge.style.display = stats.pending > 0 ? '' : 'none'; }
 
     let html = renderTabBar(['All', 'Pending', 'Answered'], ['all', 'pending', 'answered'], hitlFilter, 'hitlFilter', 'loadHitlInbox');
 
@@ -2769,6 +2861,7 @@ async function loadHitlInbox() {
                 <div class="card-tags">
                   ${q.status === 'pending' ? '<span class="tag tag-yellow">PENDING</span>' : `<span class="tag">${esc(q.status).toUpperCase()}</span>`}
                   ${q.request_type === 'approval' ? '<span class="tag tag-green">APPROVAL</span>' : ''}
+                  ${q.project_slug ? `<span class="tag" style="background:var(--bg-active);color:var(--accent-blue)">${esc(q.project_name || q.project_slug)}</span>` : ''}
                 </div>
                 <div class="card-question">${esc(q.prompt)}</div>
               </div>
@@ -2793,12 +2886,51 @@ function toggleGroup(groupId) {
   if (arrow) arrow.innerHTML = hidden ? '&#x25BC;' : '&#x25B6;';
 }
 
+function _renderDelivValue(val) {
+  if (typeof val === 'string') {
+    // Try to parse JSON string
+    const s = val.trim();
+    if (s.startsWith('{') || s.startsWith('[')) {
+      try { return jsonToHtml(JSON.parse(s)); } catch (_) {}
+    }
+    return renderMarkdown(val);
+  }
+  if (Array.isArray(val)) return jsonToHtml(val);
+  if (typeof val === 'object' && val !== null) {
+    // Pattern: {raw: "...", parse_error: "..."} — extract and parse raw
+    if ('raw' in val && 'parse_error' in val) {
+      const raw = String(val.raw || '');
+      if (!raw) return '<span style="color:var(--text-quaternary)"><em>Aucun contenu</em></span>';
+      // Try direct JSON parse
+      try { return jsonToHtml(JSON.parse(raw)); } catch (_) {}
+      // Try extracting JSON after "Content: " prefix
+      for (const prefix of ['Content: ', 'Arguments: ', 'content: ']) {
+        const idx = raw.indexOf(prefix);
+        if (idx >= 0) {
+          try { return jsonToHtml(JSON.parse(raw.slice(idx + prefix.length).trim())); } catch (_) {}
+        }
+      }
+      // Try from first { or [
+      for (const ch of ['{', '[']) {
+        const idx = raw.indexOf(ch);
+        if (idx >= 0) {
+          try { return jsonToHtml(JSON.parse(raw.slice(idx))); } catch (_) {}
+        }
+      }
+      return renderMarkdown(raw);
+    }
+    return jsonToHtml(val);
+  }
+  return esc(String(val));
+}
+
 async function openHitlQuestion(qid) {
   const content = document.getElementById('pm-content');
   content.innerHTML = '<div class="loading">Loading...</div>';
   try {
     const q = await api(`/api/questions/${qid}`);
     const options = (q.context && q.context.options) ? q.context.options : [];
+    let _dlvCount = 0;
 
     let html = `<div class="breadcrumb" style="padding:20px 20px 0">
       <a onclick="loadHitlInbox()">HITL</a><span>/</span><span class="current">${esc(q.agent_id)}</span>
@@ -2814,22 +2946,79 @@ async function openHitlQuestion(qid) {
         </div>
       </div>`;
 
-    // Phase validation: show deliverables
+    // Phase validation: show deliverables individually with per-deliverable approve/reject
     if (q.context && q.context.type === 'phase_validation') {
+      const isPending = q.status === 'pending';
+      const isApproval = q.request_type === 'approval';
+      // Collect all deliverable keys for tracking
+      _dlvCount = 0;
       html += `<div class="card" style="margin-top:12px">
         <div class="question-label">PHASE ${esc(q.context.current_phase || '').toUpperCase()} &#x2192; ${esc(q.context.next_phase || '').toUpperCase()}</div>`;
+      html += '<div style="font-size:10px;font-weight:600;color:var(--text-tertiary);letter-spacing:0.5px;margin:10px 0 8px">LIVRABLES</div>';
       const deliverables = q.context.deliverables || {};
       for (const [agentId, data] of Object.entries(deliverables)) {
-        html += `<div style="margin-top:10px">
-          <div style="font-size:10px;color:var(--accent-blue);letter-spacing:1px;margin-bottom:4px">${esc(agentId).toUpperCase()}</div>`;
-        if (typeof data === 'string') {
-          html += renderDeliverable(agentId, data);
-        } else {
-          for (const [key, val] of Object.entries(data)) {
-            html += renderDeliverable(key, val);
+        const agentName = (typeof data === 'object' && data.agent_name) ? data.agent_name : agentId;
+        let delivContent = data;
+        if (typeof data === 'object' && data !== null) {
+          if (data.deliverables) {
+            delivContent = data.deliverables;
+          } else {
+            const meta = new Set(['status', 'confidence', 'agent_id', 'agent_name', 'timestamp']);
+            const filtered = {};
+            for (const [k, v] of Object.entries(data)) {
+              if (!meta.has(k)) filtered[k] = v;
+            }
+            delivContent = Object.keys(filtered).length > 0 ? filtered : data;
           }
         }
-        html += '</div>';
+        // Flatten: one <details> per deliverable key (like Workflow tab)
+        if (typeof delivContent === 'object' && delivContent !== null && !Array.isArray(delivContent)) {
+          for (const [key, val] of Object.entries(delivContent)) {
+            const dlvId = `${agentId}::${key}`;
+            _dlvCount++;
+            const prettyKey = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+            const uid = `q-dlv-${esc(agentId)}-${esc(key)}`;
+            html += `<details style="margin-bottom:6px" id="${uid}-details">
+              <summary style="font-size:11px;cursor:pointer;padding:4px 0;display:flex;align-items:center;gap:6px">
+                <span style="color:#22c55e;font-size:10px">&#x2713;</span>
+                <span style="font-weight:500;color:var(--accent-blue)">${esc(prettyKey)}</span>
+                <span style="color:var(--text-secondary);font-size:10px">${esc(agentName)}</span>
+                ${isPending && isApproval ? `<span id="${uid}-status" style="margin-left:auto;display:flex;gap:4px">
+                  <button class="btn btn-outline" style="font-size:9px;padding:1px 8px;color:#22c55e;border-color:#22c55e44" onclick="event.stopPropagation();setDlvVerdict('${esc(dlvId)}','${uid}','approved')">&#x2713;</button>
+                  <button class="btn btn-outline" style="font-size:9px;padding:1px 8px;color:#ef4444;border-color:#ef444444" onclick="event.stopPropagation();setDlvVerdict('${esc(dlvId)}','${uid}','rejected')">&#x2717;</button>
+                </span>` : ''}
+              </summary>
+              <div class="md-content" style="max-height:500px;overflow:auto;background:var(--bg-tertiary);padding:12px;border-radius:4px;margin-top:4px">${_renderDelivValue(val)}</div>
+            </details>`;
+          }
+        } else {
+          // String or array — single entry for the whole agent
+          const dlvId = `${agentId}::_all`;
+          _dlvKeys.push(dlvId);
+          const uid = `q-dlv-${esc(agentId)}`;
+          const bodyHtml = typeof delivContent === 'string' ? renderMarkdown(delivContent) : _renderDelivValue(delivContent);
+          html += `<details style="margin-bottom:6px" id="${uid}-details">
+            <summary style="font-size:11px;cursor:pointer;padding:4px 0;display:flex;align-items:center;gap:6px">
+              <span style="color:#22c55e;font-size:10px">&#x2713;</span>
+              <span style="font-weight:500;color:var(--accent-blue)">${esc(agentName)}</span>
+              <span style="color:var(--text-secondary);font-size:10px">${esc(agentId)}</span>
+              ${isPending && isApproval ? `<span id="${uid}-status" style="margin-left:auto;display:flex;gap:4px">
+                <button class="btn btn-outline" style="font-size:9px;padding:1px 8px;color:#22c55e;border-color:#22c55e44" onclick="event.stopPropagation();setDlvVerdict('${esc(dlvId)}','${uid}','approved')">&#x2713;</button>
+                <button class="btn btn-outline" style="font-size:9px;padding:1px 8px;color:#ef4444;border-color:#ef444444" onclick="event.stopPropagation();setDlvVerdict('${esc(dlvId)}','${uid}','rejected')">&#x2717;</button>
+              </span>` : ''}
+            </summary>
+            <div class="md-content" style="max-height:500px;overflow:auto;background:var(--bg-tertiary);padding:12px;border-radius:4px;margin-top:4px">${bodyHtml}</div>
+          </details>`;
+        }
+      }
+      // Summary bar for per-deliverable verdicts
+      if (isPending && isApproval) {
+        html += `<div id="dlv-verdict-bar" style="margin-top:10px;padding:8px 12px;background:var(--bg-active);border-radius:4px;font-size:10px;color:var(--text-tertiary);display:flex;align-items:center;gap:8px">
+          <span id="dlv-verdict-count">0 / ${_dlvCount} evalues</span>
+          <span style="flex:1"></span>
+          <button class="btn btn-approve" id="dlv-approve-all-btn" style="font-size:10px;padding:3px 12px;opacity:0.4;pointer-events:none" onclick="submitDlvVerdicts('${q.id}','approve')">&#x2713; TOUT APPROUVER</button>
+          <button class="btn btn-reject" id="dlv-reject-btn" style="font-size:10px;padding:3px 12px;display:none" onclick="submitDlvVerdicts('${q.id}','reject')">&#x2717; SOUMETTRE REJETS</button>
+        </div>`;
       }
       html += '</div>';
     }
@@ -2866,9 +3055,81 @@ async function openHitlQuestion(qid) {
     }
     html += '</div>';
     content.innerHTML = html;
+    // Initialize per-deliverable verdict tracking
+    if (_dlvCount > 0) {
+      window._dlvVerdicts = {};
+      window._dlvTotal = _dlvCount;
+    }
     const ta = document.getElementById('hitl-reply-text');
     if (ta) ta.focus();
   } catch (e) { content.innerHTML = `<div class="empty-state">${esc(e.message)}</div>`; }
+}
+
+// Per-deliverable verdict tracking
+window._dlvVerdicts = {};
+window._dlvTotal = 0;
+
+function setDlvVerdict(dlvId, uid, verdict) {
+  window._dlvVerdicts[dlvId] = verdict;
+  const statusEl = document.getElementById(uid + '-status');
+  if (statusEl) {
+    if (verdict === 'approved') {
+      statusEl.innerHTML = '<span style="font-size:10px;font-weight:600;color:#22c55e">&#x2713; Approuve</span><button class="btn btn-outline" style="font-size:8px;padding:0 5px;color:var(--text-tertiary);border-color:var(--border-subtle);margin-left:4px" onclick="event.stopPropagation();clearDlvVerdict(\'' + dlvId + '\',\'' + uid + '\')">&#x2717;</button>';
+    } else {
+      statusEl.innerHTML = '<span style="font-size:10px;font-weight:600;color:#ef4444">&#x2717; Rejete</span><button class="btn btn-outline" style="font-size:8px;padding:0 5px;color:var(--text-tertiary);border-color:var(--border-subtle);margin-left:4px" onclick="event.stopPropagation();clearDlvVerdict(\'' + dlvId + '\',\'' + uid + '\')">&#x21BA;</button>';
+    }
+  }
+  updateDlvVerdictBar();
+}
+
+function clearDlvVerdict(dlvId, uid) {
+  delete window._dlvVerdicts[dlvId];
+  const statusEl = document.getElementById(uid + '-status');
+  if (statusEl) {
+    statusEl.innerHTML = '<button class="btn btn-outline" style="font-size:9px;padding:1px 8px;color:#22c55e;border-color:#22c55e44" onclick="event.stopPropagation();setDlvVerdict(\'' + dlvId + '\',\'' + uid + '\',\'approved\')">&#x2713;</button><button class="btn btn-outline" style="font-size:9px;padding:1px 8px;color:#ef4444;border-color:#ef444444" onclick="event.stopPropagation();setDlvVerdict(\'' + dlvId + '\',\'' + uid + '\',\'rejected\')">&#x2717;</button>';
+  }
+  updateDlvVerdictBar();
+}
+
+function updateDlvVerdictBar() {
+  const verdicts = window._dlvVerdicts || {};
+  const total = window._dlvTotal || 0;
+  const evaluated = Object.keys(verdicts).length;
+  const rejected = Object.values(verdicts).filter(v => v === 'rejected').length;
+  const allDone = evaluated === total && total > 0;
+  const allApproved = allDone && rejected === 0;
+
+  const countEl = document.getElementById('dlv-verdict-count');
+  if (countEl) countEl.textContent = `${evaluated} / ${total} evalues` + (rejected > 0 ? ` (${rejected} rejete${rejected > 1 ? 's' : ''})` : '');
+
+  const approveBtn = document.getElementById('dlv-approve-all-btn');
+  const rejectBtn = document.getElementById('dlv-reject-btn');
+  if (approveBtn) {
+    approveBtn.style.opacity = allApproved ? '1' : '0.4';
+    approveBtn.style.pointerEvents = allApproved ? 'auto' : 'none';
+  }
+  if (rejectBtn) {
+    rejectBtn.style.display = (allDone && rejected > 0) ? 'inline-block' : 'none';
+  }
+}
+
+async function submitDlvVerdicts(qid, action) {
+  const verdicts = window._dlvVerdicts || {};
+  const rejected = Object.entries(verdicts).filter(([, v]) => v === 'rejected');
+  let response = '';
+  if (action === 'reject' && rejected.length > 0) {
+    const details = rejected.map(([k]) => {
+      const [agent, key] = k.split('::');
+      return `- ${key === '_all' ? agent : key} (${agent})`;
+    }).join('\n');
+    const freeText = document.getElementById('hitl-reply-text')?.value || '';
+    response = `Livrables rejetes:\n${details}${freeText ? '\n\nCommentaire: ' + freeText : ''}`;
+  }
+  try {
+    await api(`/api/questions/${qid}/answer`, { method: 'POST', body: { response, action } });
+    toast(action === 'approve' ? 'Tous approuves' : 'Rejets soumis');
+    loadHitlInbox();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function submitHitlAnswer(qid, action) {
@@ -3152,9 +3413,10 @@ async function loadDeliverables() {
   const content = document.getElementById('pm-content');
   content.innerHTML = '<div class="loading">Chargement des projets...</div>';
   try {
-    const projects = await api('/api/projects');
+    const allProjects = await api('/api/projects');
+    const projects = allProjects.filter(p => !p.team_id || p.team_id === activeTeam);
     if (!projects.length) {
-      content.innerHTML = '<div class="empty-state">Aucun projet avec des livrables</div>';
+      content.innerHTML = '<div class="empty-state">Aucun projet avec des livrables pour cette équipe</div>';
       return;
     }
     let html = '<div style="padding:20px">';
@@ -3194,15 +3456,15 @@ async function loadProjectDeliverables() {
         </div>`;
       for (const agent of phase.agents) {
         const uid = `dlv-${esc(phase.phase)}-${esc(agent.agent_id)}`;
-        html += `<div class="card dlv-accordion" id="${uid}-card" style="margin-bottom:12px;cursor:pointer" onclick="toggleDelivAccordion('${uid}-card')">
-          <div style="display:flex;align-items:center;gap:8px">
+        html += `<div class="card dlv-accordion" id="${uid}-card" style="margin-bottom:12px">
+          <div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="toggleDelivAccordion('${uid}-card')">
             <span class="dlv-accordion-arrow" style="font-size:10px;color:var(--text-quaternary);transition:transform 0.2s">&#x25B6;</span>
             <span class="tag tag-accent">${esc(agent.agent_id)}</span>
             <span style="font-size:12px;color:var(--text-secondary);font-weight:500">${esc(agent.agent_name)}</span>
             ${agent.remarks ? '<span style="font-size:9px;color:var(--accent-orange);margin-left:4px" title="Remarques">&#x1F4AC;</span>' : ''}
             <span class="dlv-remark-btn" style="margin-left:auto;font-size:10px;color:var(--text-tertiary);cursor:pointer;padding:3px 8px;border:1px solid var(--border-subtle);border-radius:4px" onclick="event.stopPropagation();toggleRemarkForm('${uid}')">&#x1F4AC; Faire une remarque</span>
           </div>
-          <div class="dlv-accordion-body" style="display:none;margin-top:10px">
+          <div class="dlv-accordion-body" style="display:none;margin-top:10px" onclick="event.stopPropagation()">
             <div id="${uid}-remark" style="display:none;margin-bottom:10px;background:var(--bg-active);border:1px solid var(--accent-orange)33;border-radius:6px;padding:12px">
               <div style="font-size:10px;font-weight:600;color:var(--accent-orange);letter-spacing:0.5px;margin-bottom:8px">REMARQUE A L'AGENT</div>
               <textarea id="${uid}-remark-text" class="form-input" style="width:100%;min-height:100px;font-size:11px;font-family:inherit;background:var(--bg-tertiary);resize:vertical;line-height:1.5" placeholder="Decrivez ce que l'agent doit corriger ou ameliorer..."></textarea>
@@ -3353,7 +3615,9 @@ async function fetchActivity() {
     if (filter) params.set('event_type', filter);
     if (agent) params.set('agent_id', agent);
     const data = await api(`/api/events?${params}`);
-    const events = (data.events || []).reverse();
+    const allEvents = (data.events || []);
+    // Filter by active team
+    const events = allEvents.filter(e => !e.team_id || e.team_id === activeTeam).reverse();
     renderActivityEvents(events);
     // Populate agent filter if not already done
     const sel = document.getElementById('activity-agent');
