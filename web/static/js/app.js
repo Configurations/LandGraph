@@ -47,6 +47,38 @@ function escHtml(s) {
   return d.innerHTML;
 }
 
+function copyToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text);
+  }
+  // Fallback for HTTP (non-secure context)
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;left:-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand('copy');
+  document.body.removeChild(ta);
+  return Promise.resolve();
+}
+
+function validateJsonBlocks(text) {
+  // Find all ```json ... ``` blocks and validate each
+  const regex = /```json\s*\n([\s\S]*?)```/g;
+  let match;
+  const errors = [];
+  let idx = 0;
+  while ((match = regex.exec(text)) !== null) {
+    idx++;
+    try {
+      JSON.parse(match[1].trim());
+    } catch (e) {
+      errors.push(`Bloc JSON #${idx}: ${e.message}`);
+    }
+  }
+  return errors;
+}
+
 function maskValue(val) {
   if (!val || val.length < 8) return val;
   return val.slice(0, 4) + '*'.repeat(Math.min(val.length - 8, 30)) + val.slice(-4);
@@ -68,14 +100,15 @@ function showSection(name) {
 async function loadDashboard() {
   const el = document.getElementById('dashboard-content');
   el.innerHTML = '<div class="loading">Chargement...</div>';
-
-  const [gateway, containers, agents, teams, hitl, llm] = await Promise.allSettled([
+  try {
+  const [gateway, containers, agents, teams, hitl, llm, configCheck] = await Promise.allSettled([
     api('/api/monitoring/gateway'),
     api('/api/monitoring/containers'),
     api('/api/agents'),
     api('/api/teams'),
     api('/api/hitl/stats'),
     api('/api/llm/providers'),
+    api('/api/config/check'),
   ]);
 
   let html = '';
@@ -113,12 +146,13 @@ async function loadDashboard() {
   </div>`;
 
   // Agents
-  const ag = agents.status === 'fulfilled' ? (agents.value || []) : [];
+  const agRaw = agents.status === 'fulfilled' ? agents.value : {};
+  const ag = Array.isArray(agRaw) ? agRaw : (agRaw.groups || []).flatMap(g => Object.values(g.agents || {}));
   html += `<div class="dash-card">
     <div class="dash-card-title">Agents</div>
     <div class="dash-card-value">${ag.length}</div>
     <ul class="dash-card-list">${ag.slice(0, 8).map(a =>
-      `<li><span>${escHtml(a.name || a.id)}</span><span style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(a.llm || '')}</span></li>`
+      `<li><span>${escHtml(a.name || a.id || '?')}</span><span style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(a.llm || '')}</span></li>`
     ).join('')}${ag.length > 8 ? `<li style="color:var(--text-secondary)">+${ag.length - 8} autres</li>` : ''}</ul>
   </div>`;
 
@@ -148,7 +182,53 @@ async function loadDashboard() {
     ).join('')}${provCount > 6 ? `<li style="color:var(--text-secondary)">+${provCount - 6} autres</li>` : ''}</ul>
   </div>`;
 
+  // Config Check
+  const cc = configCheck.status === 'fulfilled' ? configCheck.value : null;
+  if (cc) {
+    const errCount = (cc.errors || []).length;
+    const warnCount = (cc.warnings || []).length;
+    const statusDot = errCount > 0 ? 'dash-status-err' : warnCount > 0 ? 'dash-status-warn' : 'dash-status-ok';
+    const statusText = errCount > 0 ? `${errCount} erreur(s)` : warnCount > 0 ? `${warnCount} avertissement(s)` : 'OK';
+    html += `<div class="dash-card dash-card-wide">
+      <div class="dash-card-title">Validation de la configuration</div>
+      <div class="dash-card-value"><span class="dash-status-dot ${statusDot}"></span>${statusText}</div>`;
+    if (errCount + warnCount > 0) {
+      html += '<ul class="dash-card-list" style="max-height:200px;overflow-y:auto">';
+      (cc.errors || []).forEach(i => {
+        html += `<li style="color:#ef4444"><span style="font-size:0.7rem;font-weight:600;padding:1px 4px;border-radius:3px;background:#ef444422;color:#ef4444;margin-right:4px">ERR</span><span style="font-size:0.7rem;color:var(--text-secondary);margin-right:4px">${escHtml(i.category)}</span>${escHtml(i.message)}</li>`;
+      });
+      (cc.warnings || []).forEach(i => {
+        html += `<li style="color:#f59e0b"><span style="font-size:0.7rem;font-weight:600;padding:1px 4px;border-radius:3px;background:#f59e0b22;color:#f59e0b;margin-right:4px">WARN</span><span style="font-size:0.7rem;color:var(--text-secondary);margin-right:4px">${escHtml(i.category)}</span>${escHtml(i.message)}</li>`;
+      });
+      html += '</ul>';
+    } else {
+      html += '<div class="dash-card-sub">Toutes les validations sont passees</div>';
+    }
+    html += '</div>';
+  }
+
   el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = `<div class="dash-card dash-card-wide"><div class="dash-card-title">Erreur</div><div style="color:var(--error)">${escHtml(e.message || String(e))}</div></div>`;
+    console.error('[loadDashboard]', e);
+  }
+}
+
+async function reloadGatewayConfig() {
+  try {
+    const gwUrl = await api('/api/monitoring/gateway-url');
+    const url = (gwUrl && gwUrl.url) ? gwUrl.url : 'http://langgraph-api:8000';
+    await fetch(url + '/reload-config', { method: 'POST' });
+    toast('Configuration rechargee sur le gateway', 'success');
+  } catch (e) {
+    // Direct call fallback
+    try {
+      await fetch('http://localhost:8123/reload-config', { method: 'POST' });
+      toast('Configuration rechargee', 'success');
+    } catch (e2) {
+      toast('Erreur: ' + (e2.message || e.message), 'error');
+    }
+  }
 }
 
 // ── Modal helpers ──────────────────────────────────
@@ -191,53 +271,186 @@ function _confirmAnswer(val) {
 
 // ── Pipeline Steps helpers ────────────────────────
 
+// ── Pipeline Steps — split-panel editor ──
+
+let _psState = {}; // { containerId: { steps: [...], selected: int } }
+
 function renderPipelineSteps(containerId, steps) {
   const el = document.getElementById(containerId);
   if (!el) return;
-  const rows = (steps || []).map((s, i) => `
-    <div class="pipeline-step" data-idx="${i}">
-      <div class="pipeline-step-header">
-        <span class="pipeline-step-num">${i + 1}</span>
-        <input class="pipeline-step-name" value="${escHtml(s.name || '')}" placeholder="Nom de l'etape" />
-        <input class="pipeline-step-key" value="${escHtml(s.output_key || '')}" placeholder="output_key" />
-        <button class="btn-icon pipeline-step-up" onclick="movePipelineStep('${containerId}',${i},-1)" title="Monter" ${i === 0 ? 'disabled' : ''}>&uarr;</button>
-        <button class="btn-icon pipeline-step-down" onclick="movePipelineStep('${containerId}',${i},1)" title="Descendre" ${i === steps.length - 1 ? 'disabled' : ''}>&darr;</button>
-        <button class="btn-icon pipeline-step-del" onclick="removePipelineStep('${containerId}',${i})" title="Supprimer">&times;</button>
+  const st = _psState[containerId] = _psState[containerId] || {};
+  st.steps = steps || [];
+  if (st.selected == null || st.selected >= st.steps.length) st.selected = st.steps.length ? 0 : -1;
+  _psRender(containerId);
+}
+
+function _psRender(containerId) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  const st = _psState[containerId];
+  const steps = st.steps;
+  const sel = st.selected;
+
+  const listItems = steps.map((s, i) => `
+    <div class="ps-list-item${i === sel ? ' active' : ''}" onclick="psSelect('${containerId}',${i})" draggable="true"
+         ondragstart="psDragStart(event,${i})" ondragover="psDragOver(event)" ondrop="psDrop(event,'${containerId}',${i})">
+      <span class="ps-list-num">${i + 1}</span>
+      <div class="ps-list-text">
+        <div class="ps-list-name">${escHtml(s.name || 'Sans titre')}</div>
+        <div class="ps-list-key">${escHtml(s.output_key || '...')}</div>
       </div>
-      <textarea class="pipeline-step-instr" placeholder="Instruction...">${escHtml(s.instruction || '')}</textarea>
+      <button class="btn-icon ps-list-del" onclick="event.stopPropagation();psRemove('${containerId}',${i})" title="Supprimer">&times;</button>
     </div>
   `).join('');
-  el.innerHTML = rows + `<button class="btn btn-outline btn-sm" onclick="addPipelineStep('${containerId}')" style="margin-top:0.5rem">+ Etape</button>`;
+
+  const edit = sel >= 0 && steps[sel] ? `
+    <div class="ps-edit-row">
+      <div class="form-group" style="flex:0 0 160px">
+        <label>Cle</label>
+        <input class="ps-edit-key" value="${escHtml(steps[sel].output_key || '')}" placeholder="output_key"
+               oninput="this.value=this.value.toLowerCase().replace(/[^a-z0-9_]/g,'');psUpdateField('${containerId}','output_key',this.value)" />
+      </div>
+      <div class="form-group" style="flex:1;min-width:0">
+        <label>Titre</label>
+        <input class="ps-edit-name" value="${escHtml(steps[sel].name || '')}" placeholder="Nom de l'etape"
+               oninput="psUpdateField('${containerId}','name',this.value)" />
+      </div>
+      <button class="btn btn-outline btn-sm ps-edit-assist" onclick="psAssist('${containerId}')" title="Aide a la redaction"><svg width="16" height="16" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg"><g fill="currentColor" fill-rule="evenodd"><circle cx="12" cy="6" r="2"/><path d="M1 18a1 1 0 0 1-.707-1.707l7-7a1 1 0 0 1 1.414 1.414l-7 7A1 1 0 0 1 1 18zM15 4a1 1 0 0 1-.707-1.707l2-2a1 1 0 0 1 1.414 1.414l-2 2A1 1 0 0 1 15 4zm-3-1a1 1 0 0 1-1-1V1a1 1 0 0 1 2 0v1a1 1 0 0 1-1 1zm0 9a1 1 0 0 1-1-1v-1a1 1 0 0 1 2 0v1a1 1 0 0 1-1 1z"/><path d="M12 3a1 1 0 0 1-1-1V1a1 1 0 0 1 2 0v1a1 1 0 0 1-1 1zm0 9a1 1 0 0 1-1-1v-1a1 1 0 0 1 2 0v1a1 1 0 0 1-1 1zM8 7H7a1 1 0 1 1 0-2h1a1 1 0 1 1 0 2zm9 0h-1a1 1 0 0 1 0-2h1a1 1 0 0 1 0 2zM9 4a1 1 0 0 1-.707-.293l-2-2A1 1 0 0 1 7.707.293l2 2A1 1 0 0 1 9 4zm8 8a1 1 0 0 1-.707-.293l-2-2a1 1 0 0 1 1.414-1.414l2 2A1 1 0 0 1 17 12z"/></g></svg></button>
+    </div>
+    <textarea class="ps-edit-instr" placeholder="Instruction detaillee pour cette etape..."
+              oninput="psUpdateField('${containerId}','instruction',this.value)">${escHtml(steps[sel].instruction || '')}</textarea>
+  ` : '<div class="ps-edit-empty">Ajoutez une etape avec le bouton +</div>';
+
+  el.innerHTML = `
+    <div class="ps-panel">
+      <div class="ps-list">
+        <div class="ps-list-header">
+          <span>Etapes</span>
+          <button class="btn-icon ps-list-add" onclick="psAdd('${containerId}')" title="Ajouter une etape">+</button>
+        </div>
+        <div class="ps-list-items">${listItems}</div>
+      </div>
+      <div class="ps-editor">${edit}</div>
+    </div>
+  `;
+}
+
+function psSelect(containerId, idx) {
+  _psState[containerId].selected = idx;
+  _psRender(containerId);
+}
+
+function psUpdateField(containerId, field, value) {
+  const st = _psState[containerId];
+  if (st.selected >= 0 && st.steps[st.selected]) {
+    st.steps[st.selected][field] = value;
+    // Update list item text live without full re-render
+    const el = document.getElementById(containerId);
+    const item = el?.querySelectorAll('.ps-list-item')[st.selected];
+    if (item) {
+      if (field === 'name') item.querySelector('.ps-list-name').textContent = value || 'Sans titre';
+      if (field === 'output_key') item.querySelector('.ps-list-key').textContent = value || '...';
+    }
+  }
+}
+
+function psAdd(containerId) {
+  const st = _psState[containerId];
+  st.steps.push({ name: '', output_key: '', instruction: '' });
+  st.selected = st.steps.length - 1;
+  _psRender(containerId);
+  // Focus the key input
+  setTimeout(() => {
+    const el = document.getElementById(containerId);
+    const inp = el?.querySelector('.ps-edit-key');
+    if (inp) inp.focus();
+  }, 50);
+}
+
+function psRemove(containerId, idx) {
+  const st = _psState[containerId];
+  st.steps.splice(idx, 1);
+  if (st.selected >= st.steps.length) st.selected = st.steps.length - 1;
+  _psRender(containerId);
+}
+
+let _psDragIdx = -1;
+function psDragStart(e, idx) { _psDragIdx = idx; e.dataTransfer.effectAllowed = 'move'; }
+function psDragOver(e) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }
+function psDrop(e, containerId, targetIdx) {
+  e.preventDefault();
+  const st = _psState[containerId];
+  if (_psDragIdx < 0 || _psDragIdx === targetIdx) return;
+  const [moved] = st.steps.splice(_psDragIdx, 1);
+  st.steps.splice(targetIdx, 0, moved);
+  st.selected = targetIdx;
+  _psRender(containerId);
+}
+
+async function psAssist(containerId) {
+  const st = _psState[containerId];
+  const step = st.steps[st.selected];
+  if (!step) return;
+  const el = document.getElementById(containerId);
+  const textarea = el?.querySelector('.ps-edit-instr');
+  const btn = el?.querySelector('.ps-edit-assist');
+  if (!textarea || !btn) return;
+
+  const info = textarea.value.trim();
+  if (!info) { toast('Ecrivez un debut d\'instruction avant de demander de l\'aide', 'error'); return; }
+
+  // Retrieve agent prompt: from textarea if visible, or from loaded agent data
+  const promptEl = document.getElementById('agent-edit-prompt') || document.getElementById('sa-prompt-edit');
+  let agentPrompt = promptEl ? promptEl.value : '';
+  if (!agentPrompt) {
+    // Find current agent id from the modal header or save button
+    const saveBtn = document.querySelector('.modal-actions .btn-primary[onclick*="saveAgent"]');
+    if (saveBtn) {
+      const m = saveBtn.getAttribute('onclick')?.match(/saveAgent\('([^']+)'\)/);
+      if (m && agents[m[1]]) agentPrompt = agents[m[1]].prompt_content || '';
+    }
+  }
+
+  const prevText = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '...';
+  try {
+    const result = await api('/api/agents/generate-mission', {
+      method: 'POST',
+      body: {
+        agent_prompt: agentPrompt,
+        step_name: step.name || '',
+        step_key: step.output_key || '',
+        current_instruction: info,
+      }
+    });
+    textarea.value = result.instruction;
+    step.instruction = result.instruction;
+    toast('Instruction generee', 'success');
+  } catch (e) {
+    toast('Erreur: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = prevText;
+  }
 }
 
 function getPipelineSteps(containerId) {
-  const el = document.getElementById(containerId);
-  if (!el) return [];
-  return [...el.querySelectorAll('.pipeline-step')].map(row => ({
-    name: row.querySelector('.pipeline-step-name').value.trim(),
-    output_key: row.querySelector('.pipeline-step-key').value.trim(),
-    instruction: row.querySelector('.pipeline-step-instr').value.trim(),
-  })).filter(s => s.name);
+  const st = _psState[containerId];
+  if (!st) return [];
+  return (st.steps || []).filter(s => s.name || s.output_key);
 }
 
-function addPipelineStep(containerId) {
-  const steps = getPipelineSteps(containerId);
-  steps.push({ name: '', output_key: '', instruction: '' });
-  renderPipelineSteps(containerId, steps);
-}
-
-function removePipelineStep(containerId, idx) {
-  const steps = getPipelineSteps(containerId);
-  steps.splice(idx, 1);
-  renderPipelineSteps(containerId, steps);
-}
-
+// Legacy compat
+function addPipelineStep(containerId) { psAdd(containerId); }
+function removePipelineStep(containerId, idx) { psRemove(containerId, idx); }
 function movePipelineStep(containerId, idx, dir) {
-  const steps = getPipelineSteps(containerId);
+  const st = _psState[containerId];
   const target = idx + dir;
-  if (target < 0 || target >= steps.length) return;
-  [steps[idx], steps[target]] = [steps[target], steps[idx]];
-  renderPipelineSteps(containerId, steps);
+  if (target < 0 || target >= st.steps.length) return;
+  [st.steps[idx], st.steps[target]] = [st.steps[target], st.steps[idx]];
+  st.selected = target;
+  _psRender(containerId);
 }
 
 // ═══════════════════════════════════════════════════
@@ -250,6 +463,53 @@ async function loadEnv() {
     renderEnv();
   } catch (e) {
     toast(e.message, 'error');
+  }
+}
+
+function showPasteEnvModal() {
+  showModal(`
+    <div class="modal-header">
+      <h3>Coller des variables .env</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem">Collez les variables au format <code>KEY=VALUE</code> (une par ligne). Les clefs existantes seront mises a jour, les nouvelles seront ajoutees.</p>
+    <textarea id="paste-env-content" style="width:100%;min-height:250px;font-family:'JetBrains Mono',monospace;font-size:0.8rem" placeholder="KEY1=value1&#10;KEY2=value2&#10;..."></textarea>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="pasteEnvValidate()">Valider</button>
+    </div>
+  `);
+  setTimeout(() => document.getElementById('paste-env-content')?.focus(), 50);
+}
+
+async function pasteEnvValidate() {
+  const raw = document.getElementById('paste-env-content')?.value || '';
+  const lines = raw.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
+  const entries = [];
+  for (const line of lines) {
+    const idx = line.indexOf('=');
+    if (idx < 1) continue;
+    entries.push({ key: line.substring(0, idx).trim(), value: line.substring(idx + 1).trim() });
+  }
+  if (!entries.length) { toast('Aucune variable valide trouvee', 'error'); return; }
+  try {
+    const result = await api('/api/env/merge', { method: 'POST', body: { entries } });
+    closeModal();
+    toast(`${result.added} ajoutee(s), ${result.updated} mise(s) a jour`, 'success');
+    loadEnv();
+  } catch (e) {
+    toast('Erreur: ' + e.message, 'error');
+  }
+}
+
+async function copyEnvFile() {
+  try {
+    const data = await api('/api/env');
+    const lines = (data.entries || []).map(e => `${e.key}=${e.value}`).join('\n');
+    await copyToClipboard(lines);
+    toast('.env copie dans le presse-papier', 'success');
+  } catch (e) {
+    toast('Erreur: ' + e.message, 'error');
   }
 }
 
@@ -773,9 +1033,9 @@ function renderAgents() {
             <h4>${isOrch ? '<span class="orch-badge" title="Orchestrateur">&#9733;</span> ' : ''}${escHtml(a.name)}</h4>
             <code style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(id)}</code>
           </div>
-          <button class="btn-icon danger" onclick="event.stopPropagation();deleteAgent('${escHtml(id)}')" title="Supprimer">
+          ${isOrch ? '' : `<button class="btn-icon danger" onclick="event.stopPropagation();deleteAgent('${escHtml(id)}')" title="Supprimer">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-          </button>
+          </button>`}
         </div>
         <div class="agent-meta">
           <span class="tag tag-blue">temp: ${a.temperature}</span>
@@ -878,15 +1138,14 @@ async function editAgent(id) {
 
     <!-- Tab: Pipeline Steps -->
     <div id="agent-tab-pipeline" class="agent-tab-content">
-      <p style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:1rem">Definissez les etapes du pipeline. Chaque etape a un nom, une cle de sortie (output_key) et une instruction.</p>
       <div id="agent-edit-pipeline-steps" class="pipeline-steps-container"></div>
     </div>
 
     <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
       <button class="btn btn-primary" onclick="saveAgent('${escHtml(id)}')">Sauvegarder</button>
+      <button class="btn btn-outline" onclick="closeModal()">Fermer</button>
     </div>
-  `, 'modal-wide');
+  `, 'modal-agent');
   renderPipelineSteps('agent-edit-pipeline-steps', a.pipeline_steps || []);
 }
 
@@ -955,6 +1214,11 @@ async function saveAgent(id) {
     toast('Un orchestrator existe deja dans cette equipe', 'error'); return;
   }
   const pipeline_steps = getPipelineSteps('agent-edit-pipeline-steps');
+  // Validate JSON blocks in pipeline step instructions
+  for (const step of pipeline_steps) {
+    const errs = validateJsonBlocks(step.instruction || '');
+    if (errs.length) { toast(`Step "${step.name}": ${errs.join(', ')}`, 'error'); return; }
+  }
   const mcpCheckboxes = document.querySelectorAll('.agent-mcp-cb:checked');
   const mcpList = Array.from(mcpCheckboxes).map(cb => cb.value);
 
@@ -968,7 +1232,7 @@ async function saveAgent(id) {
       api(`/api/agents/mcp-access/${encodeURIComponent(teamDir)}/${encodeURIComponent(id)}`, { method: 'PUT', body: { servers: mcpList } }),
     ]);
     toast('Agent sauvegarde', 'success');
-    closeModal();
+    reloadGatewayConfig();
     loadAgents();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -2290,9 +2554,9 @@ function renderTeams() {
             <h4>${isOrch ? '<span class="orch-badge" title="Orchestrateur">&#9733;</span> ' : ''}${escHtml(a.name)}</h4>
             <code style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(aid)}</code>
           </div>
-          <button class="btn-icon danger" onclick="event.stopPropagation();deleteCfgAgent('${escHtml(dir)}','${escHtml(aid)}')" title="Supprimer">
+          ${isOrch ? '' : `<button class="btn-icon danger" onclick="event.stopPropagation();deleteCfgAgent('${escHtml(dir)}','${escHtml(aid)}')" title="Supprimer">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-          </button>
+          </button>`}
         </div>
         <div class="agent-meta" onclick="editCfgAgent('${escHtml(dir)}','${escHtml(aid)}')">
           ${a.temperature != null ? `<span class="tag tag-blue">temp: ${a.temperature}</span>` : ''}
@@ -2460,7 +2724,7 @@ async function editCfgAgent(dir, agentId) {
     a.delivers_contract ? '<span class="tag tag-purple">Contrat</span>' : '',
   ].filter(Boolean).join('') || '<span style="color:var(--text-secondary);font-size:0.85rem">Aucun</span>';
 
-  const promptRaw = a.prompt_content || '';
+  const promptRaw = _composeAgentPrompt(a);
   const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
   const hasPipeline = a.type === 'pipeline' || (a.pipeline_steps && a.pipeline_steps.length > 0);
   const isOrchestrator = a.type === 'orchestrator';
@@ -2528,10 +2792,10 @@ async function editCfgAgent(dir, agentId) {
       </div>
     </div>
     <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
       <button class="btn btn-primary" onclick="saveCfgAgent('${escHtml(dir)}','${escHtml(agentId)}')">Sauvegarder</button>
+      <button class="btn btn-outline" onclick="closeModal()">Fermer</button>
     </div>
-  `, 'modal-wide');
+  `, 'modal-agent');
   // Set prompt after modal creation to avoid template literal issues with backticks
   const cfgPromptEl = document.getElementById('cfg-agent-prompt-preview');
   if (cfgPromptEl) cfgPromptEl.innerHTML = promptHtml;
@@ -2563,6 +2827,11 @@ async function saveCfgAgent(dir, agentId) {
     toast('Un orchestrator existe deja dans cette equipe', 'error'); return;
   }
   const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('cfg-pipeline-steps') : [];
+  // Validate JSON blocks in pipeline step instructions
+  for (const step of pipeline_steps) {
+    const errs = validateJsonBlocks(step.instruction || '');
+    if (errs.length) { toast(`Step "${step.name}": ${errs.join(', ')}`, 'error'); return; }
+  }
   try {
     await api(`/api/agents/${encodeURIComponent(agentId)}`, { method: 'PUT', body: {
       id: agentId, name: agentId,
@@ -2571,7 +2840,7 @@ async function saveCfgAgent(dir, agentId) {
       team_id: dir,
     }});
     toast('Agent sauvegarde', 'success');
-    closeModal();
+    reloadGatewayConfig();
     loadTeams();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -3722,6 +3991,9 @@ function showTemplateTab(tabId) {
   else if (tabId === 'tpl-mcp') loadTplMCP();
   else if (tabId === 'tpl-agents') loadSharedAgents();
   else if (tabId === 'tpl-teams') loadTplTeamsList();
+  else if (tabId === 'tpl-projects') loadTplProjects();
+  else if (tabId === 'tpl-prompts') loadTplPrompts();
+  else if (tabId === 'tpl-others') loadTplOthers();
   else if (tabId === 'tpl-git') loadTplGit();
 }
 
@@ -3732,10 +4004,483 @@ async function loadTemplates() {
   showTemplateTab(tab);
 }
 
-// ── Shared Agents (Shared/Agents/{id}/) ──────────
+// ── Cultures (Shared/cultures.json) ──────────
+
+let _allCultures = [];
+let _defaultCulture = 'fr-fr';
+
+async function loadTplOthers() {
+  try {
+    const data = await api('/api/templates/cultures');
+    _allCultures = data.cultures || [];
+    _defaultCulture = data.default || 'fr-fr';
+    renderCultures();
+  } catch (e) {
+    toast('Erreur chargement cultures: ' + e.message, 'error');
+  }
+  loadDeliverableTypes();
+}
+
+function renderCultures(filter = '') {
+  const el = document.getElementById('tpl-cultures-list');
+  if (!el) return;
+  const f = filter.toLowerCase();
+  const filtered = _allCultures.filter(c =>
+    !f || c.key.includes(f) || c.country.toLowerCase().includes(f) || c.language.toLowerCase().includes(f)
+  );
+  el.innerHTML = filtered.map(c => `
+    <div class="culture-card${c.enabled ? ' enabled' : ''}${c.key === _defaultCulture ? ' is-default' : ''}" onclick="toggleCulture('${escHtml(c.key)}', ${!c.enabled})">
+      <span class="culture-flag">${c.flag}</span>
+      <div class="culture-info">
+        <div class="culture-country">${escHtml(c.country)}</div>
+        <div class="culture-lang">${escHtml(c.language)}</div>
+        <div class="culture-key">${escHtml(c.key)}${c.key === _defaultCulture ? ' (defaut)' : ''}</div>
+      </div>
+      <div class="culture-toggle">${c.enabled ? '✓' : ''}</div>
+    </div>
+  `).join('') || '<div style="color:var(--text-secondary);padding:1rem">Aucun resultat</div>';
+}
+
+function filterCultures() {
+  const v = document.getElementById('tpl-cultures-filter')?.value || '';
+  renderCultures(v);
+}
+
+async function toggleCulture(key, enabled) {
+  try {
+    await api('/api/templates/cultures/' + encodeURIComponent(key), {
+      method: 'PUT',
+      body: { enabled }
+    });
+    const c = _allCultures.find(c => c.key === key);
+    if (c) c.enabled = enabled;
+    const f = document.getElementById('tpl-cultures-filter')?.value || '';
+    renderCultures(f);
+    toast(enabled ? `${key} active` : `${key} desactive`, 'success');
+  } catch (e) {
+    toast('Erreur: ' + e.message, 'error');
+  }
+}
+
+// ── Deliverable Types (Shared/deliverable_types.json) ──────────
+
+let _deliverableTypes = [];
+
+async function loadDeliverableTypes() {
+  try {
+    const data = await api('/api/templates/deliverable-types');
+    _deliverableTypes = data.types || [];
+    renderDeliverableTypes();
+  } catch (e) { /* silent — will show empty */ }
+}
+
+function renderDeliverableTypes() {
+  const el = document.getElementById('tpl-deliverable-types-list');
+  if (!el) return;
+  if (!_deliverableTypes.length) {
+    el.innerHTML = '<p style="color:var(--text-secondary);font-size:0.85rem">Aucun type de livrable</p>';
+    return;
+  }
+  el.innerHTML = '<table class="data-table"><thead><tr><th>Cle</th><th>Libelle</th><th></th></tr></thead><tbody>' +
+    _deliverableTypes.map(t => '<tr><td><code>' + escHtml(t.key) + '</code></td><td>' + escHtml(t.label) + '</td>' +
+      '<td><button class="btn-icon" onclick="deleteDeliverableType(\'' + escHtml(t.key) + '\')" title="Supprimer">&times;</button></td></tr>').join('') +
+    '</tbody></table>';
+}
+
+function showAddDeliverableTypeModal() {
+  showModal('<div class="modal-header"><h3>Nouveau type de livrable</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
+    '<div class="form-group"><label>Cle (ex: delivers_docs)</label><input id="dt-new-key" placeholder="delivers_xxx" oninput="this.value=this.value.replace(/[^a-zA-Z0-9_]/g,\'\')" /></div>' +
+    '<div class="form-group"><label>Libelle</label><input id="dt-new-label" placeholder="Documentation" /></div>' +
+    '<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="createDeliverableType()">Creer</button></div>');
+}
+
+async function createDeliverableType() {
+  const key = (document.getElementById('dt-new-key').value || '').trim();
+  const label = (document.getElementById('dt-new-label').value || '').trim();
+  if (!key) { toast('Cle requise', 'error'); return; }
+  if (!label) { toast('Libelle requis', 'error'); return; }
+  try {
+    await api('/api/templates/deliverable-types', { method: 'POST', body: { key, label } });
+    closeModal();
+    toast('Type ajoute', 'success');
+    loadDeliverableTypes();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteDeliverableType(key) {
+  if (!(await confirmModal('Supprimer le type "' + key + '" ?'))) return;
+  try {
+    await api('/api/templates/deliverable-types/' + encodeURIComponent(key), { method: 'DELETE' });
+    toast('Type supprime', 'success');
+    loadDeliverableTypes();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function _getEnabledCultures() {
+  return _allCultures.filter(c => c.enabled);
+}
+
+// ── Template Projects (Shared/Projects/) ──────────
+
+let _tplProjects = [];
+
+async function loadTplProjects() {
+  try {
+    // Ensure teams data is loaded (needed for team dropdown in project edit)
+    if (!tplTeamsData.teams.length) {
+      try {
+        const teamsRes = await api('/api/templates/teams');
+        tplTeamsData = teamsRes;
+        if (!Array.isArray(tplTeamsData.teams)) tplTeamsData.teams = [];
+      } catch { /* ignore */ }
+    }
+    const data = await api('/api/templates/projects');
+    _tplProjects = data.projects || [];
+    renderTplProjects();
+  } catch (e) { toast('Erreur chargement projets: ' + e.message, 'error'); }
+}
+
+function renderTplProjects() {
+  const container = document.getElementById('tpl-projects-table');
+  if (!container) return;
+  const filter = (document.getElementById('tpl-projects-filter')?.value || '').toLowerCase();
+  const filtered = _tplProjects.filter(p =>
+    !filter || p.id.toLowerCase().includes(filter) || (p.name || '').toLowerCase().includes(filter) || (p.description || '').toLowerCase().includes(filter) || (p.team || '').toLowerCase().includes(filter)
+  );
+  let html = '<input type="text" class="form-control" id="tpl-projects-filter" placeholder="Filtrer par ID, nom, description, equipe..." oninput="renderTplProjects()" style="margin-bottom:0.75rem;padding:0.4rem 0.6rem;font-size:0.85rem;width:100%;box-sizing:border-box" value="' + escHtml(filter) + '">';
+  if (!filtered.length) {
+    html += '<p style="color:var(--text-secondary);font-size:0.85rem;padding:0.5rem">' + (_tplProjects.length ? 'Aucun resultat' : 'Aucun type de projet') + '</p>';
+  } else {
+    html += '<table class="data-table"><thead><tr><th>ID</th><th>Nom</th><th>Description</th><th>Equipe</th><th>Workflows</th><th></th></tr></thead><tbody>' +
+      filtered.map(p => {
+        const wfs = (p.workflows || []);
+        const wfChips = wfs.map(w =>
+          '<span class="tag tag-blue" style="display:inline-flex;align-items:center;gap:0.25rem;margin:0.1rem">' +
+            '<span style="cursor:pointer" onclick="editProjectWorkflow(\'' + escHtml(p.id) + '\',\'' + escHtml(w) + '\')">' + escHtml(w) + '</span>' +
+            '<span style="cursor:pointer;opacity:0.6;font-size:0.7rem" onclick="deleteProjectWorkflow(\'' + escHtml(p.id) + '\',\'' + escHtml(w) + '\')" title="Supprimer">&times;</span>' +
+          '</span>'
+        ).join('');
+        const wfCell = '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:0.2rem">' + wfChips +
+          '<button class="btn-icon" onclick="addProjectWorkflow(\'' + escHtml(p.id) + '\')" title="Ajouter un workflow" style="font-size:0.85rem">+</button></div>';
+        return '<tr><td><code>' + escHtml(p.id) + '</code></td><td>' + escHtml(p.name || '') + '</td><td>' + escHtml(p.description || '') + '</td><td>' + escHtml(p.team || '') + '</td>' +
+          '<td>' + wfCell + '</td>' +
+          '<td style="white-space:nowrap">' +
+          '<button class="btn-icon" onclick="buildOrchestratorPrompt(\'' + escHtml(p.id) + '\')" title="Generer prompt orchestrateur">&#9881;</button>' +
+          '<button class="btn-icon" onclick="editTplProject(\'' + escHtml(p.id) + '\')" title="Editer">&#9998;</button>' +
+          '<button class="btn-icon" onclick="deleteTplProject(\'' + escHtml(p.id) + '\')" title="Supprimer">&times;</button></td></tr>';
+      }).join('') +
+      '</tbody></table>';
+  }
+  container.innerHTML = html;
+}
+
+function _projTeamOptions(selected) {
+  const teams = (tplTeamsData.teams || []);
+  return '<option value="">-- Aucune --</option>' +
+    teams.map(t => '<option value="' + escHtml(t.directory || t.id) + '"' + ((t.directory || t.id) === selected ? ' selected' : '') + '>' + escHtml(t.name || t.directory || t.id) + '</option>').join('');
+}
+
+function showAddProjectModal() {
+  showModal('<div class="modal-header"><h3>Nouveau type de projet</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
+    '<div class="form-group"><label>ID (lettres, chiffres, _, -)</label><input id="proj-new-id" placeholder="mon_projet" oninput="this.value=this.value.replace(/[^a-zA-Z0-9_\\-]/g,\'\')" /></div>' +
+    '<div class="form-group"><label>Nom</label><input id="proj-new-name" placeholder="Mon Projet" /></div>' +
+    '<div class="form-group"><label>Description</label><textarea id="proj-new-desc" rows="3" placeholder="Description du type de projet..."></textarea></div>' +
+    '<div class="form-group"><label>Equipe</label><select id="proj-new-team">' + _projTeamOptions('') + '</select></div>' +
+    '<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="createTplProject()">Creer</button></div>');
+}
+
+async function createTplProject() {
+  const id = (document.getElementById('proj-new-id').value || '').trim();
+  const name = (document.getElementById('proj-new-name').value || '').trim();
+  const description = (document.getElementById('proj-new-desc').value || '').trim();
+  const team = (document.getElementById('proj-new-team').value || '').trim();
+  if (!id) { toast('ID requis', 'error'); return; }
+  if (!name) { toast('Nom requis', 'error'); return; }
+  try {
+    await api('/api/templates/projects', { method: 'POST', body: { id, name, description, team } });
+    closeModal();
+    toast('Projet cree', 'success');
+    loadTplProjects();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function editTplProject(id) {
+  const p = _tplProjects.find(x => x.id === id);
+  if (!p) return;
+  showModal('<div class="modal-header"><h3>Editer le projet</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
+    '<div class="form-group"><label>ID</label><input value="' + escHtml(p.id) + '" readonly style="background:var(--bg-secondary)" /></div>' +
+    '<div class="form-group"><label>Nom</label><input id="proj-edit-name" value="' + escHtml(p.name || '') + '" /></div>' +
+    '<div class="form-group"><label>Description</label><textarea id="proj-edit-desc" rows="3">' + escHtml(p.description || '') + '</textarea></div>' +
+    '<div class="form-group"><label>Equipe</label><select id="proj-edit-team">' + _projTeamOptions(p.team || '') + '</select></div>' +
+    '<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="saveTplProject(\'' + escHtml(p.id) + '\')">Sauvegarder</button></div>');
+}
+
+async function saveTplProject(id) {
+  const name = (document.getElementById('proj-edit-name').value || '').trim();
+  const description = (document.getElementById('proj-edit-desc').value || '').trim();
+  const team = (document.getElementById('proj-edit-team').value || '').trim();
+  if (!name) { toast('Nom requis', 'error'); return; }
+  try {
+    await api('/api/templates/projects/' + encodeURIComponent(id), { method: 'PUT', body: { name, description, team } });
+    closeModal();
+    toast('Projet mis a jour', 'success');
+    loadTplProjects();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteTplProject(id) {
+  if (!(await confirmModal('Supprimer le type de projet "' + id + '" ?'))) return;
+  try {
+    await api('/api/templates/projects/' + encodeURIComponent(id), { method: 'DELETE' });
+    toast('Projet supprime', 'success');
+    loadTplProjects();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function buildOrchestratorPrompt(projectId) {
+  try {
+    const res = await api('/api/templates/projects/' + encodeURIComponent(projectId) + '/orchestrator/build', { method: 'POST' });
+    toast('Prompt orchestrateur genere', 'success');
+    showModal('<div class="modal-header"><h3>Prompt orchestrateur — ' + escHtml(projectId) + '</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
+      '<textarea readonly rows="20" style="width:100%;font-family:monospace;font-size:0.8rem;background:var(--bg-secondary);border:1px solid var(--border);padding:0.5rem;resize:vertical">' + escHtml(res.content || '') + '</textarea>' +
+      '<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Fermer</button></div>', 'modal-wide');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function addProjectWorkflow(projectId) {
+  const pid = escHtml(projectId);
+  showModal('<div class="modal-header"><h3>Nouveau workflow</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
+    '<div class="form-group"><label>Nom du workflow (lettres, chiffres, _, -)</label><input id="proj-wf-new-name" placeholder="discovery" oninput="this.value=this.value.replace(/[^a-zA-Z0-9_\\-]/g,\'\')" /></div>' +
+    '<div class="form-group"><label>Generer un workflow</label>' +
+    '<textarea id="proj-wf-gen-prompt" rows="5" placeholder="Decrivez le projet et les contraintes pour generer automatiquement le workflow..." oninput="_projWfToggleGen()"></textarea></div>' +
+    '<div class="modal-actions" id="proj-wf-actions"><button class="btn btn-outline" id="proj-wf-cancel-btn" onclick="closeModal()">Annuler</button>' +
+    '<button class="btn btn-outline" id="proj-wf-gen-btn" disabled onclick="generateProjectWorkflow(\'' + pid + '\')" style="gap:0.3rem">&#10024; Generer</button>' +
+    '<button class="btn btn-primary" id="proj-wf-create-btn" onclick="createProjectWorkflow(\'' + pid + '\')">Creer</button></div>', 'modal-wide');
+}
+function _projWfToggleGen() {
+  const btn = document.getElementById('proj-wf-gen-btn');
+  const prompt = (document.getElementById('proj-wf-gen-prompt').value || '').trim();
+  if (btn) btn.disabled = !prompt;
+}
+
+async function generateProjectWorkflow(projectId) {
+  const name = (document.getElementById('proj-wf-new-name').value || '').trim();
+  const prompt = (document.getElementById('proj-wf-gen-prompt').value || '').trim();
+  if (!name) { toast('Nom requis', 'error'); return; }
+  if (!prompt) { toast('Decrivez le projet pour generer le workflow', 'error'); return; }
+  // Disable all action buttons
+  const btns = document.querySelectorAll('#proj-wf-actions button');
+  btns.forEach(b => { b.disabled = true; b.style.opacity = '0.5'; });
+  const genBtn = document.getElementById('proj-wf-gen-btn');
+  if (genBtn) genBtn.textContent = 'Generation...';
+  try {
+    await api('/api/templates/projects/' + encodeURIComponent(projectId) + '/workflows/generate', {
+      method: 'POST', body: { name, prompt }
+    });
+    closeModal();
+    toast('Workflow genere et sauvegarde', 'success');
+    loadTplProjects();
+  } catch (e) {
+    btns.forEach(b => { b.disabled = false; b.style.opacity = ''; });
+    if (genBtn) genBtn.innerHTML = '&#10024; Generer';
+    _projWfToggleGen();
+    toast(e.message, 'error');
+  }
+}
+
+async function createProjectWorkflow(projectId) {
+  const name = (document.getElementById('proj-wf-new-name').value || '').trim();
+  if (!name) { toast('Nom requis', 'error'); return; }
+  try {
+    await api('/api/templates/projects/' + encodeURIComponent(projectId) + '/workflows', { method: 'POST', body: { name } });
+    closeModal();
+    toast('Workflow cree', 'success');
+    loadTplProjects();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function editProjectWorkflow(projectId, wfName) {
+  const p = _tplProjects.find(x => x.id === projectId);
+  const teamDir = p && p.team ? p.team : '';
+  openWorkflowEditor(wfName, '/api/templates/project-workflow/' + encodeURIComponent(projectId), 'Projects/' + projectId, teamDir);
+}
+
+async function deleteProjectWorkflow(projectId, wfName) {
+  if (!(await confirmModal('Supprimer le workflow "' + wfName + '" ?'))) return;
+  try {
+    await api('/api/templates/projects/' + encodeURIComponent(projectId) + '/workflows/' + encodeURIComponent(wfName), { method: 'DELETE' });
+    toast('Workflow supprime', 'success');
+    loadTplProjects();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ── Template Prompts (Shared/Prompts/<culture>/) ──────────
+
+let _tplPrompts = [];      // [{name, content}]
+let _tplPromptSel = -1;    // selected index
+let _tplPromptDirty = {};  // {idx: true} tracks unsaved changes
+let _tplPromptCulture = ''; // current culture for prompts
+
+async function loadTplPrompts() {
+  try {
+    // Load cultures if not yet loaded
+    if (!_allCultures.length) {
+      const cd = await api('/api/templates/cultures');
+      _allCultures = cd.cultures || [];
+      _defaultCulture = cd.default || 'fr-fr';
+    }
+    // Build culture selector
+    const sel = document.getElementById('tpl-prompts-culture-select');
+    if (sel) {
+      const enabled = _allCultures.filter(c => c.enabled);
+      sel.innerHTML = enabled.map(c =>
+        `<option value="${escHtml(c.key)}" ${c.key === (_tplPromptCulture || _defaultCulture) ? 'selected' : ''}>${c.flag} ${escHtml(c.key)} — ${escHtml(c.language)}</option>`
+      ).join('');
+      if (!_tplPromptCulture) _tplPromptCulture = sel.value || _defaultCulture;
+    }
+    // Load prompts for selected culture
+    const data = await api('/api/templates/prompts?culture=' + encodeURIComponent(_tplPromptCulture));
+    _tplPrompts = data.prompts || [];
+    _tplPromptSel = _tplPrompts.length ? 0 : -1;
+    _tplPromptDirty = {};
+    _tplPromptsRender();
+  } catch (e) {
+    toast('Erreur chargement prompts: ' + e.message, 'error');
+  }
+}
+
+function tplPromptSwitchCulture(culture) {
+  _tplPromptCulture = culture;
+  loadTplPrompts();
+}
+
+function _tplPromptsRender() {
+  const items = document.getElementById('tpl-prompts-items');
+  const editor = document.getElementById('tpl-prompts-editor');
+  if (!items || !editor) return;
+
+  items.innerHTML = _tplPrompts.map((p, i) => `
+    <div class="ps-list-item${i === _tplPromptSel ? ' active' : ''}${_tplPromptDirty[i] ? ' dirty' : ''}" onclick="tplPromptSelect(${i})">
+      <span class="ps-list-num">${i + 1}</span>
+      <div class="ps-list-text">
+        <div class="ps-list-name">${escHtml(p.name.replace(/\.md$/, ''))}</div>
+        <div class="ps-list-key">${escHtml(p.name)}</div>
+      </div>
+      <button class="btn-icon ps-list-del" onclick="event.stopPropagation();tplPromptDelete(${i})" title="Supprimer">&times;</button>
+    </div>
+  `).join('');
+
+  if (_tplPromptSel >= 0 && _tplPrompts[_tplPromptSel]) {
+    const p = _tplPrompts[_tplPromptSel];
+    editor.innerHTML = `
+      <div class="ps-edit-row">
+        <div class="form-group" style="flex:0 0 250px">
+          <label>Fichier</label>
+          <input id="tpl-prompt-name" value="${escHtml(p.name)}" placeholder="nom.md"
+                 oninput="tplPromptUpdateName(this.value)" />
+        </div>
+        <div style="flex:1"></div>
+        <button class="btn btn-primary btn-sm" onclick="tplPromptSave()" style="align-self:flex-end;margin-bottom:2px">Sauvegarder</button>
+      </div>
+      <textarea id="tpl-prompt-content" class="ps-edit-instr" placeholder="Contenu du prompt..."
+                oninput="_tplPromptDirty[${_tplPromptSel}]=true;_tplPrompts[${_tplPromptSel}].content=this.value;_tplPromptsRenderList()"
+                style="flex:1;min-height:300px">${escHtml(p.content || '')}</textarea>
+    `;
+  } else {
+    editor.innerHTML = '<div class="ps-edit-empty">Selectionnez un prompt ou ajoutez-en un avec +</div>';
+  }
+}
+
+function _tplPromptsRenderList() {
+  const items = document.getElementById('tpl-prompts-items');
+  if (!items) return;
+  items.querySelectorAll('.ps-list-item').forEach((el, i) => {
+    el.classList.toggle('dirty', !!_tplPromptDirty[i]);
+  });
+}
+
+function tplPromptSelect(idx) {
+  _tplPromptSel = idx;
+  _tplPromptsRender();
+}
+
+function tplPromptUpdateName(val) {
+  if (_tplPromptSel >= 0 && _tplPrompts[_tplPromptSel]) {
+    _tplPrompts[_tplPromptSel].name = val;
+    _tplPromptDirty[_tplPromptSel] = true;
+    const item = document.querySelectorAll('#tpl-prompts-items .ps-list-item')[_tplPromptSel];
+    if (item) {
+      item.querySelector('.ps-list-name').textContent = val.replace(/\.md$/, '') || '...';
+      item.querySelector('.ps-list-key').textContent = val || '...';
+      item.classList.add('dirty');
+    }
+  }
+}
+
+function tplPromptAdd() {
+  _tplPrompts.push({ name: 'nouveau.md', content: '', _new: true });
+  _tplPromptSel = _tplPrompts.length - 1;
+  _tplPromptDirty[_tplPromptSel] = true;
+  _tplPromptsRender();
+  setTimeout(() => {
+    const inp = document.getElementById('tpl-prompt-name');
+    if (inp) { inp.focus(); inp.select(); }
+  }, 50);
+}
+
+async function tplPromptSave() {
+  const p = _tplPrompts[_tplPromptSel];
+  if (!p) return;
+  const name = (document.getElementById('tpl-prompt-name')?.value || p.name).trim();
+  const content = document.getElementById('tpl-prompt-content')?.value ?? p.content;
+  if (!name) { toast('Nom requis', 'error'); return; }
+  if (!name.endsWith('.md')) { toast('Le nom doit finir par .md', 'error'); return; }
+  const jsonErrs = validateJsonBlocks(content);
+  if (jsonErrs.length) { toast(`JSON invalide: ${jsonErrs.join(', ')}`, 'error'); return; }
+  try {
+    await api('/api/templates/prompts/' + encodeURIComponent(name) + '?culture=' + encodeURIComponent(_tplPromptCulture), {
+      method: 'PUT',
+      body: { content }
+    });
+    p.name = name;
+    p.content = content;
+    delete p._new;
+    delete _tplPromptDirty[_tplPromptSel];
+    _tplPromptsRender();
+    toast('Prompt sauvegarde', 'success');
+  } catch (e) {
+    toast('Erreur: ' + e.message, 'error');
+  }
+}
+
+async function tplPromptDelete(idx) {
+  const p = _tplPrompts[idx];
+  if (!p) return;
+  if (!confirm(`Supprimer ${p.name} ?`)) return;
+  if (!p._new) {
+    try {
+      await api('/api/templates/prompts/' + encodeURIComponent(p.name) + '?culture=' + encodeURIComponent(_tplPromptCulture), { method: 'DELETE' });
+    } catch (e) {
+      toast('Erreur: ' + e.message, 'error');
+      return;
+    }
+  }
+  _tplPrompts.splice(idx, 1);
+  delete _tplPromptDirty[idx];
+  if (_tplPromptSel >= _tplPrompts.length) _tplPromptSel = _tplPrompts.length - 1;
+  _tplPromptsRender();
+  toast('Prompt supprime', 'success');
+}
+
+// ── Shared Agents (Shared/Agents/{id}/) — Split Panel ──────────
 
 let sharedAgentsData = [];
 let saSelectedId = '';
+let saActiveSection = 'info';
+let saAgentData = null;
+let saChatHistory = [];
+let _saLlmNames = [];
+let _saMcpInstalled = [];
 
 async function loadSharedAgents() {
   try {
@@ -3743,196 +4488,395 @@ async function loadSharedAgents() {
     sharedAgentsData = (data.agents || []).sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id, 'fr'));
   } catch { sharedAgentsData = []; }
   const prev = saSelectedId;
-  const input = document.getElementById('sa-agent-filter');
   if (prev && sharedAgentsData.find(a => a.id === prev)) {
-    const ag = sharedAgentsData.find(a => a.id === prev);
-    input.value = ag.name || ag.id;
     selectSharedAgent(prev);
   } else {
-    input.value = '';
     saSelectedId = '';
-    document.getElementById('sa-agent-detail').innerHTML = '';
-    _updateSaDeleteBtn();
+    saAgentData = null;
+    _renderSaLeft();
+    document.getElementById('sa-right').innerHTML = '<div style="padding:2rem;color:var(--text-secondary);text-align:center">Selectionnez un agent</div>';
   }
-  _renderSaDropdown(sharedAgentsData);
 }
 
-function _renderSaDropdown(list) {
-  const dd = document.getElementById('sa-agent-dropdown');
-  dd.innerHTML = list.map(a =>
-    `<div class="sa-dropdown-item${a.id === saSelectedId ? ' active' : ''}" data-id="${escHtml(a.id)}" onclick="_pickSharedAgent('${escHtml(a.id)}')">${escHtml(a.name || a.id)}</div>`
-  ).join('') || '<div style="padding:8px;color:var(--text-muted);font-size:0.85rem">Aucun agent</div>';
+function _renderSaLeft() {
+  const left = document.getElementById('sa-left');
+  if (!left) return;
+  let html = '<div class="sa-toolbar">';
+  html += '<button class="btn btn-primary btn-sm" onclick="showCreateSharedAgentModal()" style="flex:1">+ Ajouter</button>';
+  html += '<button class="btn btn-outline btn-sm" onclick="importSharedAgent()">Importer</button>';
+  html += '</div>';
+  // Agent selector (dropdown)
+  html += '<select class="sa-agent-select" onchange="selectSharedAgent(this.value)">';
+  html += '<option value="">-- Selectionner un agent --</option>';
+  for (const a of sharedAgentsData) {
+    const sel = a.id === saSelectedId ? ' selected' : '';
+    html += '<option value="' + escHtml(a.id) + '"' + sel + '>' + escHtml(a.name || a.id) + '</option>';
+  }
+  html += '</select>';
+  // Sub-sections for selected agent
+  if (saSelectedId && saAgentData) {
+    html += '<hr class="sa-separator">';
+    const sec = saActiveSection;
+    html += _saMenuItem('info', '\u2139\uFE0F', 'Informations', sec);
+    html += _saMenuItem('identity', '\uD83E\uDEAA', 'Identite', sec);
+    html += _saMenuItem('prompt', '\uD83D\uDCDD', 'Prompt', sec);
+    html += _saMenuItem('assign', '\uD83D\uDD00', 'Assignations', sec);
+    if (saAgentData.type !== 'orchestrator') {
+      html += _saMenuItem('chat', '\uD83D\uDCAC', 'Chat', sec);
+      // Roles
+      html += '<div class="sa-section-title">\uD83D\uDCCB Roles</div>';
+      for (const r of (saAgentData.roles || [])) {
+        html += _saSubItem('role:' + r.name, r.name, sec);
+      }
+      html += '<div class="sa-add-item" onclick="_saAddDynamic(\'role\')">+ Ajouter</div>';
+      // Missions
+      html += '<div class="sa-section-title">\uD83C\uDFAF Missions</div>';
+      for (const m of (saAgentData.missions || [])) {
+        html += _saSubItem('mission:' + m.name, m.name, sec);
+      }
+      html += '<div class="sa-add-item" onclick="_saAddDynamic(\'mission\')">+ Ajouter</div>';
+      // Skills
+      html += '<div class="sa-section-title">\uD83E\uDDE0 Competences</div>';
+      for (const s of (saAgentData.skills || [])) {
+        html += _saSubItem('skill:' + s.name, s.name, sec);
+      }
+      html += '<div class="sa-add-item" onclick="_saAddDynamic(\'skill\')">+ Ajouter</div>';
+    }
+    // Delete button
+    html += '<div class="sa-delete-zone"><button class="btn btn-outline btn-sm" style="width:100%;color:#ef4444;border-color:#ef4444" onclick="deleteSharedAgent(\'' + escHtml(saSelectedId) + '\')">Supprimer agent</button></div>';
+  }
+  left.innerHTML = html;
 }
 
-function _filterSharedAgents() {
-  const q = (document.getElementById('sa-agent-filter').value || '').toLowerCase();
-  const filtered = sharedAgentsData.filter(a => (a.name || a.id).toLowerCase().includes(q) || a.id.toLowerCase().includes(q));
-  _renderSaDropdown(filtered);
-  _openSaDropdown();
+function _saMenuItem(key, icon, label, active) {
+  return '<div class="sa-menu-item' + (active === key ? ' active' : '') + '" onclick="_saSetSection(\'' + key + '\')">' + icon + ' ' + escHtml(label) + '</div>';
 }
 
-function _openSaDropdown() {
-  document.getElementById('sa-agent-dropdown').style.display = 'block';
+function _saSubItem(key, label, active) {
+  const type = key.split(':')[0];
+  const name = key.split(':').slice(1).join(':');
+  return '<div class="sa-sub-item' + (active === key ? ' active' : '') + '" onclick="_saSetSection(\'' + escHtml(key) + '\')">' +
+    '<span>' + escHtml(label) + '</span>' +
+    '<span class="sa-sub-delete" onclick="event.stopPropagation();_saDeleteDynamic(\'' + type + '\',\'' + escHtml(name) + '\')" title="Supprimer">\u2716</span>' +
+    '</div>';
 }
 
-function _closeSaDropdown() {
-  setTimeout(() => { document.getElementById('sa-agent-dropdown').style.display = 'none'; }, 180);
-}
-
-function _toggleSaDropdown() {
-  const dd = document.getElementById('sa-agent-dropdown');
-  dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
-  if (dd.style.display === 'block') document.getElementById('sa-agent-filter').focus();
-}
-
-function _pickSharedAgent(id) {
-  const ag = sharedAgentsData.find(a => a.id === id);
-  document.getElementById('sa-agent-filter').value = ag ? (ag.name || ag.id) : id;
-  document.getElementById('sa-agent-dropdown').style.display = 'none';
-  selectSharedAgent(id);
-}
-
-function _updateSaDeleteBtn() {
-  const btn = document.getElementById('sa-delete-btn');
-  if (!btn) return;
-  btn.disabled = !saSelectedId;
-  btn.style.opacity = saSelectedId ? '1' : '0.5';
+function _saSetSection(section) {
+  saActiveSection = section;
+  _renderSaLeft();
+  _renderSaRight();
 }
 
 async function selectSharedAgent(id) {
   saSelectedId = id;
-  _updateSaDeleteBtn();
-  const detail = document.getElementById('sa-agent-detail');
-  if (!id) { detail.innerHTML = ''; return; }
-  let agent;
-  try { agent = await api(`/api/shared-agents/${encodeURIComponent(id)}`); }
+  if (!id) { saAgentData = null; _renderSaLeft(); document.getElementById('sa-right').innerHTML = ''; return; }
+  try { saAgentData = await api('/api/shared-agents/' + encodeURIComponent(id)); }
   catch (e) { toast(e.message, 'error'); return; }
+  // Load LLM + MCP lists (cached)
+  if (!_saLlmNames.length) { try { const d = await api('/api/templates/llm'); _saLlmNames = Object.keys(d.providers || {}); } catch {} }
+  if (!_saMcpInstalled.length) { try { const d = await api('/api/mcp/servers'); _saMcpInstalled = Object.keys(d.servers || {}); } catch {} }
+  saChatHistory = [];
+  if (saActiveSection === 'chat') saActiveSection = 'info';
+  _renderSaLeft();
+  _renderSaRight();
+}
 
-  let llmNames = [], mcpInstalled = [];
-  try { const d = await api('/api/templates/llm'); llmNames = Object.keys(d.providers || {}); } catch {}
-  try { const d = await api('/api/mcp/servers'); mcpInstalled = Object.keys(d.servers || {}); } catch {}
+function _renderSaRight() {
+  const right = document.getElementById('sa-right');
+  if (!right || !saAgentData) { if (right) right.innerHTML = ''; return; }
+  const agent = saAgentData;
+  const id = saSelectedId;
+  const sec = saActiveSection;
 
+  if (sec === 'chat') {
+    right.innerHTML = _renderSaChat(id);
+    return;
+  }
+  if (sec === 'info') {
+    right.innerHTML = _renderSaInfo(agent, id);
+    return;
+  }
+  if (sec === 'identity') {
+    right.innerHTML = _renderSaMdEditor('Identite', agent.identity_content || '', '_saSaveIdentity');
+    return;
+  }
+  if (sec === 'prompt') {
+    right.innerHTML = _renderSaPromptReadonly(agent);
+    return;
+  }
+  if (sec === 'assign') {
+    right.innerHTML = _renderSaAssign(agent, id);
+    return;
+  }
+  // Dynamic: role:xxx, mission:xxx, skill:xxx
+  const parts = sec.split(':');
+  const type = parts[0];
+  const name = parts.slice(1).join(':');
+  let list, prefix;
+  if (type === 'role') { list = agent.roles || []; prefix = 'role_'; }
+  else if (type === 'mission') { list = agent.missions || []; prefix = 'mission_'; }
+  else if (type === 'skill') { list = agent.skills || []; prefix = 'skill_'; }
+  else { right.innerHTML = ''; return; }
+  const item = list.find(i => i.name === name);
+  const content = item ? item.content : '';
+  const filename = prefix + name;
+  right.innerHTML = _renderSaDynamicEditor(type, name, content, filename);
+}
+
+// ── Right panel renderers ──
+
+function _renderSaChatMsg(m) {
+  if (m.role === 'user') return '<div class="sa-chat-msg user">' + escHtml(m.content) + '</div>';
+  // Assistant: structured response
+  let html = '<div class="sa-chat-msg assistant">';
+  if (m.display && m.display.length) {
+    for (const d of m.display) {
+      const label = d.tag === 'conflict' ? 'Conflits' : d.tag === 'confidence' ? 'Confiance' : 'Informations manquantes';
+      const cls = d.tag === 'conflict' ? 'sa-block-warn' : d.tag === 'confidence' ? 'sa-block-info' : 'sa-block-miss';
+      html += '<div class="sa-chat-block ' + cls + '"><strong>' + label + '</strong><pre>' + escHtml(d.content) + '</pre></div>';
+    }
+  }
+  if (m.file_status && m.file_status.length) {
+    html += '<div class="sa-chat-block sa-block-files"><strong>Fichiers</strong><ul>';
+    for (const f of m.file_status) {
+      if (f.status === 'unchanged') {
+        html += '<li><span style="color:var(--text-secondary)">' + escHtml(f.name) + '.md</span> : Pas de changement</li>';
+      } else {
+        html += '<li><span style="color:var(--accent-primary);font-weight:600">' + escHtml(f.name) + '.md</span> : Update</li>';
+      }
+    }
+    html += '</ul></div>';
+  }
+  if (!m.display?.length && !m.file_status?.length) {
+    html += escHtml(m.content);
+  }
+  html += '</div>';
+  return html;
+}
+
+function _renderSaChat(id) {
+  let msgs = saChatHistory.map(m => _renderSaChatMsg(m)).join('');
+  if (!msgs) msgs = '<div style="padding:1rem;color:var(--text-muted);text-align:center;font-size:0.85rem">Discutez avec le LLM pour construire le profil de l\'agent</div>';
+  return '<div class="sa-chat-wrap">' +
+    '<h3 style="margin-top:0">Chat — ' + escHtml(saAgentData.name || id) + '</h3>' +
+    '<div class="sa-chat-messages" id="sa-chat-msgs">' + msgs + '</div>' +
+    '<div class="sa-chat-input-bar">' +
+    '<textarea id="sa-chat-input" style="flex:1;min-height:40px;max-height:120px" placeholder="Message..." onkeydown="if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();_saSendChat()}"></textarea>' +
+    '<button class="btn btn-primary btn-sm" onclick="_saSendChat()" style="align-self:flex-end">Envoyer</button>' +
+    '</div></div>';
+}
+
+async function _saSendChat() {
+  const input = document.getElementById('sa-chat-input');
+  const msg = (input.value || '').trim();
+  if (!msg) return;
+  input.value = '';
+  saChatHistory.push({ role: 'user', content: msg });
+  _renderSaRight();
+  // Scroll to bottom
+  const box = document.getElementById('sa-chat-msgs');
+  if (box) box.scrollTop = box.scrollHeight;
+  try {
+    const result = await api('/api/shared-agents/' + encodeURIComponent(saSelectedId) + '/chat', {
+      method: 'POST', body: { message: msg, history: saChatHistory.slice(0, -1) }
+    });
+    saChatHistory.push({
+      role: 'assistant',
+      content: result.response || '(pas de reponse)',
+      display: result.display || [],
+      file_status: result.file_status || [],
+    });
+    // Refresh agent data if files were updated
+    if ((result.file_status || []).some(f => f.status === 'updated')) {
+      saAgentData = await api('/api/shared-agents/' + encodeURIComponent(saSelectedId));
+      _renderSaLeft();
+    }
+  } catch (e) {
+    saChatHistory.push({ role: 'assistant', content: 'Erreur: ' + e.message });
+  }
+  _renderSaRight();
+  const box2 = document.getElementById('sa-chat-msgs');
+  if (box2) box2.scrollTop = box2.scrollHeight;
+}
+
+function _renderSaInfo(agent, id) {
   const llmOptions = '<option value="">-- Defaut --</option>' +
-    llmNames.map(p => `<option value="${escHtml(p)}" ${p === (agent.llm || '') ? 'selected' : ''}>${escHtml(p)}</option>`).join('');
+    _saLlmNames.map(p => '<option value="' + escHtml(p) + '" ' + (p === (agent.llm || '') ? 'selected' : '') + '>' + escHtml(p) + '</option>').join('');
   const agentMcp = agent.mcp_access || [];
-  const mcpTags = mcpInstalled.length
-    ? mcpInstalled.map(id => {
-        const chk = agentMcp.includes(id) ? 'checked' : '';
-        return `<label class="mcp-check-tag ${chk ? 'active' : ''}"><input type="checkbox" value="${escHtml(id)}" ${chk} onchange="this.parentElement.classList.toggle('active',this.checked)" />${escHtml(id)}</label>`;
+  const mcpTags = _saMcpInstalled.length
+    ? _saMcpInstalled.map(mid => {
+        const chk = agentMcp.includes(mid) ? 'checked' : '';
+        return '<label class="mcp-check-tag ' + (chk ? 'active' : '') + '"><input type="checkbox" value="' + escHtml(mid) + '" ' + chk + ' onchange="this.parentElement.classList.toggle(\'active\',this.checked)" />' + escHtml(mid) + '</label>';
       }).join('')
     : '<span style="color:var(--text-secondary);font-size:0.85rem">Aucun serveur MCP installe</span>';
-
-  const promptRaw = agent.prompt_content || '';
-  const assignRaw = agent.assign_content || '';
-  const unassignRaw = agent.unassign_content || '';
-
-  detail.innerHTML = `
-    <div class="prompt-tabs" style="margin-top:0.75rem">
-      <div class="prompt-tab active" id="sa-tab-info" onclick="showSaSubTab('info')">Signaletique</div>
-      <div class="prompt-tab" id="sa-tab-prompt" onclick="showSaSubTab('prompt')">Prompt</div>
-      <div class="prompt-tab" id="sa-tab-assign" onclick="showSaSubTab('assign')">Assignations</div>
-    </div>
-    <div id="sa-subtab-info" style="padding:1rem 0">
-      <div class="form-row">
-        <div class="form-group"><label>ID</label><input id="sa-id" value="${escHtml(id)}" readonly style="background:var(--bg-secondary)" /></div>
-        <div class="form-group"><label>Nom</label><input id="sa-name" value="${escHtml(agent.name || '')}" /></div>
-      </div>
-      <div class="form-group"><label>Description</label><textarea id="sa-desc" style="min-height:60px">${escHtml(agent.description || '')}</textarea></div>
-      <div class="form-row">
-        <div class="form-group"><label>Modele LLM</label><select id="sa-llm">${llmOptions}</select></div>
-        <div class="form-group"><label>Temperature</label><input id="sa-temp" type="number" step="0.1" min="0" max="2" value="${agent.temperature ?? 0.3}" /></div>
-        <div class="form-group"><label>Max Tokens</label><input id="sa-tokens" type="number" value="${agent.max_tokens ?? 32768}" /></div>
-      </div>
-      <div class="form-group">
-        <label>Services MCP</label>
-        <div class="mcp-check-tags" id="sa-mcp-tags">${mcpTags}</div>
-      </div>
-      <div class="form-group">
-        <label>Type de livrable</label>
-        <div style="display:flex;gap:1.5rem;margin-top:0.25rem">
-          <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;cursor:pointer">
-            <input type="checkbox" id="sa-delivers-docs" ${agent.delivers_docs ? 'checked' : ''} /> Documentation
-          </label>
-          <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;cursor:pointer">
-            <input type="checkbox" id="sa-delivers-code" ${agent.delivers_code ? 'checked' : ''} /> Code
-          </label>
-          <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;cursor:pointer">
-            <input type="checkbox" id="sa-delivers-design" ${agent.delivers_design ? 'checked' : ''} /> Maquette / Design
-          </label>
-          <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;cursor:pointer">
-            <input type="checkbox" id="sa-delivers-automation" ${agent.delivers_automation ? 'checked' : ''} /> Automatisme
-          </label>
-          <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;cursor:pointer">
-            <input type="checkbox" id="sa-delivers-tasklist" ${agent.delivers_tasklist ? 'checked' : ''} /> Liste de taches
-          </label>
-          <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;cursor:pointer">
-            <input type="checkbox" id="sa-delivers-specs" ${agent.delivers_specs ? 'checked' : ''} /> Specifications
-          </label>
-          <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;cursor:pointer">
-            <input type="checkbox" id="sa-delivers-contract" ${agent.delivers_contract ? 'checked' : ''} /> Contrat
-          </label>
-        </div>
-      </div>
-      <div style="text-align:right;margin-top:1rem">
-        <button class="btn btn-primary btn-sm" onclick="saveSharedAgent('${escHtml(id)}')">Sauvegarder</button>
-      </div>
-    </div>
-    <div id="sa-subtab-prompt" style="padding:1rem 0;display:none">
-      <div style="display:flex;justify-content:flex-end;margin-bottom:0.5rem">
-        <button class="btn btn-outline btn-sm" onclick="generateSharedAgentPrompt('${escHtml(id)}')">Aide moi a creer mon agent</button>
-      </div>
-      <textarea id="sa-prompt-edit" style="min-height:400px;max-height:60vh;overflow-y:auto">${escHtml(promptRaw)}</textarea>
-      <div style="text-align:right;margin-top:1rem">
-        <button class="btn btn-primary btn-sm" onclick="saveSharedAgent('${escHtml(id)}')">Sauvegarder</button>
-      </div>
-    </div>
-    <div id="sa-subtab-assign" style="padding:1rem 0;display:none">
-      <div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">
-        <button class="btn btn-outline btn-sm" id="sa-btn-gen-assign" onclick="generateSharedAgentAssign('${escHtml(id)}')">Generer les exemples d'assignation</button>
-      </div>
-      <div class="form-group">
-        <label>Exemples de routing correct</label>
-        <textarea id="sa-assign-edit" style="min-height:200px;max-height:30vh;overflow-y:auto">${escHtml(assignRaw)}</textarea>
-      </div>
-      <div style="display:flex;justify-content:flex-end;margin-top:1rem;margin-bottom:0.25rem">
-        <button class="btn btn-outline btn-sm" id="sa-btn-gen-unassign" onclick="generateSharedAgentUnassign('${escHtml(id)}')">Generer les exemples de non-assignation</button>
-      </div>
-      <div class="form-group">
-        <label>Exemples de routing incorrect</label>
-        <textarea id="sa-unassign-edit" style="min-height:200px;max-height:30vh;overflow-y:auto">${escHtml(unassignRaw)}</textarea>
-      </div>
-      <div style="text-align:right;margin-top:1rem">
-        <button class="btn btn-primary btn-sm" onclick="saveSharedAgentAssign('${escHtml(id)}')">Sauvegarder</button>
-      </div>
-    </div>`;
+  const deliverTypes = [
+    ['delivers_docs', 'Documentation'], ['delivers_code', 'Code'], ['delivers_design', 'Maquette / Design'],
+    ['delivers_automation', 'Automatisme'], ['delivers_tasklist', 'Liste de taches'],
+    ['delivers_specs', 'Specifications'], ['delivers_contract', 'Contrat']
+  ];
+  const deliverHtml = deliverTypes.map(([k, l]) =>
+    '<label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;cursor:pointer"><input type="checkbox" id="sa-' + k + '" ' + (agent[k] ? 'checked' : '') + ' /> ' + l + '</label>'
+  ).join('');
+  return '<div class="sa-right-header"><h3>Informations — ' + escHtml(agent.name || id) + '</h3><button class="btn btn-primary btn-sm" onclick="saveSharedAgent(\'' + escHtml(id) + '\')">Sauvegarder</button></div>' +
+    '<div class="form-row">' +
+    '<div class="form-group"><label>ID</label><input id="sa-id" value="' + escHtml(id) + '" readonly style="background:var(--bg-secondary)" /></div>' +
+    '<div class="form-group"><label>Nom</label><input id="sa-name" value="' + escHtml(agent.name || '') + '" /></div>' +
+    '</div>' +
+    '<div class="form-group"><label>Description</label><textarea id="sa-desc" style="min-height:60px">' + escHtml(agent.description || '') + '</textarea></div>' +
+    '<div class="form-row">' +
+    '<div class="form-group"><label>Type</label><select id="sa-type" onchange="_saTypeChanged(this.value)">' +
+      '<option value="single"' + ((agent.type || 'single') === 'single' ? ' selected' : '') + '>Single</option>' +
+      '<option value="pipeline"' + (agent.type === 'pipeline' ? ' selected' : '') + '>Pipeline</option>' +
+      '<option value="orchestrator"' + (agent.type === 'orchestrator' ? ' selected' : '') + '>Orchestrator</option>' +
+    '</select></div>' +
+    '<div class="form-group"><label>Modele LLM</label><select id="sa-llm">' + llmOptions + '</select></div>' +
+    '<div class="form-group"><label>Temperature</label><input id="sa-temp" type="number" step="0.1" min="0" max="2" value="' + (agent.temperature ?? 0.3) + '" /></div>' +
+    '<div class="form-group"><label>Max Tokens</label><input id="sa-tokens" type="number" value="' + (agent.max_tokens ?? 32768) + '" /></div>' +
+    '</div>' +
+    '<div class="form-group"><label>Services MCP</label><div class="mcp-check-tags" id="sa-mcp-tags">' + mcpTags + '</div></div>' +
+    '<div class="form-group"><label>Type de livrable</label><div style="display:flex;flex-wrap:wrap;gap:1.5rem;margin-top:0.25rem">' + deliverHtml + '</div></div>';
 }
 
-function showSaSubTab(tab) {
-  document.getElementById('sa-subtab-info').style.display = tab === 'info' ? '' : 'none';
-  document.getElementById('sa-subtab-prompt').style.display = tab === 'prompt' ? '' : 'none';
-  document.getElementById('sa-subtab-assign').style.display = tab === 'assign' ? '' : 'none';
-  document.getElementById('sa-tab-info').classList.toggle('active', tab === 'info');
-  document.getElementById('sa-tab-prompt').classList.toggle('active', tab === 'prompt');
-  document.getElementById('sa-tab-assign').classList.toggle('active', tab === 'assign');
+function _saTypeChanged(newType) {
+  if (!saAgentData) return;
+  saAgentData.type = newType;
+  _renderSaLeft();
 }
+
+function _composeAgentPrompt(agent) {
+  // If agent has identity/roles/missions/skills, compose from those
+  const hasExtended = agent.identity_content || (agent.roles && agent.roles.length) || (agent.missions && agent.missions.length) || (agent.skills && agent.skills.length);
+  if (!hasExtended) return agent.prompt_content || '';
+  let parts = [];
+  if (agent.identity_content) parts.push(agent.identity_content);
+  const roles = (agent.roles || []).slice().sort((a, b) => a.name.localeCompare(b.name));
+  for (const r of roles) { parts.push('**' + r.name.replace(/_/g, ' ') + '**\n' + r.content); }
+  const missions = (agent.missions || []).slice().sort((a, b) => a.name.localeCompare(b.name));
+  for (const m of missions) { parts.push('**' + m.name.replace(/_/g, ' ') + '**\n' + m.content); }
+  const skills = (agent.skills || []).slice().sort((a, b) => a.name.localeCompare(b.name));
+  for (const s of skills) { parts.push('**' + s.name.replace(/_/g, ' ') + '**\n' + s.content); }
+  return parts.join('\n\n');
+}
+
+function _renderSaPromptReadonly(agent) {
+  const content = _composeAgentPrompt(agent);
+  return '<div class="sa-editor-wrap"><div class="sa-right-header"><h3>Prompt (lecture seule)</h3></div>' +
+    '<textarea id="sa-prompt-readonly" readonly style="background:var(--bg-secondary);cursor:default">' + escHtml(content) + '</textarea></div>';
+}
+
+function _renderSaMdEditor(title, content, saveFn, hasGenerate) {
+  let headerRight = '<button class="btn btn-primary btn-sm" onclick="' + saveFn + '()">Sauvegarder</button>';
+  if (hasGenerate) {
+    headerRight = '<div style="display:flex;gap:0.4rem;align-items:center"><button class="btn btn-outline btn-sm" onclick="generateSharedAgentPrompt(\'' + escHtml(saSelectedId) + '\')" title="Aide a la redaction">\u2728</button>' + headerRight + '</div>';
+  }
+  return '<div class="sa-editor-wrap"><div class="sa-right-header"><h3>' + escHtml(title) + '</h3>' + headerRight + '</div>' +
+    '<textarea id="sa-md-editor">' + escHtml(content) + '</textarea></div>';
+}
+
+function _renderSaAssign(agent, id) {
+  return '<div class="sa-editor-wrap"><div class="sa-right-header"><h3>Assignations</h3><button class="btn btn-primary btn-sm" onclick="saveSharedAgentAssign(\'' + escHtml(id) + '\')">Sauvegarder</button></div>' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem"><label style="margin:0">Exemples de routing correct</label>' +
+    '<button class="btn btn-outline btn-sm" id="sa-btn-gen-assign" onclick="generateSharedAgentAssign(\'' + escHtml(id) + '\')" title="Generer">\u2728</button></div>' +
+    '<textarea id="sa-assign-edit">' + escHtml(agent.assign_content || '') + '</textarea>' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:0.5rem;margin-bottom:0.5rem"><label style="margin:0">Exemples de routing incorrect</label>' +
+    '<button class="btn btn-outline btn-sm" id="sa-btn-gen-unassign" onclick="generateSharedAgentUnassign(\'' + escHtml(id) + '\')" title="Generer">\u2728</button></div>' +
+    '<textarea id="sa-unassign-edit">' + escHtml(agent.unassign_content || '') + '</textarea></div>';
+}
+
+function _renderSaDynamicEditor(type, name, content, filename) {
+  const typeLabels = { role: 'Role', mission: 'Mission', skill: 'Competence' };
+  return '<div class="sa-editor-wrap"><div class="sa-right-header"><h3>' + (typeLabels[type] || type) + ' — ' + escHtml(name) + '</h3><button class="btn btn-primary btn-sm" onclick="_saSaveDynamic(\'' + escHtml(filename) + '\')">Sauvegarder</button></div>' +
+    '<textarea id="sa-dyn-editor">' + escHtml(content) + '</textarea></div>';
+}
+
+// ── Save functions ──
+
+async function _saSaveIdentity() {
+  const content = document.getElementById('sa-md-editor').value;
+  try {
+    await api('/api/shared-agents/' + encodeURIComponent(saSelectedId), { method: 'PUT', body: { id: saSelectedId, identity_content: content } });
+    saAgentData.identity_content = content;
+    toast('Identite sauvegardee', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function _saSavePrompt() {
+  const content = document.getElementById('sa-md-editor').value;
+  const promptJsonErrs = validateJsonBlocks(content);
+  if (promptJsonErrs.length) { toast('Prompt: JSON invalide — ' + promptJsonErrs.join(', '), 'error'); return; }
+  try {
+    await api('/api/shared-agents/' + encodeURIComponent(saSelectedId), { method: 'PUT', body: { id: saSelectedId, prompt_content: content } });
+    saAgentData.prompt_content = content;
+    toast('Prompt sauvegarde', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function _saSaveDynamic(filename) {
+  const content = document.getElementById('sa-dyn-editor').value;
+  try {
+    await api('/api/shared-agents/' + encodeURIComponent(saSelectedId) + '/files/' + encodeURIComponent(filename), { method: 'PUT', body: { content } });
+    toast('Fichier sauvegarde', 'success');
+    // Refresh agent data
+    saAgentData = await api('/api/shared-agents/' + encodeURIComponent(saSelectedId));
+    _renderSaLeft();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function _saAddDynamic(type) {
+  const prefixes = { role: 'role_', mission: 'mission_', skill: 'skill_' };
+  const labels = { role: 'Role', mission: 'Mission', skill: 'Competence' };
+  showModal('<div class="modal-header"><h3>Nouveau ' + labels[type] + '</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
+    '<div class="form-group"><label>Nom (lettres, chiffres, _)</label><input id="sa-dyn-new-name" placeholder="nom" oninput="this.value=this.value.replace(/[^a-zA-Z0-9_]/g,\'\')" /></div>' +
+    '<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="sa-dyn-create-btn">Creer</button></div>');
+  document.getElementById('sa-dyn-create-btn').onclick = async () => {
+    const name = (document.getElementById('sa-dyn-new-name').value || '').trim();
+    if (!name) { toast('Nom requis', 'error'); return; }
+    const filename = prefixes[type] + name;
+    try {
+      await api('/api/shared-agents/' + encodeURIComponent(saSelectedId) + '/files/' + encodeURIComponent(filename), { method: 'PUT', body: { content: '# ' + name + '\n\n' } });
+      closeModal();
+      saAgentData = await api('/api/shared-agents/' + encodeURIComponent(saSelectedId));
+      saActiveSection = type + ':' + name;
+      _renderSaLeft();
+      _renderSaRight();
+      toast(labels[type] + ' cree', 'success');
+    } catch (e) { toast(e.message, 'error'); }
+  };
+}
+
+async function _saDeleteDynamic(type, name) {
+  const prefixes = { role: 'role_', mission: 'mission_', skill: 'skill_' };
+  const labels = { role: 'Role', mission: 'Mission', skill: 'Competence' };
+  if (!(await confirmModal('Supprimer ' + labels[type] + ' "' + name + '" ?'))) return;
+  const filename = prefixes[type] + name;
+  try {
+    await api('/api/shared-agents/' + encodeURIComponent(saSelectedId) + '/files/' + encodeURIComponent(filename), { method: 'DELETE' });
+    saAgentData = await api('/api/shared-agents/' + encodeURIComponent(saSelectedId));
+    if (saActiveSection === type + ':' + name) saActiveSection = 'info';
+    _renderSaLeft();
+    _renderSaRight();
+    toast(labels[type] + ' supprime', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ── Existing functions (adapted) ──
 
 async function saveSharedAgentAssign(id) {
   const assignContent = document.getElementById('sa-assign-edit').value;
   const unassignContent = document.getElementById('sa-unassign-edit').value;
   try {
-    await api(`/api/shared-agents/${encodeURIComponent(id)}`, { method: 'PUT', body: {
-      id,
-      name: document.getElementById('sa-name').value.trim(),
-      assign_content: assignContent,
-      unassign_content: unassignContent,
+    await api('/api/shared-agents/' + encodeURIComponent(id), { method: 'PUT', body: {
+      id, assign_content: assignContent, unassign_content: unassignContent
     }});
+    saAgentData.assign_content = assignContent;
+    saAgentData.unassign_content = unassignContent;
     toast('Assignations sauvegardees', 'success');
   } catch (e) { toast(e.message, 'error'); }
 }
 
 async function generateSharedAgentAssign(id) {
-  const name = document.getElementById('sa-name')?.value || id;
-  const prompt = document.getElementById('sa-prompt-edit')?.value || '';
+  const name = saAgentData?.name || id;
+  const prompt = saAgentData?.prompt_content || '';
   const editor = document.getElementById('sa-assign-edit');
   const btn = document.getElementById('sa-btn-gen-assign');
   const savedContent = editor.value;
@@ -3940,21 +4884,16 @@ async function generateSharedAgentAssign(id) {
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Generation...';
   editor.disabled = true; editor.value = 'Generation en cours...';
   try {
-    const result = await api('/api/agents/generate-assign', { method: 'POST', body: {
-      agent_id: id, agent_name: name, agent_prompt: prompt
-    }});
-    editor.disabled = false;
-    editor.value = result.content || '';
+    const result = await api('/api/agents/generate-assign', { method: 'POST', body: { agent_id: id, agent_name: name, agent_prompt: prompt }});
+    editor.disabled = false; editor.value = result.content || '';
     toast('Exemples d\'assignation generes', 'success');
-  } catch (e) {
-    editor.disabled = false; editor.value = savedContent;
-    toast(e.message, 'error');
-  } finally { btn.disabled = false; btn.innerHTML = savedBtn; }
+  } catch (e) { editor.disabled = false; editor.value = savedContent; toast(e.message, 'error'); }
+  finally { btn.disabled = false; btn.innerHTML = savedBtn; }
 }
 
 async function generateSharedAgentUnassign(id) {
-  const name = document.getElementById('sa-name')?.value || id;
-  const prompt = document.getElementById('sa-prompt-edit')?.value || '';
+  const name = saAgentData?.name || id;
+  const prompt = saAgentData?.prompt_content || '';
   const editor = document.getElementById('sa-unassign-edit');
   const btn = document.getElementById('sa-btn-gen-unassign');
   const savedContent = editor.value;
@@ -3962,35 +4901,17 @@ async function generateSharedAgentUnassign(id) {
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Generation...';
   editor.disabled = true; editor.value = 'Generation en cours...';
   try {
-    const result = await api('/api/agents/generate-unassign', { method: 'POST', body: {
-      agent_id: id, agent_name: name, agent_prompt: prompt
-    }});
-    editor.disabled = false;
-    editor.value = result.content || '';
+    const result = await api('/api/agents/generate-unassign', { method: 'POST', body: { agent_id: id, agent_name: name, agent_prompt: prompt }});
+    editor.disabled = false; editor.value = result.content || '';
     toast('Exemples de non-assignation generes', 'success');
-  } catch (e) {
-    editor.disabled = false; editor.value = savedContent;
-    toast(e.message, 'error');
-  } finally { btn.disabled = false; btn.innerHTML = savedBtn; }
+  } catch (e) { editor.disabled = false; editor.value = savedContent; toast(e.message, 'error'); }
+  finally { btn.disabled = false; btn.innerHTML = savedBtn; }
 }
 
-// switchSaPromptTab removed — prompt tab is now editor-only
-
 function showCreateSharedAgentModal() {
-  showModal(`
-    <div class="modal-header">
-      <h3>Nouvel agent</h3>
-      <button class="btn-icon" onclick="closeModal()">&times;</button>
-    </div>
-    <div class="form-group">
-      <label>ID unique (lettres, chiffres, _)</label>
-      <input id="sa-new-id" placeholder="mon_agent" pattern="[a-zA-Z0-9_]+" oninput="this.value=this.value.replace(/[^a-zA-Z0-9_]/g,'')" />
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
-      <button class="btn btn-primary" onclick="createSharedAgent()">Creer</button>
-    </div>
-  `);
+  showModal('<div class="modal-header"><h3>Nouvel agent</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
+    '<div class="form-group"><label>ID unique (lettres, chiffres, _)</label><input id="sa-new-id" placeholder="mon_agent" pattern="[a-zA-Z0-9_]+" oninput="this.value=this.value.replace(/[^a-zA-Z0-9_]/g,\'\')" /></div>' +
+    '<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="createSharedAgent()">Creer</button></div>');
 }
 
 async function createSharedAgent() {
@@ -4002,6 +4923,7 @@ async function createSharedAgent() {
     toast('Agent cree', 'success');
     closeModal();
     saSelectedId = id;
+    saActiveSection = 'info';
     loadSharedAgents();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -4009,39 +4931,42 @@ async function createSharedAgent() {
 async function saveSharedAgent(id) {
   const name = (document.getElementById('sa-name')?.value || '').trim();
   const description = document.getElementById('sa-desc')?.value || '';
+  const type = document.getElementById('sa-type')?.value || 'single';
   const llm = document.getElementById('sa-llm')?.value || '';
   const temperature = parseFloat(document.getElementById('sa-temp')?.value) || 0.3;
   const max_tokens = parseInt(document.getElementById('sa-tokens')?.value) || 32768;
-  const prompt_content = document.getElementById('sa-prompt-edit')?.value || '';
   const mcp_access = [...document.querySelectorAll('#sa-mcp-tags input[type=checkbox]:checked')].map(cb => cb.value);
-  const delivers_docs = document.getElementById('sa-delivers-docs')?.checked || false;
-  const delivers_code = document.getElementById('sa-delivers-code')?.checked || false;
-  const delivers_design = document.getElementById('sa-delivers-design')?.checked || false;
-  const delivers_automation = document.getElementById('sa-delivers-automation')?.checked || false;
-  const delivers_tasklist = document.getElementById('sa-delivers-tasklist')?.checked || false;
-  const delivers_specs = document.getElementById('sa-delivers-specs')?.checked || false;
-  const delivers_contract = document.getElementById('sa-delivers-contract')?.checked || false;
+  const delivers_docs = document.getElementById('sa-delivers_docs')?.checked || false;
+  const delivers_code = document.getElementById('sa-delivers_code')?.checked || false;
+  const delivers_design = document.getElementById('sa-delivers_design')?.checked || false;
+  const delivers_automation = document.getElementById('sa-delivers_automation')?.checked || false;
+  const delivers_tasklist = document.getElementById('sa-delivers_tasklist')?.checked || false;
+  const delivers_specs = document.getElementById('sa-delivers_specs')?.checked || false;
+  const delivers_contract = document.getElementById('sa-delivers_contract')?.checked || false;
   if (!name) { toast('Nom requis', 'error'); return; }
   try {
-    await api(`/api/shared-agents/${encodeURIComponent(id)}`, { method: 'PUT', body: {
-      id, name, description, llm, temperature, max_tokens, mcp_access, prompt_content, delivers_docs, delivers_code, delivers_design, delivers_automation, delivers_tasklist, delivers_specs, delivers_contract
+    await api('/api/shared-agents/' + encodeURIComponent(id), { method: 'PUT', body: {
+      id, name, description, type, llm, temperature, max_tokens, mcp_access, delivers_docs, delivers_code, delivers_design, delivers_automation, delivers_tasklist, delivers_specs, delivers_contract
     }});
     toast('Agent sauvegarde', 'success');
-    // Update dropdown + filter input without reloading detail (preserves active tab)
     const ag = sharedAgentsData.find(a => a.id === id);
     if (ag) ag.name = name;
-    document.getElementById('sa-agent-filter').value = name || id;
-    _renderSaDropdown(sharedAgentsData);
+    saAgentData.name = name;
+    saAgentData.description = description;
+    saAgentData.type = type;
+    _renderSaLeft();
   } catch (e) { toast(e.message, 'error'); }
 }
 
 async function deleteSharedAgent(id) {
   if (!id) return;
-  if (!(await confirmModal(`Supprimer l'agent "${id}" ?`))) return;
+  if (!(await confirmModal('Supprimer l\'agent "' + id + '" ?'))) return;
   try {
-    await api(`/api/shared-agents/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await api('/api/shared-agents/' + encodeURIComponent(id), { method: 'DELETE' });
     toast('Agent supprime', 'success');
     saSelectedId = '';
+    saAgentData = null;
+    saActiveSection = 'info';
     loadSharedAgents();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -4059,12 +4984,8 @@ function importSharedAgent() {
       const res = await fetch('/api/shared-agents/import', { method: 'POST', body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Erreur import');
-      if (data.conflict) {
-        // ID already exists — ask for a new name
-        _showImportRenameModal(file, data.existing_id);
-        return;
-      }
-      toast(`Agent "${data.id}" importe`, 'success');
+      if (data.conflict) { _showImportRenameModal(file, data.existing_id); return; }
+      toast('Agent "' + data.id + '" importe', 'success');
       saSelectedId = data.id;
       loadSharedAgents();
     } catch (e) { toast(e.message, 'error'); }
@@ -4073,21 +4994,9 @@ function importSharedAgent() {
 }
 
 function _showImportRenameModal(file, existingId) {
-  showModal(`
-    <div class="modal-header">
-      <h3>Agent "${existingId}" existe deja</h3>
-      <button class="btn-icon" onclick="closeModal()">&times;</button>
-    </div>
-    <div class="form-group">
-      <label>Choisir un nouvel ID</label>
-      <input id="sa-import-rename" placeholder="nouvel_id" oninput="this.value=this.value.replace(/[^a-zA-Z0-9_]/g,'')" />
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
-      <button class="btn btn-primary" id="sa-import-rename-btn">Importer</button>
-    </div>
-  `);
-  // Store file ref and wire up button
+  showModal('<div class="modal-header"><h3>Agent "' + existingId + '" existe deja</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
+    '<div class="form-group"><label>Choisir un nouvel ID</label><input id="sa-import-rename" placeholder="nouvel_id" oninput="this.value=this.value.replace(/[^a-zA-Z0-9_]/g,\'\')" /></div>' +
+    '<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Annuler</button><button class="btn btn-primary" id="sa-import-rename-btn">Importer</button></div>');
   document.getElementById('sa-import-rename-btn').onclick = async () => {
     const newId = (document.getElementById('sa-import-rename').value || '').trim();
     if (!newId) { toast('ID requis', 'error'); return; }
@@ -4095,11 +5004,11 @@ function _showImportRenameModal(file, existingId) {
     const form = new FormData();
     form.append('file', file);
     try {
-      const res = await fetch(`/api/shared-agents/import?agent_id=${encodeURIComponent(newId)}`, { method: 'POST', body: form });
+      const res = await fetch('/api/shared-agents/import?agent_id=' + encodeURIComponent(newId), { method: 'POST', body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Erreur import');
-      if (data.conflict) { toast(`L'agent "${newId}" existe aussi`, 'error'); return; }
-      toast(`Agent "${data.id}" importe`, 'success');
+      if (data.conflict) { toast('L\'agent "' + newId + '" existe aussi', 'error'); return; }
+      toast('Agent "' + data.id + '" importe', 'success');
       closeModal();
       saSelectedId = data.id;
       loadSharedAgents();
@@ -4108,34 +5017,19 @@ function _showImportRenameModal(file, existingId) {
 }
 
 async function generateSharedAgentPrompt(id) {
-  const name = document.getElementById('sa-name')?.value || id;
-  const desc = document.getElementById('sa-desc')?.value || '';
-  const info = `Identifiant: ${id}\nNom: ${name}\nDescription: ${desc}`;
-  const editor = document.getElementById('sa-prompt-edit');
-  const btn = document.querySelector('[onclick*="generateSharedAgentPrompt"]');
+  const name = saAgentData?.name || id;
+  const desc = saAgentData?.description || '';
+  const info = 'Identifiant: ' + id + '\nNom: ' + name + '\nDescription: ' + desc;
+  const editor = document.getElementById('sa-md-editor');
   const savedContent = editor.value;
-  const savedBtn = btn ? btn.innerHTML : '';
   editor.value = 'Generation en cours...';
   editor.disabled = true;
-  if (btn) {
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span> Generation...';
-  }
   try {
-    const result = await api('/api/agents/generate-prompt', { method: 'POST', body: {
-      agent_id: id, agent_name: name, agent_info: info
-    }});
+    const result = await api('/api/agents/generate-prompt', { method: 'POST', body: { agent_id: id, agent_name: name, agent_info: info }});
     editor.disabled = false;
     editor.value = result.prompt || '';
     toast('Prompt genere', 'success');
-  } catch (e) {
-    editor.disabled = false;
-    editor.value = savedContent;
-    toast(e.message, 'error');
-  } finally {
-    editor.disabled = false;
-    if (btn) { btn.disabled = false; btn.innerHTML = savedBtn; }
-  }
+  } catch (e) { editor.disabled = false; editor.value = savedContent; toast(e.message, 'error'); }
 }
 
 // ── Template Git (Enregistrement) — delegates to factorized functions ──
@@ -4710,9 +5604,9 @@ function renderTplTeams() {
             <h4>${isOrch ? '<span class="orch-badge" title="Orchestrateur">&#9733;</span> ' : ''}${escHtml(a.name)}</h4>
             <code style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(aid)}</code>
           </div>
-          <button class="btn-icon danger" onclick="event.stopPropagation();deleteTplAgent('${escHtml(dir)}','${escHtml(aid)}')" title="Supprimer">
+          ${isOrch ? '' : `<button class="btn-icon danger" onclick="event.stopPropagation();deleteTplAgent('${escHtml(dir)}','${escHtml(aid)}')" title="Supprimer">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-          </button>
+          </button>`}
         </div>
         <div class="agent-meta" onclick="editTplAgent('${escHtml(dir)}','${escHtml(aid)}')">
           <span class="tag tag-blue">temp: ${a.temperature}</span>
@@ -4744,6 +5638,7 @@ function renderTplTeams() {
           <button class="btn btn-primary btn-sm" onclick="showAddTplAgentModal('${escHtml(dir)}')">+ Agent</button>
           <button class="btn btn-outline btn-sm" id="btn-wf-tpl-${escHtml(dir)}" onclick="showTplWorkflow('${escHtml(dir)}')">Workflow</button>
           <button class="btn btn-outline btn-sm" onclick="showTplRawRegistry('${escHtml(dir)}')">Raw</button>
+          <button class="btn btn-outline btn-sm" onclick="copyTplRegistry('${escHtml(dir)}')">Copier</button>
           <button class="btn btn-outline btn-sm" style="color:var(--error)" onclick="deleteTplTeam(${i})">Suppr</button>
         </div>
       </div>
@@ -4873,7 +5768,7 @@ async function editTplAgent(dir, agentId) {
     a.delivers_contract ? '<span class="tag tag-purple">Contrat</span>' : '',
   ].filter(Boolean).join('') || '<span style="color:var(--text-secondary);font-size:0.85rem">Aucun</span>';
 
-  const promptRaw = a.prompt_content || '';
+  const promptRaw = _composeAgentPrompt(a);
   const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
   const hasPipeline = a.type === 'pipeline' || (a.pipeline_steps && a.pipeline_steps.length > 0);
   const isOrchestrator = a.type === 'orchestrator';
@@ -5029,6 +5924,17 @@ async function saveTplRawRegistry(dir) {
     closeModal();
     loadTplTeamsList();
   } catch (e) { toast(e.message, 'error'); }
+}
+
+async function copyTplRegistry(dir) {
+  try {
+    const data = await api(`/api/templates/registry/${encodeURIComponent(dir)}`);
+    const json = JSON.stringify(data, null, 2);
+    await copyToClipboard(json);
+    toast('Registry copie dans le presse-papier', 'success');
+  } catch (e) {
+    toast('Erreur: ' + e.message, 'error');
+  }
 }
 
 function showTplWorkflow(dir) {
@@ -5209,23 +6115,44 @@ async function deleteTplTeam(idx) {
 
 let _wf = null; // current workflow editor state
 
-async function openWorkflowEditor(dir, apiBase, label) {
+async function openWorkflowEditor(dir, apiBase, label, registryDir) {
   try {
     const raw = await api(`${apiBase}/${encodeURIComponent(dir)}`);
-    const designBase = apiBase.replace('/workflow', '/workflow-design');
+    const designBase = apiBase.includes('project-workflow')
+      ? apiBase.replace('/project-workflow', '/project-workflow-design')
+      : apiBase.replace('/workflow', '/workflow-design');
     let design = {};
     try { design = await api(`${designBase}/${encodeURIComponent(dir)}`); } catch {}
     // Load shared agent capabilities (delivers_docs/code/design)
     let agentCaps = {};
+    let agentPipelines = {};
+    let agentProfiles = {};
     try {
       const sa = await api('/api/shared-agents');
       (sa.agents || []).forEach(a => {
         agentCaps[a.id] = { documentation: !!a.delivers_docs, code: !!a.delivers_code, design: !!a.delivers_design, automation: !!a.delivers_automation, tasklist: !!a.delivers_tasklist, specs: !!a.delivers_specs, contract: !!a.delivers_contract };
+        agentPipelines[a.id] = a.pipeline_steps || [];
+        agentProfiles[a.id] = { roles: a.role_names || [], missions: a.mission_names || [], skills: a.skill_names || [] };
       });
+    } catch {}
+    // Merge pipeline_steps from the registry in the SAME directory as the workflow
+    // Config workflow -> /api/agents/registry/{dir}
+    // Templates workflow -> /api/templates/registry/{dir}
+    // Project workflow -> use registryDir override (team directory)
+    const regDir = registryDir || dir;
+    const registryUrl = apiBase.includes('/templates/')
+      ? `/api/templates/registry/${encodeURIComponent(regDir)}`
+      : `/api/agents/registry/${encodeURIComponent(regDir)}`;
+    try {
+      const reg = await api(registryUrl);
+      for (const [aid, acfg] of Object.entries(reg.agents || {})) {
+        if (acfg.pipeline_steps && acfg.pipeline_steps.length) agentPipelines[aid] = acfg.pipeline_steps;
+      }
     } catch {}
     const data = (raw && Object.keys(raw).length) ? raw : { phases: {}, transitions: [], parallel_groups: { description: '', order: ['A','B','C'] }, rules: {} };
     _wf = {
       dir, apiBase, designBase, label,
+      registryDir: regDir,
       data: JSON.parse(JSON.stringify(data)),
       selected: null,
       positions: (design && design.positions) ? design.positions : {},
@@ -5234,6 +6161,9 @@ async function openWorkflowEditor(dir, apiBase, label) {
       linking: null,
       linkMouse: null,
       agentCaps,
+      agentPipelines,
+      agentProfiles,
+      collapsed: new Set(),
     };
     _wfCalcPositions();
     _wfOpenEditorUI();
@@ -5293,25 +6223,57 @@ function wfRender() {
   // Render phase blocks
   const phases = Object.entries(_wf.data.phases || {});
   phases.sort((a, b) => (a[1].order || 0) - (b[1].order || 0));
+  // Auto-collapse: all phases except the last one start collapsed (unless user toggled)
+  if (!_wf._collapseInit) {
+    _wf._collapseInit = true;
+    if (phases.length > 1) {
+      for (let i = 0; i < phases.length - 1; i++) _wf.collapsed.add(phases[i][0]);
+    }
+  }
   let html = '';
   for (const [id, p] of phases) {
     const pos = _wf.positions[id] || { x: 100, y: 100 };
     const sel = _wf.selected === id ? ' wf-selected' : '';
+    const isCollapsed = _wf.collapsed.has(id);
+    const collCls = isCollapsed ? ' wf-collapsed' : '';
     const agentIds = Object.keys(p.agents || {});
     const delIds = Object.keys(p.deliverables || {});
+    const chevron = isCollapsed ? '&#9654;' : '&#9660;';
     html += `
-      <div class="wf-phase${sel}" id="wf-p-${id}" data-id="${id}"
+      <div class="wf-phase${sel}${collCls}" id="wf-p-${id}" data-id="${id}"
            style="left:${pos.x}px;top:${pos.y}px"
            onmousedown="wfPhaseMouseDown(event,'${id}')"
            onclick="wfSelectPhase(event,'${id}')"
            oncontextmenu="event.preventDefault()">
         <div class="wf-phase-head">
+          <span class="wf-phase-toggle" onclick="wfToggleCollapse(event,'${id}')">${chevron}</span>
           <span>${escHtml(p.name || id)}</span>
+          <span class="wf-phase-head-summary">${isCollapsed ? agentIds.length + 'A / ' + delIds.length + 'L' : ''}</span>
           <span class="wf-phase-order">${p.order || '?'}</span>
         </div>
-        <div class="wf-phase-body">
+        <div class="wf-phase-body"${isCollapsed ? ' style="display:none"' : ''}>
           <div class="wf-mini-label">Agents (${agentIds.length})</div>
-          <div class="wf-mini-list">${agentIds.map(a => `<span class="wf-mini-chip${(p.agents[a]||{}).required?' required':''}">${escHtml(a)}</span>`).join('')}</div>
+          ${(() => {
+            const groups = {};
+            for (const a of agentIds) {
+              const g = (p.agents[a] || {}).parallel_group || 'A';
+              (groups[g] = groups[g] || []).push(a);
+            }
+            const order = (_wf.data.parallel_groups || {}).order || ['A','B','C'];
+            const sorted = order.filter(g => groups[g]);
+            if (sorted.length <= 1) {
+              return `<div class="wf-mini-list">${agentIds.map(a => `<span class="wf-mini-chip${(p.agents[a]||{}).required?' required':''}">${escHtml(a)}</span>`).join('')}</div>`;
+            }
+            return sorted.map((g, i) => `
+              <div class="wf-group wf-group-${g.toLowerCase()}">
+                <span class="wf-group-badge">${g}</span>
+                <div class="wf-mini-list">
+                  ${groups[g].map(a => `<span class="wf-mini-chip${(p.agents[a]||{}).required?' required':''}">${escHtml(a)}</span>`).join('')}
+                </div>
+              </div>
+              ${i < sorted.length - 1 ? '<div class="wf-group-arrow">↓</div>' : ''}
+            `).join('');
+          })()}
           <div class="wf-mini-label">Livrables (${delIds.length})</div>
           <div class="wf-mini-list">${delIds.map(d => {
             const dd = p.deliverables[d]||{};
@@ -5331,6 +6293,13 @@ function wfRender() {
   wfRenderArrows();
   // Render property grid
   wfRenderProps();
+}
+
+function wfToggleCollapse(e, phaseId) {
+  e.stopPropagation();
+  if (_wf.collapsed.has(phaseId)) _wf.collapsed.delete(phaseId);
+  else _wf.collapsed.add(phaseId);
+  wfRender();
 }
 
 function _wfBezier(sx, sy, ex, ey, fromSide, toSide) {
@@ -5422,20 +6391,28 @@ function _wfRenderWorkspaceProps(el) {
     <h4>Proprietes du Workflow</h4>
 
     <div class="wf-props-section">
-      <div class="wf-props-section-title">
+      <div class="wf-props-section-title" onclick="_wfToggleSection(this)">
+        <span class="wf-section-arrow">${_wf._openSection === 'wk-pg' ? '\u25bc' : '\u25b6'}</span>
         Groupes paralleles
-        <button class="btn-icon" style="font-size:0.75rem" onclick="wfAddPG()">+</button>
+        <button class="btn-icon" style="font-size:0.75rem" onclick="event.stopPropagation();wfAddPG()">+</button>
       </div>
-      <div class="form-group">
-        <label>Description</label>
-        <input value="${escHtml(pg.description || '')}" onchange="wfSetPGDesc(this.value)" />
+      <div class="wf-section-body" ${_wf._openSection === 'wk-pg' ? '' : 'style="display:none"'} data-section="wk-pg">
+        <div class="form-group">
+          <label>Description</label>
+          <input value="${escHtml(pg.description || '')}" onchange="wfSetPGDesc(this.value)" />
+        </div>
+        ${pgHtml || '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucun groupe</div>'}
       </div>
-      ${pgHtml || '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucun groupe</div>'}
     </div>
 
     <div class="wf-props-section">
-      <div class="wf-props-section-title">Regles</div>
-      ${rulesHtml}
+      <div class="wf-props-section-title" onclick="_wfToggleSection(this)">
+        <span class="wf-section-arrow">${_wf._openSection === 'wk-rules' ? '\u25bc' : '\u25b6'}</span>
+        Regles
+      </div>
+      <div class="wf-section-body" ${_wf._openSection === 'wk-rules' ? '' : 'style="display:none"'} data-section="wk-rules">
+        ${rulesHtml}
+      </div>
     </div>
   `;
 }
@@ -5538,30 +6515,69 @@ function _wfRenderPhaseProps(el, phaseId) {
     { value: 'specs', label: 'Specifications', cap: 'specs' },
     { value: 'contract', label: 'Contrat', cap: 'contract' },
   ];
+  const allDelKeys = Object.keys(deliverables);
   let delsHtml = Object.entries(deliverables).map(([id, d]) => {
     const agOpts = agentIds.map(a => `<option value="${escHtml(a)}" ${a===d.agent?'selected':''}>${a}</option>`).join('');
+    // Pipeline steps for selected agent
+    const steps = (_wf.agentPipelines || {})[d.agent] || [];
+    const stepOpts = '<option value="">-- Step --</option>' + steps.map(s =>
+      `<option value="${escHtml(s.output_key || '')}" ${(s.output_key||'')===(d.pipeline_step||'')?'selected':''}>${escHtml(s.name || s.output_key || '')}</option>`
+    ).join('');
     // Filter types by agent capabilities
     const caps = (_wf.agentCaps || {})[d.agent];
     const hasCaps = caps && (caps.documentation || caps.code || caps.design || caps.automation || caps.tasklist || caps.specs || caps.contract);
     const availTypes = hasCaps ? WF_ALL_DELIV_TYPES.filter(t => caps[t.cap]) : WF_ALL_DELIV_TYPES;
     const typeOpts = '<option value="">-- Type --</option>' + availTypes.map(t => `<option value="${t.value}" ${t.value===(d.type||'')?'selected':''}>${t.label}</option>`).join('');
+    // Computed ID display
+    const computedId = (d.agent && d.pipeline_step) ? `${d.agent}:${d.pipeline_step}` : id;
+    // Depends on — checkboxes of other deliverables in this phase
+    const depsSet = new Set(d.depends_on || []);
+    const otherDels = allDelKeys.filter(k => k !== id);
+    const depsChecks = otherDels.length ? otherDels.map(k =>
+      `<label class="wf-inline-check"><input type="checkbox" ${depsSet.has(k)?'checked':''} onchange="_wfToggleDelDep('${phaseId}','${escHtml(id)}','${escHtml(k)}',this.checked)" />${escHtml(k)}</label>`
+    ).join('') : '<span style="font-size:0.65rem;color:var(--text-secondary)">--</span>';
+    // Agent profile: roles, missions, skills
+    const profile = (_wf.agentProfiles || {})[d.agent] || { roles: [], missions: [], skills: [] };
+    const selRoles = new Set(d.roles || []);
+    const selMissions = new Set(d.missions || []);
+    const selSkills = new Set(d.skills || []);
+    const rolesChecks = profile.roles.length ? profile.roles.map(r =>
+      `<label class="wf-inline-check"><input type="checkbox" ${selRoles.has(r)?'checked':''} onchange="_wfToggleDelProfile('${phaseId}','${escHtml(id)}','roles','${escHtml(r)}',this.checked)" />${escHtml(r)}</label>`
+    ).join('') : '<span style="font-size:0.65rem;color:var(--text-secondary)">--</span>';
+    const missionsChecks = profile.missions.length ? profile.missions.map(m =>
+      `<label class="wf-inline-check"><input type="checkbox" ${selMissions.has(m)?'checked':''} onchange="_wfToggleDelProfile('${phaseId}','${escHtml(id)}','missions','${escHtml(m)}',this.checked)" />${escHtml(m)}</label>`
+    ).join('') : '<span style="font-size:0.65rem;color:var(--text-secondary)">--</span>';
+    const skillsChecks = profile.skills.length ? profile.skills.map(s =>
+      `<label class="wf-inline-check"><input type="checkbox" ${selSkills.has(s)?'checked':''} onchange="_wfToggleDelProfile('${phaseId}','${escHtml(id)}','skills','${escHtml(s)}',this.checked)" />${escHtml(s)}</label>`
+    ).join('') : '<span style="font-size:0.65rem;color:var(--text-secondary)">--</span>';
     const colKey = `${phaseId}:del:${id}`;
     const collapsed = _wf._collapsed && _wf._collapsed[colKey];
     return `<div class="wf-inline-block${collapsed ? ' collapsed' : ''}">
       <div class="wf-inline-head" onclick="wfToggleCollapseKey('${colKey}',this)">
         <span class="wf-collapse-arrow">${collapsed ? '\u25b6' : '\u25bc'}</span>
-        <span class="wf-inline-id">${escHtml(id)}</span>
+        <span class="wf-inline-id">${escHtml(computedId)}</span>
+        <button class="btn-icon" title="SkillMatcher" onclick="event.stopPropagation();wfSkillMatch('${phaseId}','${escHtml(id)}')" style="font-size:0.85rem">&#10024;</button>
         <button class="btn-icon danger" onclick="event.stopPropagation();wfRemoveDeliverable('${phaseId}','${escHtml(id)}')">x</button>
       </div>
       <div class="wf-inline-fields"${collapsed ? ' style="display:none"' : ''}>
         <input placeholder="Description" value="${escHtml(d.description || '')}" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','description',this.value)" />
         <div style="display:flex;gap:0.3rem">
           <select style="flex:1" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','agent',this.value)">${agOpts}</select>
+        </div>
+        <div style="display:flex;gap:0.3rem">
           <select style="width:110px" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','type',this.value)">${typeOpts}</select>
           <select style="width:80px" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','required',this.value==='true')">
             <option value="true" ${d.required?'selected':''}>Requis</option><option value="false" ${!d.required?'selected':''}>Opt</option>
           </select>
         </div>
+        <div class="wf-inline-label">Roles</div>
+        <div class="wf-inline-checks">${rolesChecks}</div>
+        <div class="wf-inline-label">Missions</div>
+        <div class="wf-inline-checks">${missionsChecks}</div>
+        <div class="wf-inline-label">Competences</div>
+        <div class="wf-inline-checks">${skillsChecks}</div>
+        <div class="wf-inline-label">Depends on</div>
+        <div class="wf-inline-checks">${depsChecks}</div>
       </div>
     </div>`;
   }).join('');
@@ -5580,50 +6596,71 @@ function _wfRenderPhaseProps(el, phaseId) {
     </h4>
 
     <div class="wf-props-section">
-      <div class="form-group">
-        <label>ID</label>
-        <input value="${escHtml(phaseId)}" onchange="wfRenamePhase('${phaseId}',this.value)" />
+      <div class="wf-props-section-title" onclick="_wfToggleSection(this)">
+        <span class="wf-section-arrow">${_wf._openSection === 'ph-info' ? '\u25bc' : '\u25b6'}</span>
+        Informations
       </div>
-      <div class="form-group">
-        <label>Nom</label>
-        <input value="${escHtml(p.name || '')}" onchange="wfSetPhaseField('${phaseId}','name',this.value)" />
+      <div class="wf-section-body" ${_wf._openSection === 'ph-info' ? '' : 'style="display:none"'} data-section="ph-info">
+        <div class="form-group">
+          <label>ID</label>
+          <input value="${escHtml(phaseId)}" onchange="wfRenamePhase('${phaseId}',this.value)" />
+        </div>
+        <div class="form-group">
+          <label>Nom</label>
+          <input value="${escHtml(p.name || '')}" onchange="wfSetPhaseField('${phaseId}','name',this.value)" />
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <input value="${escHtml(p.description || '')}" onchange="wfSetPhaseField('${phaseId}','description',this.value)" />
+        </div>
+        <div class="form-group">
+          <label>Ordre</label>
+          <input type="number" value="${p.order || 1}" min="1" onchange="wfSetPhaseField('${phaseId}','order',parseInt(this.value))" />
+        </div>
+        ${p.next_phase ? `<div class="form-group"><label>Phase suivante</label><input value="${escHtml(p.next_phase)}" onchange="wfSetPhaseField('${phaseId}','next_phase',this.value)" /></div>` : ''}
       </div>
-      <div class="form-group">
-        <label>Description</label>
-        <input value="${escHtml(p.description || '')}" onchange="wfSetPhaseField('${phaseId}','description',this.value)" />
-      </div>
-      <div class="form-group">
-        <label>Ordre</label>
-        <input type="number" value="${p.order || 1}" min="1" onchange="wfSetPhaseField('${phaseId}','order',parseInt(this.value))" />
-      </div>
-      ${p.next_phase ? `<div class="form-group"><label>Phase suivante</label><input value="${escHtml(p.next_phase)}" onchange="wfSetPhaseField('${phaseId}','next_phase',this.value)" /></div>` : ''}
     </div>
 
     <div class="wf-props-section">
-      <div class="wf-props-section-title">
+      <div class="wf-props-section-title" onclick="_wfToggleSection(this)">
+        <span class="wf-section-arrow">${_wf._openSection === 'ph-agents' ? '\u25bc' : '\u25b6'}</span>
         Agents (${Object.keys(agents).length})
       </div>
-      ${agentsHtml || '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucun agent</div>'}
-      <select class="wf-add-select" id="wf-add-agent-${phaseId}" onchange="wfAddAgent('${phaseId}',this.value);this.value=''">
-        <option value="">+ Ajouter un agent...</option>
-      </select>
-    </div>
-
-    <div class="wf-props-section">
-      <div class="wf-props-section-title">
-        Livrables (${Object.keys(deliverables).length})
-        <button class="btn-icon" style="font-size:0.75rem" onclick="wfAddDeliverable('${phaseId}')">+</button>
+      <div class="wf-section-body" ${_wf._openSection === 'ph-agents' ? '' : 'style="display:none"'} data-section="ph-agents">
+        ${agentsHtml || '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucun agent</div>'}
+        <select class="wf-add-select" id="wf-add-agent-${phaseId}" onchange="wfAddAgent('${phaseId}',this.value);this.value=''">
+          <option value="">+ Ajouter un agent...</option>
+        </select>
       </div>
-      ${delsHtml || '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucun livrable</div>'}
     </div>
 
     <div class="wf-props-section">
-      <div class="wf-props-section-title">Conditions de sortie</div>
-      ${condsHtml}
+      <div class="wf-props-section-title" onclick="_wfToggleSection(this)">
+        <span class="wf-section-arrow">${_wf._openSection === 'ph-dels' ? '\u25bc' : '\u25b6'}</span>
+        Livrables (${Object.keys(deliverables).length})
+        <button class="btn-icon" style="font-size:0.75rem" onclick="event.stopPropagation();wfAddDeliverable('${phaseId}')">+</button>
+      </div>
+      <div class="wf-section-body" ${_wf._openSection === 'ph-dels' ? '' : 'style="display:none"'} data-section="ph-dels">
+        ${delsHtml || '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucun livrable</div>'}
+      </div>
     </div>
 
     <div class="wf-props-section">
-      <div class="wf-props-section-title">Transitions sortantes</div>
+      <div class="wf-props-section-title" onclick="_wfToggleSection(this)">
+        <span class="wf-section-arrow">${_wf._openSection === 'ph-exit' ? '\u25bc' : '\u25b6'}</span>
+        Conditions de sortie
+      </div>
+      <div class="wf-section-body" ${_wf._openSection === 'ph-exit' ? '' : 'style="display:none"'} data-section="ph-exit">
+        ${condsHtml}
+      </div>
+    </div>
+
+    <div class="wf-props-section">
+      <div class="wf-props-section-title" onclick="_wfToggleSection(this)">
+        <span class="wf-section-arrow">${_wf._openSection === 'ph-trans' ? '\u25bc' : '\u25b6'}</span>
+        Transitions sortantes
+      </div>
+      <div class="wf-section-body" ${_wf._openSection === 'ph-trans' ? '' : 'style="display:none"'} data-section="ph-trans">
       ${(() => {
         const transitions = _wf.data.transitions || [];
         const outgoing = transitions.map((t, i) => ({ t, i })).filter(({ t }) => t.from === phaseId);
@@ -5637,6 +6674,7 @@ function _wfRenderPhaseProps(el, phaseId) {
           </div>`;
         }).join('');
       })()}
+      </div>
     </div>
   `;
   setTimeout(() => _wfLoadAgentSelect(phaseId), 0);
@@ -5900,6 +6938,26 @@ function wfSetPhaseField(phaseId, field, val) {
   if (field === 'order' || field === 'name') wfRender();
 }
 
+// ── Collapse props sections (accordion) ──
+function _wfToggleSection(titleEl) {
+  const body = titleEl.nextElementSibling;
+  if (!body || !body.dataset.section) return;
+  const section = body.dataset.section;
+  const isOpen = _wf._openSection === section;
+  _wf._openSection = isOpen ? null : section;
+  // Collapse all sections, expand the clicked one
+  const container = titleEl.closest('#wf-props');
+  if (container) {
+    container.querySelectorAll('.wf-section-body').forEach(b => {
+      b.style.display = b.dataset.section === _wf._openSection ? '' : 'none';
+    });
+    container.querySelectorAll('.wf-section-arrow').forEach(a => {
+      const parentBody = a.closest('.wf-props-section').querySelector('.wf-section-body');
+      a.textContent = parentBody && parentBody.style.display !== 'none' ? '\u25bc' : '\u25b6';
+    });
+  }
+}
+
 // ── Collapse agent blocks ──
 function wfToggleCollapse(phaseId, agentId) {
   if (!_wf._collapsed) _wf._collapsed = {};
@@ -5954,9 +7012,10 @@ function wfAddAgent(phaseId, agentId) {
 async function _wfLoadAgentSelect(phaseId) {
   const assigned = new Set(Object.keys(_wf.data.phases[phaseId].agents || {}));
   const registryBase = _wf.apiBase.includes('templates') ? '/api/templates/registry' : '/api/agents/registry';
+  const regDir = _wf.registryDir || _wf.dir;
   let allAgents = [];
   try {
-    const reg = await api(`${registryBase}/${encodeURIComponent(_wf.dir)}`);
+    const reg = await api(`${registryBase}/${encodeURIComponent(regDir)}`);
     allAgents = Object.keys(reg.agents || reg || {});
   } catch {}
   // Populate the "add agent" select
@@ -6044,13 +7103,17 @@ function wfAddDeliverable(phaseId) {
   const agentIds = Object.keys(_wf.data.phases[phaseId].agents || {});
   if (agentIds.length === 0) { toast('Ajoutez d\'abord un agent a cette phase', 'error'); return; }
   if (!_wf.data.phases[phaseId].deliverables) _wf.data.phases[phaseId].deliverables = {};
-  const existing = Object.keys(_wf.data.phases[phaseId].deliverables);
-  let num = existing.length + 1;
-  let id = `deliverable_${num}`;
-  while (existing.includes(id)) { num++; id = `deliverable_${num}`; }
+  const agent = agentIds[0];
+  const steps = (_wf.agentPipelines || {})[agent] || [];
+  const stepKey = steps.length ? (steps[0].output_key || '') : '';
+  const id = (agent && stepKey) ? `${agent}:${stepKey}` : `deliverable_${Object.keys(_wf.data.phases[phaseId].deliverables).length + 1}`;
+  if (_wf.data.phases[phaseId].deliverables[id]) {
+    toast('Ce livrable existe deja', 'error'); return;
+  }
   _wf.data.phases[phaseId].deliverables[id] = {
     description: '',
-    agent: agentIds[0],
+    agent,
+    pipeline_step: stepKey,
     type: '',
     required: true
   };
@@ -6059,21 +7122,98 @@ function wfAddDeliverable(phaseId) {
 
 // Inline field setter for deliverables
 function _wfSetDelField(phaseId, delId, field, val) {
-  const d = _wf.data.phases[phaseId]?.deliverables?.[delId];
+  const dels = _wf.data.phases[phaseId]?.deliverables;
+  const d = dels?.[delId];
   if (!d) return;
   d[field] = val;
-  // When agent changes, reset type if the new agent doesn't support it
-  if (field === 'agent' && d.type) {
-    const caps = (_wf.agentCaps || {})[val];
-    const hasCaps = caps && (caps.documentation || caps.code || caps.design || caps.automation || caps.tasklist || caps.specs || caps.contract);
-    if (hasCaps && !caps[d.type]) d.type = '';
-    wfRenderProps();
+  // When agent changes, reset pipeline_step and type if incompatible
+  if (field === 'agent') {
+    d.pipeline_step = '';
+    if (d.type) {
+      const caps = (_wf.agentCaps || {})[val];
+      const hasCaps = caps && (caps.documentation || caps.code || caps.design || caps.automation || caps.tasklist || caps.specs || caps.contract);
+      if (hasCaps && !caps[d.type]) d.type = '';
+    }
   }
+  // When agent or pipeline_step changes, rename the deliverable key
+  if (field === 'agent' || field === 'pipeline_step') {
+    if (d.agent && d.pipeline_step) {
+      const newId = `${d.agent}:${d.pipeline_step}`;
+      if (newId !== delId && !dels[newId]) {
+        dels[newId] = d;
+        delete dels[delId];
+      }
+    }
+  }
+  wfRenderProps();
 }
 
 function wfRemoveDeliverable(phaseId, delId) {
   delete _wf.data.phases[phaseId].deliverables[delId];
+  // Also remove from depends_on of other deliverables
+  const dels = _wf.data.phases[phaseId].deliverables || {};
+  for (const d of Object.values(dels)) {
+    if (Array.isArray(d.depends_on)) {
+      d.depends_on = d.depends_on.filter(k => k !== delId);
+    }
+  }
   wfRender();
+}
+
+function _wfToggleDelDep(phaseId, delId, depKey, checked) {
+  const d = _wf.data.phases[phaseId]?.deliverables?.[delId];
+  if (!d) return;
+  if (!d.depends_on) d.depends_on = [];
+  if (checked && !d.depends_on.includes(depKey)) {
+    d.depends_on.push(depKey);
+  } else if (!checked) {
+    d.depends_on = d.depends_on.filter(k => k !== depKey);
+  }
+}
+
+function _wfToggleDelProfile(phaseId, delId, field, value, checked) {
+  const d = _wf.data.phases[phaseId]?.deliverables?.[delId];
+  if (!d) return;
+  if (!d[field]) d[field] = [];
+  if (checked && !d[field].includes(value)) {
+    d[field].push(value);
+  } else if (!checked) {
+    d[field] = d[field].filter(v => v !== value);
+  }
+}
+
+async function wfSkillMatch(phaseId, delId) {
+  const d = _wf.data.phases[phaseId]?.deliverables?.[delId];
+  if (!d || !d.agent) { toast('Agent requis', 'error'); return; }
+  // Extract project_id from apiBase: /api/templates/project-workflow/{projectId}
+  const m = (_wf.apiBase || '').match(/project-workflow\/([^/]+)/);
+  if (!m) { toast('SkillMatcher disponible uniquement pour les projets', 'error'); return; }
+  const projectId = m[1];
+  const btn = event?.target;
+  if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; }
+  try {
+    const res = await api(`/api/templates/projects/${encodeURIComponent(projectId)}/deliverable-skillmatch`, {
+      method: 'POST',
+      body: { agent_id: d.agent, description: d.description || delId }
+    });
+    if (res.full_profile) {
+      // Select all roles/missions/skills
+      const profile = (_wf.agentProfiles || {})[d.agent] || {};
+      d.roles = [...(profile.roles || [])];
+      d.missions = [...(profile.missions || [])];
+      d.skills = [...(profile.skills || [])];
+    } else {
+      d.roles = res.roles || [];
+      d.missions = res.missions || [];
+      d.skills = res.skills || [];
+    }
+    wfRenderProps();
+    toast('SkillMatcher applique');
+  } catch (e) {
+    toast(e.message || 'Erreur SkillMatcher', 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.style.opacity = ''; }
+  }
 }
 
 // ── Exit conditions (inline checkboxes) ──
@@ -6733,7 +7873,8 @@ async function _wfValidate() {
   const registryBase = _wf.apiBase.includes('templates') ? '/api/templates/registry' : '/api/agents/registry';
   let registryAgents = new Set();
   try {
-    const reg = await api(`${registryBase}/${encodeURIComponent(_wf.dir)}`);
+    const regDir = _wf.registryDir || _wf.dir;
+    const reg = await api(`${registryBase}/${encodeURIComponent(regDir)}`);
     registryAgents = new Set(Object.keys(reg.agents || reg || {}));
   } catch {
     warnings.push('Impossible de charger agents_registry.json — validation des agents ignoree');
@@ -7006,7 +8147,7 @@ async function deleteApiKey(hash) {
 function copyApiKeyToClipboard() {
   const el = document.getElementById('apikey-generated-token');
   el.select();
-  navigator.clipboard.writeText(el.value).then(
+  copyToClipboard(el.value).then(
     () => toast('Cle copiee dans le presse-papier', 'success'),
     () => toast('Erreur copie', 'error')
   );
@@ -7015,7 +8156,7 @@ function copyApiKeyToClipboard() {
 function copyApiKeyAndClose() {
   const el = document.getElementById('apikey-generated-token');
   el.select();
-  navigator.clipboard.writeText(el.value).then(
+  copyToClipboard(el.value).then(
     () => { toast('Cle copiee dans le presse-papier', 'success'); closeModal('modal-show-apikey'); },
     () => toast('Erreur copie', 'error')
   );

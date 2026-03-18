@@ -442,6 +442,31 @@ async def delete_env_entry(data: EnvDelete):
     return {"ok": True}
 
 
+class EnvMerge(BaseModel):
+    entries: list  # [{key, value}]
+
+
+@app.post("/api/env/merge")
+async def merge_env_entries(data: EnvMerge):
+    """Merge entries into .env: add new keys, update existing ones."""
+    existing = _parse_env(ENV_FILE)
+    existing_map = {e["key"]: i for i, e in enumerate(existing) if e.get("key")}
+    added, updated = 0, 0
+    for entry in data.entries:
+        key = entry.get("key", "").strip()
+        value = entry.get("value", "")
+        if not key:
+            continue
+        if key in existing_map:
+            existing[existing_map[key]]["value"] = value
+            updated += 1
+        else:
+            existing.append({"key": key, "value": value, "comment": ""})
+            added += 1
+    _write_env(ENV_FILE, existing)
+    return {"ok": True, "added": added, "updated": updated}
+
+
 # ── MCP helpers ────────────────────────────────────
 
 def _write_mcp_catalog(items: list[dict]):
@@ -833,6 +858,8 @@ async def delete_agent(agent_id: str, team_id: str = "default"):
     data = _read_json(registry_path)
     if agent_id not in data.get("agents", {}):
         raise HTTPException(404, f"Agent {agent_id} not found")
+    if data["agents"][agent_id].get("type") == "orchestrator":
+        raise HTTPException(403, "L'orchestrateur ne peut pas etre supprime")
     prompt_file = data["agents"][agent_id].get("prompt", f"{agent_id}.md")
     del data["agents"][agent_id]
     _write_json(registry_path, data)
@@ -1196,6 +1223,7 @@ class SharedAgentEntry(BaseModel):
     id: str
     name: str = ""
     description: str | None = None
+    type: str | None = None
     llm: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
@@ -1203,6 +1231,7 @@ class SharedAgentEntry(BaseModel):
     prompt_content: str | None = None
     assign_content: str | None = None
     unassign_content: str | None = None
+    identity_content: str | None = None
     delivers_docs: bool | None = None
     delivers_code: bool | None = None
     delivers_design: bool | None = None
@@ -1226,6 +1255,20 @@ def _list_shared_agents() -> list[dict]:
                 prompt_file = d / "prompt.md"
                 if prompt_file.exists():
                     cfg["prompt_content"] = prompt_file.read_text(encoding="utf-8")
+                # Load role/mission/skill names (lightweight, no content)
+                cfg["role_names"] = []
+                cfg["mission_names"] = []
+                cfg["skill_names"] = []
+                for f in sorted(d.iterdir()):
+                    if not f.is_file() or f.suffix != ".md":
+                        continue
+                    stem = f.stem
+                    if stem.startswith("role_"):
+                        cfg["role_names"].append(stem[5:])
+                    elif stem.startswith("mission_"):
+                        cfg["mission_names"].append(stem[8:])
+                    elif stem.startswith("skill_"):
+                        cfg["skill_names"].append(stem[6:])
                 agents.append(cfg)
     return agents
 
@@ -1252,6 +1295,23 @@ async def get_shared_agent(agent_id: str):
     unassign_file = agent_dir / f"{agent_id}_unassign.md"
     if unassign_file.exists():
         cfg["unassign_content"] = unassign_file.read_text(encoding="utf-8")
+    # Extended files: identity, roles, missions, skills
+    identity_file = agent_dir / "identity.md"
+    cfg["identity_content"] = identity_file.read_text(encoding="utf-8") if identity_file.exists() else ""
+    cfg["roles"] = []
+    cfg["missions"] = []
+    cfg["skills"] = []
+    if agent_dir.exists():
+        for f in sorted(agent_dir.iterdir()):
+            if not f.is_file() or not f.suffix == ".md":
+                continue
+            stem = f.stem
+            if stem.startswith("role_"):
+                cfg["roles"].append({"name": stem[5:], "content": f.read_text(encoding="utf-8")})
+            elif stem.startswith("mission_"):
+                cfg["missions"].append({"name": stem[8:], "content": f.read_text(encoding="utf-8")})
+            elif stem.startswith("skill_"):
+                cfg["skills"].append({"name": stem[6:], "content": f.read_text(encoding="utf-8")})
     return cfg
 
 
@@ -1266,6 +1326,7 @@ async def create_shared_agent(entry: SharedAgentEntry):
     cfg = {
         "name": entry.name or entry.id,
         "description": entry.description or "",
+        "type": entry.type or "single",
         "llm": entry.llm or "",
         "temperature": entry.temperature or 0.3,
         "max_tokens": entry.max_tokens or 32768,
@@ -1279,7 +1340,7 @@ async def create_shared_agent(entry: SharedAgentEntry):
         "delivers_contract": entry.delivers_contract or False,
     }
     (agent_dir / "agent.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
-    # Default prompt from Agents/Prompts/New.md
+    # Default prompt from Shared/Prompts/<culture>/New.md
     new_prompt = PROMPTS_DIR / "New.md"
     prompt = new_prompt.read_text(encoding="utf-8") if new_prompt.exists() else f"# {entry.name or entry.id}\n\n"
     if entry.prompt_content:
@@ -1300,6 +1361,8 @@ async def update_shared_agent(agent_id: str, entry: SharedAgentEntry):
         cfg["name"] = entry.name or agent_id
     if entry.description is not None:
         cfg["description"] = entry.description
+    if entry.type is not None:
+        cfg["type"] = entry.type
     if entry.llm is not None:
         cfg["llm"] = entry.llm
     if entry.temperature is not None:
@@ -1329,6 +1392,8 @@ async def update_shared_agent(agent_id: str, entry: SharedAgentEntry):
         (agent_dir / f"{agent_id}_assign.md").write_text(entry.assign_content, encoding="utf-8")
     if entry.unassign_content is not None:
         (agent_dir / f"{agent_id}_unassign.md").write_text(entry.unassign_content, encoding="utf-8")
+    if entry.identity_content is not None:
+        (agent_dir / "identity.md").write_text(entry.identity_content, encoding="utf-8")
     return {"ok": True}
 
 
@@ -1339,6 +1404,201 @@ async def delete_shared_agent(agent_id: str):
         raise HTTPException(404, f"Agent '{agent_id}' introuvable")
     shutil.rmtree(agent_dir)
     return {"ok": True}
+
+
+@app.put("/api/shared-agents/{agent_id}/files/{filename}")
+async def put_shared_agent_file(agent_id: str, filename: str, request: Request):
+    """Save a specific .md file inside an agent directory."""
+    agent_dir = SHARED_AGENTS_DIR / agent_id
+    if not agent_dir.exists():
+        raise HTTPException(404, f"Agent '{agent_id}' introuvable")
+    # Sanitize filename — only allow alphanumeric + underscore
+    safe = filename.replace("-", "_")
+    if not safe.replace("_", "").isalnum():
+        raise HTTPException(400, "Nom de fichier invalide")
+    body = await request.json()
+    content = body.get("content", "")
+    (agent_dir / f"{safe}.md").write_text(content, encoding="utf-8")
+    return {"ok": True}
+
+
+@app.delete("/api/shared-agents/{agent_id}/files/{filename}")
+async def delete_shared_agent_file(agent_id: str, filename: str):
+    """Delete a specific .md file inside an agent directory."""
+    agent_dir = SHARED_AGENTS_DIR / agent_id
+    if not agent_dir.exists():
+        raise HTTPException(404, f"Agent '{agent_id}' introuvable")
+    safe = filename.replace("-", "_")
+    target = agent_dir / f"{safe}.md"
+    if not target.exists():
+        raise HTTPException(404, "Fichier introuvable")
+    target.unlink()
+    return {"ok": True}
+
+
+_CHAT_FORMAT_INSTRUCTIONS = """
+
+## Format de reponse OBLIGATOIRE
+
+Tu DOIS structurer ta reponse avec les blocs XML suivants. Inclus TOUS les blocs, meme vides.
+
+<conflict>
+[Signale les contradictions ou incoherences detectees dans le profil ou la demande. Vide si aucun conflit.]
+</conflict>
+
+<confidence level="high|medium|low">
+[Explique ton niveau de confiance dans les modifications proposees.]
+</confidence>
+
+<missing_info>
+[Liste les informations manquantes pour completer le profil. Vide si rien ne manque.]
+</missing_info>
+
+<identity>
+[Contenu COMPLET du fichier identity.md — identite, role, expertise, posture de l'agent. Toujours inclure, meme si inchange.]
+</identity>
+
+<!-- Repete <role> pour chaque role identifie -->
+<role name="{nom_explicite}">
+[Contenu du role]
+</role>
+
+<!-- Repete <mission> pour chaque mission identifiee -->
+<mission name="{nom_explicite}">
+[Contenu de la mission]
+</mission>
+
+<!-- Repete <skill> pour chaque competence identifiee -->
+<skill name="{nom_explicite}">
+[Contenu de la competence]
+</skill>
+
+IMPORTANT: les attributs name des blocs role, mission, skill sont des noms en snake_case SANS prefixe (le prefixe role_/mission_/skill_ est ajoute automatiquement par le systeme).
+"""
+
+
+def _parse_chat_blocks(raw: str) -> dict:
+    """Parse structured XML blocks from LLM chat response."""
+    import re
+    result = {"display": [], "files": []}
+
+    # Display blocks: conflict, confidence, missing_info
+    for tag in ("conflict", "confidence", "missing_info"):
+        pattern = rf"<{tag}(?:\s+[^>]*)?>(.+?)</{tag}>"
+        m = re.search(pattern, raw, re.DOTALL)
+        if m:
+            content = m.group(0)  # full tag including attributes
+            result["display"].append({"tag": tag, "content": content.strip()})
+
+    # File blocks: identity (single), role/mission/skill (multiple with name attr)
+    # identity
+    m = re.search(r"<identity>(.*?)</identity>", raw, re.DOTALL)
+    if m:
+        result["files"].append({"filename": "identity", "content": m.group(1).strip()})
+
+    # role, mission, skill — with name attribute
+    for tag in ("role", "mission", "skill"):
+        for m in re.finditer(rf'<{tag}\s+name="([^"]+)">(.*?)</{tag}>', raw, re.DOTALL):
+            name = m.group(1)
+            result["files"].append({"filename": f"{tag}_{name}", "content": m.group(2).strip()})
+
+    # files_to_delete block
+    dtm = re.search(r"<files_to_delete>(.*?)</files_to_delete>", raw, re.DOTALL)
+    if dtm:
+        result["files_to_delete"] = [
+            line.strip() for line in dtm.group(1).strip().splitlines()
+            if line.strip()
+        ]
+    else:
+        result["files_to_delete"] = []
+
+    return result
+
+
+@app.post("/api/shared-agents/{agent_id}/chat")
+async def chat_shared_agent(agent_id: str, request: Request):
+    """Chat with the agent builder LLM using GenerateAgent.md as system prompt."""
+    agent_dir = SHARED_AGENTS_DIR / agent_id
+    if not agent_dir.exists():
+        raise HTTPException(404, f"Agent '{agent_id}' introuvable")
+    body = await request.json()
+    message = body.get("message", "")
+    history = body.get("history", [])
+
+    # Build {current_profile} from all .md files in agent directory (alphabetical, exclude chat/)
+    profile_parts = []
+    for f in sorted(agent_dir.iterdir()):
+        if f.is_dir():
+            continue
+        if f.is_file() and f.suffix == ".md":
+            content = f.read_text(encoding="utf-8")
+            profile_parts.append(f" --------------- {f.name} ---------------\n{content}")
+    current_profile = "\n\n".join(profile_parts) if profile_parts else "(aucun fichier de profil)"
+
+    # Load GenerateAgent.md and inject {current_profile} into system prompt
+    meta_path = PROMPTS_DIR / "GenerateAgent.md"
+    if not meta_path.exists():
+        raise HTTPException(500, "Meta-prompt GenerateAgent.md introuvable")
+    system_prompt = meta_path.read_text(encoding="utf-8").replace("{current_profile}", current_profile) + _CHAT_FORMAT_INSTRUCTIONS
+
+    # User message is just the user's input
+    user_msg = message
+
+    # Build messages list: system + history + current user message
+    messages = [{"role": "system", "content": system_prompt}]
+    for h in history:
+        if h.get("role") in ("user", "assistant") and h.get("content"):
+            messages.append({"role": h["role"], "content": h["content"]})
+    messages.append({"role": "user", "content": user_msg})
+
+    try:
+        result = await chat(ChatRequest(messages=messages))
+        raw = result.get("content", "")
+    except Exception as e:
+        return {"response": f"Chat indisponible: {e}", "display": [], "file_status": []}
+
+    # Historize chat in agent_dir/chat/
+    from datetime import datetime
+    chat_dir = agent_dir / "chat"
+    chat_dir.mkdir(exist_ok=True)
+    ts = datetime.now().strftime("%y%m%d%H%M%S")
+    (chat_dir / f"{ts}_send.md").write_text(json.dumps(messages, indent=2, ensure_ascii=False), encoding="utf-8")
+    (chat_dir / f"{ts}_response.md").write_text(raw, encoding="utf-8")
+
+    # Parse structured blocks
+    parsed = _parse_chat_blocks(raw)
+
+    # Compare file blocks with existing files and save if changed
+    file_status = []
+    for fb in parsed["files"]:
+        fname = fb["filename"]
+        safe = fname.replace("-", "_")
+        if not safe.replace("_", "").isalnum():
+            continue
+        filepath = agent_dir / f"{safe}.md"
+        existing = filepath.read_text(encoding="utf-8").strip() if filepath.exists() else ""
+        new_content = fb["content"]
+        if existing == new_content:
+            file_status.append({"name": safe, "status": "unchanged"})
+        else:
+            filepath.write_text(new_content, encoding="utf-8")
+            file_status.append({"name": safe, "status": "updated"})
+
+    # Delete files requested by LLM
+    for dname in parsed.get("files_to_delete", []):
+        safe_d = dname.replace("-", "_").removesuffix(".md")
+        if not safe_d.replace("_", "").isalnum():
+            continue
+        dpath = agent_dir / f"{safe_d}.md"
+        if dpath.exists():
+            dpath.unlink()
+            file_status.append({"name": safe_d, "status": "deleted"})
+
+    return {
+        "response": raw,
+        "display": parsed["display"],
+        "file_status": file_status,
+    }
 
 
 @app.post("/api/shared-agents/import")
@@ -2006,21 +2266,687 @@ async def chat(req: ChatRequest):
         raise HTTPException(500, f"Erreur: {str(e)}")
 
 
+# ── API: Config Check ─────────────────────────────
+
+@app.get("/api/config/check")
+async def config_check():
+    """Validate configuration coherence. Returns errors and warnings."""
+    issues = []  # {level: 'error'|'warning', category, message}
+
+    # 1. Check .env secrets referenced by LLM providers
+    env_entries = {e["key"]: e["value"] for e in _parse_env(ENV_FILE) if e.get("key")}
+    llm_data = _read_json(CONFIGS / "llm_providers.json") if (CONFIGS / "llm_providers.json").exists() else {}
+    for pid, pconf in llm_data.get("providers", {}).items():
+        env_key = pconf.get("env_key", "")
+        if env_key:
+            if env_key not in env_entries:
+                issues.append({"level": "error", "category": "secrets", "message": f"LLM provider '{pid}' reference la variable '{env_key}' — introuvable dans .env"})
+            elif not env_entries[env_key].strip():
+                issues.append({"level": "warning", "category": "secrets", "message": f"LLM provider '{pid}' : la variable '{env_key}' est vide dans .env"})
+
+    # 1b. Check .env secrets referenced by MCP servers
+    mcp_data = _read_json(MCP_SERVERS_FILE) if MCP_SERVERS_FILE.exists() else {}
+    for sid, sconf in mcp_data.get("servers", {}).items():
+        for param_name, env_var in sconf.get("env", {}).items():
+            if env_var not in env_entries:
+                issues.append({"level": "error", "category": "mcp", "message": f"MCP '{sid}' : variable '{env_var}' (param {param_name}) absente du .env"})
+            elif not env_entries[env_var].strip():
+                issues.append({"level": "warning", "category": "mcp", "message": f"MCP '{sid}' : variable '{env_var}' (param {param_name}) vide dans .env"})
+
+    # 2. Check critical env vars
+    critical_vars = ["DATABASE_URI", "REDIS_URI"]
+    for var in critical_vars:
+        if var not in env_entries:
+            issues.append({"level": "error", "category": "secrets", "message": f"Variable critique '{var}' absente du .env"})
+        elif not env_entries[var].strip():
+            issues.append({"level": "warning", "category": "secrets", "message": f"Variable critique '{var}' vide dans .env"})
+
+    # 3. Check teams and agents
+    teams = _read_teams_list()
+    for tcfg in teams:
+        tid = tcfg.get("id", "")
+        directory = tcfg.get("directory", tid)
+        tdir = _team_dir(directory)
+
+        # Check registry exists
+        reg_path = tdir / "agents_registry.json"
+        if not reg_path.exists():
+            issues.append({"level": "error", "category": "teams", "message": f"Equipe '{tid}' : agents_registry.json introuvable dans {directory}/"})
+            continue
+
+        reg = _read_json(reg_path)
+        agent_ids = set(reg.get("agents", {}).keys())
+
+        # Check each agent has a name
+        for aid, aconf in reg.get("agents", {}).items():
+            if not aconf.get("name"):
+                issues.append({"level": "warning", "category": "agents", "message": f"Agent '{aid}' (equipe {tid}) : champ 'name' manquant"})
+
+            # Check prompt file exists
+            prompt_file = aconf.get("prompt", f"{aid}.md")
+            prompt_path = tdir / prompt_file
+            if not prompt_path.exists():
+                # Check shared agents fallback
+                shared_found = False
+                for base in [SHARED_DIR / "Agents" / aid / "prompt.md"]:
+                    if base.exists():
+                        shared_found = True
+                        break
+                if not shared_found:
+                    issues.append({"level": "warning", "category": "agents", "message": f"Agent '{aid}' (equipe {tid}) : prompt '{prompt_file}' introuvable"})
+
+        # 3b. Validate JSON blocks in prompts and pipeline step instructions
+        import re as _re_check
+        def _check_json_blocks(text, label):
+            for m in _re_check.finditer(r'```json\s*\n([\s\S]*?)```', text):
+                try:
+                    json.loads(m.group(1).strip())
+                except json.JSONDecodeError as e:
+                    issues.append({"level": "error", "category": "prompts", "message": f"{label} : JSON invalide — {str(e)[:120]}"})
+
+        for aid, aconf in reg.get("agents", {}).items():
+            # Check team prompt
+            prompt_file = aconf.get("prompt", f"{aid}.md")
+            prompt_path = tdir / prompt_file
+            if prompt_path.exists():
+                _check_json_blocks(prompt_path.read_text(encoding="utf-8"), f"Prompt '{aid}' (equipe {tid})")
+            else:
+                # Check shared agent prompt
+                shared_prompt = SHARED_DIR / "Agents" / aid / "prompt.md"
+                if shared_prompt.exists():
+                    _check_json_blocks(shared_prompt.read_text(encoding="utf-8"), f"Prompt '{aid}' (shared)")
+            # Check pipeline step instructions
+            for step in aconf.get("pipeline_steps", []):
+                instr = step.get("instruction", "")
+                if instr:
+                    step_name = step.get("name", step.get("output_key", "?"))
+                    _check_json_blocks(instr, f"Agent '{aid}' step '{step_name}' (equipe {tid})")
+
+        # 4. Check workflow references valid agents
+        wf_path = tdir / "Workflow.json"
+        if not wf_path.exists():
+            wf_path = tdir / "workflow.json"
+        if wf_path.exists():
+            wf = _read_json(wf_path)
+            for pid, pconf in wf.get("phases", {}).items():
+                # Agents in phase must exist in registry
+                for agent_in_phase in pconf.get("agents", {}).keys():
+                    if agent_in_phase not in agent_ids:
+                        issues.append({"level": "error", "category": "workflow", "message": f"Phase '{pid}' (equipe {tid}) : agent '{agent_in_phase}' n'existe pas dans le registry"})
+
+                # Deliverables must be fully configured
+                phase_agents = set(pconf.get("agents", {}).keys())
+                phase_deliverables = set(pconf.get("deliverables", {}).keys())
+                for dk, dconf in pconf.get("deliverables", {}).items():
+                    dlabel = f"Phase '{pid}' livrable '{dk}' (equipe {tid})"
+
+                    # Agent must be set
+                    d_agent = dconf.get("agent", "")
+                    if not d_agent:
+                        issues.append({"level": "error", "category": "workflow", "message": f"{dlabel} : champ 'agent' manquant"})
+                    elif d_agent not in agent_ids:
+                        issues.append({"level": "error", "category": "workflow", "message": f"{dlabel} : agent '{d_agent}' n'existe pas dans le registry"})
+                    elif d_agent not in phase_agents:
+                        issues.append({"level": "error", "category": "workflow", "message": f"{dlabel} : agent '{d_agent}' n'est pas assigne a cette phase"})
+
+                    # Pipeline step must be set and exist in agent's steps
+                    d_step = dconf.get("pipeline_step", "")
+                    if not d_step:
+                        issues.append({"level": "error", "category": "workflow", "message": f"{dlabel} : champ 'pipeline_step' manquant"})
+                    elif d_agent:
+                        agent_conf = reg.get("agents", {}).get(d_agent, {})
+                        steps = [s.get("output_key") for s in agent_conf.get("pipeline_steps", [])]
+                        if steps and d_step not in steps:
+                            issues.append({"level": "error", "category": "workflow", "message": f"{dlabel} : pipeline_step '{d_step}' n'existe pas dans les steps de '{d_agent}'"})
+                        # Check that the step has an instruction
+                        if steps:
+                            step_conf = next((s for s in agent_conf.get("pipeline_steps", []) if s.get("output_key") == d_step), None)
+                            if step_conf and not step_conf.get("instruction", "").strip():
+                                issues.append({"level": "warning", "category": "workflow", "message": f"{dlabel} : l'instruction de la step '{d_step}' est vide"})
+
+                    # Type must be set
+                    if not dconf.get("type"):
+                        issues.append({"level": "warning", "category": "workflow", "message": f"{dlabel} : champ 'type' non renseigne"})
+
+                    # Description recommended
+                    if not dconf.get("description", "").strip():
+                        issues.append({"level": "warning", "category": "workflow", "message": f"{dlabel} : champ 'description' vide"})
+
+                    # Check depends_on references valid deliverables
+                    for dep_dk in dconf.get("depends_on", []):
+                        if dep_dk not in phase_deliverables:
+                            issues.append({"level": "error", "category": "workflow", "message": f"{dlabel} : depends_on '{dep_dk}' n'existe pas dans les livrables de la phase"})
+
+                # Transitions target valid phases
+            phase_ids = set(wf.get("phases", {}).keys())
+            for tr in wf.get("transitions", []):
+                if tr.get("from") not in phase_ids:
+                    tr_from = tr.get("from", "?")
+                    issues.append({"level": "error", "category": "workflow", "message": f"Transition from='{tr_from}' (equipe {tid}) : phase source inconnue"})
+                if tr.get("to") not in phase_ids:
+                    tr_to = tr.get("to", "?")
+                    issues.append({"level": "error", "category": "workflow", "message": f"Transition to='{tr_to}' (equipe {tid}) : phase cible inconnue"})
+        else:
+            issues.append({"level": "warning", "category": "workflow", "message": f"Equipe '{tid}' : Workflow.json introuvable"})
+
+    # 5. Validate JSON blocks in system prompts (Shared/Prompts/{culture}/)
+    if PROMPTS_DIR.exists():
+        for f in PROMPTS_DIR.glob("*.md"):
+            _check_json_blocks(f.read_text(encoding="utf-8"), f"Prompt systeme '{f.name}'")
+
+    errors = [i for i in issues if i["level"] == "error"]
+    warnings = [i for i in issues if i["level"] == "warning"]
+    return {"ok": len(errors) == 0, "errors": errors, "warnings": warnings, "total": len(issues)}
+
+
+# ── API: Cultures ─────────────────────────────────
+
+CULTURES_FILE = SHARED_DIR / "cultures.json"
+_CULTURE = os.getenv("CULTURE", "fr-fr")
+
+
+def _load_cultures() -> list:
+    if CULTURES_FILE.exists():
+        return json.loads(CULTURES_FILE.read_text(encoding="utf-8")).get("cultures", [])
+    return []
+
+
+def _save_cultures(cultures: list):
+    CULTURES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CULTURES_FILE.write_text(json.dumps({"cultures": cultures}, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+@app.get("/api/templates/cultures")
+async def list_cultures():
+    """List all cultures. Returns all (reference) and which are enabled."""
+    return {"cultures": _load_cultures(), "default": _CULTURE}
+
+
+class CultureToggle(BaseModel):
+    enabled: bool
+
+
+@app.put("/api/templates/cultures/{key}")
+async def toggle_culture(key: str, body: CultureToggle):
+    """Enable or disable a culture."""
+    cultures = _load_cultures()
+    found = False
+    for c in cultures:
+        if c["key"] == key:
+            c["enabled"] = body.enabled
+            found = True
+            break
+    if not found:
+        raise HTTPException(404, f"Culture '{key}' introuvable")
+    _save_cultures(cultures)
+    return {"ok": True}
+
+
 # ── API: Prompt Templates & Generation ───────────
 
+PROMPTS_BASE = SHARED_DIR / "Prompts"
+PROMPTS_DIR = PROMPTS_BASE / _CULTURE  # default culture for legacy endpoint
 
-PROMPTS_DIR = (PROJECT_DIR if DOCKER_MODE else ROOT) / "Agents" / "Prompts"
+
+def _prompts_dir(culture: str | None = None) -> Path:
+    """Return the prompts directory for a given culture (validated)."""
+    c = culture or _CULTURE
+    if ".." in c or "/" in c or "\\" in c:
+        raise HTTPException(400, "Culture invalide")
+    return PROMPTS_BASE / c
+
+
+# ── API: Deliverable Types (Shared/deliverable_types.json) ─────
+
+DELIVERABLE_TYPES_FILE = SHARED_DIR / "deliverable_types.json"
+
+# Default deliverable types (seeded on first read)
+_DEFAULT_DELIVERABLE_TYPES = [
+    {"key": "delivers_docs", "label": "Documentation"},
+    {"key": "delivers_code", "label": "Code"},
+    {"key": "delivers_design", "label": "Maquette & Design"},
+    {"key": "delivers_automation", "label": "Automatisme"},
+    {"key": "delivers_tasklist", "label": "Liste de taches"},
+    {"key": "delivers_specs", "label": "Specifications & Contrat"},
+]
+
+
+def _load_deliverable_types() -> list[dict]:
+    if DELIVERABLE_TYPES_FILE.exists():
+        return json.loads(DELIVERABLE_TYPES_FILE.read_text(encoding="utf-8"))
+    # Seed with defaults
+    _save_deliverable_types(_DEFAULT_DELIVERABLE_TYPES)
+    return list(_DEFAULT_DELIVERABLE_TYPES)
+
+
+def _save_deliverable_types(types: list[dict]):
+    DELIVERABLE_TYPES_FILE.write_text(json.dumps(types, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+@app.get("/api/templates/deliverable-types")
+async def list_deliverable_types():
+    return {"types": _load_deliverable_types()}
+
+
+class DeliverableTypeCreate(BaseModel):
+    key: str
+    label: str
+
+
+@app.post("/api/templates/deliverable-types")
+async def create_deliverable_type(entry: DeliverableTypeCreate):
+    key = entry.key.strip()
+    label = entry.label.strip()
+    if not key or not key.replace("_", "").isalnum():
+        raise HTTPException(400, "Cle invalide")
+    types = _load_deliverable_types()
+    if any(t["key"] == key for t in types):
+        raise HTTPException(409, f"Le type '{key}' existe deja")
+    types.append({"key": key, "label": label})
+    _save_deliverable_types(types)
+    return {"ok": True}
+
+
+@app.delete("/api/templates/deliverable-types/{key}")
+async def delete_deliverable_type(key: str):
+    types = _load_deliverable_types()
+    new_types = [t for t in types if t["key"] != key]
+    if len(new_types) == len(types):
+        raise HTTPException(404, f"Type '{key}' introuvable")
+    _save_deliverable_types(new_types)
+    return {"ok": True}
+
+
+@app.get("/api/templates/prompts")
+async def list_template_prompts(culture: str | None = None):
+    """List all prompt templates from Shared/Prompts/<culture>/."""
+    d = _prompts_dir(culture)
+    d.mkdir(parents=True, exist_ok=True)
+    prompts = []
+    for f in sorted(d.glob("*.md")):
+        prompts.append({"name": f.name, "content": f.read_text(encoding="utf-8")})
+    return {"culture": culture or _CULTURE, "prompts": prompts}
+
+
+@app.get("/api/templates/prompts/{name}")
+async def get_template_prompt(name: str, culture: str | None = None):
+    """Return a single prompt template."""
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(400, "Nom invalide")
+    path = _prompts_dir(culture) / name
+    if not path.exists():
+        raise HTTPException(404, f"Prompt '{name}' introuvable")
+    return {"name": name, "content": path.read_text(encoding="utf-8")}
+
+
+class PromptTemplateUpdate(BaseModel):
+    content: str
+
+
+@app.put("/api/templates/prompts/{name}")
+async def put_template_prompt(name: str, body: PromptTemplateUpdate, culture: str | None = None):
+    """Create or update a prompt template."""
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(400, "Nom invalide")
+    if not name.endswith(".md"):
+        raise HTTPException(400, "Le nom doit finir par .md")
+    d = _prompts_dir(culture)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_text(body.content, encoding="utf-8")
+    return {"ok": True}
+
+
+@app.delete("/api/templates/prompts/{name}")
+async def delete_template_prompt(name: str, culture: str | None = None):
+    """Delete a prompt template."""
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(400, "Nom invalide")
+    path = _prompts_dir(culture) / name
+    if not path.exists():
+        raise HTTPException(404, f"Prompt '{name}' introuvable")
+    path.unlink()
+    return {"ok": True}
+
+
+# ── API: Template Projects (Shared/Projects/) ─────────────
+
+SHARED_PROJECTS_DIR = SHARED_DIR / "Projects"
+
+
+@app.get("/api/templates/projects")
+async def list_template_projects():
+    """List all project types from Shared/Projects/."""
+    projects = []
+    if SHARED_PROJECTS_DIR.exists():
+        for d in sorted(SHARED_PROJECTS_DIR.iterdir()):
+            if d.is_dir():
+                cfg_file = d / "project.json"
+                cfg = json.loads(cfg_file.read_text(encoding="utf-8")) if cfg_file.exists() else {}
+                workflows = [f.stem.removesuffix(".wrk") for f in sorted(d.glob("*.wrk.json"))]
+                projects.append({"id": d.name, "name": cfg.get("name", d.name), "description": cfg.get("description", ""), "team": cfg.get("team", ""), "workflows": workflows})
+    return {"projects": projects}
+
+
+class ProjectCreate(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+    team: str = ""
+
+
+@app.post("/api/templates/projects")
+async def create_template_project(entry: ProjectCreate):
+    """Create a new project type directory with project.json."""
+    pid = entry.id.strip()
+    if not pid or not pid.replace("_", "").replace("-", "").isalnum():
+        raise HTTPException(400, "ID invalide (lettres, chiffres, _, - uniquement)")
+    project_dir = SHARED_PROJECTS_DIR / pid
+    if project_dir.exists():
+        raise HTTPException(409, f"Le projet '{pid}' existe deja")
+    project_dir.mkdir(parents=True)
+    cfg = {"name": entry.name.strip(), "description": entry.description.strip(), "team": entry.team.strip()}
+    (project_dir / "project.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {"ok": True}
+
+
+class ProjectUpdate(BaseModel):
+    name: str
+    description: str = ""
+    team: str = ""
+
+
+@app.put("/api/templates/projects/{project_id}")
+async def update_template_project(project_id: str, entry: ProjectUpdate):
+    """Update a project type."""
+    if ".." in project_id or "/" in project_id or "\\" in project_id:
+        raise HTTPException(400, "ID invalide")
+    project_dir = SHARED_PROJECTS_DIR / project_id
+    if not project_dir.exists():
+        raise HTTPException(404, f"Projet '{project_id}' introuvable")
+    cfg_file = project_dir / "project.json"
+    cfg = json.loads(cfg_file.read_text(encoding="utf-8")) if cfg_file.exists() else {}
+    cfg["name"] = entry.name.strip()
+    cfg["description"] = entry.description.strip()
+    cfg["team"] = entry.team.strip()
+    cfg_file.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {"ok": True}
+
+
+@app.delete("/api/templates/projects/{project_id}")
+async def delete_template_project(project_id: str):
+    """Delete a project type directory."""
+    if ".." in project_id or "/" in project_id or "\\" in project_id:
+        raise HTTPException(400, "ID invalide")
+    project_dir = SHARED_PROJECTS_DIR / project_id
+    if not project_dir.exists():
+        raise HTTPException(404, f"Projet '{project_id}' introuvable")
+    import shutil
+    shutil.rmtree(project_dir)
+    return {"ok": True}
+
+
+def _project_dir_or_404(project_id: str) -> Path:
+    if ".." in project_id or "/" in project_id or "\\" in project_id:
+        raise HTTPException(400, "ID invalide")
+    d = SHARED_PROJECTS_DIR / project_id
+    if not d.exists():
+        raise HTTPException(404, f"Projet '{project_id}' introuvable")
+    return d
+
+
+def _wf_name_safe(name: str) -> str:
+    if ".." in name or "/" in name or "\\" in name or not name.replace("_", "").replace("-", "").isalnum():
+        raise HTTPException(400, "Nom de workflow invalide")
+    return name
+
+
+class WorkflowCreate(BaseModel):
+    name: str
+
+
+@app.post("/api/templates/projects/{project_id}/workflows")
+async def create_project_workflow(project_id: str, entry: WorkflowCreate):
+    project_dir = _project_dir_or_404(project_id)
+    name = _wf_name_safe(entry.name.strip())
+    wf = project_dir / f"{name}.wrk.json"
+    if wf.exists():
+        raise HTTPException(409, f"Le workflow '{name}' existe deja")
+    wf.write_text(json.dumps({"phases": {}}, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {"ok": True}
+
+
+class WorkflowGenerate(BaseModel):
+    name: str
+    prompt: str
+
+
+@app.post("/api/templates/projects/{project_id}/workflows/generate")
+async def generate_project_workflow(project_id: str, entry: WorkflowGenerate):
+    """Generate a workflow using CreateWorkflow.md system prompt and save it."""
+    import re as _re
+    project_dir = _project_dir_or_404(project_id)
+    name = _wf_name_safe(entry.name.strip())
+    wf_path = project_dir / f"{name}.wrk.json"
+    if wf_path.exists():
+        raise HTTPException(409, f"Le workflow '{name}' existe deja")
+
+    # Load system prompt template
+    meta_path = PROMPTS_DIR / "CreateWorkflow.md"
+    if not meta_path.exists():
+        raise HTTPException(500, "Meta-prompt CreateWorkflow.md introuvable")
+    system_template = meta_path.read_text(encoding="utf-8")
+
+    # Build {project_prompt} from project.json + user prompt
+    cfg_file = project_dir / "project.json"
+    project_cfg = json.loads(cfg_file.read_text(encoding="utf-8")) if cfg_file.exists() else {}
+    project_prompt_parts = []
+    if project_cfg.get("name"):
+        project_prompt_parts.append(f"Nom du projet : {project_cfg['name']}")
+    if project_cfg.get("description"):
+        project_prompt_parts.append(f"Description : {project_cfg['description']}")
+    if project_cfg.get("team"):
+        project_prompt_parts.append(f"Equipe : {project_cfg['team']}")
+    project_prompt_parts.append(entry.prompt.strip())
+    project_prompt = "\n".join(project_prompt_parts)
+
+    # Build {available_agents} with identity + profile file names
+    agents_parts = []
+    if SHARED_AGENTS_DIR.exists():
+        for sa_dir in sorted(SHARED_AGENTS_DIR.iterdir()):
+            if sa_dir.is_dir():
+                acfg_file = sa_dir / "agent.json"
+                if not acfg_file.exists():
+                    continue
+                acfg = json.loads(acfg_file.read_text(encoding="utf-8"))
+                agent_id = sa_dir.name
+                lines = [f"## {agent_id} — {acfg.get('name', agent_id)}"]
+                # Identity
+                identity_file = sa_dir / "identity.md"
+                if identity_file.exists():
+                    lines.append(f"Identity: {identity_file.read_text(encoding='utf-8').strip()}")
+                # Profile files
+                roles, missions, skills = [], [], []
+                for f in sorted(sa_dir.iterdir()):
+                    if not f.is_file() or f.suffix != ".md":
+                        continue
+                    stem = f.stem
+                    if stem.startswith("role_"):
+                        roles.append(stem[5:])
+                    elif stem.startswith("mission_"):
+                        missions.append(stem[8:])
+                    elif stem.startswith("skill_"):
+                        skills.append(stem[6:])
+                if roles:
+                    lines.append(f"Roles: {', '.join(roles)}")
+                if missions:
+                    lines.append(f"Missions: {', '.join(missions)}")
+                if skills:
+                    lines.append(f"Skills: {', '.join(skills)}")
+                agents_parts.append("\n".join(lines))
+    available_agents = "\n\n".join(agents_parts) if agents_parts else "(aucun agent disponible)"
+
+    # Build {workflow_spec} from docs/workflow-model.md
+    specs_path = PROJECT_DIR / "docs" / "workflow-model.md"
+    if not specs_path.exists():
+        specs_path = Path(__file__).resolve().parent.parent / "docs" / "workflow-model.md"
+    workflow_spec = specs_path.read_text(encoding="utf-8") if specs_path.exists() else "(specifications non disponibles)"
+
+    # Inject placeholders
+    system_prompt = system_template.replace("{project_prompt}", project_prompt).replace("{available_agents}", available_agents).replace("{workflow_spec}", workflow_spec)
+    user_msg = "Genere le workflow complet pour ce projet. Retourne uniquement le JSON."
+
+    # Trace: save prompt to project chat directory
+    from datetime import datetime as _dt
+    chat_dir = project_dir / "chat"
+    chat_dir.mkdir(exist_ok=True)
+    ts = _dt.now().strftime("%y%m%d-%H%M%S")
+    trace_content = f"# System Prompt\n\n{system_prompt}\n\n# User Message\n\n{user_msg}\n"
+    (chat_dir / f"{ts}_create.md").write_text(trace_content, encoding="utf-8")
+
+    try:
+        result = await chat(ChatRequest(messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_msg},
+        ]))
+        raw = result.get("content", "")
+    except Exception as e:
+        raise HTTPException(500, f"Generation echouee: {e}")
+
+    # Trace: save response
+    (chat_dir / f"{ts}_response.md").write_text(raw, encoding="utf-8")
+
+    # Extract JSON from response (handle markdown code blocks)
+    json_match = _re.search(r"```(?:json)?\s*\n?(.*?)```", raw, _re.DOTALL)
+    json_str = json_match.group(1).strip() if json_match else raw.strip()
+
+    try:
+        workflow_data = json.loads(json_str)
+    except json.JSONDecodeError:
+        raise HTTPException(422, "Le LLM n'a pas retourne un JSON valide.")
+
+    wf_path.write_text(json.dumps(workflow_data, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {"ok": True, "workflow": workflow_data}
+
+
+@app.get("/api/templates/projects/{project_id}/workflows/{wf_name}")
+async def get_project_workflow(project_id: str, wf_name: str):
+    project_dir = _project_dir_or_404(project_id)
+    name = _wf_name_safe(wf_name)
+    wf = project_dir / f"{name}.wrk.json"
+    if not wf.exists():
+        raise HTTPException(404, f"Workflow '{name}' introuvable")
+    return {"name": name, "content": wf.read_text(encoding="utf-8")}
+
+
+class WorkflowUpdate(BaseModel):
+    content: str
+
+
+@app.put("/api/templates/projects/{project_id}/workflows/{wf_name}")
+async def put_project_workflow(project_id: str, wf_name: str, entry: WorkflowUpdate):
+    project_dir = _project_dir_or_404(project_id)
+    name = _wf_name_safe(wf_name)
+    content = entry.content.strip()
+    try:
+        json.loads(content)
+    except json.JSONDecodeError as e:
+        raise HTTPException(400, f"JSON invalide: {e}")
+    (project_dir / f"{name}.wrk.json").write_text(content, encoding="utf-8")
+    return {"ok": True}
+
+
+@app.delete("/api/templates/projects/{project_id}/workflows/{wf_name}")
+async def delete_project_workflow(project_id: str, wf_name: str):
+    project_dir = _project_dir_or_404(project_id)
+    name = _wf_name_safe(wf_name)
+    wf = project_dir / f"{name}.wrk.json"
+    if not wf.exists():
+        raise HTTPException(404, f"Workflow '{name}' introuvable")
+    wf.unlink()
+    return {"ok": True}
+
+
+# ── API: Project Workflow — visual editor endpoints ────
+# These follow the same pattern as /api/templates/workflow/{dir}
+# Used by openWorkflowEditor(wfName, '/api/templates/project-workflow/{project_id}', ...)
+
+@app.get("/api/templates/project-workflow/{project_id}/{wf_name}")
+async def get_project_workflow_editor(project_id: str, wf_name: str):
+    project_dir = _project_dir_or_404(project_id)
+    name = _wf_name_safe(wf_name)
+    wf = project_dir / f"{name}.wrk.json"
+    return _read_json(wf) if wf.exists() else {}
+
+
+@app.put("/api/templates/project-workflow/{project_id}/{wf_name}")
+async def put_project_workflow_editor(project_id: str, wf_name: str, request: Request):
+    project_dir = _project_dir_or_404(project_id)
+    name = _wf_name_safe(wf_name)
+    data = await request.json()
+    _write_json(project_dir / f"{name}.wrk.json", data)
+    return {"ok": True}
+
+
+@app.get("/api/templates/project-workflow-design/{project_id}/{wf_name}")
+async def get_project_workflow_design(project_id: str, wf_name: str):
+    project_dir = _project_dir_or_404(project_id)
+    name = _wf_name_safe(wf_name)
+    path = project_dir / f"{name}.wrk.design.json"
+    return _read_json(path) if path.exists() else {}
+
+
+@app.put("/api/templates/project-workflow-design/{project_id}/{wf_name}")
+async def put_project_workflow_design(project_id: str, wf_name: str, request: Request):
+    project_dir = _project_dir_or_404(project_id)
+    name = _wf_name_safe(wf_name)
+    data = await request.json()
+    _write_json(project_dir / f"{name}.wrk.design.json", data)
+    return {"ok": True}
 
 
 @app.get("/api/prompts/templates/{name}")
 async def get_prompt_template(name: str):
-    """Return content of a prompt template from Agents/Prompts/{name}.md."""
+    """Return content of a prompt template (legacy, uses default culture)."""
     if ".." in name or "/" in name or "\\" in name:
         raise HTTPException(400, "Nom de template invalide")
     path = PROMPTS_DIR / f"{name}.md"
     if not path.exists():
         raise HTTPException(404, f"Template '{name}' introuvable")
     return {"content": path.read_text(encoding="utf-8")}
+
+
+class GenerateMissionRequest(BaseModel):
+    agent_prompt: str = ""
+    step_name: str = ""
+    step_key: str = ""
+    current_instruction: str = ""
+
+
+@app.post("/api/agents/generate-mission")
+async def generate_mission(req: GenerateMissionRequest):
+    """Use Missions.md meta-prompt + agent prompt + current instruction to generate a better mission."""
+    meta_path = PROMPTS_DIR / "Missions.md"
+    if not meta_path.exists():
+        raise HTTPException(500, "Meta-prompt Missions.md introuvable")
+    system_prompt = meta_path.read_text(encoding="utf-8")
+
+    user_msg = ""
+    if req.agent_prompt:
+        user_msg += f"<profil>\n{req.agent_prompt[:12000]}\n</profil>\n\n"
+    if req.step_name:
+        user_msg += f"Etape : {req.step_name}"
+        if req.step_key:
+            user_msg += f" (cle: {req.step_key})"
+        user_msg += "\n\n"
+    user_msg += f"<mission>\n{req.current_instruction}\n</mission>\n\n"
+    user_msg += "Genere l'instruction de mission optimisee. Reponds uniquement avec le contenu de l'instruction, sans bloc de code markdown, sans explication."
+
+    chat_req = ChatRequest(messages=[
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_msg},
+    ])
+    result = await chat(chat_req)
+    return {"instruction": result["content"]}
 
 
 class GeneratePromptRequest(BaseModel):
@@ -2102,6 +3028,104 @@ async def generate_unassign(req: GenerateAssignRequest):
     return {"content": result["content"]}
 
 
+class SkillMatchRequest(BaseModel):
+    agent_id: str
+    description: str = ""
+
+
+@app.post("/api/templates/projects/{project_id}/deliverable-skillmatch")
+async def deliverable_skillmatch(project_id: str, req: SkillMatchRequest):
+    """Use SkillMatcher.md to auto-select roles/missions/skills for a deliverable."""
+    _project_dir_or_404(project_id)
+    agent_dir = SHARED_AGENTS_DIR / req.agent_id
+    if not agent_dir.exists():
+        raise HTTPException(404, f"Agent '{req.agent_id}' introuvable")
+
+    # Load SkillMatcher.md system prompt
+    meta_path = PROMPTS_DIR / "SkillMatcher.md"
+    if not meta_path.exists():
+        raise HTTPException(500, "Meta-prompt SkillMatcher.md introuvable")
+    system_prompt = meta_path.read_text(encoding="utf-8")
+
+    # Build {agent_profile} from all .md files
+    profile_parts = []
+    for f in sorted(agent_dir.iterdir()):
+        if f.is_file() and f.suffix == ".md" and not f.name.endswith("_assign.md") and not f.name.endswith("_unassign.md"):
+            if f.parent.name == "chat":
+                continue
+            content = f.read_text(encoding="utf-8")
+            profile_parts.append(f"--------------- {f.name} ---------------\n{content}")
+    # Also check chat/ subdirectory exclusion (files are in agent_dir directly)
+    agent_profile = "\n\n".join(profile_parts) if profile_parts else "(aucun profil)"
+
+    # Build {deliverable} context
+    deliverable_ctx = json.dumps({"description": req.description, "agent_id": req.agent_id}, ensure_ascii=False, indent=2)
+
+    # Inject into system prompt
+    system_prompt = system_prompt.replace("{deliverable}", deliverable_ctx).replace("{agent_profile}", agent_profile)
+
+    user_msg = "Analyse le livrable et le profil agent. Retourne uniquement le JSON demande, sans bloc de code markdown."
+
+    result = await chat(ChatRequest(messages=[
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_msg},
+    ]))
+
+    # Trace in chat/ directory
+    from datetime import datetime
+    chat_dir = agent_dir / "chat"
+    chat_dir.mkdir(exist_ok=True)
+    ts = datetime.now().strftime("%y%m%d%H%M%S")
+    (chat_dir / f"{ts}_skillmatch_send.md").write_text(
+        json.dumps([{"role": "system", "content": system_prompt}, {"role": "user", "content": user_msg}], indent=2, ensure_ascii=False),
+        encoding="utf-8"
+    )
+    (chat_dir / f"{ts}_skillmatch_response.md").write_text(result.get("content", ""), encoding="utf-8")
+
+    # Parse JSON from response
+    raw = result.get("content", "")
+    import re as _re
+    # Try to extract JSON from response (may be wrapped in markdown code block)
+    json_match = _re.search(r'\{[\s\S]*\}', raw)
+    if json_match:
+        try:
+            parsed = json.loads(json_match.group())
+            # Extract role/mission/skill names from selected_files
+            roles = [e["file"].removeprefix("role_").removesuffix(".md") for e in (parsed.get("selected_files", {}).get("roles", []))]
+            missions = [e["file"].removeprefix("mission_").removesuffix(".md") for e in (parsed.get("selected_files", {}).get("missions", []))]
+            skills = [e["file"].removeprefix("skill_").removesuffix(".md") for e in (parsed.get("selected_files", {}).get("skills", []))]
+            full_profile = parsed.get("full_profile", False)
+            return {"roles": roles, "missions": missions, "skills": skills, "full_profile": full_profile}
+        except (json.JSONDecodeError, KeyError):
+            pass
+    raise HTTPException(500, f"Reponse LLM non parseable: {raw[:500]}")
+
+
+@app.post("/api/templates/projects/{project_id}/orchestrator/build")
+async def build_orchestrator_prompt_endpoint(project_id: str):
+    """Build orchestrator prompt dynamically from agent catalog."""
+    project_dir = _project_dir_or_404(project_id)
+    try:
+        import importlib.util as _ilu
+        _pb_path = (PROJECT_DIR if DOCKER_MODE else Path(__file__).resolve().parent.parent) / "Agents" / "Shared" / "prompt_builder.py"
+        _spec = _ilu.spec_from_file_location("prompt_builder", _pb_path)
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        build_orchestrator_prompt = _mod.build_orchestrator_prompt
+        content = build_orchestrator_prompt(
+            project_dir,
+            shared_agents_dir=SHARED_AGENTS_DIR,
+            shared_teams_dir=SHARED_TEAMS_DIR,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Erreur generation: {e}")
+    return {"ok": True, "content": content}
+
+
 # ── API: Teams (Configs) ──────────────────────────
 
 
@@ -2140,6 +3164,22 @@ async def get_teams():
                     prompt_file = sa_dir / "prompt.md"
                     if prompt_file.exists():
                         cfg["prompt_content"] = prompt_file.read_text(encoding="utf-8")
+                    # Extended files: identity, roles, missions, skills
+                    identity_file = sa_dir / "identity.md"
+                    cfg["identity_content"] = identity_file.read_text(encoding="utf-8") if identity_file.exists() else ""
+                    cfg["roles"] = []
+                    cfg["missions"] = []
+                    cfg["skills"] = []
+                    for f in sorted(sa_dir.iterdir()):
+                        if not f.is_file() or f.suffix != ".md":
+                            continue
+                        stem = f.stem
+                        if stem.startswith("role_"):
+                            cfg["roles"].append({"name": stem[5:], "content": f.read_text(encoding="utf-8")})
+                        elif stem.startswith("mission_"):
+                            cfg["missions"].append({"name": stem[8:], "content": f.read_text(encoding="utf-8")})
+                        elif stem.startswith("skill_"):
+                            cfg["skills"].append({"name": stem[6:], "content": f.read_text(encoding="utf-8")})
                     shared_agents_map[sa_dir.name] = cfg
     # Enrich each team with its agents (merged from shared catalog)
     enriched = []
@@ -2231,7 +3271,15 @@ def _ensure_team_folder(team_id: str, directory: str = "", template: str = ""):
         else:
             log.warning("Template '%s' not found, creating skeleton", template)
     team_dir.mkdir(parents=True, exist_ok=True)
-    _write_json(team_dir / "agents_registry.json", {"agents": {}})
+    _write_json(team_dir / "agents_registry.json", {"agents": {
+        "orchestrator": {
+            "name": "Orchestrateur",
+            "temperature": 0.2,
+            "max_tokens": 4096,
+            "prompt": "orchestrator.md",
+            "type": "orchestrator"
+        }
+    }})
     _write_json(team_dir / "agent_mcp_access.json", {})
     log.info("Created skeleton team folder: %s", team_dir)
 
@@ -2252,8 +3300,8 @@ async def add_team(team_id: str, entry: TeamEntry):
     if entry.orchestrator:
         team_data["orchestrator"] = entry.orchestrator
     _ensure_team_folder(team_id, directory, entry.template)
-    # Auto-detect orchestrator from template if not explicitly set
-    if not entry.orchestrator and entry.template:
+    # Auto-detect orchestrator from registry if not explicitly set
+    if not entry.orchestrator:
         registry_file = TEAMS_DIR / (directory or team_id) / "agents_registry.json"
         if registry_file.exists():
             reg = _read_json(registry_file)
@@ -2350,6 +3398,22 @@ async def list_templates():
                     prompt_file = sa_dir / "prompt.md"
                     if prompt_file.exists():
                         cfg["prompt_content"] = prompt_file.read_text(encoding="utf-8")
+                    # Extended files: identity, roles, missions, skills
+                    identity_file = sa_dir / "identity.md"
+                    cfg["identity_content"] = identity_file.read_text(encoding="utf-8") if identity_file.exists() else ""
+                    cfg["roles"] = []
+                    cfg["missions"] = []
+                    cfg["skills"] = []
+                    for f in sorted(sa_dir.iterdir()):
+                        if not f.is_file() or f.suffix != ".md":
+                            continue
+                        stem = f.stem
+                        if stem.startswith("role_"):
+                            cfg["roles"].append({"name": stem[5:], "content": f.read_text(encoding="utf-8")})
+                        elif stem.startswith("mission_"):
+                            cfg["missions"].append({"name": stem[8:], "content": f.read_text(encoding="utf-8")})
+                        elif stem.startswith("skill_"):
+                            cfg["skills"].append({"name": stem[6:], "content": f.read_text(encoding="utf-8")})
                     shared_agents_map[sa_dir.name] = cfg
     templates = []
     if SHARED_TEAMS_DIR.exists():
@@ -2520,7 +3584,15 @@ async def save_template_teams(request: Request):
             team_dir = SHARED_TEAMS_DIR / directory
             if not team_dir.exists():
                 team_dir.mkdir(parents=True, exist_ok=True)
-                _write_json(team_dir / "agents_registry.json", {"agents": {}})
+                _write_json(team_dir / "agents_registry.json", {"agents": {
+                    "orchestrator": {
+                        "name": "Orchestrateur",
+                        "temperature": 0.2,
+                        "max_tokens": 4096,
+                        "prompt": "orchestrator.md",
+                        "type": "orchestrator"
+                    }
+                }})
                 _write_json(team_dir / "agent_mcp_access.json", {})
                 log.info("Created shared team folder: %s", team_dir)
     return {"ok": True}
@@ -2596,6 +3668,8 @@ async def delete_template_agent(agent_id: str, team_id: str = ""):
     data = _read_json(registry_path)
     if agent_id not in data.get("agents", {}):
         raise HTTPException(404, f"Agent {agent_id} not found")
+    if data["agents"][agent_id].get("type") == "orchestrator":
+        raise HTTPException(403, "L'orchestrateur ne peut pas etre supprime")
     prompt_file = data["agents"][agent_id].get("prompt", f"{agent_id}.md")
     del data["agents"][agent_id]
     _write_json(registry_path, data)
