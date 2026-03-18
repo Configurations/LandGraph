@@ -76,6 +76,7 @@ Pas de wrapper "workflow" autour.
 
 ```json
 {
+  "team": "DevProject",
   "phases": {
     "phase_id": {
       "name": "Nom affiché",
@@ -92,13 +93,16 @@ Pas de wrapper "workflow" autour.
         }
       },
       "deliverables": {
-        "deliverable_key": {
+        "agent_id:step_key": {
           "agent": "agent_id",
           "required": true,
-          "type": "documentation|code|design|automation|tasklist|specs",
+          "type": "documentation|code|design|automation|tasklist|specs|contract",
           "description": "Description du livrable",
           "pipeline_step": "step_key",
-          "depends_on": []
+          "depends_on": [],
+          "roles": ["role_name"],
+          "missions": ["mission_name"],
+          "skills": ["skill_name"]
         }
       },
       "exit_conditions": {
@@ -109,7 +113,7 @@ Pas de wrapper "workflow" autour.
     }
   },
   "transitions": [
-    {"from": "phase_a", "to": "phase_b", "human_gate": true}
+    {"from": "phase_a", "to": "phase_b", "human_gate": true, "from_side": "right", "to_side": "left"}
   ],
   "parallel_groups": {
     "description": "Les agents du même groupe tournent en parallèle. B attend A. C attend B.",
@@ -147,6 +151,14 @@ Pas de wrapper "workflow" autour.
 - PAS de wrapper "workflow" : phases, transitions, parallel_groups, rules sont 
   des clés à la RACINE du JSON.
 - coverage_report et missing_roles sont aussi à la racine.
+
+### Profil livrable (roles, missions, skills)
+- Les champs `roles`, `missions` et `skills` d'un livrable sont optionnels.
+- Ils referencent les fichiers `role_*.md`, `mission_*.md` et `skill_*.md` du catalogue
+  agent dans `Shared/Agents/{agent_id}/`.
+- Si absents, l'agent utilise son profil complet (identity + tous roles/missions/skills).
+- Si presents, seuls les roles/missions/skills listes sont injectes dans le prompt de l'agent.
+- L'editeur propose un skill-match automatique (baguette magique) via LLM.
 
 ### Pipeline steps
 - Chaque pipeline_step doit être UNIQUE au sein d'un même agent dans tout le workflow.

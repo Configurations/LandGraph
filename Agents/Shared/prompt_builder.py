@@ -14,6 +14,20 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 
+def _resolve_agent_dir(shared_agents_dir: Path, agent_id: str) -> Path | None:
+    """Find agent directory with case-insensitive matching."""
+    exact = shared_agents_dir / agent_id
+    if exact.exists():
+        return exact
+    if not shared_agents_dir.exists():
+        return None
+    lower = agent_id.lower()
+    for d in shared_agents_dir.iterdir():
+        if d.is_dir() and d.name.lower() == lower:
+            return d
+    return None
+
+
 def build_orchestrator_prompt(
     project_dir: str | Path,
     *,
@@ -68,7 +82,11 @@ def build_orchestrator_prompt(
     agents = registry.get("agents", {})
 
     # 3. Read orchestrator identity template
-    orch_dir = shared_agents_dir / "orchestrator"
+    orch_dir = _resolve_agent_dir(shared_agents_dir, "orchestrator")
+    if orch_dir is None:
+        raise FileNotFoundError(
+            f"Dossier orchestrateur introuvable dans {shared_agents_dir}"
+        )
     template_file = orch_dir / "identity.md"
     if not template_file.exists():
         raise FileNotFoundError(
@@ -87,11 +105,11 @@ def build_orchestrator_prompt(
             continue
 
         agent_name = agent_cfg.get("name", agent_id)
-        agent_catalog_dir = shared_agents_dir / agent_id
+        agent_catalog_dir = _resolve_agent_dir(shared_agents_dir, agent_id)
 
         # Identity
         identity_text = ""
-        if agent_catalog_dir.exists():
+        if agent_catalog_dir is not None:
             identity_file = agent_catalog_dir / "identity.md"
             if identity_file.exists():
                 identity_text = identity_file.read_text(encoding="utf-8").strip()
@@ -101,7 +119,7 @@ def build_orchestrator_prompt(
 
         # Roles (role_*.md)
         role_items = []
-        if agent_catalog_dir.exists():
+        if agent_catalog_dir is not None:
             for f in sorted(agent_catalog_dir.glob("role_*.md")):
                 content = f.read_text(encoding="utf-8").strip()
                 if content:
@@ -113,7 +131,7 @@ def build_orchestrator_prompt(
 
         # Missions (mission_*.md)
         mission_items = []
-        if agent_catalog_dir.exists():
+        if agent_catalog_dir is not None:
             for f in sorted(agent_catalog_dir.glob("mission_*.md")):
                 content = f.read_text(encoding="utf-8").strip()
                 if content:

@@ -4249,8 +4249,11 @@ async function buildOrchestratorPrompt(projectId) {
 
 function addProjectWorkflow(projectId) {
   const pid = escHtml(projectId);
+  const p = _tplProjects.find(x => x.id === projectId);
+  const defaultTeam = p && p.team ? p.team : '';
   showModal('<div class="modal-header"><h3>Nouveau workflow</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
     '<div class="form-group"><label>Nom du workflow (lettres, chiffres, _, -)</label><input id="proj-wf-new-name" placeholder="discovery" oninput="this.value=this.value.replace(/[^a-zA-Z0-9_\\-]/g,\'\')" /></div>' +
+    '<div class="form-group"><label>Equipe</label><select id="proj-wf-team" onchange="_projWfToggleGen()">' + _projTeamOptions(defaultTeam) + '</select></div>' +
     '<div class="form-group"><label>Generer un workflow</label>' +
     '<textarea id="proj-wf-gen-prompt" rows="5" placeholder="Decrivez le projet et les contraintes pour generer automatiquement le workflow..." oninput="_projWfToggleGen()"></textarea></div>' +
     '<div class="modal-actions" id="proj-wf-actions"><button class="btn btn-outline" id="proj-wf-cancel-btn" onclick="closeModal()">Annuler</button>' +
@@ -4260,7 +4263,8 @@ function addProjectWorkflow(projectId) {
 function _projWfToggleGen() {
   const btn = document.getElementById('proj-wf-gen-btn');
   const prompt = (document.getElementById('proj-wf-gen-prompt').value || '').trim();
-  if (btn) btn.disabled = !prompt;
+  const team = (document.getElementById('proj-wf-team')?.value || '').trim();
+  if (btn) btn.disabled = !prompt || !team;
 }
 
 async function generateProjectWorkflow(projectId) {
@@ -4290,9 +4294,10 @@ async function generateProjectWorkflow(projectId) {
 
 async function createProjectWorkflow(projectId) {
   const name = (document.getElementById('proj-wf-new-name').value || '').trim();
+  const team = (document.getElementById('proj-wf-team')?.value || '').trim();
   if (!name) { toast('Nom requis', 'error'); return; }
   try {
-    await api('/api/templates/projects/' + encodeURIComponent(projectId) + '/workflows', { method: 'POST', body: { name } });
+    await api('/api/templates/projects/' + encodeURIComponent(projectId) + '/workflows', { method: 'POST', body: { name, team } });
     closeModal();
     toast('Workflow cree', 'success');
     loadTplProjects();
@@ -6139,7 +6144,8 @@ async function openWorkflowEditor(dir, apiBase, label, registryDir) {
     // Config workflow -> /api/agents/registry/{dir}
     // Templates workflow -> /api/templates/registry/{dir}
     // Project workflow -> use registryDir override (team directory)
-    const regDir = registryDir || dir;
+    // Priority: team persisted in workflow data > registryDir param > dir
+    const regDir = (raw && raw.team) || registryDir || dir;
     const registryUrl = apiBase.includes('/templates/')
       ? `/api/templates/registry/${encodeURIComponent(regDir)}`
       : `/api/agents/registry/${encodeURIComponent(regDir)}`;
@@ -6450,6 +6456,7 @@ function _wfRenderWorkspaceProps(el) {
 async function _wfChangeTeam(teamDir) {
   if (!_wf) return;
   _wf.registryDir = teamDir;
+  _wf.data.team = teamDir;
   // Reload agents from the new team's registry
   const registryBase = _wf.apiBase.includes('templates') ? '/api/templates/registry' : '/api/agents/registry';
   _wf.agentPipelines = {};

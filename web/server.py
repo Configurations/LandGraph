@@ -2702,6 +2702,7 @@ def _wf_name_safe(name: str) -> str:
 
 class WorkflowCreate(BaseModel):
     name: str
+    team: str = ""
 
 
 @app.post("/api/templates/projects/{project_id}/workflows")
@@ -2711,7 +2712,10 @@ async def create_project_workflow(project_id: str, entry: WorkflowCreate):
     wf = project_dir / f"{name}.wrk.json"
     if wf.exists():
         raise HTTPException(409, f"Le workflow '{name}' existe deja")
-    wf.write_text(json.dumps({"phases": {}}, indent=2, ensure_ascii=False), encoding="utf-8")
+    data = {"phases": {}}
+    if entry.team.strip():
+        data["team"] = entry.team.strip()
+    wf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     return {"ok": True}
 
 
