@@ -107,6 +107,14 @@ def build_orchestrator_prompt(
         agent_name = agent_cfg.get("name", agent_id)
         agent_catalog_dir = _resolve_agent_dir(shared_agents_dir, agent_id)
 
+        # Read description from catalog agent.json
+        description = ""
+        if agent_catalog_dir is not None:
+            catalog_json = agent_catalog_dir / "agent.json"
+            if catalog_json.exists():
+                catalog_cfg = json.loads(catalog_json.read_text(encoding="utf-8"))
+                description = catalog_cfg.get("description", "")
+
         # Identity
         identity_text = ""
         if agent_catalog_dir is not None:
@@ -114,7 +122,7 @@ def build_orchestrator_prompt(
             if identity_file.exists():
                 identity_text = identity_file.read_text(encoding="utf-8").strip()
         identity_rows.append(
-            f"| `{agent_id}` | {agent_name} | {identity_text} |"
+            f"| `{agent_id}` | {agent_name} | {description} | {identity_text} |"
         )
 
         # Roles (role_*.md)
@@ -143,7 +151,7 @@ def build_orchestrator_prompt(
 
     # Format variables
     agents_identity = (
-        "| Cle | Nom | Identite |\n|---|---|---|\n"
+        "| Cle | Nom | Description | Identite |\n|---|---|---|---|\n"
         + "\n".join(identity_rows)
         if identity_rows
         else "(aucun agent)"
