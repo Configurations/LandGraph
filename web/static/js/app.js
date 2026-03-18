@@ -6149,10 +6149,17 @@ async function openWorkflowEditor(dir, apiBase, label, registryDir) {
         if (acfg.pipeline_steps && acfg.pipeline_steps.length) agentPipelines[aid] = acfg.pipeline_steps;
       }
     } catch {}
+    // Load available teams for the team selector
+    let wfTeams = [];
+    try {
+      const td = await api('/api/templates/teams');
+      wfTeams = (td.teams || []);
+    } catch {}
     const data = (raw && Object.keys(raw).length) ? raw : { phases: {}, transitions: [], parallel_groups: { description: '', order: ['A','B','C'] }, rules: {} };
     _wf = {
       dir, apiBase, designBase, label,
       registryDir: regDir,
+      teams: wfTeams,
       data: JSON.parse(JSON.stringify(data)),
       selected: null,
       positions: (design && design.positions) ? design.positions : {},
@@ -6387,8 +6394,31 @@ function _wfRenderWorkspaceProps(el) {
     </div>`;
   }).join('');
 
+  // Build team selector options
+  const teamOptions = (_wf.teams || []).map(t => {
+    const dir = t.directory || t.id;
+    const sel = dir === _wf.registryDir ? 'selected' : '';
+    return `<option value="${escHtml(dir)}" ${sel}>${escHtml(t.name || dir)}</option>`;
+  }).join('');
+
   el.innerHTML = `
     <h4>Proprietes du Workflow</h4>
+
+    <div class="wf-props-section">
+      <div class="wf-props-section-title" onclick="_wfToggleSection(this)">
+        <span class="wf-section-arrow">${_wf._openSection === 'wk-team' ? '\u25bc' : '\u25b6'}</span>
+        Equipe
+      </div>
+      <div class="wf-section-body" ${_wf._openSection === 'wk-team' ? '' : 'style="display:none"'} data-section="wk-team">
+        <div class="form-group">
+          <label>Equipe source des agents</label>
+          <select onchange="_wfChangeTeam(this.value)">
+            <option value="">-- Aucune --</option>
+            ${teamOptions}
+          </select>
+        </div>
+      </div>
+    </div>
 
     <div class="wf-props-section">
       <div class="wf-props-section-title" onclick="_wfToggleSection(this)">
@@ -6415,6 +6445,34 @@ function _wfRenderWorkspaceProps(el) {
       </div>
     </div>
   `;
+}
+
+async function _wfChangeTeam(teamDir) {
+  if (!_wf) return;
+  _wf.registryDir = teamDir;
+  // Reload agents from the new team's registry
+  const registryBase = _wf.apiBase.includes('templates') ? '/api/templates/registry' : '/api/agents/registry';
+  _wf.agentPipelines = {};
+  if (teamDir) {
+    try {
+      const reg = await api(`${registryBase}/${encodeURIComponent(teamDir)}`);
+      for (const [aid, acfg] of Object.entries(reg.agents || {})) {
+        if (acfg.pipeline_steps && acfg.pipeline_steps.length) _wf.agentPipelines[aid] = acfg.pipeline_steps;
+      }
+    } catch {}
+  }
+  // Reload shared agent caps/profiles
+  try {
+    const sa = await api('/api/shared-agents');
+    _wf.agentCaps = {};
+    _wf.agentProfiles = {};
+    (sa.agents || []).forEach(a => {
+      _wf.agentCaps[a.id] = { documentation: !!a.delivers_docs, code: !!a.delivers_code, design: !!a.delivers_design, automation: !!a.delivers_automation, tasklist: !!a.delivers_tasklist, specs: !!a.delivers_specs, contract: !!a.delivers_contract };
+      _wf.agentProfiles[a.id] = { roles: a.role_names || [], missions: a.mission_names || [], skills: a.skill_names || [] };
+      if (a.pipeline_steps && a.pipeline_steps.length) _wf.agentPipelines[a.id] = a.pipeline_steps;
+    });
+  } catch {}
+  wfRender();
 }
 
 function _wfRenderTransitionProps(el, idx) {
