@@ -110,7 +110,7 @@ def get_throttle(env_key: str) -> ProviderThrottle:
         return _throttles[env_key]
 
 
-def throttled_invoke(llm, messages, provider_name: str = "", model: str = "", estimated_tokens: int = 1000):
+def throttled_invoke(llm, messages, provider_name: str = "", model: str = "", estimated_tokens: int = 1000, callbacks: list | None = None):
     env_key = "_default"
     if provider_name:
         env_key = _get_env_key_for_provider(provider_name)
@@ -119,11 +119,12 @@ def throttled_invoke(llm, messages, provider_name: str = "", model: str = "", es
 
     throttle = get_throttle(env_key)
     last_error = None
+    invoke_kwargs = {"config": {"callbacks": callbacks}} if callbacks else {}
 
     for attempt in range(MAX_RETRIES + 1):
         throttle.wait_if_needed(estimated_tokens)
         try:
-            response = llm.invoke(messages)
+            response = llm.invoke(messages, **invoke_kwargs)
             if hasattr(response, "usage_metadata"):
                 total = getattr(response.usage_metadata, "total_tokens", estimated_tokens)
                 throttle.record_usage(total)

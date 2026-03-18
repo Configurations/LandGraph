@@ -23,7 +23,7 @@ def _create_agent(agent_id, conf, has_mcp, team_id="default"):
     use_tools = conf.get("use_tools", has_mcp)
     attrs = {
         "agent_id": agent_id,
-        "agent_name": conf["name"],
+        "agent_name": conf.get("name", agent_id),
         "default_llm": conf.get("llm", ""),
         "default_model": conf.get("model", "claude-sonnet-4-5-20250929"),
         "default_temperature": conf.get("temperature", 0.3),
@@ -79,6 +79,47 @@ def get_agents(team_id: str = "default"):
     return _teams_agents[team_id]
 
 
+def reload_agents(team_id: str = None):
+    """Clear agent cache. If team_id is None, clear all."""
+    if team_id:
+        _teams_agents.pop(team_id, None)
+    else:
+        _teams_agents.clear()
+    logger.info(f"Agent cache cleared: {team_id or 'all'}")
+
+
 def get_agent(agent_id: str, team_id: str = "default"):
     agents = get_agents(team_id)
     return agents.get(agent_id)
+
+
+def get_pipeline_step_instruction(agent_id: str, pipeline_step: str, team_id: str = "default") -> str:
+    """Return the instruction for a specific pipeline step from the registry."""
+    registry = load_team_json(team_id, "agents_registry.json")
+    if not registry:
+        return ""
+    agent_conf = registry.get("agents", {}).get(agent_id, {})
+    for step in agent_conf.get("pipeline_steps", []):
+        if step.get("output_key") == pipeline_step:
+            return step.get("instruction", "")
+    return ""
+
+
+def load_agent_supplementary_prompts(agent_id: str) -> str:
+    """Load assign + unassign prompts from Shared/Agents/{agent_id}/.
+    Returns concatenated text, empty string if files not found."""
+    parts = []
+    for base in ['/app/shared_agents', '/app/Shared/Agents', 'Shared/Agents']:
+        agent_dir = os.path.join(base, agent_id)
+        if not os.path.isdir(agent_dir):
+            continue
+        for suffix in ['_assign.md', '_unassign.md']:
+            path = os.path.join(agent_dir, f"{agent_id}{suffix}")
+            if os.path.isfile(path):
+                try:
+                    parts.append(open(path, encoding="utf-8").read())
+                except Exception:
+                    pass
+        if parts:
+            break
+    return "\n\n".join(parts)

@@ -125,18 +125,17 @@ class EventBus:
         self._register_webhooks()
 
     def _register_langfuse(self):
-        """Enregistre le handler Langfuse si les env vars sont presentes."""
-        pk = os.getenv("LANGFUSE_PUBLIC_KEY", "")
-        sk = os.getenv("LANGFUSE_SECRET_KEY", "")
-        host = os.getenv("LANGFUSE_HOST", "")
-        if not (pk and sk):
-            logger.info("Langfuse: not configured (no LANGFUSE_PUBLIC_KEY/SECRET_KEY)")
-            return
-
-        try:
+        """Langfuse tracing is now handled by CallbackHandler in langfuse_setup.py.
+        This event_bus handler is disabled — kept as placeholder for future custom events."""
+        logger.info("Langfuse: event_bus handler disabled (tracing via CallbackHandler)")
+        return
+        # Legacy code below — kept for reference but not executed
+        try:  # noqa
+            pk = os.getenv("LANGFUSE_PUBLIC_KEY", "")
+            sk = os.getenv("LANGFUSE_SECRET_KEY", "")
+            host = os.getenv("LANGFUSE_HOST", "")
             from langfuse import Langfuse
             client = Langfuse(public_key=pk, secret_key=sk, host=host or "http://localhost:3000")
-            logger.info(f"Langfuse: connected ({host or 'localhost:3000'})")
 
             # State pour tracker les traces/spans en cours
             _traces = {}  # thread_id:agent_id -> trace

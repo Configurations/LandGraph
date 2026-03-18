@@ -147,6 +147,26 @@ REMOTE_CLEAN
             || scp $SCP_OPTS "$f" "${SSH_TARGET}:${REMOTE_DIR}/config/${fname}"
     done
 
+    # Seed Shared/cultures.json (skip if exists)
+    if [[ -f "$LOCAL_DIR/Shared/cultures.json" ]]; then
+        ssh $SSH_OPTS "${SSH_TARGET}" "test -f ${REMOTE_DIR}/Shared/cultures.json" \
+            || scp $SCP_OPTS "$LOCAL_DIR/Shared/cultures.json" "${SSH_TARGET}:${REMOTE_DIR}/Shared/cultures.json"
+    fi
+
+    # Seed Shared/Prompts/ — copy each locale dir and files if they don't exist on remote
+    log "Seeding prompts (skip existing) ..."
+    for locale_dir in "$LOCAL_DIR"/Shared/Prompts/*/; do
+        [[ -d "$locale_dir" ]] || continue
+        locale=$(basename "$locale_dir")
+        ssh $SSH_OPTS "${SSH_TARGET}" "mkdir -p ${REMOTE_DIR}/Shared/Prompts/${locale}"
+        for f in "$locale_dir"*.md; do
+            [[ -f "$f" ]] || continue
+            fname=$(basename "$f")
+            ssh $SSH_OPTS "${SSH_TARGET}" "test -f ${REMOTE_DIR}/Shared/Prompts/${locale}/${fname}" \
+                || scp $SCP_OPTS "$f" "${SSH_TARGET}:${REMOTE_DIR}/Shared/Prompts/${locale}/${fname}"
+        done
+    done
+
     # If no .env on remote, seed it from env.example so services can start
     ssh $SSH_OPTS "${SSH_TARGET}" bash -s <<REMOTE_ENV
 if [[ ! -f "${REMOTE_DIR}/.env" ]]; then

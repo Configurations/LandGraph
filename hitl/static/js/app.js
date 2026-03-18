@@ -1861,12 +1861,21 @@ async function renderProjectWorkflowTab(project, wfStatus) {
   const currentPhase = wfStatus && !wfStatus.error ? (wfStatus.current_phase || 'discovery') : null;
   const phaseData = wfStatus ? (wfStatus.phases || {}) : {};
 
-  // Fetch deliverables + events in parallel
+  // Fetch deliverables + events + pending HITL questions in parallel
   let delivData = { phases: [] };
   let eventsData = { events: [] };
+  let pendingQuestions = [];
+  const threadId = `project-${teamId}-${project.id}`;
   await Promise.all([
-    slug ? api(`/api/projects/${encodeURIComponent(slug)}/deliverables`).then(d => delivData = d).catch(() => {}) : Promise.resolve(),
+    slug ? api(`/api/projects/${encodeURIComponent(slug)}/deliverables`).then(d => { delivData = d; window._lastDelivData = d; }).catch(() => {}) : Promise.resolve(),
     api('/api/events?n=200').then(d => eventsData = d).catch(() => {}),
+    api(`/api/teams/${encodeURIComponent(teamId)}/questions`).then(d => {
+      const questions = Array.isArray(d) ? d : (d.questions || []);
+      pendingQuestions = questions.filter(q =>
+        q.status === 'pending' && q.thread_id === threadId &&
+        q.context && q.context.type === 'phase_validation'
+      );
+    }).catch(() => {}),
   ]);
   const delivByPhase = {};
   (delivData.phases || []).forEach(p => { delivByPhase[p.phase] = p.agents; });
@@ -1888,6 +1897,22 @@ async function renderProjectWorkflowTab(project, wfStatus) {
   if (!currentPhase) {
     html += '<div class="empty-state">Workflow non lance. Cliquez sur "Lancer les agents" pour demarrer.</div></div>';
     return html;
+  }
+
+  // Phase transition banner — show if there's a pending phase_validation
+  if (pendingQuestions.length > 0) {
+    const pq = pendingQuestions[0];
+    const fromPhase = pq.context.current_phase || currentPhase;
+    const toPhase = pq.context.next_phase || '?';
+    html += `<div style="background:linear-gradient(135deg,#6366f115,#8b5cf615);border:1px solid #6366f144;border-radius:8px;padding:16px;margin-bottom:16px;display:flex;align-items:center;gap:12px">
+      <span style="font-size:24px">🚦</span>
+      <div style="flex:1">
+        <div style="font-size:13px;font-weight:600;color:var(--text-primary)">Phase ${esc(fromPhase)} terminee</div>
+        <div style="font-size:11px;color:var(--text-secondary)">Tous les livrables sont produits. Approuvez pour passer a la phase <strong>${esc(toPhase)}</strong>.</div>
+      </div>
+      <button class="btn btn-primary" style="font-size:12px;padding:6px 16px" onclick="approvePhaseTransition('${esc(pq.id)}','${esc(teamId)}')">Approuver → ${esc(toPhase)}</button>
+      <button class="btn btn-outline" style="font-size:12px;padding:6px 16px;color:var(--accent-red);border-color:var(--accent-red)" onclick="rejectPhaseTransition('${esc(pq.id)}','${esc(teamId)}')">Refuser</button>
+    </div>`;
   }
 
   // Phase cards — current phase on top, completed phases below (newest first)
@@ -1923,7 +1948,8 @@ async function renderProjectWorkflowTab(project, wfStatus) {
     html += `<div class="card ${hasRunning ? 'wf-phase-active' : ''}" style="margin-bottom:16px;border-left:4px solid ${borderColor};background:${statusBg}">`;
 
     // Phase header
-    html += `<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+    html += `<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;cursor:pointer" onclick="const b=document.getElementById('wf-phase-body-${ph.key}');if(!b)return;const o=b.style.display!=='none';b.style.display=o?'none':'';this.querySelector('.wf-ph-chev').textContent=o?'\\u25B6':'\\u25BC'">
+      <span class="wf-ph-chev" style="font-size:10px;opacity:0.6;flex-shrink:0">${isDone ? '\u25B6' : '\u25BC'}</span>
       <span style="font-size:18px">${ph.icon}</span>
       <span style="font-size:13px;font-weight:600;color:var(--text-primary);letter-spacing:0.5px">${ph.label.toUpperCase()}</span>
       <span style="font-size:10px;font-weight:500;padding:2px 8px;border-radius:4px;background:${statusColor}18;color:${statusColor}">${statusLabel}</span>`;
@@ -1933,6 +1959,9 @@ async function renderProjectWorkflowTab(project, wfStatus) {
       html += `<button class="btn btn-outline" style="margin-left:auto;font-size:10px;padding:3px 10px;color:var(--accent-red);border-color:var(--accent-red)" onclick="resetPhase(${project.id},'${esc(teamId)}','${esc(ph.key)}')">Reset</button>`;
     }
     html += '</div>';
+
+    // Collapsible body — done phases collapsed by default
+    html += `<div id="wf-phase-body-${ph.key}" style="${isDone ? 'display:none' : ''}">`;
 
     // Agents
     if (pd && pd.agents) {
@@ -1977,6 +2006,9 @@ async function renderProjectWorkflowTab(project, wfStatus) {
     const defs = pd && pd.deliverable_defs ? pd.deliverable_defs : {};
     const delivByAgent = {};
     deliverables.forEach(d => { delivByAgent[d.agent_id] = d; });
+    // Also index by agent_id for quick lookup of validated status per deliverable key
+    const validationsByAgent = {};
+    deliverables.forEach(d => { validationsByAgent[d.agent_id] = d.verdicts || {}; });
     const hasDefs = Object.keys(defs).length > 0;
     const hasDelivs = deliverables.length > 0;
     if (hasDefs || hasDelivs) {
@@ -2000,26 +2032,43 @@ async function renderProjectWorkflowTab(project, wfStatus) {
           shownAgents.add(agentId);
           const prettyKey = dDef.description || dKey.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
           const uid = `wf-dlv-${esc(ph.key)}-${esc(dKey)}`;
+          // Get validation status for this specific deliverable
+          const agentVerdicts = validationsByAgent[agentId] || {};
+          const dlvStep = dDef.pipeline_step || dKey;
+          const validated = agentVerdicts[dlvStep]?.verdict || d?.validated || null;
           if (done) {
-            html += `<details style="margin-bottom:6px">
-              <summary style="font-size:11px;cursor:pointer;padding:4px 0;display:flex;align-items:center;gap:6px">
-                <span style="color:#22c55e;font-size:10px">&#x2713;</span>
+            const vBg = validated === 'approved' ? 'background:#22c55e18;border-radius:4px;' : validated === 'rejected' ? 'background:#ef444418;border-radius:4px;' : '';
+            html += `<details style="margin-bottom:6px" id="${uid}-details">
+              <summary style="font-size:11px;cursor:pointer;padding:4px 6px;display:flex;align-items:center;gap:6px;${vBg}">
+                <span id="${uid}-icon" style="font-size:10px">${validated === 'approved' ? '<span style="color:#22c55e">&#x2713;</span>' : validated === 'rejected' ? '<span style="color:#ef4444">&#x2717;</span>' : '<span style="color:#f59e0b">&#x25CF;</span>'}</span>
                 <span style="font-weight:500;color:var(--accent-blue)">${esc(prettyKey)}</span>
                 <span style="color:var(--text-secondary);font-size:10px">${esc(agentId)}</span>
                 ${_typeTag(dDef.type)}
                 ${dDef.required ? '<span style="font-size:8px;color:var(--accent-orange);font-weight:600">REQ</span>' : '<span style="font-size:8px;color:var(--text-quaternary)">OPT</span>'}
-                <span class="dlv-remark-btn" style="margin-left:auto;font-size:9px;color:var(--text-tertiary);cursor:pointer;padding:2px 6px;border:1px solid var(--border-subtle);border-radius:3px" onclick="event.preventDefault();event.stopPropagation();toggleRemarkForm('${uid}')">&#x1F4AC; remarque</span>
+                <span style="margin-left:auto;display:flex;gap:4px;align-items:center">
+                  <button class="btn btn-outline" style="font-size:9px;padding:1px 8px;color:#22c55e;border-color:#22c55e44" onclick="event.preventDefault();event.stopPropagation();wfValidateDeliverable('${uid}','${esc(slug)}','${esc(ph.key)}','${esc(dKey)}','${esc(agentId)}','${esc(teamId)}','approved','main',1)" title="Valider">&#x2713;</button>
+                  <button class="btn btn-outline" style="font-size:9px;padding:1px 8px;color:#ef4444;border-color:#ef444444" onclick="event.preventDefault();event.stopPropagation();wfValidateDeliverable('${uid}','${esc(slug)}','${esc(ph.key)}','${esc(dKey)}','${esc(agentId)}','${esc(teamId)}','rejected','main',1)" title="Rejeter">&#x2717;</button>
+                  <span class="dlv-remark-btn" style="font-size:9px;color:var(--text-tertiary);cursor:pointer;padding:2px 6px;border:1px solid var(--border-subtle);border-radius:3px" onclick="event.preventDefault();event.stopPropagation();toggleRemarkForm('${uid}')">&#x1F4AC;</span>
+                  <span style="font-size:9px;color:var(--text-tertiary);cursor:pointer;padding:2px 6px;border:1px solid var(--border-subtle);border-radius:3px" onclick="event.preventDefault();event.stopPropagation();toggleDelivEdit('${uid}','${esc(slug)}','${esc(ph.key)}','${esc(agentId)}','${esc(dDef.pipeline_step || dKey)}','${esc(teamId)}')" title="Editer">&#x270F;</span>
+                </span>
               </summary>
               <div id="${uid}-remark" style="display:none;margin-top:4px;margin-bottom:8px;background:var(--bg-active);border:1px solid var(--accent-orange)33;border-radius:4px;padding:10px">
                 <div style="font-size:9px;font-weight:600;color:var(--accent-orange);letter-spacing:0.5px;margin-bottom:6px">REMARQUE A L'AGENT</div>
                 <textarea id="${uid}-remark-text" class="form-input" style="width:100%;min-height:80px;font-size:11px;font-family:inherit;background:var(--bg-tertiary);resize:vertical;line-height:1.5" placeholder="Decrivez ce que l'agent doit corriger ou ameliorer..."></textarea>
                 <div style="display:flex;gap:6px;margin-top:6px;justify-content:flex-end">
                   <button class="btn btn-outline" style="font-size:10px;padding:3px 10px" onclick="toggleRemarkForm('${uid}')">Annuler</button>
-                  <button class="btn btn-primary" style="font-size:10px;padding:3px 10px;background:var(--accent-orange);border-color:var(--accent-orange)" onclick="submitRemark('${uid}','${esc(slug)}','${esc(ph.key)}','${esc(agentId)}','${esc(teamId)}')">Soumettre</button>
+                  <button class="btn btn-primary" style="font-size:10px;padding:3px 10px;background:var(--accent-orange);border-color:var(--accent-orange)" onclick="submitRemark('${uid}','${esc(slug)}','${esc(ph.key)}','${esc(agentId)}','${esc(teamId)}','${esc(dDef.pipeline_step || dKey)}')">Soumettre</button>
                 </div>
               </div>
               ${d.remarks ? `<div style="margin-top:4px;margin-bottom:4px;padding:8px;background:var(--bg-active);border-left:3px solid var(--accent-orange);border-radius:0 4px 4px 0;font-size:10px;color:var(--text-tertiary)"><div style="font-size:9px;font-weight:600;color:var(--accent-orange);margin-bottom:4px">REMARQUES PRECEDENTES</div>${renderMarkdown(d.remarks)}</div>` : ''}
-              <div id="${uid}-view" class="md-content" style="max-height:500px;overflow:auto;background:var(--bg-tertiary);padding:12px;border-radius:4px;margin-top:4px">${_renderDelivContent(d.content)}</div>
+              <div id="${uid}-view" class="md-content" style="max-height:500px;overflow:auto;background:var(--bg-tertiary);padding:12px;border-radius:4px;margin-top:4px">${_renderDelivContent(_extractSection(d.content, dKey))}</div>
+              <div id="${uid}-edit" style="display:none;margin-top:4px">
+                <textarea id="${uid}-edit-text" class="form-input" style="width:100%;min-height:300px;font-size:11px;font-family:'JetBrains Mono',monospace;background:var(--bg-tertiary);resize:vertical;line-height:1.5;white-space:pre-wrap"></textarea>
+                <div style="display:flex;gap:6px;margin-top:6px;justify-content:flex-end">
+                  <button class="btn btn-outline" style="font-size:10px;padding:3px 10px" onclick="toggleDelivEdit('${uid}')">Annuler</button>
+                  <button class="btn btn-primary" style="font-size:10px;padding:3px 10px" onclick="saveDelivEdit('${uid}','${esc(slug)}','${esc(ph.key)}','${esc(agentId)}','${esc(dDef.pipeline_step || dKey)}','${esc(teamId)}')">Sauvegarder</button>
+                </div>
+              </div>
             </details>`;
           } else {
             html += `<div style="font-size:11px;padding:4px 0;display:flex;align-items:center;gap:6px;color:var(--text-quaternary)">
@@ -2070,7 +2119,8 @@ async function renderProjectWorkflowTab(project, wfStatus) {
       html += '</div>';
     }
 
-    html += '</div>';
+    html += '</div>'; // close wf-phase-body
+    html += '</div>'; // close card
   });
 
   // Reset total
@@ -2962,6 +3012,18 @@ function toggleGroup(groupId) {
   const hidden = group.style.display === 'none';
   group.style.display = hidden ? 'block' : 'none';
   if (arrow) arrow.innerHTML = hidden ? '&#x25BC;' : '&#x25B6;';
+}
+
+function _extractSection(text, sectionKey) {
+  // Extract a specific ## section from a deliverable .md file
+  if (!text || !sectionKey) return text || '';
+  const regex = new RegExp(`^## ${sectionKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\n`, 'm');
+  const match = text.match(regex);
+  if (!match) return text; // section not found, return full content
+  const start = match.index + match[0].length;
+  const nextSection = text.indexOf('\n## ', start);
+  const body = nextSection >= 0 ? text.substring(start, nextSection).trim() : text.substring(start).trim();
+  return body;
 }
 
 function _renderDelivContent(text) {
@@ -4005,24 +4067,151 @@ function toggleRemarkForm(uid) {
   }
 }
 
-async function submitRemark(uid, slug, phase, agentId, teamId) {
+async function submitRemark(uid, slug, phase, agentId, teamId, deliverableStep) {
   const ta = document.getElementById(uid + '-remark-text');
   if (!ta) return;
   const remark = ta.value.trim();
-  if (!remark) { showToast('La remarque ne peut pas etre vide', 'error'); return; }
+  if (!remark) { toast('La remarque ne peut pas etre vide', 'error'); return; }
   try {
+    const body = { remark, team_id: teamId || 'team1' };
+    if (deliverableStep) body.deliverable_step = deliverableStep;
     const res = await api(`/api/projects/${encodeURIComponent(slug)}/deliverables/${encodeURIComponent(phase)}/${encodeURIComponent(agentId)}/remark`, {
-      method: 'POST', body: { remark, team_id: teamId || 'team1' }
+      method: 'POST', body
     });
     if (res.ok) {
-      showToast('Remarque soumise — l\'agent va produire une version revisee', 'success');
+      toast('Remarque soumise — l\'agent va produire une version revisee', 'success');
       ta.value = '';
       const remarkEl = document.getElementById(uid + '-remark');
       if (remarkEl) remarkEl.style.display = 'none';
     } else {
-      showToast(res.error || 'Erreur', 'error');
+      toast(res.error || 'Erreur', 'error');
     }
-  } catch (e) { showToast(e.message || 'Erreur', 'error'); }
+  } catch (e) { toast(e.message || 'Erreur', 'error'); }
+}
+
+function toggleDelivEdit(uid, slug, phase, agentId, delivKey, teamId) {
+  const editEl = document.getElementById(uid + '-edit');
+  const viewEl = document.getElementById(uid + '-view');
+  if (!editEl) return;
+  const visible = editEl.style.display !== 'none';
+  if (visible) {
+    // Cancel — hide edit, show view
+    editEl.style.display = 'none';
+    if (viewEl) viewEl.style.display = '';
+  } else {
+    // Open edit — load raw content into textarea
+    const ta = document.getElementById(uid + '-edit-text');
+    if (ta && viewEl) {
+      // Get raw content from cached project data
+      const ctx = window._projectCtx;
+      let raw = '';
+      if (ctx && ctx.wfStatus) {
+        const delivData = window._lastDelivData;
+        if (delivData) {
+          const phaseAgents = (delivData.phases || []).find(p => p.phase === phase);
+          if (phaseAgents) {
+            const agent = (phaseAgents.agents || []).find(a => a.agent_id === agentId);
+            if (agent) raw = _extractSection(agent.content, delivKey);
+          }
+        }
+      }
+      ta.value = raw;
+    }
+    if (viewEl) viewEl.style.display = 'none';
+    editEl.style.display = '';
+    if (ta) ta.focus();
+  }
+}
+
+async function saveDelivEdit(uid, slug, phase, agentId, delivKey, teamId) {
+  const ta = document.getElementById(uid + '-edit-text');
+  if (!ta) return;
+  const content = ta.value;
+  try {
+    const res = await api(
+      `/api/projects/${encodeURIComponent(slug)}/deliverables/${encodeURIComponent(phase)}/${encodeURIComponent(agentId)}/${encodeURIComponent(delivKey)}`,
+      { method: 'PUT', body: { content, team_id: teamId || 'team1' } }
+    );
+    if (res.ok) {
+      toast('Livrable sauvegarde', 'success');
+      // Update view with new rendered content
+      const viewEl = document.getElementById(uid + '-view');
+      if (viewEl) {
+        viewEl.innerHTML = _renderDelivContent(content);
+        viewEl.style.display = '';
+      }
+      const editEl = document.getElementById(uid + '-edit');
+      if (editEl) editEl.style.display = 'none';
+      // Update cached data
+      if (window._lastDelivData) {
+        const phaseAgents = (window._lastDelivData.phases || []).find(p => p.phase === phase);
+        if (phaseAgents) {
+          const agent = (phaseAgents.agents || []).find(a => a.agent_id === agentId);
+          if (agent) agent.content = content;
+        }
+      }
+    } else {
+      toast(res.error || 'Erreur', 'error');
+    }
+  } catch (e) { toast(e.message || 'Erreur', 'error'); }
+}
+
+async function wfValidateDeliverable(uid, slug, phase, delivKey, agentId, teamId, verdict, workflow, iteration) {
+  try {
+    const res = await api(`/api/projects/${encodeURIComponent(slug)}/deliverables/${encodeURIComponent(phase)}/${encodeURIComponent(agentId)}/validate`, {
+      method: 'POST', body: {
+        deliverable_key: delivKey,
+        verdict,
+        team_id: teamId || 'team1',
+        workflow: workflow || 'main',
+        iteration: iteration || 1,
+      }
+    });
+    if (res.ok) {
+      const icon = document.getElementById(uid + '-icon');
+      if (icon) {
+        icon.innerHTML = verdict === 'approved'
+          ? '<span style="color:#22c55e">&#x2713;</span>'
+          : '<span style="color:#ef4444">&#x2717;</span>';
+      }
+      const details = document.getElementById(uid + '-details');
+      if (details) {
+        const summary = details.querySelector('summary');
+        if (summary) summary.style.background = verdict === 'approved' ? '#22c55e18' : '#ef444418';
+      }
+      toast(verdict === 'approved' ? 'Livrable valide' : 'Livrable rejete', verdict === 'approved' ? 'success' : 'error');
+    } else {
+      toast(res.error || 'Erreur', 'error');
+    }
+  } catch (e) {
+    console.error('[wfValidateDeliverable]', e);
+    toast('Erreur validation: ' + (e.message || e), 'error');
+  }
+}
+
+async function approvePhaseTransition(questionId, teamId) {
+  try {
+    const res = await api(`/api/questions/${questionId}/answer`, {
+      method: 'POST', body: { action: 'approve', response: 'Phase approved from workflow view' }
+    });
+    toast('Phase approuvee — transition en cours', 'success');
+    // Refresh the project view after a short delay
+    setTimeout(() => loadProjectDetail(), 2000);
+  } catch (e) {
+    toast('Erreur: ' + (e.message || e), 'error');
+  }
+}
+
+async function rejectPhaseTransition(questionId, teamId) {
+  try {
+    const res = await api(`/api/questions/${questionId}/answer`, {
+      method: 'POST', body: { action: 'reject', response: 'Phase rejected from workflow view' }
+    });
+    toast('Transition refusee', 'error');
+    setTimeout(() => loadProjectDetail(), 2000);
+  } catch (e) {
+    toast('Erreur: ' + (e.message || e), 'error');
+  }
 }
 
 // ── Threads ─────────────────────────────────────

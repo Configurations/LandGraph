@@ -6,7 +6,7 @@
   <title>ag.flow Admin</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/style.css?v=20260314y">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260318e">
 </head>
 <body>
   <div class="app-layout">
@@ -81,6 +81,7 @@
         <div class="page-header">
           <h2>Dashboard</h2>
           <button class="btn btn-outline btn-sm" onclick="loadDashboard()">Rafraichir</button>
+          <button class="btn btn-outline btn-sm" onclick="reloadGatewayConfig()">Recharger config</button>
         </div>
         <div class="dashboard-grid" id="dashboard-content">
           <div class="loading">Chargement...</div>
@@ -94,6 +95,8 @@
           <div style="display:flex;gap:0.5rem">
             <button class="btn btn-outline btn-sm" onclick="loadEnv()">Rafraichir</button>
             <button class="btn btn-primary btn-sm" onclick="showAddEnvModal()">+ Ajouter</button>
+            <button class="btn btn-outline btn-sm" onclick="copyEnvFile()">Copier</button>
+            <button class="btn btn-outline btn-sm" onclick="showPasteEnvModal()">Coller</button>
           </div>
         </div>
         <div class="card">
@@ -791,6 +794,9 @@
           <div class="prompt-tab" data-tpl-tab="tpl-mcp" onclick="showTemplateTab('tpl-mcp')">Services MCP</div>
           <div class="prompt-tab" data-tpl-tab="tpl-agents" onclick="showTemplateTab('tpl-agents')">Agents</div>
           <div class="prompt-tab" data-tpl-tab="tpl-teams" onclick="showTemplateTab('tpl-teams')">Equipes</div>
+          <div class="prompt-tab" data-tpl-tab="tpl-projects" onclick="showTemplateTab('tpl-projects')">Projets</div>
+          <div class="prompt-tab" data-tpl-tab="tpl-prompts" onclick="showTemplateTab('tpl-prompts')">Prompts</div>
+          <div class="prompt-tab" data-tpl-tab="tpl-others" onclick="showTemplateTab('tpl-others')">Autres</div>
           <div class="prompt-tab" data-tpl-tab="tpl-git" onclick="showTemplateTab('tpl-git')">Enregistrement</div>
         </div>
 
@@ -846,22 +852,9 @@
 
         <!-- Sub-tab: Agents -->
         <div class="tpl-tab-content" id="tpl-tab-tpl-agents">
-          <div class="card">
-            <div class="card-header">
-              <h3>Catalogue d'agents</h3>
-              <div style="display:flex;gap:0.5rem;align-items:center">
-                <div style="position:relative;min-width:240px" id="sa-combo">
-                  <input type="text" id="sa-agent-filter" placeholder="Rechercher un agent..." autocomplete="off"
-                    oninput="_filterSharedAgents()" onfocus="_openSaDropdown()" onblur="_closeSaDropdown()" style="width:100%;padding:6px 28px 6px 8px">
-                  <span style="position:absolute;right:8px;top:50%;transform:translateY(-50%);cursor:pointer;color:var(--text-muted);font-size:11px" onclick="_toggleSaDropdown()">&#9660;</span>
-                  <div id="sa-agent-dropdown" class="sa-dropdown" style="display:none"></div>
-                </div>
-                <button class="btn btn-primary btn-sm" onclick="showCreateSharedAgentModal()">Ajouter</button>
-                <button class="btn btn-outline btn-sm" onclick="importSharedAgent()">Importer</button>
-                <button class="btn btn-outline btn-sm" id="sa-delete-btn" disabled style="color:var(--danger);opacity:0.5" onclick="deleteSharedAgent(saSelectedId)">Supprimer</button>
-              </div>
-            </div>
-            <div id="sa-agent-detail"></div>
+          <div class="sa-split">
+            <div class="sa-left" id="sa-left"></div>
+            <div class="sa-right" id="sa-right"></div>
           </div>
         </div>
 
@@ -872,6 +865,57 @@
             <button class="btn btn-primary btn-sm" onclick="showAddTplTeamModal()">+ Ajouter</button>
           </div>
           <div class="table-container" id="tpl-teams-table"></div>
+        </div>
+
+        <!-- Sub-tab: Projects -->
+        <div class="tpl-tab-content" id="tpl-tab-tpl-projects">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+            <h3 style="margin:0">Types de projets</h3>
+            <button class="btn btn-primary btn-sm" onclick="showAddProjectModal()">+ Ajouter</button>
+          </div>
+          <div class="table-container" id="tpl-projects-table"></div>
+        </div>
+
+        <!-- Sub-tab: Prompts -->
+        <div class="tpl-tab-content" id="tpl-tab-tpl-prompts">
+          <div class="card">
+            <div class="card-header">
+              <h3>Prompts systeme</h3>
+              <select id="tpl-prompts-culture-select" onchange="tplPromptSwitchCulture(this.value)" style="font-size:0.8rem;padding:0.25rem 0.5rem;margin-left:auto"></select>
+            </div>
+            <div class="ps-panel" id="tpl-prompts-panel">
+              <div class="ps-list" id="tpl-prompts-list" style="width:220px">
+                <div class="ps-list-header">
+                  <span>Fichiers</span>
+                  <button class="btn-icon ps-list-add" onclick="tplPromptAdd()" title="Nouveau prompt">+</button>
+                </div>
+                <div class="ps-list-items" id="tpl-prompts-items"></div>
+              </div>
+              <div class="ps-editor" id="tpl-prompts-editor">
+                <div class="ps-edit-empty">Selectionnez un prompt</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sub-tab: Others -->
+        <div class="tpl-tab-content" id="tpl-tab-tpl-others">
+          <div class="card">
+            <div class="card-header">
+              <h3>Cultures</h3>
+            </div>
+            <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem">Cultures disponibles dans l'application. La culture par defaut est definie par la variable d'environnement <code>CULTURE</code>.</p>
+            <input type="text" class="form-control" id="tpl-cultures-filter" placeholder="Filtrer par pays, langue ou code..." oninput="filterCultures()" style="margin-bottom:0.75rem;padding:0.4rem 0.6rem;font-size:0.85rem;width:100%;box-sizing:border-box">
+            <div id="tpl-cultures-list" class="cultures-grid"></div>
+          </div>
+          <div class="card" style="margin-top:1rem">
+            <div class="card-header">
+              <h3>Types de livrables</h3>
+              <button class="btn btn-primary btn-sm" onclick="showAddDeliverableTypeModal()">+ Ajouter</button>
+            </div>
+            <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem">Types de livrables assignables aux agents. La cle (<code>delivers_xxx</code>) est utilisee dans les configurations d'agents.</p>
+            <div id="tpl-deliverable-types-list"></div>
+          </div>
         </div>
 
         <!-- Sub-tab: Git (Enregistrement) -->
@@ -1300,6 +1344,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="/static/js/app.js?v=20260314y"></script>
+  <script src="/static/js/app.js?v=20260318e"></script>
 </body>
 </html>

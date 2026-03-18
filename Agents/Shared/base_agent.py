@@ -392,6 +392,7 @@ class BaseAgent:
                         except json.JSONDecodeError:
                             pass
         # Nothing worked
+        logger.error(f"[parse_response] FAIL raw={len(raw)}c, starts={repr(raw[:80])}, has_backtick={'```' in raw}")
         raise json.JSONDecodeError("No valid JSON found in response", raw[:200], 0)
 
     # ── Appels LLM ───────────────────────────────────────────────────────────
@@ -407,7 +408,7 @@ class BaseAgent:
             uc += f"Precedents:\n```json\n{ps}\n```\n\n"
         lang = context.get("project_metadata", {}).get("language", "fr")
         lang_label = {"fr": "français", "en": "English", "es": "español", "de": "Deutsch"}.get(lang, lang)
-        uc += f"Instruction: {instruction}\n\nReponds UNIQUEMENT en JSON valide. Redige tout le contenu en {lang_label}."
+        uc += f"Instruction: {instruction}\n\nIMPORTANT: Reponds UNIQUEMENT avec du JSON valide (commencant par {{ et finissant par }}). Pas de texte explicatif, pas de code block markdown. Redige tout le contenu en {lang_label}."
         msgs = [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": uc},
@@ -416,7 +417,8 @@ class BaseAgent:
         bus.emit(Event("llm_call_start", agent_id=self.agent_id,
                         thread_id=st.get("_thread_id", ""), team_id=st.get("_team_id", ""),
                         data={"provider": self.llm_provider, "model": self.model, "messages_count": len(msgs)}))
-        r = throttled_invoke(llm, msgs, provider_name=self.llm_provider, model=self.model)
+        from agents.shared.langfuse_setup import get_langfuse_callbacks
+        r = throttled_invoke(llm, msgs, provider_name=self.llm_provider, model=self.model, callbacks=get_langfuse_callbacks())
         raw = r.content if isinstance(r.content, str) else str(r.content)
         tokens = {}
         if hasattr(r, "usage_metadata") and r.usage_metadata:
@@ -455,12 +457,21 @@ class BaseAgent:
             {"role": "user", "content": uc},
         ]
 
-        for iteration in range(10):
+        max_iters = 3
+        for iteration in range(max_iters):
+            # Last iteration: strip tools and force JSON output
+            use_llm = llm_t
+            if iteration == max_iters - 1:
+                use_llm = llm  # raw LLM without tools
+                logger.info(f"[{self.agent_id}] ReAct: last iter, stripping tools, forcing JSON")
+                msgs.append({"role": "user", "content": "STOP les appels d'outils. Produis maintenant le JSON final avec toutes les informations que tu as collectees. Reponds UNIQUEMENT avec le JSON brut commencant par { et finissant par }."})
+
             bus.emit(Event("llm_call_start", agent_id=self.agent_id,
                             thread_id=st.get("_thread_id", ""), team_id=st.get("_team_id", ""),
                             data={"provider": self.llm_provider, "model": self.model,
                                   "messages_count": len(msgs), "iteration": iteration + 1}))
-            resp = throttled_invoke(llm_t, msgs, provider_name=self.llm_provider, model=self.model)
+            from agents.shared.langfuse_setup import get_langfuse_callbacks
+            resp = throttled_invoke(use_llm, msgs, provider_name=self.llm_provider, model=self.model, callbacks=get_langfuse_callbacks())
             tokens = {}
             if hasattr(resp, "usage_metadata") and resp.usage_metadata:
                 tokens = {"input_tokens": getattr(resp.usage_metadata, "input_tokens", 0),
@@ -475,7 +486,19 @@ class BaseAgent:
 
             if not resp.tool_calls:
                 raw = resp.content if isinstance(resp.content, str) else str(resp.content)
-                logger.info(f"[{self.agent_id}] ReAct done — {iteration + 1} iters")
+                # If response is empty or not JSON-like, retry up to 2 times
+                needs_retry = False
+                if not raw.strip():
+                    needs_retry = True
+                elif not raw.strip().startswith('{') and not raw.strip().startswith('[') and '```json' not in raw:
+                    needs_retry = True
+                if needs_retry and iteration < max_iters - 1:
+                    retry_count = sum(1 for m in msgs if isinstance(m, dict) and m.get("role") == "user" and "JSON" in m.get("content", ""))
+                    if retry_count < 1:
+                        logger.info(f"[{self.agent_id}] ReAct response empty/not JSON, requesting structured output (retry {retry_count+1})")
+                        msgs.append({"role": "user", "content": "Ta reponse est vide ou n'est pas du JSON. Reponds UNIQUEMENT avec le JSON structure demande. Pas de texte explicatif, pas de code block markdown, juste le JSON brut commencant par { et finissant par }."})
+                        continue
+                logger.info(f"[{self.agent_id}] ReAct done — {iteration + 1} iters, raw={len(raw)}c, starts={repr(raw[:30])}")
                 return raw
 
             for tc in resp.tool_calls:
@@ -514,8 +537,19 @@ class BaseAgent:
                                       "result_length": len(result)}))
                 msgs.append(ToolMessage(content=result, tool_call_id=tc["id"]))
 
-        last = msgs[-1]
-        logger.warning(f"[{self.agent_id}] ReAct max iters")
+        # Max iterations reached — do one final call without tools to force JSON output
+        logger.warning(f"[{self.agent_id}] ReAct max iters — final JSON extraction call")
+        msgs.append({"role": "user", "content": "Tu as atteint la limite d'iterations. Produis MAINTENANT le JSON final avec toutes les informations collectees. JSON brut uniquement, commencant par { et finissant par }."})
+        try:
+            from agents.shared.langfuse_setup import get_langfuse_callbacks
+            final_resp = throttled_invoke(llm, msgs, provider_name=self.llm_provider, model=self.model, callbacks=get_langfuse_callbacks())
+            raw = final_resp.content if isinstance(final_resp.content, str) else str(final_resp.content)
+            if raw.strip():
+                logger.info(f"[{self.agent_id}] Final extraction: {len(raw)}c")
+                return raw
+        except Exception as e:
+            logger.error(f"[{self.agent_id}] Final extraction failed: {e}")
+        last = msgs[-2] if len(msgs) > 1 else msgs[-1]
         return last.content if hasattr(last, "content") and isinstance(last.content, str) else str(last)
 
     # ── Modes d'execution ────────────────────────────────────────────────────
@@ -549,7 +583,9 @@ class BaseAgent:
                 _post_to_discord_sync(ch, f"✅ **{self.agent_name}** — **{sn}**\n\n{formatted}")
             except json.JSONDecodeError as e:
                 logger.error(f"[{self.agent_id}] {sn} JSON fail: {e}")
-                dl[ok] = {"raw": raw[:8000], "parse_error": str(e)[:100]}
+                # Store error message + raw content as markdown
+                err_msg = f"> **Erreur de parsing JSON**: {str(e)[:150]}\n\n"
+                dl[ok] = err_msg + (raw[:8000] if raw.strip() else "*Aucun contenu retourne par le LLM*")
                 _post_to_discord_sync(ch, f"⚠️ **{self.agent_name}** — **{sn}** : output brut preserve.")
             self._evt("pipeline_step_end", state, step=i, step_name=sn, success=ok in dl)
 
@@ -616,9 +652,117 @@ class BaseAgent:
                        thread_id=state.get("_thread_id", ""),
                        team_id=state.get("_team_id", ""), data=data))
 
+    def _run_deliverable(self, state, dispatch_info):
+        """Run a single deliverable: one pipeline step with enriched prompt."""
+        from agents.shared.rate_limiter import throttled_invoke
+        from agents.shared.langfuse_setup import get_langfuse_callbacks
+        from agents.shared.agent_loader import load_agent_supplementary_prompts
+
+        ctx = self.build_context(state)
+        ch = self._get_channel_id(state)
+        step_name = dispatch_info.get("step_name", dispatch_info.get("pipeline_step", ""))
+        step_key = dispatch_info.get("pipeline_step", "")
+        instruction = dispatch_info.get("instruction", "")
+
+        if not instruction:
+            return {"agent_id": self.agent_id, "pipeline_step": step_key,
+                    "status": "blocked", "error": "No instruction for this deliverable",
+                    "timestamp": datetime.now(timezone.utc).isoformat()}
+
+        logger.info(f"[{self.agent_id}] Deliverable: {step_key} — {step_name}")
+        _post_to_discord_sync(ch, f"⏳ **{self.agent_name}** — livrable **{step_name}** ({step_key})...")
+
+        # Enrich system prompt with assign/unassign
+        enriched_prompt = self.system_prompt
+        supplementary = load_agent_supplementary_prompts(self.agent_id)
+        if supplementary:
+            enriched_prompt += "\n\n" + supplementary
+
+        # Build messages
+        uc = f"Contexte:\n```json\n{json.dumps(ctx, indent=2, default=str)}\n```\n\n"
+        # Include previously completed deliverables as context
+        prev = {k: v.get("deliverables", {}) for k, v in state.get("agent_outputs", {}).items()
+                if isinstance(v, dict) and v.get("status") == "complete" and v.get("deliverables")}
+        if prev:
+            ps = json.dumps(prev, indent=2, default=str, ensure_ascii=False)
+            if len(ps) > 15000:
+                ps = ps[:15000] + "\n...(tronque)"
+            uc += f"Livrables precedents:\n```json\n{ps}\n```\n\n"
+        lang = ctx.get("project_metadata", {}).get("language", "fr")
+        lang_label = {"fr": "français", "en": "English", "es": "español", "de": "Deutsch"}.get(lang, lang)
+        uc += f"Mission: {instruction}\n\nRedige tout le contenu en {lang_label}."
+
+        msgs = [
+            {"role": "system", "content": enriched_prompt},
+            {"role": "user", "content": uc},
+        ]
+
+        self._evt("llm_call_start", state, provider=self.llm_provider, model=self.model,
+                   messages_count=len(msgs), deliverable=step_key)
+
+        # For remark re-invocations (long instruction with deliverable context), skip tools
+        is_remark = "LIVRABLE ACTUEL" in instruction or "REMARQUES HUMAINES" in instruction
+        if self.use_tools and not is_remark:
+            # Temporarily swap system_prompt to include assign/unassign
+            original_prompt = self.system_prompt
+            self.system_prompt = enriched_prompt
+            try:
+                raw = self._call_llm_with_tools(instruction, ctx, None, _state=state)
+            finally:
+                self.system_prompt = original_prompt
+        else:
+            llm = self.get_llm()
+            r = throttled_invoke(llm, msgs, provider_name=self.llm_provider,
+                                 model=self.model, callbacks=get_langfuse_callbacks())
+            raw = r.content if isinstance(r.content, str) else str(r.content)
+
+        try:
+            parsed = self.parse_response(raw)
+            dl = {}
+            if step_key in parsed:
+                dl[step_key] = parsed[step_key]
+            elif "deliverables" in parsed and step_key in parsed["deliverables"]:
+                dl[step_key] = parsed["deliverables"][step_key]
+            else:
+                dl[step_key] = parsed
+            formatted = _format_deliverable(step_key, dl[step_key])
+            _post_to_discord_sync(ch, f"✅ **{self.agent_name}** — **{step_name}**\n\n{formatted}")
+        except json.JSONDecodeError as e:
+            err_msg = f"> **Erreur de parsing JSON**: {str(e)[:150]}\n\n"
+            dl = {step_key: err_msg + (raw[:8000] if raw.strip() else "*Aucun contenu retourne par le LLM*")}
+            _post_to_discord_sync(ch, f"⚠️ **{self.agent_name}** — **{step_name}** : output brut preserve.")
+
+        return {
+            "agent_id": self.agent_id, "pipeline_step": step_key,
+            "status": "complete", "confidence": 0.85,
+            "deliverables": dl,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
     def __call__(self, state):
         try:
             self._current_state = state
+
+            # Deliverable-based dispatch: run a single step
+            dispatch_info = state.get("_deliverable_dispatch")
+            if dispatch_info:
+                step_key = dispatch_info.get("pipeline_step", "")
+                output_key = f"{self.agent_id}:{step_key}"
+                logger.info(f"[{self.agent_id}] Deliverable dispatch: {output_key}")
+                self._evt("agent_start", state, pipeline_steps=1, use_tools=self.use_tools, deliverable=step_key)
+                output = self._run_deliverable(state, dispatch_info)
+
+                ao = dict(state.get("agent_outputs", {}))
+                ao[output_key] = output
+                state["agent_outputs"] = ao
+                msgs = list(state.get("messages", []))
+                msgs.append(("assistant", f"[{output_key}] status={output.get('status')}"))
+                state["messages"] = msgs
+                logger.info(f"[{output_key}] Done — status={output.get('status')}")
+                self._evt("agent_complete", state, status=output.get("status", "complete"),
+                          deliverables=output.get("deliverables", {}))
+                return state
+
             logger.info(f"[{self.agent_id}] Start — pipeline={len(self.pipeline_steps)}, tools={self.use_tools}")
             self._evt("agent_start", state, pipeline_steps=len(self.pipeline_steps), use_tools=self.use_tools)
             output = self._run_pipeline(state) if self.pipeline_steps else self._run_single(state)

@@ -941,6 +941,15 @@ def answer_question(question_id: str, req: AnswerRequest, user: TokenData = Depe
             if cur.rowcount == 0:
                 raise HTTPException(409, "Deja traitee")
 
+            # Cancel duplicate pending requests of same type for same thread
+            if ctx.get("type") == "phase_validation" and req_thread_id:
+                cur.execute("""
+                    UPDATE project.hitl_requests
+                    SET status = 'cancelled', answered_at = NOW()
+                    WHERE thread_id = %s AND status = 'pending' AND id != %s
+                      AND context::text LIKE %s
+                """, (req_thread_id, question_id, '%"type": "phase_validation"%'))
+
         # If phase validation approved, notify gateway to transition
         if ctx.get("type") == "phase_validation" and req.action == "approve":
             _notify_gateway_phase_transition(
@@ -1033,12 +1042,11 @@ def list_projects(user: TokenData = Depends(get_current_user)):
 
 @app.get("/api/projects/{slug}/deliverables")
 def get_project_deliverables(slug: str, user: TokenData = Depends(get_current_user)):
-    """Read deliverable markdown files from disk."""
+    """Read deliverable markdown files from disk (new structure + legacy fallback)."""
     import re as _re
-    # Sanitize slug
     safe = _re.sub(r'[^a-z0-9_-]', '', slug.lower())
-    deliv_root = os.path.join(PROJECTS_ROOT, safe, "deliverables")
-    if not os.path.isdir(deliv_root):
+    project_root = os.path.join(PROJECTS_ROOT, safe)
+    if not os.path.isdir(project_root):
         return {"phases": [], "team_id": ""}
     # Look up team_id from pm_projects
     _team_id = ""
@@ -1048,70 +1056,150 @@ def get_project_deliverables(slug: str, user: TokenData = Depends(get_current_us
                 cur.execute("SELECT team_id FROM project.pm_projects WHERE slug = %s LIMIT 1", (safe,))
                 row = cur.fetchone()
                 if row:
-                    _team_id = row[0]
+                    _team_id = row[0] or "team1"
     except Exception:
         pass
-    # Load verdicts
-    verdicts_path = os.path.join(deliv_root, "_verdicts.json")
-    verdicts = {}
-    if os.path.isfile(verdicts_path):
-        try:
-            with open(verdicts_path, "r", encoding="utf-8") as f:
-                verdicts = json.load(f)
-        except Exception:
-            pass
+    if not _team_id:
+        _team_id = "team1"
 
     result = []
-    for phase in PHASE_ORDER:
-        phase_dir = os.path.join(deliv_root, phase)
-        if not os.path.isdir(phase_dir):
+    # Scan new structure: {slug}/{team_id}/{workflow}/{iteration}:{phase}/{agent_id}/{key}.md
+    for team_dir_name in sorted(os.listdir(project_root)):
+        team_path = os.path.join(project_root, team_dir_name)
+        if not os.path.isdir(team_path) or team_dir_name.startswith('.') or team_dir_name in ('deliverables', 'docs', 'repo', 'repo2'):
             continue
-        agents = []
-        for fname in sorted(os.listdir(phase_dir)):
-            if not fname.endswith(".md") or fname.startswith("_") or fname.endswith("_remarks.md"):
+        for wf_name in sorted(os.listdir(team_path)):
+            wf_path = os.path.join(team_path, wf_name)
+            if not os.path.isdir(wf_path):
                 continue
-            fpath = os.path.join(phase_dir, fname)
-            try:
-                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
-                    content = f.read()
-            except Exception:
-                content = ""
-            agent_id = fname[:-3]  # remove .md
-            # Extract agent name from first heading: "# Agent Name"
-            agent_name = agent_id
-            for line in content.split("\n"):
-                if line.startswith("# "):
-                    agent_name = line[2:].strip()
-                    break
-            # Read associated remarks if they exist
-            remarks = ""
-            remarks_path = os.path.join(phase_dir, f"{agent_id}_remarks.md")
-            if os.path.isfile(remarks_path):
+            for entry in sorted(os.listdir(wf_path)):
+                if ":" not in entry:
+                    continue
+                parts = entry.split(":", 1)
                 try:
-                    with open(remarks_path, "r", encoding="utf-8", errors="replace") as f:
-                        remarks = f.read()
-                except Exception:
-                    pass
-            # Collect per-key verdicts for this agent
-            prefix = f"{phase}/{agent_id}/"
-            agent_verdicts = {}
-            for vk, vv in verdicts.items():
-                if vk.startswith(prefix):
-                    dkey = vk[len(prefix):]
-                    agent_verdicts[dkey] = vv
-                elif vk == f"{phase}/{agent_id}":
-                    # Legacy format (no key) — treat as _all
-                    agent_verdicts["_all"] = vv
-            agents.append({
-                "agent_id": agent_id,
-                "agent_name": agent_name,
-                "content": content,
-                "remarks": remarks,
-                "verdicts": agent_verdicts,
-            })
-        if agents:
-            result.append({"phase": phase, "agents": agents})
+                    iteration = int(parts[0])
+                except ValueError:
+                    continue
+                phase = parts[1]
+                phase_path = os.path.join(wf_path, entry)
+                if not os.path.isdir(phase_path):
+                    continue
+                # Load validations
+                validations = {}
+                val_path = os.path.join(phase_path, "_validations.json")
+                if os.path.isfile(val_path):
+                    try:
+                        validations = json.loads(open(val_path, encoding="utf-8").read())
+                    except Exception:
+                        pass
+                agents = []
+                for agent_dir_name in sorted(os.listdir(phase_path)):
+                    agent_path = os.path.join(phase_path, agent_dir_name)
+                    if not os.path.isdir(agent_path):
+                        continue
+                    # Read all .md files in agent dir
+                    content_parts = []
+                    for fname in sorted(os.listdir(agent_path)):
+                        if not fname.endswith(".md"):
+                            continue
+                        fpath = os.path.join(agent_path, fname)
+                        try:
+                            with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                                content_parts.append(f.read())
+                        except Exception:
+                            pass
+                    if not content_parts:
+                        continue
+                    content = "\n\n---\n\n".join(content_parts)
+                    agent_name = agent_dir_name
+                    for line in content.split("\n"):
+                        if line.startswith("# "):
+                            agent_name = line[2:].strip()
+                            break
+                    # Collect validations for this agent
+                    agent_validations = {}
+                    for vk, vv in validations.items():
+                        if vk.startswith(agent_dir_name + ":"):
+                            dkey = vk.split(":", 1)[1]
+                            agent_validations[dkey] = vv
+                    agents.append({
+                        "agent_id": agent_dir_name,
+                        "agent_name": agent_name,
+                        "content": content,
+                        "remarks": "",
+                        "verdicts": agent_validations,
+                        "validated": next((v.get("verdict") for v in agent_validations.values()), None),
+                    })
+                if agents:
+                    result.append({"phase": phase, "agents": agents, "iteration": iteration, "workflow": wf_name, "team_id": team_dir_name})
+
+    # Legacy fallback: {slug}/deliverables/{phase}/
+    if not result:
+        deliv_root = os.path.join(project_root, "deliverables")
+        if os.path.isdir(deliv_root):
+            for phase in PHASE_ORDER:
+                phase_dir = os.path.join(deliv_root, phase)
+                if not os.path.isdir(phase_dir):
+                    continue
+                agents = []
+                for fname in sorted(os.listdir(phase_dir)):
+                    if not fname.endswith(".md") or fname.startswith("_"):
+                        continue
+                    fpath = os.path.join(phase_dir, fname)
+                    try:
+                        with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                            content = f.read()
+                    except Exception:
+                        content = ""
+                    agent_id = fname[:-3]
+                    agents.append({"agent_id": agent_id, "agent_name": agent_id, "content": content, "remarks": "", "verdicts": {}})
+                if agents:
+                    result.append({"phase": phase, "agents": agents})
+
     return {"phases": result, "team_id": _team_id}
+
+
+@app.put("/api/projects/{slug}/deliverables/{phase}/{agent_id}/{deliverable_key}")
+def update_deliverable_content(slug: str, phase: str, agent_id: str, deliverable_key: str, body: dict, user: TokenData = Depends(get_current_user)):
+    """Overwrite a deliverable markdown file with user-edited content."""
+    import re as _re
+    safe_slug = _re.sub(r'[^a-z0-9_-]', '', slug.lower())
+    safe_agent = _re.sub(r'[^a-z0-9_-]', '', agent_id.lower())
+    safe_key = _re.sub(r'[^a-z0-9_-]', '', deliverable_key.lower())
+    safe_phase = _re.sub(r'[^a-z0-9_-]', '', phase.lower())
+    content = body.get("content", "")
+    team_id = body.get("team_id", "team1")
+    project_root = os.path.join(PROJECTS_ROOT, safe_slug)
+    if not os.path.isdir(project_root):
+        raise HTTPException(404, "Project not found")
+    # Find the deliverable file in new structure
+    team_path = os.path.join(project_root, team_id)
+    if os.path.isdir(team_path):
+        for wf_name in sorted(os.listdir(team_path)):
+            wf_path = os.path.join(team_path, wf_name)
+            if not os.path.isdir(wf_path):
+                continue
+            for entry in sorted(os.listdir(wf_path), reverse=True):
+                if ":" not in entry:
+                    continue
+                parts = entry.split(":", 1)
+                if parts[1] != safe_phase:
+                    continue
+                agent_path = os.path.join(wf_path, entry, safe_agent)
+                if not os.path.isdir(agent_path):
+                    continue
+                fpath = os.path.join(agent_path, f"{safe_key}.md")
+                if os.path.isfile(fpath):
+                    with open(fpath, "w", encoding="utf-8") as f:
+                        f.write(content)
+                    return {"ok": True, "path": f"{team_id}/{wf_name}/{entry}/{safe_agent}/{safe_key}.md"}
+    # Legacy fallback
+    legacy_path = os.path.join(project_root, "deliverables", safe_phase, f"{safe_agent}.md")
+    if os.path.isfile(legacy_path):
+        with open(legacy_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return {"ok": True, "path": f"deliverables/{safe_phase}/{safe_agent}.md"}
+    raise HTTPException(404, "Deliverable file not found")
 
 
 @app.post("/api/projects/{slug}/deliverables/{phase}/{agent_id}/verdict")
@@ -1164,17 +1252,31 @@ def post_deliverable_remark(slug: str, phase: str, agent_id: str, body: dict, us
     if not remark:
         raise HTTPException(400, "Remark cannot be empty")
     team_id = body.get("team_id", "team1")
+    workflow = body.get("workflow", "main")
+    iteration = body.get("iteration", 1)
 
-    deliv_dir = os.path.join(PROJECTS_ROOT, safe_slug, "deliverables", safe_phase)
-    deliv_path = os.path.join(deliv_dir, f"{safe_agent}.md")
-    if not os.path.isfile(deliv_path):
+    # Find deliverable files — new structure first, then legacy
+    current_deliverable = ""
+    deliv_dir = None
+    # New: projects/{slug}/{team_id}/{workflow}/{iteration}:{phase}/{agent_id}/
+    new_agent_dir = os.path.join(PROJECTS_ROOT, safe_slug, team_id, workflow, f"{iteration}:{safe_phase}", safe_agent)
+    if os.path.isdir(new_agent_dir):
+        deliv_dir = os.path.join(PROJECTS_ROOT, safe_slug, team_id, workflow, f"{iteration}:{safe_phase}")
+        parts = []
+        for fname in sorted(os.listdir(new_agent_dir)):
+            if fname.endswith(".md"):
+                try:
+                    parts.append(open(os.path.join(new_agent_dir, fname), "r", encoding="utf-8", errors="replace").read())
+                except Exception:
+                    pass
+        current_deliverable = "\n\n---\n\n".join(parts)
+    if not current_deliverable:
         raise HTTPException(404, "Deliverable not found")
 
-    # 1. Read current deliverable
-    with open(deliv_path, "r", encoding="utf-8", errors="replace") as f:
-        current_deliverable = f.read()
-
     # 2. Append remark to _remarks file
+    if not deliv_dir:
+        deliv_dir = new_agent_dir
+    os.makedirs(deliv_dir, exist_ok=True)
     remarks_path = os.path.join(deliv_dir, f"{safe_agent}_remarks.md")
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     remark_block = f"\n---\n\n**{user.email}** — {now}\n\n{remark}\n"
@@ -1230,6 +1332,7 @@ def post_deliverable_remark(slug: str, phase: str, agent_id: str, body: dict, us
             "project_slug": safe_slug,
             "team_id": team_id,
             "direct_agent": safe_agent,
+            "deliverable_step": body.get("deliverable_step", ""),
         }, headers={"Content-Type": "application/json"}, timeout=10)
         gw_result = resp.json() if resp.status_code == 200 else {"error": f"Gateway {resp.status_code}"}
     except Exception as e:
@@ -1250,6 +1353,68 @@ def get_deliverable_remarks(slug: str, phase: str, agent_id: str, user: TokenDat
         return {"remarks": ""}
     with open(remarks_path, "r", encoding="utf-8", errors="replace") as f:
         return {"remarks": f.read()}
+
+
+@app.post("/api/projects/{slug}/deliverables/{phase}/{agent_id}/validate")
+def validate_deliverable(slug: str, phase: str, agent_id: str, body: dict, user: TokenData = Depends(get_current_user)):
+    """Validate or reject a deliverable. Saves verdict then asks gateway to check phase completion."""
+    import re as _re
+    verdict = body.get("verdict", "")
+    if verdict not in ("approved", "rejected"):
+        raise HTTPException(400, "verdict must be 'approved' or 'rejected'")
+    deliverable_key = body.get("deliverable_key", "")
+    team_id = body.get("team_id", "team1")
+    workflow = body.get("workflow", "main")
+    iteration = body.get("iteration", 1)
+    comment = body.get("comment", "")
+
+    # Save validation to disk
+    safe_slug = _re.sub(r'[^a-z0-9_-]', '', slug.lower())
+    deliv_dir = os.path.join(PROJECTS_ROOT, safe_slug, team_id, workflow, f"{iteration}:{phase}")
+    os.makedirs(deliv_dir, exist_ok=True)
+    validations_path = os.path.join(deliv_dir, "_validations.json")
+    validations = {}
+    if os.path.isfile(validations_path):
+        try:
+            validations = json.loads(open(validations_path, encoding="utf-8").read())
+        except Exception:
+            pass
+    key = f"{agent_id}:{deliverable_key}" if deliverable_key else agent_id
+    validations[key] = {
+        "verdict": verdict,
+        "reviewer": user.email,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "comment": comment,
+    }
+    with open(validations_path, "w", encoding="utf-8") as f:
+        json.dump(validations, f, indent=2, ensure_ascii=False)
+
+    # After approval, ask gateway to check if phase is complete
+    check_result = {}
+    if verdict == "approved":
+        # Find project_id from DB to build thread_id
+        try:
+            conn = get_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id FROM project.pm_projects WHERE slug = %s", (safe_slug,))
+                    row = cur.fetchone()
+            finally:
+                conn.close()
+            if row:
+                thread_id = f"project-{team_id}-{row[0]}"
+                import httpx
+                gw = _get_gateway_url()
+                resp = httpx.post(f"{gw}/workflow/check-phase", json={
+                    "thread_id": thread_id,
+                    "phase": phase,
+                    "team_id": team_id,
+                }, timeout=10)
+                check_result = resp.json() if resp.status_code == 200 else {"error": f"Gateway {resp.status_code}"}
+        except Exception as e:
+            check_result = {"error": str(e)[:200]}
+
+    return {"ok": True, "key": key, "verdict": verdict, "check": check_result}
 
 
 # ── Workflow → Issues sync ────────────────────
@@ -2073,12 +2238,23 @@ def pm_reset_phase(project_id: int, body: dict, user: TokenData = Depends(get_cu
                 raise HTTPException(404, "Project not found")
             slug = row[0]
 
-            # 2. Delete deliverable files for reset phases
+            # 2. Delete deliverable files for reset phases (legacy + new structure)
+            import shutil
             for p in phases_to_reset:
+                # Legacy: projects/{slug}/deliverables/{phase}/
                 phase_dir = os.path.join(PROJECTS_ROOT, slug, "deliverables", p)
                 if os.path.isdir(phase_dir):
-                    import shutil
                     shutil.rmtree(phase_dir)
+                # New: projects/{slug}/{team_id}/{workflow}/{iteration}:{phase}/
+                team_dir = os.path.join(PROJECTS_ROOT, slug, team_id)
+                if os.path.isdir(team_dir):
+                    for wf_name in os.listdir(team_dir):
+                        wf_dir = os.path.join(team_dir, wf_name)
+                        if not os.path.isdir(wf_dir):
+                            continue
+                        for entry in os.listdir(wf_dir):
+                            if ":" in entry and entry.split(":", 1)[1] == p:
+                                shutil.rmtree(os.path.join(wf_dir, entry))
 
             # 3. Cancel pending HITL requests for reset phases (+ any for the thread if full reset)
             thread_id = f"project-{team_id}-{project_id}"
@@ -3306,12 +3482,13 @@ class PMAIPlanRequest(BaseModel):
 
 
 def _load_ai_plan_prompt() -> str:
-    """Load the AI planning system prompt from Agents/Prompts/ProjectPlannerCreateProject.md."""
+    """Load the AI planning system prompt from Shared/Prompts/<culture>/ProjectPlannerCreateProject.md."""
+    culture = os.getenv("CULTURE", "fr-fr")
     for base in ["/project", "/app", os.path.join(os.path.dirname(__file__), "..")]:
-        path = os.path.join(base, "Agents", "Prompts", "ProjectPlannerCreateProject.md")
+        path = os.path.join(base, "Shared", "Prompts", culture, "ProjectPlannerCreateProject.md")
         if os.path.isfile(path):
             return open(path, encoding="utf-8").read().strip()
-    raise FileNotFoundError("Prompt file Agents/Prompts/ProjectPlannerCreateProject.md not found")
+    raise FileNotFoundError(f"Prompt file Shared/Prompts/{culture}/ProjectPlannerCreateProject.md not found")
 
 
 def _get_llm_config():

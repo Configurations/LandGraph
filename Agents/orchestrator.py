@@ -233,8 +233,10 @@ def parse_llm_decision(raw: str, project_id: str) -> RoutingDecision:
     data = json.loads(clean)
     data["project_id"] = project_id
     # Normalize common LLM aliases for decision_type
-    dt_aliases = {"dispatch": "parallel_dispatch", "route_agent": "route", "transition": "phase_transition",
-                   "human_gate": "escalate", "dispatch_agents": "parallel_dispatch"}
+    dt_aliases = {"dispatch": "parallel_dispatch", "dispatch_agent": "parallel_dispatch",
+                   "dispatch_agents": "parallel_dispatch", "route_agent": "route",
+                   "transition": "phase_transition", "human_gate": "escalate",
+                   "escalate_human": "escalate", "escalate_to_human": "escalate"}
     dt = data.get("decision_type", "")
     if dt in dt_aliases:
         data["decision_type"] = dt_aliases[dt]
@@ -388,7 +390,8 @@ def orchestrator_node(state: dict) -> dict:
                     ),
                 },
             ]
-            response = throttled_invoke(llm, msgs, provider_name=CONFIG["llm"])
+            from agents.shared.langfuse_setup import get_langfuse_callbacks
+            response = throttled_invoke(llm, msgs, provider_name=CONFIG["llm"], callbacks=get_langfuse_callbacks())
 
             raw = (
                 response.content

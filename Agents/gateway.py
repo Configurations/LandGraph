@@ -252,8 +252,168 @@ async def run_single_agent(agent_id, agent_callable, state, channel_id, thread_i
         return state
 
 
+async def run_single_deliverable(deliv_info, state, channel_id, thread_id=""):
+    """Run a single deliverable: inject _deliverable_dispatch and call the agent."""
+    agent_id = deliv_info["agent_id"]
+    agent_callable = deliv_info["agent"]
+    step_key = deliv_info["pipeline_step"]
+    output_key = f"{agent_id}:{step_key}"
+    try:
+        local_state = dict(state)
+        local_state["_deliverable_dispatch"] = {
+            "pipeline_step": step_key,
+            "step_name": deliv_info.get("step_name", deliv_info.get("deliverable_key", step_key)),
+            "instruction": deliv_info.get("instruction", ""),
+        }
+        result = await asyncio.wait_for(
+            asyncio.to_thread(agent_callable, local_state), timeout=2100)
+        state["agent_outputs"] = result.get("agent_outputs", state.get("agent_outputs", {}))
+        logger.info(f"[bg] deliverable {output_key} done")
+        output = result.get("agent_outputs", {}).get(output_key, {})
+        if output and isinstance(output, dict):
+            await _persist_deliverable_to_fs(state, output_key, output)
+        return result
+    except asyncio.TimeoutError:
+        logger.error(f"[bg] deliverable {output_key} timeout")
+        await post_to_channel(channel_id, f"⏰ **{output_key}** timeout (35min)", thread_id)
+        return state
+    except Exception as e:
+        logger.error(f"[bg] deliverable {output_key} error: {e}")
+        await post_to_channel(channel_id, f"❌ **{output_key}** erreur : {str(e)[:300]}", thread_id)
+        return state
+
+
+async def run_deliverables_parallel(deliverables_to_run, state, channel_id, thread_id="default", _depth=0):
+    """Run deliverables in parallel, then auto-dispatch next group."""
+    MAX_CHAIN_DEPTH = 5
+    # Set disk check context so workflow_engine can skip already-produced deliverables
+    from agents.shared.workflow_engine import set_disk_check_context
+    slug = state.get("project_slug", "")
+    if slug:
+        set_disk_check_context(slug, state.get("_team_id", "team1"),
+                               state.get("_workflow", "main"),
+                               state.get("_iteration", 1),
+                               state.get("project_phase", ""))
+    tasks = [run_single_deliverable(d, dict(state), channel_id, thread_id) for d in deliverables_to_run]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    merged = dict(state.get("agent_outputs", {}))
+    for r in results:
+        if isinstance(r, dict) and "agent_outputs" in r:
+            merged.update(r.get("agent_outputs", {}))
+
+    state["agent_outputs"] = merged
+    try:
+        graph = get_orchestrator_graph()
+        config = {"configurable": {"thread_id": thread_id}}
+        await asyncio.to_thread(graph.update_state, config, state)
+        logger.info(f"State saved for {thread_id} — {len(merged)} outputs")
+    except Exception as e:
+        logger.error(f"Could not save state for {thread_id}: {e}")
+
+    # Recap
+    if len(deliverables_to_run) > 1:
+        names = []
+        for d in deliverables_to_run:
+            ok = f"{d['agent_id']}:{d['pipeline_step']}"
+            output = merged.get(ok, {})
+            status = output.get("status", "?")
+            emoji = "✅" if status == "complete" else "❌" if status == "blocked" else "⏳"
+            names.append(f"{emoji} {ok}")
+        await post_to_channel(channel_id, f"📋 **Recap livrables** : {' | '.join(names)}", thread_id)
+
+    # Auto-dispatch next group
+    if _depth >= MAX_CHAIN_DEPTH:
+        logger.warning(f"[workflow] Max chain depth ({MAX_CHAIN_DEPTH}) reached")
+        return
+
+    try:
+        from agents.shared.workflow_engine import get_deliverables_to_dispatch, can_transition
+        team_id = state.get("_team_id", "team1")
+        current_phase = state.get("project_phase", "discovery")
+
+        next_deliverables = get_deliverables_to_dispatch(current_phase, merged, team_id)
+        if next_deliverables:
+            resolved = _resolve_deliverables(next_deliverables, team_id, channel_id)
+            if resolved:
+                for d in resolved:
+                    bus.emit(Event("agent_dispatch", agent_id=f"{d['agent_id']}:{d['pipeline_step']}",
+                                    thread_id=thread_id, team_id=team_id,
+                                    data={"trigger": "workflow_auto", "depth": _depth + 1}))
+                await post_to_channel(channel_id,
+                    f"⚡ Workflow : livrables suivants → {', '.join(d['agent_id'] + ':' + d['pipeline_step'] for d in resolved)}", thread_id)
+                await run_deliverables_parallel(resolved, state, channel_id, thread_id, _depth + 1)
+                return
+
+        # Generate synthesis when phase complete
+        await _maybe_generate_synthesis(state, current_phase, merged)
+
+        # Check phase completion
+        transition = can_transition(current_phase, merged, state.get("legal_alerts", []), team_id)
+        if transition["allowed"]:
+            next_phase = transition["next_phase"]
+            needs_gate = transition.get("needs_human_gate", True)
+            if needs_gate:
+                await post_to_channel(channel_id,
+                    f"🚦 **Phase {current_phase} complete !**\nTransition vers **{next_phase}** possible.", thread_id)
+                await _create_hitl_phase_request(
+                    thread_id, team_id, current_phase, next_phase, merged)
+            else:
+                state["project_phase"] = next_phase
+                try:
+                    await asyncio.to_thread(graph.update_state, config, state)
+                except Exception:
+                    pass
+                bus.emit(Event("phase_transition", thread_id=thread_id, team_id=team_id,
+                               data={"from_phase": current_phase, "to_phase": next_phase, "auto": True}))
+                await post_to_channel(channel_id,
+                    f"✅ Transition automatique : **{current_phase}** → **{next_phase}**", thread_id)
+
+    except Exception as e:
+        logger.warning(f"Deliverable auto-dispatch error: {e}")
+
+
+def _resolve_deliverables(deliverable_specs, team_id, channel_id):
+    """Resolve deliverable specs to runnable dicts with agent instances and instructions."""
+    from agents.shared.agent_loader import get_pipeline_step_instruction
+    canonical_agents, _, _ = resolve_agents(channel_id)
+    resolved = []
+    for spec in deliverable_specs:
+        aid = spec["agent_id"]
+        if aid not in canonical_agents:
+            logger.warning(f"Agent {aid} not found for deliverable {spec['deliverable_key']}")
+            continue
+        instruction = get_pipeline_step_instruction(aid, spec["pipeline_step"], team_id)
+        if not instruction:
+            instruction = spec.get("description", "")
+        # Get step name from registry
+        step_name = spec.get("description", spec["pipeline_step"])
+        from agents.shared.team_resolver import load_team_json
+        registry = load_team_json(team_id, "agents_registry.json") or {}
+        for s in registry.get("agents", {}).get(aid, {}).get("pipeline_steps", []):
+            if s.get("output_key") == spec["pipeline_step"]:
+                step_name = s.get("name", step_name)
+                break
+        resolved.append({
+            "deliverable_key": spec["deliverable_key"],
+            "agent_id": aid,
+            "pipeline_step": spec["pipeline_step"],
+            "agent": canonical_agents[aid],
+            "instruction": instruction,
+            "step_name": step_name,
+        })
+    return resolved
+
+
 async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="default", _depth=0):
     MAX_CHAIN_DEPTH = 5  # max groupes enchaines automatiquement
+    # Set disk check context for workflow_engine
+    from agents.shared.workflow_engine import set_disk_check_context
+    slug = state.get("project_slug", "")
+    if slug:
+        set_disk_check_context(slug, state.get("_team_id", "team1"),
+                               state.get("_workflow", "main"),
+                               state.get("_iteration", 1),
+                               state.get("project_phase", ""))
     tasks = [run_single_agent(a["agent_id"], a["agent"], dict(state), channel_id, thread_id) for a in agents_to_run]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     merged = dict(state.get("agent_outputs", {}))
@@ -293,31 +453,19 @@ async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="defau
         return
 
     try:
-        from agents.shared.workflow_engine import get_agents_to_dispatch, can_transition
+        from agents.shared.workflow_engine import get_deliverables_to_dispatch, can_transition
         team_id = state.get("_team_id", "team1")
         current_phase = state.get("project_phase", "discovery")
 
-        # Verifier s'il y a de nouveaux agents a lancer (groupe B apres A, etc.)
-        next_agents = get_agents_to_dispatch(current_phase, merged, team_id)
-        if next_agents:
-            # Resoudre les agents callables
-            canonical_agents, _, _ = resolve_agents(channel_id)
-            next_to_run = []
-            for na in next_agents:
-                aid = na["agent_id"]
-                if aid in canonical_agents:
-                    next_to_run.append({"agent_id": aid, "agent": canonical_agents[aid]})
-                    logger.info(f"[workflow] Auto-dispatch: {aid} (group {na.get('parallel_group', '?')})")
-
-            if next_to_run:
-                for a in next_to_run:
-                    bus.emit(Event("agent_dispatch", agent_id=a["agent_id"],
-                                   thread_id=thread_id, team_id=team_id,
-                                   data={"trigger": "workflow_auto", "depth": _depth + 1}))
+        # Try deliverable-based dispatch first (new flow)
+        next_deliverables = get_deliverables_to_dispatch(current_phase, merged, team_id)
+        if next_deliverables:
+            resolved = _resolve_deliverables(next_deliverables, team_id, channel_id)
+            if resolved:
                 await post_to_channel(channel_id,
-                    f"⚡ Workflow : groupe suivant → {', '.join(a['agent_id'] for a in next_to_run)}", thread_id)
-                await run_agents_parallel(next_to_run, state, channel_id, thread_id, _depth + 1)
-                return  # Le recursif gere la suite
+                    f"⚡ Workflow : livrables suivants → {', '.join(d['agent_id'] + ':' + d['pipeline_step'] for d in resolved)}", thread_id)
+                await run_deliverables_parallel(resolved, state, channel_id, thread_id, _depth + 1)
+                return
 
         # Generate _synthesis.md when phase is complete
         await _maybe_generate_synthesis(state, current_phase, merged)
@@ -382,6 +530,16 @@ async def _create_hitl_phase_request(thread_id: str, team_id: str,
 
         with psycopg.connect(uri, autocommit=True) as conn:
             with conn.cursor() as cur:
+                # Check for existing pending phase_validation for this thread
+                cur.execute("""
+                    SELECT id FROM project.hitl_requests
+                    WHERE thread_id = %s AND status = 'pending'
+                      AND context::text LIKE '%%"type": "phase_validation"%%'
+                    LIMIT 1
+                """, (thread_id,))
+                if cur.fetchone():
+                    logger.info(f"[hitl] Phase validation already pending for {thread_id}, skipping")
+                    return
                 cur.execute("""
                     INSERT INTO project.hitl_requests
                     (thread_id, agent_id, team_id, request_type, prompt, context, channel, status)
@@ -433,29 +591,49 @@ async def _maybe_generate_synthesis(state: dict, phase: str, agent_outputs: dict
     if not slug:
         return
     try:
-        from agents.shared.project_store import read_synthesis, write_synthesis, _deliverables_dir
+        from agents.shared.project_store import read_synthesis, write_synthesis, _phase_dir, _legacy_deliverables_dir
+        team_id = state.get("_team_id", "team1")
+        workflow = state.get("_workflow", "main")
+        iteration = state.get("_iteration")
         # Skip if synthesis already exists for this phase
-        if read_synthesis(slug, phase):
+        if read_synthesis(slug, phase, team_id=team_id, workflow=workflow, iteration=iteration):
             return
-        # Collect all deliverables for this phase
+        # Collect all deliverables for this phase (new structure + legacy fallback)
         phase_deliverables = {}
-        deliv_dir = _deliverables_dir(slug, phase)
-        if not os.path.isdir(deliv_dir):
-            return
-        for fname in os.listdir(deliv_dir):
-            if fname.endswith(".md") and not fname.startswith("_"):
-                fpath = os.path.join(deliv_dir, fname)
-                try:
-                    with open(fpath, "r", encoding="utf-8") as f:
-                        phase_deliverables[fname[:-3]] = f.read()
-                except Exception:
-                    pass
+        from agents.shared.project_store import get_current_iteration
+        it = iteration or get_current_iteration(slug, team_id, workflow, phase)
+        phase_path = _phase_dir(slug, team_id, workflow, it, phase)
+        # New structure: walk agent subdirectories
+        if os.path.isdir(phase_path):
+            for agent_dir_name in os.listdir(phase_path):
+                agent_path = os.path.join(phase_path, agent_dir_name)
+                if os.path.isdir(agent_path):
+                    for fname in os.listdir(agent_path):
+                        if fname.endswith(".md"):
+                            fpath = os.path.join(agent_path, fname)
+                            try:
+                                with open(fpath, "r", encoding="utf-8") as f:
+                                    phase_deliverables[f"{agent_dir_name}/{fname[:-3]}"] = f.read()
+                            except Exception:
+                                pass
+        # Legacy fallback
+        if not phase_deliverables:
+            legacy_dir = _legacy_deliverables_dir(slug, phase)
+            if os.path.isdir(legacy_dir):
+                for fname in os.listdir(legacy_dir):
+                    if fname.endswith(".md") and not fname.startswith("_"):
+                        fpath = os.path.join(legacy_dir, fname)
+                        try:
+                            with open(fpath, "r", encoding="utf-8") as f:
+                                phase_deliverables[fname[:-3]] = f.read()
+                        except Exception:
+                            pass
         if not phase_deliverables:
             return
         # Use LLM to generate synthesis
         synthesis = await asyncio.to_thread(_generate_synthesis_llm, phase, phase_deliverables)
         if synthesis:
-            write_synthesis(slug, phase, synthesis)
+            write_synthesis(slug, phase, synthesis, team_id=team_id, workflow=workflow, iteration=iteration)
             logger.info(f"[synthesis] Generated _synthesis.md for {slug}/{phase}")
     except Exception as e:
         logger.warning(f"[synthesis] Error generating synthesis for {phase}: {e}")
@@ -541,8 +719,12 @@ async def _persist_deliverable_to_fs(state: dict, agent_id: str, output: dict):
         if not slug:
             return
         phase = state.get("project_phase", "discovery")
+        team_id = state.get("_team_id", "team1")
+        workflow = state.get("_workflow", "main")
+        iteration = state.get("_iteration")
         from agents.shared.project_store import persist_deliverable
-        await asyncio.to_thread(persist_deliverable, slug, phase, agent_id, output)
+        await asyncio.to_thread(persist_deliverable, slug, phase, agent_id, output,
+                                team_id=team_id, workflow=workflow, iteration=iteration)
         # Index in pgvector (non-blocking, best-effort)
         await _index_in_rag(state, agent_id, output)
     except Exception as e:
@@ -655,22 +837,33 @@ async def workflow_transition(req: PhaseTransitionRequest, background_tasks: Bac
                         data={"from_phase": req.from_phase, "to_phase": req.to_phase,
                               "source": "hitl_console"}))
 
-        # Auto-dispatch first group of next phase
+        # Create empty phase directory for next phase
         team_id = state.get("_team_id", _default_team())
+        slug = state.get("project_slug", "")
+        if slug:
+            try:
+                from agents.shared.project_store import _phase_dir, get_current_iteration, start_new_iteration
+                workflow = state.get("_workflow", "main")
+                iteration = start_new_iteration(slug, team_id, workflow, req.to_phase)
+                state["_iteration"] = iteration
+                phase_path = _phase_dir(slug, team_id, workflow, iteration, req.to_phase)
+                os.makedirs(phase_path, exist_ok=True)
+                logger.info(f"Created phase dir: {phase_path}")
+                await asyncio.to_thread(graph.update_state, config, state)
+            except Exception as e:
+                logger.warning(f"Could not create phase dir: {e}")
+
+        # Auto-dispatch deliverables for next phase
         channel_id = state.get("_channel_id", "")
         merged = state.get("agent_outputs", {})
-        from agents.shared.workflow_engine import get_agents_to_dispatch
-        next_agents = get_agents_to_dispatch(req.to_phase, merged, team_id)
-        if next_agents:
-            canonical_agents, _, _ = resolve_agents(channel_id)
-            agents_to_run = [
-                {"agent_id": a, "agent": canonical_agents[a]}
-                for a in next_agents if a in canonical_agents
-            ]
-            if agents_to_run:
+        from agents.shared.workflow_engine import get_deliverables_to_dispatch
+        next_deliverables = get_deliverables_to_dispatch(req.to_phase, merged, team_id)
+        if next_deliverables:
+            resolved = _resolve_deliverables(next_deliverables, team_id, channel_id)
+            if resolved:
                 background_tasks.add_task(
-                    run_agents_parallel, agents_to_run, state, channel_id, req.thread_id)
-                logger.info(f"Auto-dispatching {req.to_phase} agents: {next_agents}")
+                    run_deliverables_parallel, resolved, state, channel_id, req.thread_id)
+                logger.info(f"Auto-dispatching {req.to_phase} deliverables: {[d['deliverable_key'] for d in next_deliverables]}")
 
         return {"ok": True, "from_phase": req.from_phase, "to_phase": req.to_phase}
     except HTTPException:
@@ -748,9 +941,78 @@ async def reset(request: ResetRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/reload-config")
+async def reload_config():
+    """Reload agents and workflow from disk (clear caches)."""
+    from agents.shared.agent_loader import reload_agents
+    from agents.shared.workflow_engine import reload_workflow
+    reload_agents()
+    reload_workflow()
+    logger.info("Config reloaded (agents + workflow caches cleared)")
+    return {"ok": True}
+
+
 class PhaseResetRequest(BaseModel):
     thread_id: str
     phase: str
+
+class CheckPhaseRequest(BaseModel):
+    thread_id: str
+    phase: str
+    team_id: str = "team1"
+
+
+@app.post("/workflow/check-phase")
+async def check_phase(request: CheckPhaseRequest, background_tasks: BackgroundTasks):
+    """Check if all required deliverables are validated. If so, propose phase transition."""
+    try:
+        graph = get_orchestrator_graph()
+        config = {"configurable": {"thread_id": request.thread_id}}
+        existing = await asyncio.to_thread(graph.get_state, config)
+        if not existing or not existing.values:
+            raise HTTPException(404, "Thread introuvable")
+        state = existing.values
+        current_phase = state.get("project_phase", "")
+        if current_phase != request.phase:
+            return {"ok": True, "action": "none", "reason": f"Phase actuelle est '{current_phase}', pas '{request.phase}'"}
+
+        merged = state.get("agent_outputs", {})
+        team_id = request.team_id or state.get("_team_id", _default_team())
+
+        from agents.shared.workflow_engine import can_transition, get_deliverables_to_dispatch
+        # Check if there are still deliverables to dispatch
+        pending = get_deliverables_to_dispatch(current_phase, merged, team_id)
+        if pending:
+            return {"ok": True, "action": "none", "reason": f"{len(pending)} livrable(s) encore a produire"}
+
+        transition = can_transition(current_phase, merged, state.get("legal_alerts", []), team_id)
+        if not transition["allowed"]:
+            return {"ok": True, "action": "none", "reason": transition.get("reason", "Phase pas complete")}
+
+        next_phase = transition["next_phase"]
+        needs_gate = transition.get("needs_human_gate", True)
+        channel_id = state.get("_channel_id", "")
+
+        if needs_gate:
+            await _create_hitl_phase_request(
+                request.thread_id, team_id, current_phase, next_phase, merged)
+            await post_to_channel(channel_id,
+                f"🚦 **Phase {current_phase} complete !** Transition vers **{next_phase}** possible.", request.thread_id)
+            return {"ok": True, "action": "phase_gate", "current": current_phase, "next": next_phase}
+        else:
+            state["project_phase"] = next_phase
+            await asyncio.to_thread(graph.update_state, config, state)
+            bus.emit(Event("phase_transition", thread_id=request.thread_id, team_id=team_id,
+                           data={"from_phase": current_phase, "to_phase": next_phase, "auto": True}))
+            await post_to_channel(channel_id,
+                f"✅ Transition automatique : **{current_phase}** → **{next_phase}**", request.thread_id)
+            return {"ok": True, "action": "auto_transition", "current": current_phase, "next": next_phase}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
 
 @app.post("/workflow/reset-phase")
 async def reset_phase(request: PhaseResetRequest):
@@ -772,18 +1034,40 @@ async def reset_phase(request: PhaseResetRequest):
         team_id = state.get("_team_id", _default_team())
         wf = load_workflow(team_id)
         phases_to_clear = phase_order[phase_idx:]
-        agents_to_clear = set()
-        for pid in phases_to_clear:
+        # Build set of deliverable keys (agent_id:step) belonging to phases being reset
+        deliverable_keys_to_clear = set()
+        agents_only_in_cleared = set()  # agents that appear ONLY in cleared phases
+        agents_in_kept = set()  # agents that appear in kept phases
+        for pid in phase_order:
             pconf = wf.get("phases", {}).get(pid, {})
-            agents_to_clear.update(pconf.get("agents", {}).keys())
+            phase_agents = set(pconf.get("agents", {}).keys())
+            if pid in phases_to_clear:
+                for deliv_name, deliv_conf in pconf.get("deliverables", {}).items():
+                    agent_id = deliv_conf.get("agent", "")
+                    deliverable_keys_to_clear.add(f"{agent_id}:{deliv_name}")
+                agents_only_in_cleared.update(phase_agents)
+            else:
+                agents_in_kept.update(phase_agents)
+        # Agents shared with kept phases should NOT have legacy keys removed
+        agents_only_in_cleared -= agents_in_kept
         outputs = state.get("agent_outputs", {})
-        for aid in agents_to_clear:
-            outputs.pop(aid, None)
+        keys_to_remove = []
+        for key in outputs:
+            if ":" in key:
+                # New format (agent_id:step) — only remove if deliverable belongs to a cleared phase
+                if key in deliverable_keys_to_clear:
+                    keys_to_remove.append(key)
+            else:
+                # Legacy format (agent_id only) — only remove if agent is NOT shared with a kept phase
+                if key in agents_only_in_cleared:
+                    keys_to_remove.append(key)
+        for key in keys_to_remove:
+            outputs.pop(key, None)
         state["agent_outputs"] = outputs
         state["project_phase"] = request.phase
         await asyncio.to_thread(graph.update_state, config, state)
-        logger.info(f"Phase reset to {request.phase} for {request.thread_id} — cleared {len(agents_to_clear)} agent outputs")
-        return {"ok": True, "phase": request.phase, "cleared_agents": list(agents_to_clear)}
+        logger.info(f"Phase reset to {request.phase} for {request.thread_id} — cleared {len(keys_to_remove)} outputs: {keys_to_remove}")
+        return {"ok": True, "phase": request.phase, "cleared_outputs": keys_to_remove}
     except HTTPException:
         raise
     except Exception as e:
@@ -798,6 +1082,7 @@ class InvokeRequest(BaseModel):
     channel_id: str = ""
     team_id: str = ""
     direct_agent: str = ""
+    deliverable_step: str = ""  # If set, run only this pipeline step (for remark re-invocation)
 
 class InvokeResponse(BaseModel):
     output: str
@@ -841,10 +1126,26 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
             bus.emit(Event("agent_dispatch", agent_id=canonical_id,
                            thread_id=request.thread_id, team_id=team_id,
                            data={"trigger": "direct", "task": msgs[0][1][:200] if msgs else ""}))
-            background_tasks.add_task(
-                run_agents_parallel,
-                [{"agent_id": canonical_id, "agent": agent_callable}],
-                state, channel_id, request.thread_id)
+
+            if request.deliverable_step:
+                # Remark re-invocation: run single deliverable step with the message as instruction
+                task_msg = msgs[0][1] if msgs else ""
+                deliverable_info = {
+                    "deliverable_key": request.deliverable_step,
+                    "agent_id": canonical_id,
+                    "pipeline_step": request.deliverable_step,
+                    "agent": agent_callable,
+                    "instruction": task_msg,
+                    "step_name": request.deliverable_step,
+                }
+                background_tasks.add_task(
+                    run_deliverables_parallel,
+                    [deliverable_info], state, channel_id, request.thread_id)
+            else:
+                background_tasks.add_task(
+                    run_agents_parallel,
+                    [{"agent_id": canonical_id, "agent": agent_callable}],
+                    state, channel_id, request.thread_id)
 
             existing = list(state.get("agent_outputs", {}).keys())
             ctx_info = f"\n📦 Contexte charge : {len(existing)} livrables" if existing else ""
@@ -1009,32 +1310,12 @@ except Exception as e:
 
 @app.on_event("startup")
 async def startup():
-    # ── OpenLIT auto-instrumentation ──
+    # ── Langfuse observability ──
     try:
-        import openlit
-        import socket
-        otel_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://openlit:4318")
-        # Check connectivity before init to avoid retry spam
-        host = otel_endpoint.replace("http://", "").replace("https://", "").split(":")[0]
-        port = int(otel_endpoint.rsplit(":", 1)[-1].rstrip("/"))
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(2)
-        reachable = sock.connect_ex((host, port)) == 0
-        sock.close()
-        if not reachable:
-            logger.info(f"OpenLIT collector not reachable at {host}:{port} — skipping")
-        else:
-            openlit.init(
-                otlp_endpoint=otel_endpoint,
-                application_name="ag.flow",
-                environment=os.getenv("OPENLIT_ENV", "production"),
-                disable_batch=True,
-            )
-            logger.info("OpenLIT instrumentation active")
-    except ImportError:
-        logger.info("OpenLIT SDK not installed — skipping auto-instrumentation")
+        from agents.shared.langfuse_setup import init_langfuse
+        init_langfuse()
     except Exception as e:
-        logger.warning(f"OpenLIT init failed: {e}")
+        logger.warning(f"Langfuse init failed: {e}")
 
     try:
         get_orchestrator_graph()

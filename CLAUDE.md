@@ -22,9 +22,11 @@ LandGraph est une plateforme multi-agent basée sur **LangGraph** (Python) qui o
 | `langgraph-api` | Custom (Dockerfile) | **8123** | API FastAPI — gateway + agents |
 | `discord-bot` | Custom (Dockerfile.discord) | — | Bot Discord — interface utilisateur |
 | `langgraph-admin` | Custom (Dockerfile.admin) | **8080** | Dashboard web administration |
-| `openlit-clickhouse` | clickhouse/clickhouse-server:24.4.1 | — | OLAP traces OpenLIT |
 | `hitl-console` | Custom (Dockerfile.hitl) | **8090** | Console HITL — validation humaine web |
-| `openlit` | ghcr.io/openlit/openlit:latest | **3000** | Observabilité LLM (UI + OTel collector) |
+| `langfuse-web` | langfuse/langfuse:3 | **3000** | Observabilité LLM — UI Langfuse |
+| `langfuse-worker` | langfuse/langfuse-worker:3 | — | Worker async Langfuse |
+| `langfuse-clickhouse` | clickhouse/clickhouse-server | — | Stockage traces Langfuse |
+| `langfuse-minio` | cgr.dev/chainguard/minio | — | S3 blob storage Langfuse |
 
 ---
 
@@ -39,9 +41,10 @@ langgraph-project/
 │   └── shared/
 │       ├── team_resolver.py    ← SOURCE UNIQUE de vérité pour trouver les fichiers (configs, prompts, workflow)
 │       ├── channels.py         ← Interface abstraite MessageChannel + implémentations Discord/Email
-│       ├── workflow_engine.py  ← Lit workflow.json, valide transitions, gère parallel_groups
-│       ├── base_agent.py       ← Classe de base — Pipeline + ReAct + tools + human gate
-│       ├── agent_loader.py     ← Charge agents depuis registry JSON (multi-équipes via team_resolver)
+│       ├── workflow_engine.py  ← Lit workflow.json, valide transitions, dispatch par livrables
+│       ├── base_agent.py       ← Classe de base — Pipeline + ReAct + tools + human gate + deliverable dispatch
+│       ├── agent_loader.py     ← Charge agents depuis registry JSON + prompts supplémentaires (assign/unassign)
+│       ├── langfuse_setup.py   ← Singleton Langfuse CallbackHandler pour tracing LLM
 │       ├── llm_provider.py     ← Factory multi-provider (9 types, 17 providers)
 │       ├── rate_limiter.py     ← Throttling par env_key + retry exponentiel (20 retries)
 │       ├── mcp_client.py       ← Lazy install MCP + cache global + locks
@@ -65,6 +68,19 @@ langgraph-project/
 │   │   └── ... (13 fichiers .md)
 │   └── Team2/                  ← Autre équipe (même structure)
 │
+├── Shared/
+│   ├── cultures.json           ← Référentiel des cultures (31 locales, enabled/disabled)
+│   ├── Prompts/
+│   │   └── fr-fr/              ← Prompts système localisés (Missions.md, createAgent.md, etc.)
+│   ├── Agents/                 ← Catalogue agents partagés
+│   │   └── {agent_id}/
+│   │       ├── agent.json      ← Config agent (capabilities, delivers_*)
+│   │       ├── prompt.md       ← Prompt système de l'agent
+│   │       ├── {agent_id}_assign.md    ← Exemples d'assignation
+│   │       └── {agent_id}_unassign.md  ← Exemples de non-assignation
+│   └── Teams/
+│       └── mcp_catalog.csv     ← Catalogue MCP
+│
 ├── hitl/
 │   ├── server.py               ← Console HITL FastAPI (port 8090)
 │   ├── requirements.txt        ← Deps HITL (fastapi, passlib, httpx, jose)
@@ -76,9 +92,9 @@ langgraph-project/
 │   ├── server.py               ← Dashboard admin FastAPI
 │   └── static/                 ← Frontend web
 ├── docker-compose.yml
-├── Dockerfile / Dockerfile.discord / Dockerfile.admin
+├── Dockerfile / Dockerfile.discord / Dockerfile.admin / Dockerfile.hitl
 ├── .env                        ← Secrets uniquement
-├── start.sh / restart.sh / build.sh
+├── deploy.sh                   ← Script de déploiement multi-cible
 └── requirements.txt
 ```
 
@@ -156,8 +172,9 @@ Lit `Workflow.json` depuis le dossier de l'équipe et pilote le cycle de vie du 
 
 | Fonction | Rôle |
 |---|---|
-| `get_agents_to_dispatch(phase, outputs, team)` | Quels agents lancer maintenant ? (respecte parallel_groups + depends_on) |
-| `check_phase_complete(phase, outputs, team)` | La phase est-elle terminée ? (agents requis + deliverables) |
+| `get_deliverables_to_dispatch(phase, outputs, team)` | Quels livrables lancer maintenant ? (par parallel_group + depends_on) |
+| `get_agents_to_dispatch(phase, outputs, team)` | Legacy : quels agents lancer (utilisé par orchestrateur Discord) |
+| `check_phase_complete(phase, outputs, team)` | La phase est-elle terminée ? (clé `agent_id:pipeline_step`) |
 | `can_transition(phase, outputs, alerts, team)` | Peut-on passer à la phase suivante ? |
 | `get_workflow_status(phase, outputs, team)` | État complet pour l'affichage |
 
@@ -171,13 +188,26 @@ Design :    A = [ux_designer, architect, planner]
 Build :     A = [lead_dev] → B = [dev_frontend, dev_backend, dev_mobile] → C = [qa_engineer]
 ```
 
-### Auto-dispatch dans le gateway
+### Dispatch par livrables (nouveau)
 
-Après qu'un groupe termine, le gateway redemande au workflow engine s'il y a un groupe suivant. Chaînage automatique récursif (max 5 niveaux).
+Chaque livrable dans `Workflow.json` a un `agent` + `pipeline_step`. Le dispatch se fait livrable par livrable :
 
 ```
-Groupe A termine → workflow engine : "groupe B suivant" → auto-dispatch B
-Groupe B termine → workflow engine : "groupe C suivant" → auto-dispatch C
+Phase transition (HITL approve)
+  → get_deliverables_to_dispatch(phase, outputs, team)
+  → Pour chaque livrable : agent reçoit prompt + assign + unassign + mission (instruction du step)
+  → agent_outputs["requirements_analyst:prd"] = {status: "complete", deliverables: {...}}
+```
+
+Les livrables héritent du `parallel_group` de leur agent. Groupe A termine → groupe B démarre. Max 5 niveaux.
+
+### Auto-dispatch dans le gateway
+
+Après qu'un groupe de livrables termine, le gateway redemande au workflow engine s'il y a un groupe suivant. Chaînage automatique récursif (max 5 niveaux).
+
+```
+Livrables groupe A terminent → workflow engine : "groupe B suivant" → auto-dispatch B
+Livrables groupe B terminent → workflow engine : "groupe C suivant" → auto-dispatch C
 Groupe C termine → workflow engine : "phase complete" → propose human_gate
 ```
 
@@ -458,13 +488,16 @@ auth_type     TEXT DEFAULT 'local'      -- 'local' | 'google'
 ### EventBus interne (`agents/shared/event_bus.py`)
 - Bus pub/sub singleton avec ring buffer (2000 events)
 - 12 types d'events : agent_start/complete/error, llm_call_start/end, tool_call, pipeline_step_start/end, human_gate_requested/responded, agent_dispatch, phase_transition
-- Handlers : Langfuse (si env vars présentes), Webhooks (HMAC-SHA256), Dashboard (via `/events`)
+- Handlers : Webhooks (HMAC-SHA256), Dashboard (via `/events`)
 
-### OpenLIT (port 3000)
-- Open-source, self-hosted (2 containers : ClickHouse + OpenLIT)
-- Auto-instrumentation LangChain via `openlit.init()` dans le gateway startup
-- Collecteur OTel intégré (ports 4317 gRPC, 4318 HTTP)
-- UI sur port 3000, données persistées dans `/opt/langgraph-data/openlit*`
+### Langfuse (port 3000)
+- Open-source, self-hosted (4 containers : Langfuse Web + Worker + ClickHouse + MinIO)
+- Intégration LangChain via `CallbackHandler` (singleton dans `langfuse_setup.py`)
+- Callbacks injectés dans `throttled_invoke()` via paramètre `callbacks`
+- UI sur port 3000, traces dans ClickHouse, blobs dans MinIO
+- BDD dédiée `langfuse` dans PostgreSQL (séparée de `langgraph`)
+- Login AGT1 : `admin@langgraph.local` / `admin123`
+- Env vars : `LANGFUSE_SECRET_KEY`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_HOST`
 
 ---
 
@@ -478,16 +511,21 @@ auth_type     TEXT DEFAULT 'local'      -- 'local' | 'google'
 | `mcp_servers.json` | `config/` | Serveurs MCP (global) | Non |
 | `langgraph.json` | `config/` | Config LangGraph | Non |
 | `hitl.json` | `config/` | Auth HITL + Google OAuth (client_id, domaines) | Non |
+| `cultures.json` | `Shared/` | Référentiel cultures (31 locales, enabled/disabled) | Non |
 | `agents_registry.json` | `config/Team1/` | 13 agents + orchestrator | Non |
 | `agent_mcp_access.json` | `config/Team1/` | MCP par agent | Non |
-| `Workflow.json` | `config/Team1/` | Phases, transitions, rules | Non |
+| `Workflow.json` | `config/Team1/` | Phases, transitions, livrables (agent+pipeline_step) | Non |
 | `*.md` | `config/Team1/` | Prompts des agents | Non |
+| `*.md` | `Shared/Prompts/fr-fr/` | Prompts système localisés | Non |
 
 ---
 
 ## Variables d'environnement clés
 
 ```bash
+# Culture par défaut (prompts localisés)
+CULTURE=fr-fr
+
 # Canal par défaut (discord | email)
 DEFAULT_CHANNEL=discord
 
@@ -517,6 +555,14 @@ HITL_ADMIN_EMAIL=admin@...    # Email admin initial (seed)
 HITL_ADMIN_PASSWORD=...       # Password admin initial (seed)
 HITL_PUBLIC_URL=https://...   # URL publique HITL (pour les liens de reset)
 GOOGLE_CLIENT_SECRET=...      # Secret Google OAuth (si google_oauth.enabled)
+
+# Langfuse Observabilité
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_HOST=http://langfuse-web:3000
+LANGFUSE_ENCRYPTION_KEY=...   # openssl rand -hex 32
+LANGFUSE_SALT=...
+LANGFUSE_NEXTAUTH_SECRET=...
 ```
 
 ---
@@ -582,7 +628,7 @@ Le script 02 télécharge tout depuis GitHub : Dockerfiles, code agents (`Agents
 23. Publication GitHub via Documentaliste
 24. EventBus observabilité — bus d'events centralisé (`event_bus.py`) avec ring buffer, Langfuse handler, webhook dispatcher
 25. Monitoring dashboard — events temps réel, logs Docker, état containers (start/stop/restart)
-26. OpenLIT observabilité externe — auto-instrumentation LangChain, ClickHouse + UI (port 3000)
+26. Langfuse observabilité — remplace OpenLIT, self-hosted v3 (4 containers), CallbackHandler LangChain, BDD dédiée
 27. MCP SSE Server — agents exposés comme tools MCP par équipe (`/mcp/{team_id}/sse`), auth HMAC signée + PostgreSQL, gestion API keys dans le dashboard admin
 
 ### HITL Console
@@ -590,6 +636,13 @@ Le script 02 télécharge tout depuis GitHub : Dockerfiles, code agents (`Agents
 29. Auth locale (email/password) avec inscription en rôle `undefined` (validation admin requise)
 30. Auth Google OAuth — Google Identity Services, config via `config/hitl.json`, restriction par domaine
 31. Gestion utilisateurs admin — colonne auth_type, rôle `undefined` visible en rouge, validation par l'admin
+
+### Dispatch & Cultures (2026-03-16)
+32. Dispatch par livrables — chaque livrable = 1 appel agent distinct (agent + pipeline_step), prompt enrichi (assign/unassign)
+33. Système de cultures — `Shared/cultures.json` (31 locales), prompts localisés dans `Shared/Prompts/{culture}/`
+34. Éditeur pipeline steps — split-panel (liste + éditeur), drag-drop, baguette magique (génération via Missions.md)
+35. Onglet Prompts dans Templates — CRUD prompts par culture, sélecteur de culture
+36. Onglet Autres dans Templates — gestion des cultures disponibles (grille avec filtre)
 
 ## À faire 🔧
 
