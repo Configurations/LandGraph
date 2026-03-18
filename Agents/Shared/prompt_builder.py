@@ -94,10 +94,11 @@ def build_orchestrator_prompt(
         )
     template = template_file.read_text(encoding="utf-8")
 
-    # 4. Build the 3 variables from non-orchestrator agents
+    # 4. Build the 4 variables from non-orchestrator agents
     identity_rows = []
     role_blocks = []
     mission_blocks = []
+    skill_blocks = []
 
     for agent_id, agent_cfg in agents.items():
         # Skip orchestrator
@@ -149,6 +150,18 @@ def build_orchestrator_prompt(
                 f"- **{agent_name}**\n" + "\n".join(mission_items)
             )
 
+        # Skills (skill_*.md)
+        skill_items = []
+        if agent_catalog_dir is not None:
+            for f in sorted(agent_catalog_dir.glob("skill_*.md")):
+                content = f.read_text(encoding="utf-8").strip()
+                if content:
+                    skill_items.append(f"  - {content}")
+        if skill_items:
+            skill_blocks.append(
+                f"- **{agent_name}**\n" + "\n".join(skill_items)
+            )
+
     # Format variables
     agents_identity = (
         "| Cle | Nom | Description | Identite |\n|---|---|---|---|\n"
@@ -156,15 +169,19 @@ def build_orchestrator_prompt(
         if identity_rows
         else "(aucun agent)"
     )
-    agents_role = "\n".join(role_blocks) if role_blocks else "(aucun role)"
+    agents_role = "\n\n".join(role_blocks) if role_blocks else "(aucun role)"
     agents_missions = (
-        "\n".join(mission_blocks) if mission_blocks else "(aucune mission)"
+        "\n\n".join(mission_blocks) if mission_blocks else "(aucune mission)"
+    )
+    agents_skills = (
+        "\n\n".join(skill_blocks) if skill_blocks else "(aucune competence)"
     )
 
     # 5. Replace placeholders in template
     prompt = template.replace("{Agents_identity}", agents_identity)
     prompt = prompt.replace("{Agents_role}", agents_role)
     prompt = prompt.replace("{Agents_missions}", agents_missions)
+    prompt = prompt.replace("{Agents_skills}", agents_skills)
 
     # 6. Save to project dir
     output_file = project_dir / "prompt_orchestrator.md"
