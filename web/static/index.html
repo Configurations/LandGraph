@@ -796,6 +796,7 @@
           <div class="prompt-tab" data-tpl-tab="tpl-teams" onclick="showTemplateTab('tpl-teams')">Equipes</div>
           <div class="prompt-tab" data-tpl-tab="tpl-projects" onclick="showTemplateTab('tpl-projects')">Projets</div>
           <div class="prompt-tab" data-tpl-tab="tpl-prompts" onclick="showTemplateTab('tpl-prompts')">Prompts</div>
+          <div class="prompt-tab" data-tpl-tab="tpl-i18n" onclick="showTemplateTab('tpl-i18n')">I18n</div>
           <div class="prompt-tab" data-tpl-tab="tpl-others" onclick="showTemplateTab('tpl-others')">Autres</div>
           <div class="prompt-tab" data-tpl-tab="tpl-git" onclick="showTemplateTab('tpl-git')">Enregistrement</div>
         </div>
@@ -910,11 +911,35 @@
           </div>
           <div class="card" style="margin-top:1rem">
             <div class="card-header">
-              <h3>Types de livrables</h3>
+              <h3>Services</h3>
               <button class="btn btn-primary btn-sm" onclick="showAddDeliverableTypeModal()">+ Ajouter</button>
             </div>
-            <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem">Types de livrables assignables aux agents. La cle (<code>delivers_xxx</code>) est utilisee dans les configurations d'agents.</p>
+            <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem">Services disponibles pour les agents. La cle (<code>delivers_xxx</code>) est utilisee dans les configurations d'agents.</p>
             <div id="tpl-deliverable-types-list"></div>
+          </div>
+        </div>
+
+        <!-- Sub-tab: I18n -->
+        <div class="tpl-tab-content" id="tpl-tab-tpl-i18n">
+          <div class="card">
+            <div class="card-header">
+              <h3>Traductions</h3>
+              <div style="display:flex;align-items:center;gap:0.5rem">
+                <select id="tpl-i18n-culture-select" onchange="i18nSwitchCulture(this.value)" style="padding:0.3rem 0.5rem;font-size:0.85rem"></select>
+                <button class="btn btn-primary btn-sm" onclick="i18nAddKey()">+ Ajouter</button>
+              </div>
+            </div>
+            <div class="ps-panel" style="height:calc(100vh - 300px)">
+              <div class="ps-list">
+                <div class="ps-list-header">
+                  <input type="text" id="tpl-i18n-filter" placeholder="Filtrer..." oninput="i18nRenderList()" style="flex:1;padding:0.25rem 0.4rem;font-size:0.8rem;border:1px solid var(--border);border-radius:4px;background:var(--bg-primary);color:var(--text-primary)">
+                </div>
+                <div class="ps-list-items" id="tpl-i18n-items"></div>
+              </div>
+              <div class="ps-editor" id="tpl-i18n-editor">
+                <p style="color:var(--text-secondary);font-size:0.85rem;padding:1rem">Selectionnez une cle pour editer sa traduction.</p>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1344,6 +1369,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="/static/js/app.js?v=20260318e"></script>
+  <script src="/static/js/app.js?v=20260319c"></script>
 </body>
 </html>

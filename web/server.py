@@ -1394,6 +1394,7 @@ async def update_shared_agent(agent_id: str, entry: SharedAgentEntry):
         (agent_dir / f"{agent_id}_unassign.md").write_text(entry.unassign_content, encoding="utf-8")
     if entry.identity_content is not None:
         (agent_dir / "identity.md").write_text(entry.identity_content, encoding="utf-8")
+    _invalidate_orchestrator_prompts(agent_id)
     return {"ok": True}
 
 
@@ -1403,6 +1404,7 @@ async def delete_shared_agent(agent_id: str):
     if not agent_dir.exists():
         raise HTTPException(404, f"Agent '{agent_id}' introuvable")
     shutil.rmtree(agent_dir)
+    _invalidate_orchestrator_prompts(agent_id)
     return {"ok": True}
 
 
@@ -1419,6 +1421,7 @@ async def put_shared_agent_file(agent_id: str, filename: str, request: Request):
     body = await request.json()
     content = body.get("content", "")
     (agent_dir / f"{safe}.md").write_text(content, encoding="utf-8")
+    _invalidate_orchestrator_prompts(agent_id)
     return {"ok": True}
 
 
@@ -2429,6 +2432,14 @@ async def config_check():
         else:
             issues.append({"level": "warning", "category": "workflow", "message": f"Equipe '{tid}' : Workflow.json introuvable"})
 
+    # 4b. Check orchestrator_prompt.md exists for each team
+    for tcfg in teams:
+        tid = tcfg.get("id", "")
+        directory = tcfg.get("directory", tid)
+        stdir = SHARED_TEAMS_DIR / directory
+        if stdir.exists() and not (stdir / "orchestrator_prompt.md").exists():
+            issues.append({"level": "error", "category": "agents", "message": f"Equipe '{tid}' : orchestrator_prompt.md manquant — construisez-le depuis Templates > Equipes"})
+
     # 5. Validate JSON blocks in system prompts (Shared/Prompts/{culture}/)
     if PROMPTS_DIR.exists():
         for f in PROMPTS_DIR.glob("*.md"):
@@ -2479,6 +2490,66 @@ async def toggle_culture(key: str, body: CultureToggle):
     if not found:
         raise HTTPException(404, f"Culture '{key}' introuvable")
     _save_cultures(cultures)
+    return {"ok": True}
+
+
+# ── API: I18n Translations (Shared/i18n/{culture}.json) ───────────
+
+I18N_DIR = SHARED_DIR / "i18n"
+
+
+def _i18n_path(culture: str) -> Path:
+    if ".." in culture or "/" in culture or "\\" in culture:
+        raise HTTPException(400, "Culture invalide")
+    return I18N_DIR / f"{culture}.json"
+
+
+def _load_i18n(culture: str) -> dict:
+    p = _i18n_path(culture)
+    if p.exists():
+        return json.loads(p.read_text(encoding="utf-8"))
+    return {}
+
+
+def _save_i18n(culture: str, data: dict):
+    I18N_DIR.mkdir(parents=True, exist_ok=True)
+    p = _i18n_path(culture)
+    p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+@app.get("/api/templates/i18n")
+async def list_i18n(culture: str | None = None):
+    c = culture or _CULTURE
+    translations = _load_i18n(c)
+    default_translations = _load_i18n(_CULTURE) if c != _CULTURE else translations
+    return {
+        "culture": c,
+        "translations": translations,
+        "default_keys": sorted(default_translations.keys()),
+    }
+
+
+class I18nValue(BaseModel):
+    value: str
+
+
+@app.put("/api/templates/i18n/{key:path}")
+async def set_i18n(key: str, body: I18nValue, culture: str | None = None):
+    c = culture or _CULTURE
+    data = _load_i18n(c)
+    data[key] = body.value
+    _save_i18n(c, data)
+    return {"ok": True}
+
+
+@app.delete("/api/templates/i18n/{key:path}")
+async def delete_i18n(key: str, culture: str | None = None):
+    c = culture or _CULTURE
+    data = _load_i18n(c)
+    if key not in data:
+        raise HTTPException(404, f"Cle '{key}' introuvable")
+    del data[key]
+    _save_i18n(c, data)
     return {"ok": True}
 
 
@@ -2722,6 +2793,7 @@ async def create_project_workflow(project_id: str, entry: WorkflowCreate):
 class WorkflowGenerate(BaseModel):
     name: str
     prompt: str
+    team: str = ""
 
 
 @app.post("/api/templates/projects/{project_id}/workflows/generate")
@@ -2753,40 +2825,38 @@ async def generate_project_workflow(project_id: str, entry: WorkflowGenerate):
     project_prompt_parts.append(entry.prompt.strip())
     project_prompt = "\n".join(project_prompt_parts)
 
-    # Build {available_agents} with identity + profile file names
+    # Build {available_agents} from team registry + Shared/Agents/{agent_id}/
     agents_parts = []
-    if SHARED_AGENTS_DIR.exists():
-        for sa_dir in sorted(SHARED_AGENTS_DIR.iterdir()):
-            if sa_dir.is_dir():
-                acfg_file = sa_dir / "agent.json"
-                if not acfg_file.exists():
-                    continue
-                acfg = json.loads(acfg_file.read_text(encoding="utf-8"))
-                agent_id = sa_dir.name
-                lines = [f"## {agent_id} — {acfg.get('name', agent_id)}"]
-                # Identity
-                identity_file = sa_dir / "identity.md"
-                if identity_file.exists():
-                    lines.append(f"Identity: {identity_file.read_text(encoding='utf-8').strip()}")
-                # Profile files
-                roles, missions, skills = [], [], []
-                for f in sorted(sa_dir.iterdir()):
-                    if not f.is_file() or f.suffix != ".md":
-                        continue
-                    stem = f.stem
-                    if stem.startswith("role_"):
-                        roles.append(stem[5:])
-                    elif stem.startswith("mission_"):
-                        missions.append(stem[8:])
-                    elif stem.startswith("skill_"):
-                        skills.append(stem[6:])
-                if roles:
-                    lines.append(f"Roles: {', '.join(roles)}")
-                if missions:
-                    lines.append(f"Missions: {', '.join(missions)}")
-                if skills:
-                    lines.append(f"Skills: {', '.join(skills)}")
-                agents_parts.append("\n".join(lines))
+    _team_id = entry.team or project_cfg.get("team", "")
+    _team_dir = None
+    if _team_id and SHARED_TEAMS_FILE.exists():
+        _teams_cfg = json.loads(SHARED_TEAMS_FILE.read_text(encoding="utf-8"))
+        for t in _teams_cfg.get("teams", []):
+            if t["id"].lower() == _team_id.lower():
+                _team_dir = SHARED_TEAMS_DIR / t["directory"]
+                break
+    # Read team agents_registry.json
+    _registry_agents = {}
+    if _team_dir:
+        _reg_file = _team_dir / "agents_registry.json"
+        if _reg_file.exists():
+            _registry_agents = json.loads(_reg_file.read_text(encoding="utf-8")).get("agents", {})
+    # Build available_agents from registry
+    for agent_id in sorted(_registry_agents):
+        acfg_reg = _registry_agents[agent_id]
+        if acfg_reg.get("type") == "orchestrator":
+            continue
+        sa_dir = SHARED_AGENTS_DIR / agent_id
+        lines = [f"- **{agent_id}**"]
+        # Description from Shared/Agents/{agent_id}/agent.json
+        agent_json = sa_dir / "agent.json" if sa_dir.is_dir() else None
+        if agent_json and agent_json.exists():
+            acfg = json.loads(agent_json.read_text(encoding="utf-8"))
+            desc = acfg.get("description", "")
+            if desc:
+                lines[0] += f" : {desc}"
+        lines.append("")
+        agents_parts.append("\n".join(lines))
     available_agents = "\n\n".join(agents_parts) if agents_parts else "(aucun agent disponible)"
 
     # Build {workflow_spec} from docs/workflow-model.md
@@ -2796,7 +2866,8 @@ async def generate_project_workflow(project_id: str, entry: WorkflowGenerate):
     workflow_spec = specs_path.read_text(encoding="utf-8") if specs_path.exists() else "(specifications non disponibles)"
 
     # Inject placeholders
-    system_prompt = system_template.replace("{project_prompt}", project_prompt).replace("{available_agents}", available_agents).replace("{workflow_spec}", workflow_spec)
+    team_id = entry.team or project_cfg.get("team", "")
+    system_prompt = system_template.replace("{project_prompt}", project_prompt).replace("{team_id}", team_id).replace("{available_agents}", available_agents).replace("{workflow_spec}", workflow_spec)
     user_msg = "Genere le workflow complet pour ce projet. Retourne uniquement le JSON."
 
     # Trace: save prompt to project chat directory
@@ -3107,27 +3178,16 @@ async def deliverable_skillmatch(project_id: str, req: SkillMatchRequest):
 
 @app.post("/api/templates/projects/{project_id}/orchestrator/build")
 async def build_orchestrator_prompt_endpoint(project_id: str):
-    """Build orchestrator prompt dynamically from agent catalog."""
+    """Build orchestrator prompt for the project's team — delegates to team build."""
     project_dir = _project_dir_or_404(project_id)
-    try:
-        import importlib.util as _ilu
-        _pb_path = (PROJECT_DIR if DOCKER_MODE else Path(__file__).resolve().parent.parent) / "Agents" / "Shared" / "prompt_builder.py"
-        _spec = _ilu.spec_from_file_location("prompt_builder", _pb_path)
-        _mod = _ilu.module_from_spec(_spec)
-        _spec.loader.exec_module(_mod)
-        build_orchestrator_prompt = _mod.build_orchestrator_prompt
-        content = build_orchestrator_prompt(
-            project_dir,
-            shared_agents_dir=SHARED_AGENTS_DIR,
-            shared_teams_dir=SHARED_TEAMS_DIR,
-        )
-    except FileNotFoundError as e:
-        raise HTTPException(404, str(e))
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:
-        raise HTTPException(500, f"Erreur generation: {e}")
-    return {"ok": True, "content": content}
+    project_json = project_dir / "project.json"
+    if not project_json.exists():
+        raise HTTPException(404, "project.json introuvable")
+    project_cfg = json.loads(project_json.read_text(encoding="utf-8"))
+    team = project_cfg.get("team", "").strip()
+    if not team:
+        raise HTTPException(400, "Le projet n'a pas d'equipe (champ 'team' vide)")
+    return await build_team_orchestrator_prompt(team)
 
 
 # ── API: Teams (Configs) ──────────────────────────
@@ -3638,6 +3698,7 @@ async def add_template_agent(cfg: AgentConfig):
         agent_data["pipeline_steps"] = cfg.pipeline_steps
     data["agents"][cfg.id] = agent_data
     _write_json(registry_path, data)
+    _invalidate_orchestrator_prompt_for_team(cfg.team_id)
     return {"ok": True}
 
 
@@ -3661,6 +3722,7 @@ async def update_template_agent(agent_id: str, cfg: AgentConfig):
         del existing["pipeline_steps"]
     data["agents"][agent_id] = existing
     _write_json(registry_path, data)
+    _invalidate_orchestrator_prompt_for_team(cfg.team_id)
     return {"ok": True}
 
 
@@ -3681,7 +3743,113 @@ async def delete_template_agent(agent_id: str, team_id: str = ""):
     if prompt_path.exists():
         prompt_path.unlink()
         log.info("Deleted prompt file: %s", prompt_path)
+    _invalidate_orchestrator_prompt_for_team(team_id)
     return {"ok": True}
+
+
+# ── Orchestrator prompt build & invalidation ──────
+
+
+def _invalidate_orchestrator_prompts(agent_id: str):
+    """Delete orchestrator_prompt.md from all teams that reference agent_id."""
+    if not SHARED_TEAMS_FILE.exists():
+        return
+    teams_cfg = json.loads(SHARED_TEAMS_FILE.read_text(encoding="utf-8"))
+    for t in teams_cfg.get("teams", []):
+        tdir = SHARED_TEAMS_DIR / t.get("directory", t["id"])
+        reg_file = tdir / "agents_registry.json"
+        if not reg_file.exists():
+            continue
+        reg = json.loads(reg_file.read_text(encoding="utf-8"))
+        if agent_id in reg.get("agents", {}):
+            prompt_file = tdir / "orchestrator_prompt.md"
+            if prompt_file.exists():
+                prompt_file.unlink()
+                log.info("Invalidated orchestrator prompt for team %s (agent %s changed)", t["id"], agent_id)
+
+
+def _invalidate_orchestrator_prompt_for_team(team_dir: str):
+    """Delete orchestrator_prompt.md for a specific team."""
+    tdir = _shared_team_dir(team_dir)
+    prompt_file = tdir / "orchestrator_prompt.md"
+    if prompt_file.exists():
+        prompt_file.unlink()
+        log.info("Invalidated orchestrator prompt for team dir %s", team_dir)
+
+
+@app.post("/api/templates/teams/{team_dir}/orchestrator/build")
+async def build_team_orchestrator_prompt(team_dir: str):
+    """Build orchestrator prompt for a team using translateOrchestrator.md + LLM."""
+    tdir = _shared_team_dir(team_dir)
+    reg_file = tdir / "agents_registry.json"
+    if not reg_file.exists():
+        raise HTTPException(404, f"agents_registry.json introuvable pour {team_dir}")
+
+    registry = json.loads(reg_file.read_text(encoding="utf-8"))
+    agents = registry.get("agents", {})
+
+    # Load translateOrchestrator.md template
+    culture = os.getenv("CULTURE", "fr-fr")
+    template_path = SHARED_DIR / "Prompts" / culture / "translateOrchestrator.md"
+    if not template_path.exists():
+        raise HTTPException(404, f"Template translateOrchestrator.md introuvable pour culture {culture}")
+    template = template_path.read_text(encoding="utf-8")
+
+    # Build one orchestrator card per non-orchestrator agent
+    cards = []
+    for agent_id, agent_cfg in agents.items():
+        if agent_cfg.get("type") == "orchestrator" or agent_id == "orchestrator":
+            continue
+
+        agent_name = agent_cfg.get("name", agent_id)
+
+        # Build agent_profile from all .md files in Shared/Agents/{agent_id}/
+        profile_parts = []
+        agent_catalog_dir = SHARED_AGENTS_DIR / agent_id
+        if agent_catalog_dir.is_dir():
+            for f in sorted(agent_catalog_dir.iterdir()):
+                if f.is_file() and f.suffix == ".md":
+                    content = f.read_text(encoding="utf-8").strip()
+                    if content:
+                        profile_parts.append(f"--------------- {f.name} ---------------\n{content}\n")
+
+        # Also read description from agent.json
+        agent_json = agent_catalog_dir / "agent.json" if agent_catalog_dir.is_dir() else None
+        description = ""
+        if agent_json and agent_json.exists():
+            acfg = json.loads(agent_json.read_text(encoding="utf-8"))
+            description = acfg.get("description", "")
+        if description:
+            profile_parts.insert(0, f"--------------- description ---------------\n{description}\n")
+
+        agent_profile = "\n".join(profile_parts) if profile_parts else "(aucun profil disponible)"
+
+        # Fill template placeholders
+        prompt = template.replace("{agent_id}", agent_id)
+        prompt = prompt.replace("{agent_name}", agent_name)
+        prompt = prompt.replace("{agent_profile}", agent_profile)
+
+        # Call LLM
+        try:
+            result = await chat(ChatRequest(messages=[
+                {"role": "user", "content": prompt},
+            ]))
+            card = result.get("content", "").strip()
+            if card:
+                cards.append(card)
+        except Exception as e:
+            log.warning("LLM call failed for agent %s: %s", agent_id, e)
+            cards.append(f"<!-- Erreur generation pour {agent_id}: {e} -->")
+
+    # Assemble final prompt
+    content = "\n\n".join(cards)
+
+    # Save to team directory
+    output_file = tdir / "orchestrator_prompt.md"
+    output_file.write_text(content, encoding="utf-8")
+    log.info("Orchestrator prompt built for team %s: %s", team_dir, output_file)
+
+    return {"ok": True, "content": content}
 
 
 # ── Git helpers ───────────────────────────────────

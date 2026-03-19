@@ -3993,6 +3993,7 @@ function showTemplateTab(tabId) {
   else if (tabId === 'tpl-teams') loadTplTeamsList();
   else if (tabId === 'tpl-projects') loadTplProjects();
   else if (tabId === 'tpl-prompts') loadTplPrompts();
+  else if (tabId === 'tpl-i18n') loadTplI18n();
   else if (tabId === 'tpl-others') loadTplOthers();
   else if (tabId === 'tpl-git') loadTplGit();
 }
@@ -4116,6 +4117,154 @@ async function deleteDeliverableType(key) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+// ── I18n Translations (Shared/i18n/{culture}.json) ──────────
+
+let _i18nCulture = null;
+let _i18nKeys = [];       // [{key, value, missing}]
+let _i18nSel = -1;
+let _i18nDirty = {};
+let _i18nDefaultKeys = []; // keys from default culture (reference)
+
+async function loadTplI18n() {
+  try {
+    if (!_allCultures.length) {
+      const cd = await api('/api/templates/cultures');
+      _allCultures = cd.cultures || [];
+      _defaultCulture = cd.default || 'fr-fr';
+    }
+    const sel = document.getElementById('tpl-i18n-culture-select');
+    if (sel) {
+      const enabled = _allCultures.filter(c => c.enabled);
+      sel.innerHTML = enabled.map(c =>
+        `<option value="${escHtml(c.key)}" ${c.key === (_i18nCulture || _defaultCulture) ? 'selected' : ''}>${c.flag} ${escHtml(c.key)} — ${escHtml(c.language)}</option>`
+      ).join('');
+      if (!_i18nCulture) _i18nCulture = sel.value || _defaultCulture;
+    }
+    const data = await api('/api/templates/i18n?culture=' + encodeURIComponent(_i18nCulture));
+    _i18nDefaultKeys = data.default_keys || [];
+    const translations = data.translations || {};
+    // Build key list: existing keys + missing keys from default
+    _i18nKeys = [];
+    const seen = new Set();
+    for (const [k, v] of Object.entries(translations)) {
+      _i18nKeys.push({ key: k, value: v, missing: false });
+      seen.add(k);
+    }
+    for (const k of _i18nDefaultKeys) {
+      if (!seen.has(k)) {
+        _i18nKeys.push({ key: k, value: '', missing: true });
+      }
+    }
+    _i18nKeys.sort((a, b) => a.key.localeCompare(b.key));
+    _i18nSel = _i18nKeys.length ? 0 : -1;
+    _i18nDirty = {};
+    i18nRenderList();
+    i18nRenderEditor();
+  } catch (e) {
+    toast('Erreur chargement i18n: ' + e.message, 'error');
+  }
+}
+
+function i18nSwitchCulture(culture) {
+  _i18nCulture = culture;
+  loadTplI18n();
+}
+
+function i18nRenderList() {
+  const container = document.getElementById('tpl-i18n-items');
+  if (!container) return;
+  const filter = (document.getElementById('tpl-i18n-filter')?.value || '').toLowerCase();
+  const items = _i18nKeys.map((item, i) => {
+    if (filter && !item.key.toLowerCase().includes(filter) && !item.value.toLowerCase().includes(filter)) return '';
+    const active = i === _i18nSel ? ' active' : '';
+    const dirty = _i18nDirty[i] ? ' dirty' : '';
+    const missing = item.missing ? ' style="color:var(--danger);font-style:italic"' : '';
+    return `<div class="ps-list-item${active}${dirty}" onclick="i18nSelect(${i})"><span class="ps-list-name"${missing}>${escHtml(item.key)}${item.missing ? ' ⚠' : ''}</span></div>`;
+  }).join('');
+  container.innerHTML = items || '<p style="color:var(--text-secondary);font-size:0.8rem;padding:0.5rem">Aucune cle</p>';
+}
+
+function i18nSelect(idx) {
+  _i18nSel = idx;
+  i18nRenderList();
+  i18nRenderEditor();
+}
+
+function i18nRenderEditor() {
+  const editor = document.getElementById('tpl-i18n-editor');
+  if (!editor) return;
+  if (_i18nSel < 0 || _i18nSel >= _i18nKeys.length) {
+    editor.innerHTML = '<p style="color:var(--text-secondary);font-size:0.85rem;padding:1rem">Selectionnez une cle pour editer sa traduction.</p>';
+    return;
+  }
+  const item = _i18nKeys[_i18nSel];
+  const isNew = item._new;
+  editor.innerHTML =
+    `<div class="ps-edit-row">
+      <input class="ps-edit-input" id="tpl-i18n-key" value="${escHtml(item.key)}" placeholder="cle.de.traduction" ${isNew ? '' : 'readonly'} style="${isNew ? '' : 'opacity:0.7;cursor:default'}" />
+      <button class="btn btn-primary btn-sm" onclick="i18nSave()">Sauvegarder</button>
+      <button class="btn btn-outline btn-sm" onclick="i18nDelete()" style="color:var(--danger)">Supprimer</button>
+    </div>
+    <label style="font-size:0.8rem;color:var(--text-secondary)">Valeur${item.missing ? ' <span style="color:var(--danger)">(manquante dans cette culture)</span>' : ''}</label>
+    <textarea class="ps-edit-instr" id="tpl-i18n-value" oninput="_i18nDirty[${_i18nSel}]=true;i18nRenderList()" placeholder="Traduction...">${escHtml(item.value)}</textarea>`;
+}
+
+function i18nAddKey() {
+  _i18nKeys.push({ key: '', value: '', missing: false, _new: true });
+  _i18nSel = _i18nKeys.length - 1;
+  _i18nDirty[_i18nSel] = true;
+  i18nRenderList();
+  i18nRenderEditor();
+  const keyInput = document.getElementById('tpl-i18n-key');
+  if (keyInput) keyInput.focus();
+}
+
+async function i18nSave() {
+  const keyInput = document.getElementById('tpl-i18n-key');
+  const valueInput = document.getElementById('tpl-i18n-value');
+  if (!keyInput || !valueInput) return;
+  const key = keyInput.value.trim();
+  const value = valueInput.value;
+  if (!key) { toast('Cle requise', 'error'); return; }
+  try {
+    await api('/api/templates/i18n/' + encodeURIComponent(key) + '?culture=' + encodeURIComponent(_i18nCulture), {
+      method: 'PUT', body: { value }
+    });
+    toast('Traduction sauvegardee', 'success');
+    // Update local state
+    const item = _i18nKeys[_i18nSel];
+    item.key = key;
+    item.value = value;
+    item.missing = false;
+    delete item._new;
+    delete _i18nDirty[_i18nSel];
+    i18nRenderList();
+    i18nRenderEditor();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function i18nDelete() {
+  if (_i18nSel < 0) return;
+  const item = _i18nKeys[_i18nSel];
+  if (item._new) {
+    _i18nKeys.splice(_i18nSel, 1);
+    _i18nSel = Math.min(_i18nSel, _i18nKeys.length - 1);
+    i18nRenderList();
+    i18nRenderEditor();
+    return;
+  }
+  if (!(await confirmModal('Supprimer la cle "' + item.key + '" ?'))) return;
+  try {
+    await api('/api/templates/i18n/' + encodeURIComponent(item.key) + '?culture=' + encodeURIComponent(_i18nCulture), { method: 'DELETE' });
+    toast('Cle supprimee', 'success');
+    _i18nKeys.splice(_i18nSel, 1);
+    _i18nSel = Math.min(_i18nSel, _i18nKeys.length - 1);
+    delete _i18nDirty[_i18nSel];
+    i18nRenderList();
+    i18nRenderEditor();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
 function _getEnabledCultures() {
   return _allCultures.filter(c => c.enabled);
 }
@@ -4143,15 +4292,26 @@ async function loadTplProjects() {
 function renderTplProjects() {
   const container = document.getElementById('tpl-projects-table');
   if (!container) return;
-  const filter = (document.getElementById('tpl-projects-filter')?.value || '').toLowerCase();
+  // Create filter input + content wrapper once, then only update content
+  let filterInput = document.getElementById('tpl-projects-filter');
+  if (!filterInput) {
+    const inputHtml = '<input type="text" class="form-control" id="tpl-projects-filter" placeholder="Filtrer par ID, nom, description, equipe..." oninput="renderTplProjects()" style="margin-bottom:0.75rem;padding:0.4rem 0.6rem;font-size:0.85rem;width:100%;box-sizing:border-box">';
+    let contentDiv = document.createElement('div');
+    contentDiv.id = 'tpl-projects-content';
+    container.innerHTML = inputHtml;
+    container.appendChild(contentDiv);
+    filterInput = document.getElementById('tpl-projects-filter');
+  }
+  const contentDiv = document.getElementById('tpl-projects-content');
+  const filter = (filterInput.value || '').toLowerCase();
   const filtered = _tplProjects.filter(p =>
     !filter || p.id.toLowerCase().includes(filter) || (p.name || '').toLowerCase().includes(filter) || (p.description || '').toLowerCase().includes(filter) || (p.team || '').toLowerCase().includes(filter)
   );
-  let html = '<input type="text" class="form-control" id="tpl-projects-filter" placeholder="Filtrer par ID, nom, description, equipe..." oninput="renderTplProjects()" style="margin-bottom:0.75rem;padding:0.4rem 0.6rem;font-size:0.85rem;width:100%;box-sizing:border-box" value="' + escHtml(filter) + '">';
+  let html = '';
   if (!filtered.length) {
-    html += '<p style="color:var(--text-secondary);font-size:0.85rem;padding:0.5rem">' + (_tplProjects.length ? 'Aucun resultat' : 'Aucun type de projet') + '</p>';
+    html = '<p style="color:var(--text-secondary);font-size:0.85rem;padding:0.5rem">' + (_tplProjects.length ? 'Aucun resultat' : 'Aucun type de projet') + '</p>';
   } else {
-    html += '<table class="data-table"><thead><tr><th>ID</th><th>Nom</th><th>Description</th><th>Equipe</th><th>Workflows</th><th></th></tr></thead><tbody>' +
+    html = '<table class="data-table"><thead><tr><th>ID</th><th>Nom</th><th>Description</th><th>Equipe</th><th>Workflows</th><th></th></tr></thead><tbody>' +
       filtered.map(p => {
         const wfs = (p.workflows || []);
         const wfChips = wfs.map(w =>
@@ -4171,7 +4331,7 @@ function renderTplProjects() {
       }).join('') +
       '</tbody></table>';
   }
-  container.innerHTML = html;
+  contentDiv.innerHTML = html;
 }
 
 function _projTeamOptions(selected) {
@@ -4270,8 +4430,10 @@ function _projWfToggleGen() {
 async function generateProjectWorkflow(projectId) {
   const name = (document.getElementById('proj-wf-new-name').value || '').trim();
   const prompt = (document.getElementById('proj-wf-gen-prompt').value || '').trim();
+  const team = (document.getElementById('proj-wf-team')?.value || '').trim();
   if (!name) { toast('Nom requis', 'error'); return; }
   if (!prompt) { toast('Decrivez le projet pour generer le workflow', 'error'); return; }
+  if (!team) { toast('Equipe requise', 'error'); return; }
   // Disable all action buttons
   const btns = document.querySelectorAll('#proj-wf-actions button');
   btns.forEach(b => { b.disabled = true; b.style.opacity = '0.5'; });
@@ -4279,7 +4441,7 @@ async function generateProjectWorkflow(projectId) {
   if (genBtn) genBtn.textContent = 'Generation...';
   try {
     await api('/api/templates/projects/' + encodeURIComponent(projectId) + '/workflows/generate', {
-      method: 'POST', body: { name, prompt }
+      method: 'POST', body: { name, prompt, team }
     });
     closeModal();
     toast('Workflow genere et sauvegarde', 'success');
@@ -4523,8 +4685,10 @@ function _renderSaLeft() {
     html += '<hr class="sa-separator">';
     const sec = saActiveSection;
     html += _saMenuItem('info', '\u2139\uFE0F', 'Informations', sec);
-    html += _saMenuItem('identity', '\uD83E\uDEAA', 'Identite', sec);
-    html += _saMenuItem('prompt', '\uD83D\uDCDD', 'Prompt', sec);
+    if (saAgentData.type !== 'orchestrator') {
+      html += _saMenuItem('identity', '\uD83E\uDEAA', 'Identite', sec);
+      html += _saMenuItem('prompt', '\uD83D\uDCDD', 'Prompt', sec);
+    }
     html += _saMenuItem('assign', '\uD83D\uDD00', 'Assignations', sec);
     if (saAgentData.type !== 'orchestrator') {
       html += _saMenuItem('chat', '\uD83D\uDCAC', 'Chat', sec);
@@ -5841,6 +6005,7 @@ async function editTplAgent(dir, agentId) {
       </div>
     </div>
     <div class="modal-actions">
+      ${isOrchestrator ? '<button class="btn btn-outline" onclick="buildTeamOrchestratorPrompt(\'' + escHtml(dir) + '\')" style="gap:0.3rem">&#9881; Construire prompt</button>' : ''}
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
       <button class="btn btn-primary" onclick="saveTplAgent('${escHtml(dir)}','${escHtml(agentId)}')">Sauvegarder</button>
     </div>
@@ -5849,6 +6014,16 @@ async function editTplAgent(dir, agentId) {
   const promptEl = document.getElementById('tpl-agent-prompt-preview');
   if (promptEl) promptEl.innerHTML = promptHtml;
   renderPipelineSteps('tpl-pipeline-steps', a.pipeline_steps || []);
+}
+
+async function buildTeamOrchestratorPrompt(teamDir) {
+  try {
+    const res = await api('/api/templates/teams/' + encodeURIComponent(teamDir) + '/orchestrator/build', { method: 'POST' });
+    toast('Prompt orchestrateur genere', 'success');
+    showModal('<div class="modal-header"><h3>Prompt orchestrateur — ' + escHtml(teamDir) + '</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
+      '<textarea readonly rows="20" style="width:100%;font-family:monospace;font-size:0.8rem;background:var(--bg-secondary);border:1px solid var(--border);padding:0.5rem;resize:vertical">' + escHtml(res.content || '') + '</textarea>' +
+      '<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Fermer</button></div>', 'modal-wide');
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 function switchTplModalTab(tab) {

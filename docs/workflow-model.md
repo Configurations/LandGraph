@@ -37,13 +37,32 @@ Les agents disponibles dans le workflow proviennent du registry de l'equipe sele
 | `role` | `string` | Role contextualise au projet dans cette phase |
 | `required` | `boolean` | Doit terminer pour completer la phase |
 | `parallel_group` | `string` | Groupe d'execution (A, B, C) |
-| `depends_on` | `array[string]` | Agent IDs dont les livrables doivent etre termines avant dispatch |
+| `depends_on` | `array[string]` | Agent IDs (MEME PHASE uniquement) dont les livrables doivent etre termines avant dispatch |
 | `can_delegate_to` | `array[string]` | Agent IDs vers lesquels cet agent peut deleguer du travail |
-| `delegated_by` | `string\|null` | Agent delegateur — si present, pas de dispatch automatique |
+| `delegated_by` | `string\|null` | ID de l'agent DELEGATEUR (pas de soi-meme) — si present, pas de dispatch automatique |
+
+### depends_on (agent)
+
+Les valeurs sont des **agent IDs simples** de la **meme phase**. Le workflow engine ne supporte PAS les references cross-phase.
+
+```
+VALIDE :   "depends_on": ["ux_designer", "architect"]
+INVALIDE : "depends_on": ["discovery:architect:adrs"]       ← cross-phase interdit
+INVALIDE : "depends_on": ["architect:adrs"]                  ← c'est une cle livrable, pas un agent ID
+```
+
+Le moteur resout les dependances ainsi : pour chaque agent_id dans depends_on, il verifie que TOUS les livrables required de cet agent dans la meme phase sont termines.
 
 ### Delegation
 
 Un agent avec `delegated_by` n'est jamais dispatche automatiquement par le workflow engine. Il est dispatche par l'agent delegateur (typiquement le lead_dev qui delegue aux devs). Le `can_delegate_to` de l'agent delegateur liste les agents qu'il peut dispatcher.
+
+`delegated_by` contient l'ID de l'agent qui DELEGUE, pas l'ID de l'agent lui-meme.
+
+```
+VALIDE :   dev_mobile a "delegated_by": "lead_dev"    ← le lead_dev delegue AU dev_mobile
+INVALIDE : dev_mobile a "delegated_by": "dev_mobile"   ← auto-reference interdite
+```
 
 ## Livrable (deliverable)
 
@@ -56,7 +75,7 @@ Chaque livrable represente une unite de travail assignee a un agent. La cle du l
 | `required` | `boolean` | oui | Bloquant pour la phase |
 | `type` | `string` | oui | Type de livrable (voir ci-dessous) |
 | `description` | `string` | non | Description du livrable |
-| `depends_on` | `array[string]` | non | Cles de livrables prerequis (meme phase uniquement) |
+| `depends_on` | `array[string]` | non | Cles de livrables prerequis (MEME PHASE uniquement, pas de cross-phase) |
 | `roles` | `array[string]` | non | Roles de l'agent actives pour ce livrable (depuis `Shared/Agents/{id}/role_*.md`) |
 | `missions` | `array[string]` | non | Missions de l'agent activees pour ce livrable (depuis `Shared/Agents/{id}/mission_*.md`) |
 | `skills` | `array[string]` | non | Competences de l'agent activees pour ce livrable (depuis `Shared/Agents/{id}/skill_*.md`) |
@@ -73,6 +92,18 @@ Chaque livrable represente une unite de travail assignee a un agent. La cle du l
 | `specs` | Specifications techniques (architecture, ADR, schemas) |
 | `contract` | Documents contractuels, CGU, mentions legales |
 
+### depends_on (livrable)
+
+Les valeurs sont des **cles de livrables** du dictionnaire `deliverables` de la **meme phase**. Le workflow engine ne supporte PAS les references cross-phase.
+
+```
+VALIDE :   "depends_on": ["architect:adrs", "ux_designer:wireframes"]
+INVALIDE : "depends_on": ["design:architect:adrs"]              ← cross-phase interdit
+INVALIDE : "depends_on": ["planning:architect:architecture_spec"] ← cross-phase interdit
+```
+
+Les dependances cross-phase sont gerees implicitement par les groupes paralleles et les transitions. Il n'est pas necessaire de les declarer.
+
 ### Cle de sortie
 
 La cle de sortie dans le state est `{agent_id}:{pipeline_step}`. Elle doit etre unique par agent dans tout le workflow. Si deux livrables du meme agent ont le meme pipeline_step, le second ecrase le premier.
@@ -85,6 +116,8 @@ L'editeur de workflow propose une baguette magique (skill-match) qui appelle un 
 
 ## Transition
 
+`transitions` est un **ARRAY d'objets**, PAS un dictionnaire.
+
 | Champ | Type | Description |
 |---|---|---|
 | `from` | `string` | Phase source |
@@ -92,6 +125,11 @@ L'editeur de workflow propose une baguette magique (skill-match) qui appelle un 
 | `human_gate` | `boolean` | Validation humaine requise avant transition |
 | `from_side` | `string` | Cote de sortie sur le canvas (left, right, top, bottom) |
 | `to_side` | `string` | Cote d'arrivee sur le canvas (left, right, top, bottom) |
+
+```
+VALIDE :   "transitions": [{"from": "discovery", "to": "design", "human_gate": true, "from_side": "right", "to_side": "left"}]
+INVALIDE : "transitions": {"discovery": ["design"]}   ← le moteur attend un ARRAY d'objets avec from/to
+```
 
 Les champs `from_side` et `to_side` sont utilises par l'editeur visuel pour le positionnement des fleches.
 

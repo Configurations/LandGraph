@@ -116,14 +116,8 @@ def build_orchestrator_prompt(
                 catalog_cfg = json.loads(catalog_json.read_text(encoding="utf-8"))
                 description = catalog_cfg.get("description", "")
 
-        # Identity
-        identity_text = ""
-        if agent_catalog_dir is not None:
-            identity_file = agent_catalog_dir / "identity.md"
-            if identity_file.exists():
-                identity_text = identity_file.read_text(encoding="utf-8").strip()
         identity_rows.append(
-            f"| `{agent_id}` | {agent_name} | {description} | {identity_text} |"
+            f"| `{agent_id}` | {agent_name} | {description} |"
         )
 
         # Roles (role_*.md)
