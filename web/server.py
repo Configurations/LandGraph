@@ -2156,19 +2156,16 @@ class ChatRequest(BaseModel):
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
-    data = _read_json(LLM_PROVIDERS_FILE)
     default_key = "admin_llm" if req.use_admin_llm else "default"
+    data = _read_json(SHARED_LLM_FILE)
     chosen_id = req.provider_id or data.get(default_key, "") or data.get("default", "")
     if not chosen_id or chosen_id not in data.get("providers", {}):
-        # Fallback: try the template LLM config
-        data = _read_json(SHARED_LLM_FILE)
-        chosen_id = req.provider_id or data.get(default_key, "") or data.get("default", "")
-    if not chosen_id or chosen_id not in data.get("providers", {}):
-        raise HTTPException(400, "Aucun provider LLM par defaut configure (ni dans config, ni dans template)")
+        raise HTTPException(400, "Aucun provider LLM configure dans Shared/Teams/llm_providers.json")
 
     provider = data["providers"][chosen_id]
     ptype = provider["type"]
     model = provider["model"]
+    max_tokens = provider.get("max_tokens", 4096)
     env_key = provider.get("env_key", "")
     base_url = provider.get("base_url", "")
 
@@ -2191,7 +2188,7 @@ async def chat(req: ChatRequest):
                         system_msg = m["content"]
                     else:
                         chat_msgs.append({"role": m["role"], "content": m["content"]})
-                body = {"model": model, "max_tokens": 4096, "messages": chat_msgs}
+                body = {"model": model, "max_tokens": max_tokens, "messages": chat_msgs}
                 if system_msg:
                     body["system"] = system_msg
                 resp = await client.post(
@@ -2238,7 +2235,7 @@ async def chat(req: ChatRequest):
                 api_version = provider.get("api_version", "2024-12-01-preview")
                 url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
                 headers = {"api-key": api_key, "content-type": "application/json"}
-                body = {"model": model, "messages": messages, "max_tokens": 4096}
+                body = {"model": model, "messages": messages, "max_tokens": max_tokens}
                 resp = await client.post(url, headers=headers, json=body)
                 resp.raise_for_status()
                 result = resp.json()
@@ -2252,7 +2249,7 @@ async def chat(req: ChatRequest):
                 headers = {"content-type": "application/json"}
                 if api_key:
                     headers["Authorization"] = f"Bearer {api_key}"
-                body = {"model": model, "messages": messages, "max_tokens": 4096}
+                body = {"model": model, "messages": messages, "max_tokens": max_tokens}
                 resp = await client.post(url, headers=headers, json=body)
                 resp.raise_for_status()
                 result = resp.json()

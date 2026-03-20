@@ -3359,6 +3359,10 @@ function cloneCfgProvider(id) {
       <div class="form-group"><label>Description</label><input id="prov-desc" value="${escHtml(p.description || '')}" /></div>
       <div class="form-group"><label>Base URL</label><input id="prov-base-url" value="${escHtml(p.base_url || '')}" placeholder="https://..." /></div>
     </div>
+    <div class="form-row">
+      <div class="form-group"><label>Max Tokens</label><input id="prov-max-tokens" type="number" value="${p.max_tokens || ''}" placeholder="4096" /></div>
+      <div class="form-group"></div>
+    </div>
     ${_providerTypeFields(p.type, p)}
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
@@ -3434,6 +3438,10 @@ function editCfgProvider(id) {
     <div class="form-row">
       <div class="form-group"><label>Description</label><input id="prov-desc" value="${escHtml(p.description || '')}" /></div>
       <div class="form-group"><label>Base URL</label><input id="prov-base-url" value="${escHtml(p.base_url || '')}" placeholder="https://..." /></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Max Tokens</label><input id="prov-max-tokens" type="number" value="${p.max_tokens || ''}" placeholder="4096" /></div>
+      <div class="form-group"></div>
     </div>
     ${_providerTypeFields(p.type, p)}
     <div class="modal-actions">
@@ -5484,14 +5492,14 @@ async function _saDeleteDynamic(type, name) {
 
 function showCreateSharedAgentModal() {
   showModal('<div class="modal-header"><h3>Nouvel agent</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
-    '<div class="form-group"><label>ID unique (lettres, chiffres, _)</label><input id="sa-new-id" placeholder="mon_agent" pattern="[a-zA-Z0-9_]+" oninput="this.value=this.value.replace(/[^a-zA-Z0-9_]/g,\'\')" /></div>' +
+    '<div class="form-group"><label>ID unique (minuscules, chiffres, _)</label><input id="sa-new-id" placeholder="mon_agent" pattern="[a-z0-9_]+" oninput="this.value=this.value.toLowerCase().replace(/[^a-z0-9_]/g,\'\')" /></div>' +
     '<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="createSharedAgent()">Creer</button></div>');
 }
 
 async function createSharedAgent() {
   const id = (document.getElementById('sa-new-id').value || '').trim();
   if (!id) { toast('ID requis', 'error'); return; }
-  if (!/^[a-zA-Z0-9_]+$/.test(id)) { toast('ID invalide (lettres, chiffres, _ uniquement)', 'error'); return; }
+  if (!/^[a-z0-9_]+$/.test(id)) { toast('ID invalide (minuscules, chiffres, _ uniquement)', 'error'); return; }
   try {
     await api('/api/shared-agents', { method: 'POST', body: { id, name: id } });
     toast('Agent cree', 'success');
@@ -5786,6 +5794,10 @@ function cloneTplProvider(id) {
       <div class="form-group"><label>Description</label><input id="prov-desc" value="${escHtml(p.description || '')}" /></div>
       <div class="form-group"><label>Base URL</label><input id="prov-base-url" value="${escHtml(p.base_url || '')}" placeholder="https://..." /></div>
     </div>
+    <div class="form-row">
+      <div class="form-group"><label>Max Tokens</label><input id="prov-max-tokens" type="number" value="${p.max_tokens || ''}" placeholder="4096" /></div>
+      <div class="form-group"></div>
+    </div>
     ${_providerTypeFields(p.type, p)}
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
@@ -5831,9 +5843,11 @@ function _readProviderForm() {
   const env_key = document.getElementById('prov-envkey').value.trim();
   const description = document.getElementById('prov-desc').value.trim();
   const base_url = (document.getElementById('prov-base-url')?.value || '').trim();
+  const max_tokens = parseInt(document.getElementById('prov-max-tokens')?.value) || 0;
   const prov = { type, model, description };
   if (env_key) prov.env_key = env_key;
   if (base_url) prov.base_url = base_url;
+  if (max_tokens > 0) prov.max_tokens = max_tokens;
   if (type === 'azure') {
     const ae = (document.getElementById('prov-azure-endpoint')?.value || '').trim();
     const ad = (document.getElementById('prov-azure-deployment')?.value || '').trim();
@@ -5882,6 +5896,10 @@ function editTplProvider(id) {
     <div class="form-row">
       <div class="form-group"><label>Description</label><input id="prov-desc" value="${escHtml(p.description || '')}" /></div>
       <div class="form-group"><label>Base URL</label><input id="prov-base-url" value="${escHtml(p.base_url || '')}" placeholder="https://..." /></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Max Tokens</label><input id="prov-max-tokens" type="number" value="${p.max_tokens || ''}" placeholder="4096" /></div>
+      <div class="form-group"></div>
     </div>
     ${_providerTypeFields(p.type, p)}
     <div class="modal-actions">
