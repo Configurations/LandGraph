@@ -167,6 +167,34 @@ REMOTE_CLEAN
         done
     done
 
+    # Seed Shared/Models/ — copy each subdir and files if they don't exist on remote
+    log "Seeding models (skip existing) ..."
+    for model_dir in "$LOCAL_DIR"/Shared/Models/*/; do
+        [[ -d "$model_dir" ]] || continue
+        model=$(basename "$model_dir")
+        ssh $SSH_OPTS "${SSH_TARGET}" "mkdir -p ${REMOTE_DIR}/Shared/Models/${model}"
+        for f in "$model_dir"*.md; do
+            [[ -f "$f" ]] || continue
+            fname=$(basename "$f")
+            ssh $SSH_OPTS "${SSH_TARGET}" "test -f ${REMOTE_DIR}/Shared/Models/${model}/${fname}" \
+                || scp $SCP_OPTS "$f" "${SSH_TARGET}:${REMOTE_DIR}/Shared/Models/${model}/${fname}"
+        done
+    done
+
+    # Seed Shared/Dockerfiles/ — copy each subdir and files if they don't exist on remote
+    log "Seeding dockerfiles (skip existing) ..."
+    if [[ -d "$LOCAL_DIR/Shared/Dockerfiles" ]]; then
+        find "$LOCAL_DIR/Shared/Dockerfiles" -type d | while read -r ddir; do
+            rel="${ddir#$LOCAL_DIR/}"
+            ssh $SSH_OPTS "${SSH_TARGET}" "mkdir -p ${REMOTE_DIR}/${rel}"
+        done
+        find "$LOCAL_DIR/Shared/Dockerfiles" -type f | while read -r f; do
+            rel="${f#$LOCAL_DIR/}"
+            ssh $SSH_OPTS "${SSH_TARGET}" "test -f ${REMOTE_DIR}/${rel}" \
+                || scp $SCP_OPTS "$f" "${SSH_TARGET}:${REMOTE_DIR}/${rel}"
+        done
+    fi
+
     # If no .env on remote, seed it from env.example so services can start
     ssh $SSH_OPTS "${SSH_TARGET}" bash -s <<REMOTE_ENV
 if [[ ! -f "${REMOTE_DIR}/.env" ]]; then

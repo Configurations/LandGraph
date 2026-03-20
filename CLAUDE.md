@@ -656,3 +656,11 @@ Le script 02 télécharge tout depuis GitHub : Dockerfiles, code agents (`Agents
 
 
 Ne livre jamais le code ni en test ni sur git sans une demande explicite de ma part.
+
+## Notifications de skills
+
+Quand tu invoques une compétence (skill) via l'outil Skill, affiche systématiquement un marqueur visuel **avant** d'exécuter la skill :
+
+> **`🟢 SKILL`** → _nom-de-la-skill_ — raison en une phrase
+
+Exemple : **`🟢 SKILL`** → _brainstorming_ — explorer les options avant d'implémenter la feature

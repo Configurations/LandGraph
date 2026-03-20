@@ -1,11 +1,13 @@
 """ag.flow Admin — FastAPI backend."""
 import csv
+from datetime import datetime
 import hashlib
 import hmac
 import io
 import json
 import logging
 import os
+import re
 import secrets
 import subprocess
 import asyncio
@@ -763,6 +765,11 @@ async def get_agents():
             prompt_content = ""
             if prompt_file.exists():
                 prompt_content = prompt_file.read_text(encoding="utf-8")
+            # For orchestrator type, load orchestrator_prompt.md from team dir
+            if acfg.get("type") == "orchestrator":
+                orch_prompt_file = tdir / "orchestrator_prompt.md"
+                if orch_prompt_file.exists():
+                    prompt_content = orch_prompt_file.read_text(encoding="utf-8")
             result[aid] = {**acfg, "prompt_content": prompt_content}
         mcp_access = _read_json(tdir / "agent_mcp_access.json") if (tdir / "agent_mcp_access.json").exists() else {}
         groups.append({
@@ -788,6 +795,7 @@ class AgentConfig(BaseModel):
     llm: str = ""
     type: str = ""
     pipeline_steps: list = []
+    delegates_to: list = []
     team_id: str = "default"
     delivers_docs: bool | None = None
     delivers_code: bool | None = None
@@ -846,8 +854,19 @@ async def update_agent(agent_id: str, cfg: AgentConfig):
         existing["pipeline_steps"] = cfg.pipeline_steps
     elif "pipeline_steps" in existing:
         del existing["pipeline_steps"]
+    # delegates_to: list of agent keys this pipeline agent can delegate to
+    old_delegates = existing.get("delegates_to", [])
+    if cfg.delegates_to:
+        existing["delegates_to"] = cfg.delegates_to
+    elif "delegates_to" in existing:
+        del existing["delegates_to"]
     data["agents"][agent_id] = existing
     _write_json(registry_path, data)
+    # Invalidate orchestrator prompt if delegates_to changed
+    if sorted(old_delegates) != sorted(cfg.delegates_to or []):
+        tdir_team = _team_dir(cfg.team_id)
+        team_dir_name = tdir_team.name
+        _invalidate_orchestrator_prompt_for_team(team_dir_name)
     return {"ok": True}
 
 
@@ -1101,6 +1120,16 @@ async def set_llm_default(req: LLMDefaultUpdate):
     return {"ok": True}
 
 
+@app.put("/api/llm/providers/admin")
+async def set_llm_admin(req: LLMDefaultUpdate):
+    data = _read_json(LLM_PROVIDERS_FILE)
+    if req.provider_id and req.provider_id not in data.get("providers", {}):
+        raise HTTPException(404, f"Provider '{req.provider_id}' introuvable")
+    data["admin_llm"] = req.provider_id
+    _write_json(LLM_PROVIDERS_FILE, data)
+    return {"ok": True}
+
+
 class ThrottlingEntry(BaseModel):
     env_key: str
     rpm: int
@@ -1232,6 +1261,8 @@ class SharedAgentEntry(BaseModel):
     assign_content: str | None = None
     unassign_content: str | None = None
     identity_content: str | None = None
+    docker_mode: bool | None = None
+    docker_image: str | None = None
     delivers_docs: bool | None = None
     delivers_code: bool | None = None
     delivers_design: bool | None = None
@@ -1371,6 +1402,10 @@ async def update_shared_agent(agent_id: str, entry: SharedAgentEntry):
         cfg["max_tokens"] = entry.max_tokens
     if entry.mcp_access is not None:
         cfg["mcp_access"] = entry.mcp_access
+    if entry.docker_mode is not None:
+        cfg["docker_mode"] = entry.docker_mode
+    if entry.docker_image is not None:
+        cfg["docker_image"] = entry.docker_image
     if entry.delivers_docs is not None:
         cfg["delivers_docs"] = entry.delivers_docs
     if entry.delivers_code is not None:
@@ -1438,48 +1473,6 @@ async def delete_shared_agent_file(agent_id: str, filename: str):
     target.unlink()
     return {"ok": True}
 
-
-_CHAT_FORMAT_INSTRUCTIONS = """
-
-## Format de reponse OBLIGATOIRE
-
-Tu DOIS structurer ta reponse avec les blocs XML suivants. Inclus TOUS les blocs, meme vides.
-
-<conflict>
-[Signale les contradictions ou incoherences detectees dans le profil ou la demande. Vide si aucun conflit.]
-</conflict>
-
-<confidence level="high|medium|low">
-[Explique ton niveau de confiance dans les modifications proposees.]
-</confidence>
-
-<missing_info>
-[Liste les informations manquantes pour completer le profil. Vide si rien ne manque.]
-</missing_info>
-
-<identity>
-[Contenu COMPLET du fichier identity.md — identite, role, expertise, posture de l'agent. Toujours inclure, meme si inchange.]
-</identity>
-
-<!-- Repete <role> pour chaque role identifie -->
-<role name="{nom_explicite}">
-[Contenu du role]
-</role>
-
-<!-- Repete <mission> pour chaque mission identifiee -->
-<mission name="{nom_explicite}">
-[Contenu de la mission]
-</mission>
-
-<!-- Repete <skill> pour chaque competence identifiee -->
-<skill name="{nom_explicite}">
-[Contenu de la competence]
-</skill>
-
-IMPORTANT: les attributs name des blocs role, mission, skill sont des noms en snake_case SANS prefixe (le prefixe role_/mission_/skill_ est ajoute automatiquement par le systeme).
-"""
-
-
 def _parse_chat_blocks(raw: str) -> dict:
     """Parse structured XML blocks from LLM chat response."""
     import re
@@ -1526,36 +1519,44 @@ async def chat_shared_agent(agent_id: str, request: Request):
         raise HTTPException(404, f"Agent '{agent_id}' introuvable")
     body = await request.json()
     message = body.get("message", "")
-    history = body.get("history", [])
 
-    # Build {current_profile} from all .md files in agent directory (alphabetical, exclude chat/)
-    profile_parts = []
+    # Load agent description from agent.json
+    agent_description = ""
+    cfg_file = agent_dir / "agent.json"
+    if cfg_file.exists():
+        cfg = json.loads(cfg_file.read_text(encoding="utf-8"))
+        agent_description = cfg.get("description", "")
+
+    # Snapshot all existing .md files (exclude chat/ subdirectory)
+    existing_md_files = {}
     for f in sorted(agent_dir.iterdir()):
         if f.is_dir():
             continue
         if f.is_file() and f.suffix == ".md":
-            content = f.read_text(encoding="utf-8")
-            profile_parts.append(f" --------------- {f.name} ---------------\n{content}")
+            existing_md_files[f.stem] = f
+
+    # Build {current_profile} from snapshot
+    profile_parts = []
+    for stem, f in existing_md_files.items():
+        content = f.read_text(encoding="utf-8")
+        profile_parts.append(f" --------------- {f.name} ---------------\n{content}")
     current_profile = "\n\n".join(profile_parts) if profile_parts else "(aucun fichier de profil)"
 
-    # Load GenerateAgent.md and inject {current_profile} into system prompt
+    # Load GenerateAgent.md and inject variables into system prompt
     meta_path = PROMPTS_DIR / "GenerateAgent.md"
     if not meta_path.exists():
         raise HTTPException(500, "Meta-prompt GenerateAgent.md introuvable")
-    system_prompt = meta_path.read_text(encoding="utf-8").replace("{current_profile}", current_profile) + _CHAT_FORMAT_INSTRUCTIONS
+    system_prompt = meta_path.read_text(encoding="utf-8").replace("{current_profile}", current_profile).replace("{agent_id}", agent_id).replace("{agent_description}", agent_description)
 
     # User message is just the user's input
     user_msg = message
 
-    # Build messages list: system + history + current user message
+    # Build messages list: system + current user message (no history — each call is self-contained)
     messages = [{"role": "system", "content": system_prompt}]
-    for h in history:
-        if h.get("role") in ("user", "assistant") and h.get("content"):
-            messages.append({"role": h["role"], "content": h["content"]})
     messages.append({"role": "user", "content": user_msg})
 
     try:
-        result = await chat(ChatRequest(messages=messages))
+        result = await chat(ChatRequest(messages=messages, use_admin_llm=True))
         raw = result.get("content", "")
     except Exception as e:
         return {"response": f"Chat indisponible: {e}", "display": [], "file_status": []}
@@ -1571,7 +1572,7 @@ async def chat_shared_agent(agent_id: str, request: Request):
     # Parse structured blocks
     parsed = _parse_chat_blocks(raw)
 
-    # Compare file blocks with existing files and save if changed
+    # Write file blocks from LLM response, removing each from the snapshot dict
     file_status = []
     for fb in parsed["files"]:
         fname = fb["filename"]
@@ -1586,16 +1587,12 @@ async def chat_shared_agent(agent_id: str, request: Request):
         else:
             filepath.write_text(new_content, encoding="utf-8")
             file_status.append({"name": safe, "status": "updated"})
+        existing_md_files.pop(safe, None)
 
-    # Delete files requested by LLM
-    for dname in parsed.get("files_to_delete", []):
-        safe_d = dname.replace("-", "_").removesuffix(".md")
-        if not safe_d.replace("_", "").isalnum():
-            continue
-        dpath = agent_dir / f"{safe_d}.md"
-        if dpath.exists():
-            dpath.unlink()
-            file_status.append({"name": safe_d, "status": "deleted"})
+    # Delete orphan .md files not returned by the LLM
+    for stem, fpath in existing_md_files.items():
+        fpath.unlink()
+        file_status.append({"name": stem, "status": "deleted"})
 
     return {
         "response": raw,
@@ -2154,16 +2151,18 @@ _LLM_BASE_URLS = {
 class ChatRequest(BaseModel):
     messages: list[dict]
     provider_id: str = ""
+    use_admin_llm: bool = False
 
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     data = _read_json(LLM_PROVIDERS_FILE)
-    chosen_id = req.provider_id or data.get("default", "")
+    default_key = "admin_llm" if req.use_admin_llm else "default"
+    chosen_id = req.provider_id or data.get(default_key, "") or data.get("default", "")
     if not chosen_id or chosen_id not in data.get("providers", {}):
         # Fallback: try the template LLM config
         data = _read_json(SHARED_LLM_FILE)
-        chosen_id = req.provider_id or data.get("default", "")
+        chosen_id = req.provider_id or data.get(default_key, "") or data.get("default", "")
     if not chosen_id or chosen_id not in data.get("providers", {}):
         raise HTTPException(400, "Aucun provider LLM par defaut configure (ni dans config, ni dans template)")
 
@@ -2341,11 +2340,11 @@ async def config_check():
         # 3b. Validate JSON blocks in prompts and pipeline step instructions
         import re as _re_check
         def _check_json_blocks(text, label):
-            for m in _re_check.finditer(r'```json\s*\n([\s\S]*?)```', text):
+            for m in _re_check.finditer(r'```json\s*\n([\s\S]*?)\n\s*```', text):
                 try:
                     json.loads(m.group(1).strip())
                 except json.JSONDecodeError as e:
-                    issues.append({"level": "error", "category": "prompts", "message": f"{label} : JSON invalide — {str(e)[:120]}"})
+                    issues.append({"level": "warning", "category": "prompts", "message": f"{label} : JSON invalide — {str(e)[:120]}"})
 
         for aid, aconf in reg.get("agents", {}).items():
             # Check team prompt
@@ -2395,12 +2394,12 @@ async def config_check():
                     # Pipeline step must be set and exist in agent's steps
                     d_step = dconf.get("pipeline_step", "")
                     if not d_step:
-                        issues.append({"level": "error", "category": "workflow", "message": f"{dlabel} : champ 'pipeline_step' manquant"})
+                        issues.append({"level": "warning", "category": "workflow", "message": f"{dlabel} : champ 'pipeline_step' manquant"})
                     elif d_agent:
                         agent_conf = reg.get("agents", {}).get(d_agent, {})
                         steps = [s.get("output_key") for s in agent_conf.get("pipeline_steps", [])]
                         if steps and d_step not in steps:
-                            issues.append({"level": "error", "category": "workflow", "message": f"{dlabel} : pipeline_step '{d_step}' n'existe pas dans les steps de '{d_agent}'"})
+                            issues.append({"level": "warning", "category": "workflow", "message": f"{dlabel} : pipeline_step '{d_step}' n'existe pas dans les steps de '{d_agent}'"})
                         # Check that the step has an instruction
                         if steps:
                             step_conf = next((s for s in agent_conf.get("pipeline_steps", []) if s.get("output_key") == d_step), None)
@@ -2431,6 +2430,26 @@ async def config_check():
                     issues.append({"level": "error", "category": "workflow", "message": f"Transition to='{tr_to}' (equipe {tid}) : phase cible inconnue"})
         else:
             issues.append({"level": "warning", "category": "workflow", "message": f"Equipe '{tid}' : Workflow.json introuvable"})
+
+    # 4a. Check docker_mode agents have valid docker_image
+    for sa_dir in sorted(SHARED_AGENTS_DIR.iterdir()) if SHARED_AGENTS_DIR.exists() else []:
+        agent_json = sa_dir / "agent.json"
+        if not agent_json.exists():
+            continue
+        sa = _read_json(agent_json)
+        if not sa.get("docker_mode"):
+            continue
+        aid = sa_dir.name
+        img = (sa.get("docker_image") or "").strip()
+        if not img:
+            issues.append({"level": "error", "category": "agents", "message": f"Agent '{aid}' : docker_mode actif mais aucune image Docker configuree"})
+        else:
+            try:
+                r = subprocess.run(["docker", "image", "inspect", img], capture_output=True, timeout=5)
+                if r.returncode != 0:
+                    issues.append({"level": "warning", "category": "agents", "message": f"Agent '{aid}' : image Docker '{img}' non compilee"})
+            except Exception:
+                issues.append({"level": "warning", "category": "agents", "message": f"Agent '{aid}' : impossible de verifier l'image Docker '{img}'"})
 
     # 4b. Check orchestrator_prompt.md exists for each team
     for tcfg in teams:
@@ -2679,6 +2698,200 @@ async def delete_template_prompt(name: str, culture: str | None = None):
     return {"ok": True}
 
 
+# ── API: Template Models (Shared/Models/<culture>/) ─────────────
+
+MODELS_BASE = SHARED_DIR / "Models"
+
+
+def _models_dir(culture: str | None = None) -> Path:
+    """Return the models directory for a given culture (validated)."""
+    c = culture or _CULTURE
+    if ".." in c or "/" in c or "\\" in c:
+        raise HTTPException(400, "Culture invalide")
+    return MODELS_BASE / c
+
+
+@app.get("/api/templates/models")
+async def list_template_models(culture: str | None = None):
+    """List all model templates from Shared/Models/<culture>/."""
+    d = _models_dir(culture)
+    d.mkdir(parents=True, exist_ok=True)
+    models = []
+    for f in sorted(d.glob("*.md")):
+        models.append({"name": f.name, "content": f.read_text(encoding="utf-8")})
+    return {"culture": culture or _CULTURE, "models": models}
+
+
+@app.get("/api/templates/models/{name}")
+async def get_template_model(name: str, culture: str | None = None):
+    """Return a single model template."""
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(400, "Nom invalide")
+    path = _models_dir(culture) / name
+    if not path.exists():
+        raise HTTPException(404, f"Model '{name}' introuvable")
+    return {"name": name, "content": path.read_text(encoding="utf-8")}
+
+
+class ModelTemplateUpdate(BaseModel):
+    content: str
+
+
+@app.put("/api/templates/models/{name}")
+async def put_template_model(name: str, body: ModelTemplateUpdate, culture: str | None = None):
+    """Create or update a model template."""
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(400, "Nom invalide")
+    if not name.endswith(".md"):
+        raise HTTPException(400, "Le nom doit finir par .md")
+    d = _models_dir(culture)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_text(body.content, encoding="utf-8")
+    return {"ok": True}
+
+
+@app.delete("/api/templates/models/{name}")
+async def delete_template_model(name: str, culture: str | None = None):
+    """Delete a model template."""
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(400, "Nom invalide")
+    path = _models_dir(culture) / name
+    if not path.exists():
+        raise HTTPException(404, f"Model '{name}' introuvable")
+    path.unlink()
+    return {"ok": True}
+
+
+# ── API: Template Dockerfiles (Shared/Dockerfiles/) ─────────────
+
+DOCKERFILES_DIR = SHARED_DIR / "Dockerfiles"
+
+
+@app.get("/api/templates/dockerfiles")
+async def list_template_dockerfiles():
+    """List all Dockerfiles from Shared/Dockerfiles/."""
+    DOCKERFILES_DIR.mkdir(parents=True, exist_ok=True)
+    files = []
+    for f in sorted(DOCKERFILES_DIR.iterdir()):
+        if f.is_file() and f.name.startswith("Dockerfile"):
+            dot_idx = f.name.find(".")
+            label = f.name[dot_idx + 1:] if dot_idx >= 0 else f.name
+            entrypoint_name = f"entrypoint.{label}.sh"
+            entrypoint_path = DOCKERFILES_DIR / entrypoint_name
+            df_content = f.read_text(encoding="utf-8")
+            ep_content = entrypoint_path.read_text(encoding="utf-8") if entrypoint_path.exists() else ""
+            content_hash = hashlib.sha256((df_content + ep_content).encode("utf-8")).hexdigest()[:8]
+            image_tag = f"agflow-{label.lower()}:{content_hash}"
+            # Check if image exists
+            try:
+                r = subprocess.run(["docker", "image", "inspect", image_tag], capture_output=True, timeout=5)
+                image_built = r.returncode == 0
+            except Exception:
+                image_built = False
+            files.append({"name": f.name, "content": df_content, "entrypoint_name": entrypoint_name, "entrypoint_content": ep_content, "image_tag": image_tag, "image_built": image_built})
+    return {"files": files}
+
+
+@app.get("/api/templates/dockerfiles/{name}")
+async def get_template_dockerfile(name: str):
+    """Return a single Dockerfile."""
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(400, "Nom invalide")
+    path = DOCKERFILES_DIR / name
+    if not path.exists():
+        raise HTTPException(404, f"Dockerfile '{name}' introuvable")
+    return {"name": name, "content": path.read_text(encoding="utf-8")}
+
+
+class DockerfileUpdate(BaseModel):
+    content: str
+    entrypoint_content: str | None = None
+
+
+@app.put("/api/templates/dockerfiles/{name}")
+async def put_template_dockerfile(name: str, body: DockerfileUpdate):
+    """Create or update a Dockerfile and its entrypoint."""
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(400, "Nom invalide")
+    DOCKERFILES_DIR.mkdir(parents=True, exist_ok=True)
+    is_new = not (DOCKERFILES_DIR / name).exists()
+    (DOCKERFILES_DIR / name).write_text(body.content, encoding="utf-8")
+    # Resolve entrypoint name
+    dot_idx = name.find(".")
+    label = name[dot_idx + 1:] if dot_idx >= 0 else name
+    entrypoint_name = f"entrypoint.{label}.sh"
+    entrypoint_path = DOCKERFILES_DIR / entrypoint_name
+    # Create companion entrypoint script for new Dockerfiles
+    if is_new and not entrypoint_path.exists():
+        entrypoint_path.write_text("#!/bin/bash\nset -e\n\nexec \"$@\"\n", encoding="utf-8")
+    # Save entrypoint content if provided
+    if body.entrypoint_content is not None:
+        entrypoint_path.write_text(body.entrypoint_content, encoding="utf-8")
+    return {"ok": True}
+
+
+@app.delete("/api/templates/dockerfiles/{name}")
+async def delete_template_dockerfile(name: str):
+    """Delete a Dockerfile."""
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(400, "Nom invalide")
+    path = DOCKERFILES_DIR / name
+    if not path.exists():
+        raise HTTPException(404, f"Dockerfile '{name}' introuvable")
+    path.unlink()
+    # Also delete companion entrypoint if deleting a Dockerfile
+    if name.startswith("Dockerfile"):
+        dot_idx = name.find(".")
+        label = name[dot_idx + 1:] if dot_idx >= 0 else name
+        entrypoint_path = DOCKERFILES_DIR / f"entrypoint.{label}.sh"
+        if entrypoint_path.exists():
+            entrypoint_path.unlink()
+    return {"ok": True}
+
+
+@app.post("/api/templates/dockerfiles/{name}/build")
+async def build_template_dockerfile(name: str, no_cache: bool = False):
+    """Build a Docker image from a Dockerfile, streaming output via SSE."""
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(400, "Nom invalide")
+    dockerfile_path = DOCKERFILES_DIR / name
+    if not dockerfile_path.exists():
+        raise HTTPException(404, f"Dockerfile '{name}' introuvable")
+    dot_idx = name.find(".")
+    tag = name[dot_idx + 1:] if dot_idx >= 0 else "default"
+    # Compute short hash from dockerfile + entrypoint content
+    df_content = dockerfile_path.read_text(encoding="utf-8")
+    ep_path = DOCKERFILES_DIR / f"entrypoint.{tag}.sh"
+    ep_content = ep_path.read_text(encoding="utf-8") if ep_path.exists() else ""
+    content_hash = hashlib.sha256((df_content + ep_content).encode("utf-8")).hexdigest()[:8]
+    image_name = f"agflow-{tag.lower()}:{content_hash}"
+
+    _err_words = ("error", "failed", "invalid", "denied", "not found", "cannot", "fatal", "COPY failed")
+
+    async def stream_build():
+        try:
+            cmd = ["docker", "build", "-f", name, "-t", image_name]
+            if no_cache:
+                cmd.append("--no-cache")
+            cmd.append(".")
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                cwd=str(DOCKERFILES_DIR),
+            )
+            async for raw in proc.stdout:
+                text = raw.decode("utf-8", errors="replace").rstrip()
+                if text:
+                    is_err = any(p in text for p in _err_words)
+                    yield f"data: {json.dumps({'line': text, 'error': is_err})}\n\n"
+            await proc.wait()
+            yield f"data: {json.dumps({'done': True, 'ok': proc.returncode == 0, 'image': image_name})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'done': True, 'ok': False, 'error': str(e)})}\n\n"
+
+    return StreamingResponse(stream_build(), media_type="text/event-stream", headers={"Cache-Control": "no-store"})
+
+
 # ── API: Template Projects (Shared/Projects/) ─────────────
 
 SHARED_PROJECTS_DIR = SHARED_DIR / "Projects"
@@ -2882,7 +3095,7 @@ async def generate_project_workflow(project_id: str, entry: WorkflowGenerate):
         result = await chat(ChatRequest(messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg},
-        ]))
+        ], use_admin_llm=True))
         raw = result.get("content", "")
     except Exception as e:
         raise HTTPException(500, f"Generation echouee: {e}")
@@ -3019,7 +3232,7 @@ async def generate_mission(req: GenerateMissionRequest):
     chat_req = ChatRequest(messages=[
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_msg},
-    ])
+    ], use_admin_llm=True)
     result = await chat(chat_req)
     return {"instruction": result["content"]}
 
@@ -3052,7 +3265,7 @@ async def generate_prompt(req: GeneratePromptRequest):
     chat_req = ChatRequest(messages=[
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_msg},
-    ])
+    ], use_admin_llm=True)
     result = await chat(chat_req)
     return {"prompt": result["content"]}
 
@@ -3079,7 +3292,7 @@ async def generate_assign(req: GenerateAssignRequest):
     result = await chat(ChatRequest(messages=[
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": context},
-    ]))
+    ], use_admin_llm=True))
     return {"content": result["content"]}
 
 
@@ -3099,7 +3312,7 @@ async def generate_unassign(req: GenerateAssignRequest):
     result = await chat(ChatRequest(messages=[
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": context},
-    ]))
+    ], use_admin_llm=True))
     return {"content": result["content"]}
 
 
@@ -3144,7 +3357,7 @@ async def deliverable_skillmatch(project_id: str, req: SkillMatchRequest):
     result = await chat(ChatRequest(messages=[
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_msg},
-    ]))
+    ], use_admin_llm=True))
 
     # Trace in chat/ directory
     from datetime import datetime
@@ -3265,6 +3478,13 @@ async def get_teams():
                 merged["pipeline_steps"] = acfg["pipeline_steps"]
             if "id" not in merged:
                 merged["id"] = aid
+            # Orchestrator exception: prefer built prompt (orchestrator_prompt.md), fallback to registry prompt
+            if acfg.get("type") == "orchestrator":
+                team_prompt_file = tdir / "orchestrator_prompt.md"
+                if not team_prompt_file.exists():
+                    team_prompt_file = tdir / acfg.get("prompt", f"{aid}.md")
+                if team_prompt_file.exists():
+                    merged["prompt_content"] = team_prompt_file.read_text(encoding="utf-8")
             # Fallback: if shared agent not found, use legacy registry data
             if not shared:
                 prompt_file = tdir / acfg.get("prompt", f"{aid}.md")
@@ -3494,6 +3714,8 @@ async def list_templates():
                         merged["type"] = acfg["type"]
                     if acfg.get("pipeline_steps"):
                         merged["pipeline_steps"] = acfg["pipeline_steps"]
+                    if acfg.get("delegates_to"):
+                        merged["delegates_to"] = acfg["delegates_to"]
                     if "id" not in merged:
                         merged["id"] = aid
                     # Fallback: if shared agent not found, use legacy registry data
@@ -3503,7 +3725,14 @@ async def list_templates():
                         if prompt_file.exists():
                             prompt_content = prompt_file.read_text(encoding="utf-8")
                         merged = {**acfg, "prompt_content": prompt_content, "id": aid}
+                    # For orchestrator type, load orchestrator_prompt.md from team dir
+                    if merged.get("type") == "orchestrator":
+                        orch_prompt_file = d / "orchestrator_prompt.md"
+                        if orch_prompt_file.exists():
+                            merged["prompt_content"] = orch_prompt_file.read_text(encoding="utf-8")
                     agents_detail[aid] = merged
+                orch_exists = (d / "orchestrator_prompt.md").exists()
+                orch_stale = _check_orchestrator_prompt_staleness(d) if orch_exists else False
                 mcp_access = _read_json(d / "agent_mcp_access.json") if (d / "agent_mcp_access.json").exists() else {}
                 templates.append({
                     "id": d.name,
@@ -3511,6 +3740,9 @@ async def list_templates():
                     "agents": agents_detail,
                     "agent_count": len(agents_raw),
                     "mcp_access": mcp_access,
+                    "orchestrator_prompt_exists": orch_exists,
+                    "orchestrator_prompt_stale": orch_stale,
+                    "report_exists": (d / "report.md").exists(),
                 })
     return {"templates": templates}
 
@@ -3714,15 +3946,22 @@ async def update_template_agent(agent_id: str, cfg: AgentConfig):
     if agent_id not in data.get("agents", {}):
         raise HTTPException(404, f"Agent {agent_id} not found")
     existing = data["agents"][agent_id]
+    old_delegates = sorted(existing.get("delegates_to", []))
     if cfg.type:
         existing["type"] = cfg.type
     if cfg.pipeline_steps:
         existing["pipeline_steps"] = cfg.pipeline_steps
     elif "pipeline_steps" in existing:
         del existing["pipeline_steps"]
+    if cfg.delegates_to:
+        existing["delegates_to"] = cfg.delegates_to
+    elif "delegates_to" in existing:
+        del existing["delegates_to"]
     data["agents"][agent_id] = existing
     _write_json(registry_path, data)
-    _invalidate_orchestrator_prompt_for_team(cfg.team_id)
+    # Only invalidate orchestrator prompt if delegates_to changed
+    if old_delegates != sorted(cfg.delegates_to or []):
+        _invalidate_orchestrator_prompt_for_team(cfg.team_id)
     return {"ok": True}
 
 
@@ -3748,6 +3987,27 @@ async def delete_template_agent(agent_id: str, team_id: str = ""):
 
 
 # ── Orchestrator prompt build & invalidation ──────
+
+
+def _check_orchestrator_prompt_staleness(tdir: Path) -> bool:
+    """Check if orchestrator_prompt.md is older than source .md files in Shared/Agents/."""
+    prompt_file = tdir / "orchestrator_prompt.md"
+    if not prompt_file.exists():
+        return False
+    prompt_mtime = prompt_file.stat().st_mtime
+    reg_file = tdir / "agents_registry.json"
+    if not reg_file.exists():
+        return False
+    reg = json.loads(reg_file.read_text(encoding="utf-8"))
+    for aid in reg.get("agents", {}):
+        agent_dir = SHARED_AGENTS_DIR / aid
+        if not agent_dir.is_dir():
+            continue
+        for f in agent_dir.iterdir():
+            if f.is_file() and f.suffix == ".md" and f.stat().st_mtime > prompt_mtime:
+                log.info("Stale orchestrator_prompt.md for %s (source %s newer)", tdir.name, f.name)
+                return True
+    return False
 
 
 def _invalidate_orchestrator_prompts(agent_id: str):
@@ -3788,16 +4048,49 @@ async def build_team_orchestrator_prompt(team_dir: str):
     registry = json.loads(reg_file.read_text(encoding="utf-8"))
     agents = registry.get("agents", {})
 
+    # Topological sort: managers before their subordinates
+    _parents = {}
+    for aid, acfg in agents.items():
+        for sub in acfg.get("delegates_to", []):
+            _parents.setdefault(sub, set()).add(aid)
+    _in_degree = {aid: len(_parents.get(aid, set())) for aid in agents}
+    _queue = [aid for aid, deg in _in_degree.items() if deg == 0]
+    sorted_agent_ids = []
+    while _queue:
+        _queue.sort()
+        aid = _queue.pop(0)
+        sorted_agent_ids.append(aid)
+        for sub in agents[aid].get("delegates_to", []):
+            if sub in _in_degree:
+                _in_degree[sub] -= 1
+                if _in_degree[sub] == 0:
+                    _queue.append(sub)
+    for aid in agents:
+        if aid not in sorted_agent_ids:
+            sorted_agent_ids.append(aid)
+
     # Load translateOrchestrator.md template
-    culture = os.getenv("CULTURE", "fr-fr")
-    template_path = SHARED_DIR / "Prompts" / culture / "translateOrchestrator.md"
+    template_path = SHARED_DIR / "Prompts" / _CULTURE / "translateOrchestrator.md"
     if not template_path.exists():
-        raise HTTPException(404, f"Template translateOrchestrator.md introuvable pour culture {culture}")
+        raise HTTPException(404, f"Template translateOrchestrator.md introuvable pour culture {_CULTURE}")
     template = template_path.read_text(encoding="utf-8")
 
-    # Build one orchestrator card per non-orchestrator agent
-    cards = []
-    for agent_id, agent_cfg in agents.items():
+    # Pre-compute boss relationships: agent_id -> list of boss agent_ids
+    boss_map = {}
+    for aid, acfg in agents.items():
+        for sub_id in acfg.get("delegates_to", []):
+            boss_map.setdefault(sub_id, []).append(aid)
+
+    # Process each agent individually: one LLM call per agent, with hash-based cache
+    chat_dir = tdir / "chat"
+    chat_dir.mkdir(exist_ok=True)
+    cache_dir = tdir / "tmp"
+    cache_dir.mkdir(exist_ok=True)
+    ts = datetime.now().strftime("%y%m%d-%H%M%S")
+    all_cards = []
+
+    for agent_id in sorted_agent_ids:
+        agent_cfg = agents[agent_id]
         if agent_cfg.get("type") == "orchestrator" or agent_id == "orchestrator":
             continue
 
@@ -3811,38 +4104,71 @@ async def build_team_orchestrator_prompt(team_dir: str):
                 if f.is_file() and f.suffix == ".md":
                     content = f.read_text(encoding="utf-8").strip()
                     if content:
-                        profile_parts.append(f"--------------- {f.name} ---------------\n{content}\n")
+                        label = f.stem.split("_")[0]
+                        profile_parts.append(f"{label} : {content}")
 
         # Also read description from agent.json
         agent_json = agent_catalog_dir / "agent.json" if agent_catalog_dir.is_dir() else None
         description = ""
         if agent_json and agent_json.exists():
-            acfg = json.loads(agent_json.read_text(encoding="utf-8"))
-            description = acfg.get("description", "")
+            acfg_data = json.loads(agent_json.read_text(encoding="utf-8"))
+            description = acfg_data.get("description", "")
         if description:
-            profile_parts.insert(0, f"--------------- description ---------------\n{description}\n")
+            profile_parts.insert(0, f"{description}\n")
+
+        # Inject hierarchy block (Boss/Sub relationships)
+        hierarchy_lines = []
+        for sub_id in agent_cfg.get("delegates_to", []):
+            sub_name = agents.get(sub_id, {}).get("name", sub_id)
+            hierarchy_lines.append(f"-  Sub : {sub_name} id {sub_id}")
+        for boss_id in boss_map.get(agent_id, []):
+            boss_name = agents.get(boss_id, {}).get("name", boss_id)
+            hierarchy_lines.append(f"-  managed_by : id {boss_id} {boss_name}")
+        if hierarchy_lines:
+            hierarchy_block = "\n".join(hierarchy_lines) + "\n"
+            insert_pos = 1 if description else 0
+            profile_parts.insert(insert_pos, hierarchy_block)
 
         agent_profile = "\n".join(profile_parts) if profile_parts else "(aucun profil disponible)"
 
-        # Fill template placeholders
-        prompt = template.replace("{agent_id}", agent_id)
-        prompt = prompt.replace("{agent_name}", agent_name)
-        prompt = prompt.replace("{agent_profile}", agent_profile)
+        # Inject into template for this agent
+        agent_prompt = template.replace("{agent_profile}", agent_profile).replace("{agent_id}", agent_id).replace("{agent_name}", agent_name)
 
-        # Call LLM
-        try:
-            result = await chat(ChatRequest(messages=[
-                {"role": "user", "content": prompt},
-            ]))
-            card = result.get("content", "").strip()
-            if card:
-                cards.append(card)
-        except Exception as e:
-            log.warning("LLM call failed for agent %s: %s", agent_id, e)
-            cards.append(f"<!-- Erreur generation pour {agent_id}: {e} -->")
+        # Check cache: hash the prompt, look for tmp/{hash}.xml
+        prompt_hash = hashlib.sha256(agent_prompt.encode("utf-8")).hexdigest()
+        cache_file = cache_dir / f"{prompt_hash}.xml"
 
-    # Assemble final prompt
-    content = "\n\n".join(cards)
+        if cache_file.exists():
+            card = cache_file.read_text(encoding="utf-8").strip()
+            log.info("Orchestrator card for agent %s loaded from cache (%s)", agent_id, prompt_hash[:12])
+        else:
+            # Log send
+            send_file = chat_dir / f"{ts}_orchestrator_build_{agent_id}_send.md"
+            send_file.write_text(agent_prompt, encoding="utf-8")
+
+            try:
+                result = await chat(ChatRequest(messages=[
+                    {"role": "user", "content": agent_prompt},
+                ], use_admin_llm=True))
+                card = result.get("content", "").strip()
+                resp_file = chat_dir / f"{ts}_orchestrator_build_{agent_id}_response.md"
+                resp_file.write_text(card, encoding="utf-8")
+                # Save to cache
+                cache_file.write_text(card, encoding="utf-8")
+                log.info("Orchestrator card built for agent %s in team %s", agent_id, team_dir)
+            except Exception as e:
+                log.warning("LLM call failed for agent %s orchestrator card: %s", agent_id, e)
+                all_cards.append((agent_id, agent_name, f"<!-- Erreur: {e} -->"))
+                continue
+
+        all_cards.append((agent_id, agent_name, card))
+
+    # Assemble all cards, strip XML tags and add agent header
+    stripped_cards = []
+    for aid, aname, card in all_cards:
+        clean = re.sub(r"</?orchestrator_card[^>]*>", "", card).strip()
+        stripped_cards.append(f"### {aname} - id : {aid}\n\n{clean}")
+    content = "\n\n".join(stripped_cards)
 
     # Save to team directory
     output_file = tdir / "orchestrator_prompt.md"
@@ -3850,6 +4176,82 @@ async def build_team_orchestrator_prompt(team_dir: str):
     log.info("Orchestrator prompt built for team %s: %s", team_dir, output_file)
 
     return {"ok": True, "content": content}
+
+
+@app.post("/api/templates/teams/{team_dir}/coherence/check")
+async def check_team_coherence(team_dir: str):
+    """Run coherence check on a team using CheckTeamCoherence.md + LLM."""
+    tdir = _shared_team_dir(team_dir)
+    reg_file = tdir / "agents_registry.json"
+    if not reg_file.exists():
+        raise HTTPException(404, f"agents_registry.json introuvable pour {team_dir}")
+
+    orch_file = tdir / "orchestrator_prompt.md"
+    if not orch_file.exists():
+        raise HTTPException(400, "orchestrator_prompt.md introuvable — construisez-le d'abord")
+
+    # Load CheckTeamCoherence.md template
+    template_path = SHARED_DIR / "Prompts" / _CULTURE / "CheckTeamCoherence.md"
+    if not template_path.exists():
+        raise HTTPException(404, f"CheckTeamCoherence.md introuvable pour culture {_CULTURE}")
+    template = template_path.read_text(encoding="utf-8")
+
+    orchestrator_cards = orch_file.read_text(encoding="utf-8")
+    registry = json.loads(reg_file.read_text(encoding="utf-8"))
+    team_registry = json.dumps(registry.get("agents", {}), indent=2, ensure_ascii=False)
+
+    prompt = template.replace("{orchestrator_cards}", orchestrator_cards).replace("{team_registry}", team_registry)
+
+    # Log send
+    chat_dir = tdir / "chat"
+    chat_dir.mkdir(exist_ok=True)
+    ts = datetime.now().strftime("%y%m%d-%H%M%S")
+    send_file = chat_dir / f"{ts}_coherence_check_send.md"
+    send_file.write_text(prompt, encoding="utf-8")
+
+    try:
+        result = await chat(ChatRequest(messages=[
+            {"role": "user", "content": prompt},
+        ], use_admin_llm=True))
+        content = result.get("content", "").strip()
+        resp_file = chat_dir / f"{ts}_coherence_check_response.md"
+        resp_file.write_text(content, encoding="utf-8")
+    except Exception as e:
+        raise HTTPException(500, f"Erreur LLM: {e}")
+
+    # Convert XML diagnostic to Markdown report
+    report_lines = [f"# Rapport de coherence — {team_dir}", f"*Genere le {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*", ""]
+
+    for section, title in [
+        ("summary", "Resume"),
+        ("critical", "Problemes critiques"),
+        ("warnings", "Avertissements"),
+        ("ghost_references", "References fantomes"),
+        ("actions", "Actions correctives"),
+    ]:
+        match = re.search(f"<{section}>(.*?)</{section}>", content, re.DOTALL)
+        body = match.group(1).strip() if match else "N/A"
+        report_lines.append(f"## {title}")
+        report_lines.append("")
+        report_lines.append(body)
+        report_lines.append("")
+
+    report = "\n".join(report_lines)
+    report_file = tdir / "report.md"
+    report_file.write_text(report, encoding="utf-8")
+    log.info("Coherence report saved for team %s: %s", team_dir, report_file)
+
+    return {"ok": True, "content": report}
+
+
+@app.get("/api/templates/teams/{team_dir}/coherence/report")
+async def get_team_coherence_report(team_dir: str):
+    """Read existing coherence report for a team."""
+    tdir = _shared_team_dir(team_dir)
+    report_file = tdir / "report.md"
+    if not report_file.exists():
+        raise HTTPException(404, "Aucun rapport disponible")
+    return {"ok": True, "content": report_file.read_text(encoding="utf-8")}
 
 
 # ── Git helpers ───────────────────────────────────

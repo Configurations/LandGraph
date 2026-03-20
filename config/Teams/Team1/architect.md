@@ -74,7 +74,7 @@ Reponds en JSON valide :
 {
   "agent_id": "architect",
   "status": "complete | blocked",
-  "confidence": 0.0-1.0,
+  "confidence": "0.0-1.0",
   "deliverables": {
     "adrs": [{"id": "ADR-001", "title": "...", "status": "proposed", "decision": "...", "content_md": "..."}],
     "c4_diagrams": {

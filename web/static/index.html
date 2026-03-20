@@ -6,7 +6,13 @@
   <title>ag.flow Admin</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/style.css?v=20260318e">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260320c">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/codemirror.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/theme/material-darker.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/codemirror.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/addon/mode/simple.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/mode/dockerfile/dockerfile.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/mode/shell/shell.min.js"></script>
 </head>
 <body>
   <div class="app-layout">
@@ -138,7 +144,6 @@
           <div class="prompt-tab" data-cfg-tab="cfg-teams" onclick="showConfigTab('cfg-teams')">Equipes</div>
           <div class="prompt-tab" data-cfg-tab="cfg-mail" onclick="showConfigTab('cfg-mail')">Mail</div>
           <div class="prompt-tab" data-cfg-tab="cfg-security" onclick="showConfigTab('cfg-security')">Securite</div>
-          <div class="prompt-tab" data-cfg-tab="cfg-outline" onclick="showConfigTab('cfg-outline')">Base de connaissances</div>
           <div class="prompt-tab" data-cfg-tab="cfg-misc" onclick="showConfigTab('cfg-misc')">Divers</div>
           <div class="prompt-tab" data-cfg-tab="cfg-git" onclick="showConfigTab('cfg-git')">Enregistrement</div>
           <div id="cfg-tab-save-btn" style="margin-left:auto;display:none">
@@ -152,9 +157,14 @@
             <div class="card-header">
               <h3>Modele par defaut</h3>
             </div>
-            <div class="form-row" style="align-items:flex-end">
-              <div class="form-group" style="margin-bottom:0">
+            <div class="form-row" style="align-items:flex-end;gap:1.5rem">
+              <div class="form-group" style="margin-bottom:0;flex:1">
+                <label style="font-size:0.8rem;margin-bottom:0.25rem">Modele par defaut (agents)</label>
                 <select id="cfg-llm-default-select" onchange="setCfgLLMDefault(this.value)"></select>
+              </div>
+              <div class="form-group" style="margin-bottom:0;flex:1">
+                <label style="font-size:0.8rem;margin-bottom:0.25rem">LLM Admin (dashboard)</label>
+                <select id="cfg-llm-admin-select" onchange="setCfgLLMAdmin(this.value)"></select>
               </div>
             </div>
           </div>
@@ -553,68 +563,6 @@
 
         <!-- cfg-auth removed: merged into cfg-security above -->
 
-        <!-- Sub-tab: Outline (Base de connaissances) -->
-        <div class="cfg-tab-content" id="cfg-tab-cfg-outline">
-          <div class="card">
-            <div class="card-header"><h3>Outline Wiki</h3></div>
-            <div class="card-body">
-              <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:1rem">
-                Connectez la plateforme a votre instance Outline pour publier automatiquement les livrables des agents dans un wiki centralise.
-                Les variables <code>OUTLINE_URL</code> et <code>OUTLINE_API_KEY</code> doivent etre definies dans le fichier <code>.env</code>.
-              </p>
-
-              <div class="form-row">
-                <div class="form-group">
-                  <label>
-                    <input type="checkbox" id="outline-enabled" style="margin-right:0.5rem" />
-                    Activer l'integration Outline
-                  </label>
-                </div>
-                <div class="form-group">
-                  <button class="btn btn-sm" onclick="testOutlineConnection()" id="outline-test-btn">Tester la connexion</button>
-                  <span id="outline-test-result" style="font-size:0.8rem;margin-left:0.5rem"></span>
-                </div>
-              </div>
-
-              <div class="form-row">
-                <div class="form-group">
-                  <label>Prefixe des collections</label>
-                  <input id="outline-collection-prefix" placeholder="ag.flow" />
-                </div>
-                <div class="form-group">
-                  <label>Variable URL (env)</label>
-                  <input id="outline-url-env" placeholder="OUTLINE_URL" />
-                </div>
-                <div class="form-group">
-                  <label>Variable API Key (env)</label>
-                  <input id="outline-api-key-env" placeholder="OUTLINE_API_KEY" />
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="card-header"><h3>Publication automatique</h3></div>
-            <div class="card-body">
-              <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem">
-                Quand un agent termine un livrable, il est automatiquement publie dans Outline si la case correspondante est cochee.
-              </p>
-              <div class="form-row" style="align-items:center;margin-bottom:0.75rem">
-                <label>
-                  <input type="checkbox" id="outline-auto-publish" style="margin-right:0.5rem" />
-                  Activer la publication automatique
-                </label>
-              </div>
-              <div id="outline-deliverables-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:0.5rem">
-              </div>
-            </div>
-          </div>
-
-          <div style="margin-top:1rem;display:flex;gap:0.5rem">
-            <button class="btn btn-primary" onclick="saveOutlineConfig()">Sauvegarder</button>
-          </div>
-        </div>
-
         <!-- Sub-tab: Divers -->
         <div class="cfg-tab-content" id="cfg-tab-cfg-misc">
           <p style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:1rem">
@@ -649,10 +597,6 @@
                 </div>
               </div>
               <div class="form-row">
-                <div class="form-group">
-                  <label>Outline Wiki (port 3200)</label>
-                  <input id="misc-host-outline" placeholder="https://outline.example.com" />
-                </div>
                 <div class="form-group">
                   <label>PostgreSQL</label>
                   <input id="misc-host-postgres" placeholder="langgraph-postgres:5432" />
@@ -792,10 +736,12 @@
         <div class="prompt-tabs" style="margin-bottom:1rem">
           <div class="prompt-tab active" data-tpl-tab="tpl-llm" onclick="showTemplateTab('tpl-llm')">Modeles LLM</div>
           <div class="prompt-tab" data-tpl-tab="tpl-mcp" onclick="showTemplateTab('tpl-mcp')">Services MCP</div>
+          <div class="prompt-tab" data-tpl-tab="tpl-dockerfiles" onclick="showTemplateTab('tpl-dockerfiles')">Dockerfiles</div>
           <div class="prompt-tab" data-tpl-tab="tpl-agents" onclick="showTemplateTab('tpl-agents')">Agents</div>
           <div class="prompt-tab" data-tpl-tab="tpl-teams" onclick="showTemplateTab('tpl-teams')">Equipes</div>
           <div class="prompt-tab" data-tpl-tab="tpl-projects" onclick="showTemplateTab('tpl-projects')">Projets</div>
           <div class="prompt-tab" data-tpl-tab="tpl-prompts" onclick="showTemplateTab('tpl-prompts')">Prompts</div>
+          <div class="prompt-tab" data-tpl-tab="tpl-models" onclick="showTemplateTab('tpl-models')">Models</div>
           <div class="prompt-tab" data-tpl-tab="tpl-i18n" onclick="showTemplateTab('tpl-i18n')">I18n</div>
           <div class="prompt-tab" data-tpl-tab="tpl-others" onclick="showTemplateTab('tpl-others')">Autres</div>
           <div class="prompt-tab" data-tpl-tab="tpl-git" onclick="showTemplateTab('tpl-git')">Enregistrement</div>
@@ -807,9 +753,14 @@
             <div class="card-header">
               <h3>Modele par defaut</h3>
             </div>
-            <div class="form-row" style="align-items:flex-end">
-              <div class="form-group" style="margin-bottom:0">
+            <div class="form-row" style="align-items:flex-end;gap:1.5rem">
+              <div class="form-group" style="margin-bottom:0;flex:1">
+                <label style="font-size:0.8rem;margin-bottom:0.25rem">Modele par defaut (agents)</label>
                 <select id="tpl-llm-default-select" onchange="setTplLLMDefault(this.value)"></select>
+              </div>
+              <div class="form-group" style="margin-bottom:0;flex:1">
+                <label style="font-size:0.8rem;margin-bottom:0.25rem">LLM Admin (dashboard)</label>
+                <select id="tpl-llm-admin-select" onchange="setTplLLMAdmin(this.value)"></select>
               </div>
             </div>
           </div>
@@ -882,7 +833,7 @@
           <div class="card">
             <div class="card-header">
               <h3>Prompts systeme</h3>
-              <select id="tpl-prompts-culture-select" onchange="tplPromptSwitchCulture(this.value)" style="font-size:0.8rem;padding:0.25rem 0.5rem;margin-left:auto"></select>
+              <select id="tpl-prompts-culture-select" onchange="tplPromptSwitchCulture(this.value)" style="font-size:0.8rem;padding:0.25rem 0.5rem;margin-left:auto;width:auto;max-width:250px"></select>
             </div>
             <div class="ps-panel" id="tpl-prompts-panel">
               <div class="ps-list" id="tpl-prompts-list" style="width:220px">
@@ -894,6 +845,46 @@
               </div>
               <div class="ps-editor" id="tpl-prompts-editor">
                 <div class="ps-edit-empty">Selectionnez un prompt</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sub-tab: Models -->
+        <div class="tpl-tab-content" id="tpl-tab-tpl-models">
+          <div class="card">
+            <div class="card-header">
+              <h3>Models</h3>
+              <select id="tpl-models-culture-select" onchange="tplModelSwitchCulture(this.value)" style="font-size:0.8rem;padding:0.25rem 0.5rem;margin-left:auto;width:auto;max-width:250px"></select>
+            </div>
+            <div class="ps-panel" id="tpl-models-panel">
+              <div class="ps-list" id="tpl-models-list" style="width:220px">
+                <div class="ps-list-header">
+                  <span>Fichiers</span>
+                  <button class="btn-icon ps-list-add" onclick="tplModelAdd()" title="Nouveau model">+</button>
+                </div>
+                <div class="ps-list-items" id="tpl-models-items"></div>
+              </div>
+              <div class="ps-editor" id="tpl-models-editor">
+                <div class="ps-edit-empty">Selectionnez un model</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sub-tab: Dockerfiles -->
+        <div class="tpl-tab-content" id="tpl-tab-tpl-dockerfiles">
+          <div class="card">
+            <div class="card-header">
+              <h3>Dockerfiles</h3>
+              <button class="btn-icon ps-list-add" onclick="tplDockerfileAdd()" title="Nouveau Dockerfile" style="font-size:1.2rem">+</button>
+            </div>
+            <div class="ps-panel" id="tpl-dockerfiles-panel">
+              <div class="ps-list" id="tpl-dockerfiles-list" style="width:180px">
+                <div class="ps-list-items" id="tpl-dockerfiles-items"></div>
+              </div>
+              <div class="ps-editor" id="tpl-dockerfiles-editor">
+                <div class="ps-edit-empty">Selectionnez un Dockerfile</div>
               </div>
             </div>
           </div>
@@ -1369,6 +1360,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="/static/js/app.js?v=20260319c"></script>
+  <script src="/static/js/app.js?v=20260320f"></script>
 </body>
 </html>

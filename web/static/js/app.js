@@ -64,7 +64,7 @@ function copyToClipboard(text) {
 
 function validateJsonBlocks(text) {
   // Find all ```json ... ``` blocks and validate each
-  const regex = /```json\s*\n([\s\S]*?)```/g;
+  const regex = /```json\s*\n([\s\S]*?)\n\s*```/g;
   let match;
   const errors = [];
   let idx = 0;
@@ -240,6 +240,10 @@ function showModal(html, cssClass = '') {
 }
 
 function closeModal(id) {
+  if (_tplDockerfileBuildAbort) {
+    try { _tplDockerfileBuildAbort.abort(); } catch {}
+    _tplDockerfileBuildAbort = null;
+  }
   if (id) {
     const el = document.getElementById(id);
     if (el) { el.style.display = 'none'; return; }
@@ -1023,14 +1027,14 @@ function renderAgents() {
   const grid = document.getElementById('agents-grid');
 
   grid.innerHTML = agentGroups.map(g => {
-    const orchId = g.orchestrator || '';
+    const orchId = g.orchestrator || Object.entries(g.agents).find(([, a]) => a.type === 'orchestrator')?.[0] || '';
     const agentCards = Object.entries(g.agents).map(([id, a]) => {
       const mcpList = (mcpAccess[id] || []);
-      const isOrch = id === orchId;
+      const isOrch = id === orchId || a.type === 'orchestrator';
       return `<div class="agent-card${isOrch ? ' agent-orchestrator' : ''}" onclick="editAgent('${escHtml(id)}')">
         <div class="agent-card-header">
           <div>
-            <h4>${isOrch ? '<span class="orch-badge" title="Orchestrateur">&#9733;</span> ' : ''}${escHtml(a.name)}</h4>
+            <h4>${isOrch ? '<span class="orch-badge" title="Orchestrateur">&#9733;</span> ' : ''}${escHtml(a.name)}${a.docker_mode ? ' <svg title="Docker" width="18" height="13" viewBox="0 0 256 185" style="vertical-align:middle;margin-left:4px"><path fill="#0db7ed" d="M250 87c-3-2-10-4-18-3-2-13-10-24-19-31l-4-2-2 4c-3 5-5 12-4 18 0 4 1 8 3 12-5 2-13 4-24 4H1l-1 4c-1 12 2 27 9 38 8 12 20 18 36 18 34 0 60-16 72-49 5 0 15 0 20-10l1-2-3-1zM28 81H8v20h20V81zm26 0H34v20h20V81zm26 0H60v20h20V81zm26 0H86v20h20V81zm-78-24H8v20h20V57zm26 0H34v20h20V57zm26 0H60v20h20V57zm26 0H86v20h20V57zm0-24H86v20h20V33z"/></svg>' : ''}</h4>
             <code style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(id)}</code>
           </div>
           ${isOrch ? '' : `<button class="btn-icon danger" onclick="event.stopPropagation();deleteAgent('${escHtml(id)}')" title="Supprimer">
@@ -1085,6 +1089,19 @@ async function editAgent(id) {
   const curType = isOrchestrator ? 'orchestrator' : (hasPipeline ? 'pipeline' : 'single');
   const hasOtherOrch = Object.entries(agents).some(([aid, ag]) => aid !== id && ag.type === 'orchestrator');
 
+  // Build delegates_to checkboxes (all team agents except orchestrator and self)
+  const delegatesTo = a.delegates_to || [];
+  const teamId = a._team_id || 'default';
+  const delegateChips = Object.entries(agents)
+    .filter(([aid, ag]) => aid !== id && ag.type !== 'orchestrator' && (ag._team_id || 'default') === teamId)
+    .map(([aid, ag]) => {
+      const checked = delegatesTo.includes(aid);
+      return `<label class="mcp-chip${checked ? ' active' : ''}" title="${escHtml(aid)}">
+        <input type="checkbox" class="agent-delegate-cb" value="${escHtml(aid)}" ${checked ? 'checked' : ''} onchange="this.parentElement.classList.toggle('active',this.checked)" />
+        ${escHtml(ag.name || aid)}
+      </label>`;
+    }).join('');
+
   showModal(`
     <div class="modal-header">
       <h3>Agent: ${escHtml(a.name)} (${escHtml(id)})</h3>
@@ -1093,6 +1110,7 @@ async function editAgent(id) {
     <div class="agent-tabs">
       <div class="agent-tab active" onclick="switchAgentTab('divers')">Divers</div>
       <div class="agent-tab" onclick="switchAgentTab('pipeline')">Pipeline Steps</div>
+      <div class="agent-tab" id="agent-tab-header-delegates" onclick="switchAgentTab('delegates')" style="${curType === 'pipeline' ? '' : 'display:none'}">Sous-traitance</div>
     </div>
 
     <!-- Tab: Divers -->
@@ -1122,7 +1140,7 @@ async function editAgent(id) {
       </div>
       <div class="form-group">
         <label>Type</label>
-        <select id="agent-edit-type">
+        <select id="agent-edit-type" onchange="document.getElementById('agent-tab-header-delegates').style.display=this.value==='pipeline'?'':'none'">
           <option value="single" ${curType==='single'?'selected':''}>Single</option>
           <option value="pipeline" ${curType==='pipeline'?'selected':''}>Pipeline</option>
           <option value="orchestrator" ${curType==='orchestrator'?'selected':''} ${hasOtherOrch && curType!=='orchestrator'?'disabled':''}>Orchestrator</option>
@@ -1139,6 +1157,14 @@ async function editAgent(id) {
     <!-- Tab: Pipeline Steps -->
     <div id="agent-tab-pipeline" class="agent-tab-content">
       <div id="agent-edit-pipeline-steps" class="pipeline-steps-container"></div>
+    </div>
+
+    <!-- Tab: Sous-traitance -->
+    <div id="agent-tab-delegates" class="agent-tab-content">
+      <p style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:12px">Cet agent peut deleguer du travail aux agents coches ci-dessous :</p>
+      <div class="mcp-chips">
+        ${delegateChips || '<p style="color:var(--text-secondary);font-size:0.8rem">Aucun autre agent dans cette equipe.</p>'}
+      </div>
     </div>
 
     <div class="modal-actions">
@@ -1221,13 +1247,15 @@ async function saveAgent(id) {
   }
   const mcpCheckboxes = document.querySelectorAll('.agent-mcp-cb:checked');
   const mcpList = Array.from(mcpCheckboxes).map(cb => cb.value);
+  const delegateCbs = document.querySelectorAll('.agent-delegate-cb:checked');
+  const delegates_to = agentType === 'pipeline' ? Array.from(delegateCbs).map(cb => cb.value) : [];
 
   const teamDir = agents[id]._team_dir || agents[id]._team_id || 'default';
   try {
     await Promise.all([
       api(`/api/agents/${id}`, {
         method: 'PUT',
-        body: { id, name, model, temperature, max_tokens, prompt_file: '', type: agentType, pipeline_steps, team_id: agents[id]._team_id || 'default' }
+        body: { id, name, model, temperature, max_tokens, prompt_file: '', type: agentType, pipeline_steps, delegates_to, team_id: agents[id]._team_id || 'default' }
       }),
       api(`/api/agents/mcp-access/${encodeURIComponent(teamDir)}/${encodeURIComponent(id)}`, { method: 'PUT', body: { servers: mcpList } }),
     ]);
@@ -1965,7 +1993,7 @@ async function loadContainers() {
       <tbody>${containers.map(c => {
         const running = c.state === 'running';
         const dot = running ? '🟢' : '🔴';
-        const isManaged = ['langgraph-api','langgraph-discord','langgraph-mail','langgraph-admin','langgraph-hitl','langgraph-outline','langgraph-minio'].includes(c.name);
+        const isManaged = ['langgraph-api','langgraph-discord','langgraph-mail','langgraph-admin','langgraph-hitl','langgraph-minio'].includes(c.name);
         const actions = isManaged ? `
           <button class="btn btn-outline btn-sm" onclick="containerAction('${c.name}','restart')" style="font-size:0.7rem">Restart</button>
           ${running
@@ -2544,14 +2572,14 @@ function renderTeams() {
     const mcpAccess = t.mcp_access || {};
     const dir = t.directory || t.id;
 
-    const orchId = t.orchestrator || '';
+    const orchId = t.orchestrator || agentEntries.find(([, a]) => a.type === 'orchestrator')?.[0] || '';
     const agentCards = agentEntries.map(([aid, a]) => {
       const mcpList = mcpAccess[aid] || [];
-      const isOrch = aid === orchId;
+      const isOrch = aid === orchId || a.type === 'orchestrator';
       return `<div class="agent-card${isOrch ? ' agent-orchestrator' : ''}" style="cursor:pointer">
         <div class="agent-card-header">
           <div onclick="editCfgAgent('${escHtml(dir)}','${escHtml(aid)}')" style="flex:1;cursor:pointer">
-            <h4>${isOrch ? '<span class="orch-badge" title="Orchestrateur">&#9733;</span> ' : ''}${escHtml(a.name)}</h4>
+            <h4>${isOrch ? '<span class="orch-badge" title="Orchestrateur">&#9733;</span> ' : ''}${escHtml(a.name)}${a.docker_mode ? ' <svg title="Docker" width="18" height="13" viewBox="0 0 256 185" style="vertical-align:middle;margin-left:4px"><path fill="#0db7ed" d="M250 87c-3-2-10-4-18-3-2-13-10-24-19-31l-4-2-2 4c-3 5-5 12-4 18 0 4 1 8 3 12-5 2-13 4-24 4H1l-1 4c-1 12 2 27 9 38 8 12 20 18 36 18 34 0 60-16 72-49 5 0 15 0 20-10l1-2-3-1zM28 81H8v20h20V81zm26 0H34v20h20V81zm26 0H60v20h20V81zm26 0H86v20h20V81zm-78-24H8v20h20V57zm26 0H34v20h20V57zm26 0H60v20h20V57zm26 0H86v20h20V57zm0-24H86v20h20V33z"/></svg>' : ''}</h4>
             <code style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(aid)}</code>
           </div>
           ${isOrch ? '' : `<button class="btn-icon danger" onclick="event.stopPropagation();deleteCfgAgent('${escHtml(dir)}','${escHtml(aid)}')" title="Supprimer">
@@ -2775,7 +2803,7 @@ async function editCfgAgent(dir, agentId) {
         <div style="display:flex;flex-wrap:wrap;gap:0.35rem;margin-top:0.25rem">${mcpReadOnly}</div>
       </div>
       <div class="form-group">
-        <label>Type de livrable</label>
+        <label>Type de services</label>
         <div style="display:flex;flex-wrap:wrap;gap:0.35rem;margin-top:0.25rem">${delivTags}</div>
       </div>
     </div>
@@ -3122,89 +3150,8 @@ function showConfigTab(tabId) {
   else if (tabId === 'cfg-teams') loadCfgTeams();
   else if (tabId === 'cfg-mail') loadMail();
   else if (tabId === 'cfg-security') { loadApiKeys(); loadAuthConfig(); }
-  else if (tabId === 'cfg-outline') loadOutlineConfig();
   else if (tabId === 'cfg-misc') loadCfgMisc();
   else if (tabId === 'cfg-git') loadCfgGit();
-}
-
-// ── Config Outline (Base de connaissances) ────────
-let _outlineData = {};
-const _defaultDeliverables = {
-  prd: 'PRD / Cahier des charges',
-  legal_review: 'Analyse juridique',
-  architecture: 'Architecture technique',
-  ux_design: 'Design UX/UI',
-  project_plan: 'Plan de projet',
-  technical_docs: 'Documentation technique',
-  user_docs: 'Documentation utilisateur',
-  qa_report: 'Rapport QA',
-  deployment_plan: 'Plan de deploiement',
-};
-
-async function loadOutlineConfig() {
-  try {
-    _outlineData = await api('/api/outline-config');
-    document.getElementById('outline-enabled').checked = _outlineData.enabled || false;
-    document.getElementById('outline-collection-prefix').value = _outlineData.collection_prefix || 'ag.flow';
-    document.getElementById('outline-url-env').value = _outlineData.url_env || 'OUTLINE_URL';
-    document.getElementById('outline-api-key-env').value = _outlineData.api_key_env || 'OUTLINE_API_KEY';
-
-    const ap = _outlineData.auto_publish || {};
-    document.getElementById('outline-auto-publish').checked = ap.enabled || false;
-
-    const deliverables = ap.deliverables || {};
-    const container = document.getElementById('outline-deliverables-list');
-    container.innerHTML = Object.entries(_defaultDeliverables).map(([key, label]) =>
-      `<label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem">
-        <input type="checkbox" class="outline-deliv-cb" data-key="${key}" ${deliverables[key] ? 'checked' : ''} />
-        ${escHtml(label)}
-      </label>`
-    ).join('');
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-async function saveOutlineConfig() {
-  const deliverables = {};
-  document.querySelectorAll('.outline-deliv-cb').forEach(cb => {
-    deliverables[cb.dataset.key] = cb.checked;
-  });
-  const data = {
-    enabled: document.getElementById('outline-enabled').checked,
-    url_env: document.getElementById('outline-url-env').value || 'OUTLINE_URL',
-    api_key_env: document.getElementById('outline-api-key-env').value || 'OUTLINE_API_KEY',
-    collection_prefix: document.getElementById('outline-collection-prefix').value || 'ag.flow',
-    phase_labels: _outlineData.phase_labels || {},
-    auto_publish: {
-      enabled: document.getElementById('outline-auto-publish').checked,
-      deliverables,
-    },
-  };
-  try {
-    await api('/api/outline-config', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(data) });
-    toast('Configuration Outline sauvegardee', 'success');
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-async function testOutlineConnection() {
-  const btn = document.getElementById('outline-test-btn');
-  const result = document.getElementById('outline-test-result');
-  btn.disabled = true;
-  result.textContent = 'Test en cours...';
-  result.style.color = 'var(--text-secondary)';
-  try {
-    const r = await api('/api/outline/test-connection', { method: 'POST' });
-    if (r.ok) {
-      result.textContent = `Connecte (${r.info.team || '?'} — ${r.info.user || '?'})`;
-      result.style.color = 'var(--success)';
-    } else {
-      result.textContent = r.error || 'Erreur inconnue';
-      result.style.color = 'var(--danger)';
-    }
-  } catch (e) {
-    result.textContent = e.message;
-    result.style.color = 'var(--danger)';
-  }
-  btn.disabled = false;
 }
 
 // ── Config Divers ─────────────────────────────────
@@ -3241,7 +3188,6 @@ async function loadCfgMisc() {
     document.getElementById('misc-host-hitl').value = hosts.hitl || '';
     document.getElementById('misc-host-api').value = hosts.api || '';
     document.getElementById('misc-host-openlit').value = hosts.openlit || '';
-    document.getElementById('misc-host-outline').value = hosts.outline || '';
     document.getElementById('misc-host-postgres').value = hosts.postgres || '';
     document.getElementById('misc-host-redis').value = hosts.redis || '';
   } catch (e) { toast(e.message, 'error'); }
@@ -3256,7 +3202,6 @@ async function saveCfgMisc() {
         hitl: document.getElementById('misc-host-hitl').value.trim(),
         api: document.getElementById('misc-host-api').value.trim(),
         openlit: document.getElementById('misc-host-openlit').value.trim(),
-        outline: document.getElementById('misc-host-outline').value.trim(),
         postgres: document.getElementById('misc-host-postgres').value.trim(),
         redis: document.getElementById('misc-host-redis').value.trim(),
       },
@@ -3284,12 +3229,22 @@ function renderCfgLLM() {
   const throttling = cfgLlmData.throttling || {};
   const defaultId = cfgLlmData.default || '';
 
-  // Default select
+  // Default select (agents)
   const sel = document.getElementById('cfg-llm-default-select');
   sel.innerHTML = `<option value="">-- Aucun --</option>` +
     Object.entries(providers).map(([id, p]) =>
       `<option value="${escHtml(id)}" ${id === defaultId ? 'selected' : ''}>${escHtml(id)} — ${escHtml(p.description || p.model)}</option>`
     ).join('');
+
+  // Admin LLM select (dashboard)
+  const cfgAdminId = cfgLlmData.admin_llm || '';
+  const cfgAdminSel = document.getElementById('cfg-llm-admin-select');
+  if (cfgAdminSel) {
+    cfgAdminSel.innerHTML = `<option value="">-- Meme que defaut --</option>` +
+      Object.entries(providers).map(([id, p]) =>
+        `<option value="${escHtml(id)}" ${id === cfgAdminId ? 'selected' : ''}>${escHtml(id)} — ${escHtml(p.description || p.model)}</option>`
+      ).join('');
+  }
 
   // Providers table
   const tbl = document.getElementById('cfg-llm-providers-table');
@@ -3360,6 +3315,14 @@ async function setCfgLLMDefault(providerId) {
   try {
     await api('/api/llm/providers/default', { method: 'PUT', body: { provider_id: providerId } });
     toast('Modele par defaut mis a jour', 'success');
+    loadCfgLLM();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function setCfgLLMAdmin(providerId) {
+  try {
+    await api('/api/llm/providers/admin', { method: 'PUT', body: { provider_id: providerId } });
+    toast('LLM Admin mis a jour', 'success');
     loadCfgLLM();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -3993,6 +3956,8 @@ function showTemplateTab(tabId) {
   else if (tabId === 'tpl-teams') loadTplTeamsList();
   else if (tabId === 'tpl-projects') loadTplProjects();
   else if (tabId === 'tpl-prompts') loadTplPrompts();
+  else if (tabId === 'tpl-models') loadTplModels();
+  else if (tabId === 'tpl-dockerfiles') loadTplDockerfiles();
   else if (tabId === 'tpl-i18n') loadTplI18n();
   else if (tabId === 'tpl-others') loadTplOthers();
   else if (tabId === 'tpl-git') loadTplGit();
@@ -4079,7 +4044,7 @@ function renderDeliverableTypes() {
   const el = document.getElementById('tpl-deliverable-types-list');
   if (!el) return;
   if (!_deliverableTypes.length) {
-    el.innerHTML = '<p style="color:var(--text-secondary);font-size:0.85rem">Aucun type de livrable</p>';
+    el.innerHTML = '<p style="color:var(--text-secondary);font-size:0.85rem">Aucun type de services</p>';
     return;
   }
   el.innerHTML = '<table class="data-table"><thead><tr><th>Cle</th><th>Libelle</th><th></th></tr></thead><tbody>' +
@@ -4089,7 +4054,7 @@ function renderDeliverableTypes() {
 }
 
 function showAddDeliverableTypeModal() {
-  showModal('<div class="modal-header"><h3>Nouveau type de livrable</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
+  showModal('<div class="modal-header"><h3>Nouveau type de services</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
     '<div class="form-group"><label>Cle (ex: delivers_docs)</label><input id="dt-new-key" placeholder="delivers_xxx" oninput="this.value=this.value.replace(/[^a-zA-Z0-9_]/g,\'\')" /></div>' +
     '<div class="form-group"><label>Libelle</label><input id="dt-new-label" placeholder="Documentation" /></div>' +
     '<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="createDeliverableType()">Creer</button></div>');
@@ -4127,11 +4092,9 @@ let _i18nDefaultKeys = []; // keys from default culture (reference)
 
 async function loadTplI18n() {
   try {
-    if (!_allCultures.length) {
-      const cd = await api('/api/templates/cultures');
-      _allCultures = cd.cultures || [];
-      _defaultCulture = cd.default || 'fr-fr';
-    }
+    const cd = await api('/api/templates/cultures');
+    _allCultures = cd.cultures || [];
+    _defaultCulture = cd.default || 'fr-fr';
     const sel = document.getElementById('tpl-i18n-culture-select');
     if (sel) {
       const enabled = _allCultures.filter(c => c.enabled);
@@ -4639,6 +4602,421 @@ async function tplPromptDelete(idx) {
   toast('Prompt supprime', 'success');
 }
 
+// ── Template Dockerfiles (Shared/Dockerfiles/) ──────────
+
+let _tplDockerfiles = [];
+let _tplDockerfileSel = -1;
+let _tplDockerfileDirty = {};
+let _tplDockerfileTab = 'dockerfile'; // 'dockerfile' or 'entrypoint'
+let _tplDockerfileBuildAbort = null; // AbortController for current build
+
+async function loadTplDockerfiles() {
+  try {
+    const data = await api('/api/templates/dockerfiles');
+    _tplDockerfiles = data.files || [];
+    _tplDockerfileSel = _tplDockerfiles.length ? 0 : -1;
+    _tplDockerfileDirty = {};
+    _tplDockerfilesRender();
+  } catch (e) {
+    toast('Erreur chargement dockerfiles: ' + e.message, 'error');
+  }
+}
+
+function _dockerfileLabel(name) {
+  const idx = name.indexOf('.');
+  return idx >= 0 ? name.substring(idx + 1) : name;
+}
+
+function _tplDockerfilesRender() {
+  const items = document.getElementById('tpl-dockerfiles-items');
+  const editor = document.getElementById('tpl-dockerfiles-editor');
+  if (!items || !editor) return;
+
+  items.innerHTML = _tplDockerfiles.map((p, i) => `
+    <div class="ps-list-item${i === _tplDockerfileSel ? ' active' : ''}${_tplDockerfileDirty[i] ? ' dirty' : ''}" onclick="tplDockerfileSelect(${i})">
+      <span class="ps-list-num">${i + 1}</span>
+      <div class="ps-list-text">
+        <div class="ps-list-name">${escHtml(_dockerfileLabel(p.name))}</div>
+        <div class="ps-list-key">${escHtml(p.name)}</div>
+      </div>
+      <button class="btn-icon ps-list-del" onclick="event.stopPropagation();tplDockerfileDelete(${i})" title="Supprimer">&times;</button>
+    </div>
+  `).join('');
+
+  if (_tplDockerfileSel >= 0 && _tplDockerfiles[_tplDockerfileSel]) {
+    const p = _tplDockerfiles[_tplDockerfileSel];
+    const isDockerTab = _tplDockerfileTab === 'dockerfile';
+    editor.innerHTML = `
+      <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;font-size:0.8rem">
+        <span style="display:inline-flex;align-items:center;gap:0.3rem;padding:0.2rem 0.6rem;border-radius:4px;background:${p.image_built ? 'rgba(76,175,80,0.15)' : 'rgba(239,68,68,0.15)'};color:${p.image_built ? '#4caf50' : '#ef4444'}">
+          <span style="font-size:0.7rem">${p.image_built ? '●' : '○'}</span>
+          ${p.image_built ? 'Image compilee' : 'Non compile'}
+        </span>
+        <code style="color:var(--text-secondary);font-size:0.75rem">${escHtml(p.image_tag || '')}</code>
+      </div>
+      <div class="ps-edit-row">
+        <div class="form-group" style="flex:0 0 250px">
+          <label>Fichier</label>
+          <input id="tpl-dockerfile-name" value="${escHtml(p.name)}" placeholder="Dockerfile.xxx"
+                 oninput="tplDockerfileUpdateName(this.value)" />
+        </div>
+        <div style="flex:1"></div>
+        <button class="btn btn-primary btn-sm" onclick="tplDockerfileSave()" style="align-self:flex-end;margin-bottom:2px">Sauvegarder</button>
+        <button class="btn btn-outline btn-sm" id="tpl-dockerfile-build-btn" onclick="tplDockerfileBuild()" style="align-self:flex-end;margin-bottom:2px">Compiler</button>
+        <button class="btn btn-outline btn-sm" onclick="tplDockerfileDelete(${_tplDockerfileSel})" style="align-self:flex-end;margin-bottom:2px;color:#ef4444;border-color:#ef4444">Supprimer</button>
+      </div>
+      <div class="prompt-tabs" style="margin-bottom:0.5rem">
+        <div class="prompt-tab${isDockerTab ? ' active' : ''}" onclick="_tplDockerfileTab='dockerfile';_tplDockerfilesRender()">Dockerfile</div>
+        <div class="prompt-tab${!isDockerTab ? ' active' : ''}" onclick="_tplDockerfileTab='entrypoint';_tplDockerfilesRender()">Entrypoint</div>
+      </div>
+      <div id="tpl-dockerfile-cm" style="flex:1;min-height:300px;border:1px solid var(--border);border-radius:4px;overflow:hidden"></div>
+    `;
+    // Init CodeMirror
+    const cmEl = document.getElementById('tpl-dockerfile-cm');
+    if (cmEl && typeof CodeMirror !== 'undefined') {
+      const mode = isDockerTab ? 'dockerfile' : 'shell';
+      const val = isDockerTab ? (p.content || '') : (p.entrypoint_content || '');
+      const cm = CodeMirror(cmEl, {
+        value: val,
+        mode: mode,
+        theme: 'material-darker',
+        lineNumbers: true,
+        lineWrapping: true,
+        tabSize: 2,
+        indentWithTabs: false,
+      });
+      cm.setSize('100%', '100%');
+      const sel = _tplDockerfileSel;
+      const key = isDockerTab ? 'content' : 'entrypoint_content';
+      cm.on('change', () => {
+        _tplDockerfiles[sel][key] = cm.getValue();
+        _tplDockerfileDirty[sel] = true;
+        _tplDockerfilesRenderList();
+      });
+      // Store ref for save
+      window._tplDockerfileCM = cm;
+    }
+  } else {
+    editor.innerHTML = '<div class="ps-edit-empty">Selectionnez un Dockerfile ou ajoutez-en un avec +</div>';
+  }
+}
+
+function _tplDockerfilesRenderList() {
+  const items = document.getElementById('tpl-dockerfiles-items');
+  if (!items) return;
+  items.querySelectorAll('.ps-list-item').forEach((el, i) => {
+    el.classList.toggle('dirty', !!_tplDockerfileDirty[i]);
+  });
+}
+
+function tplDockerfileSelect(idx) {
+  _tplDockerfileSel = idx;
+  _tplDockerfileTab = 'dockerfile';
+  _tplDockerfilesRender();
+}
+
+function tplDockerfileUpdateName(val) {
+  if (_tplDockerfileSel >= 0 && _tplDockerfiles[_tplDockerfileSel]) {
+    _tplDockerfiles[_tplDockerfileSel].name = val;
+    _tplDockerfileDirty[_tplDockerfileSel] = true;
+    const item = document.querySelectorAll('#tpl-dockerfiles-items .ps-list-item')[_tplDockerfileSel];
+    if (item) {
+      item.querySelector('.ps-list-name').textContent = _dockerfileLabel(val) || '...';
+      item.querySelector('.ps-list-key').textContent = val || '...';
+      item.classList.add('dirty');
+    }
+  }
+}
+
+function tplDockerfileAdd() {
+  _tplDockerfiles.push({ name: 'Dockerfile.new', content: '', _new: true });
+  _tplDockerfileSel = _tplDockerfiles.length - 1;
+  _tplDockerfileDirty[_tplDockerfileSel] = true;
+  _tplDockerfilesRender();
+  setTimeout(() => {
+    const inp = document.getElementById('tpl-dockerfile-name');
+    if (inp) { inp.focus(); inp.select(); }
+  }, 50);
+}
+
+async function tplDockerfileSave() {
+  const p = _tplDockerfiles[_tplDockerfileSel];
+  if (!p) return;
+  const name = (document.getElementById('tpl-dockerfile-name')?.value || p.name).trim();
+  // Update current tab content from CodeMirror
+  if (window._tplDockerfileCM) {
+    const curText = window._tplDockerfileCM.getValue();
+    if (_tplDockerfileTab === 'dockerfile') p.content = curText;
+    else p.entrypoint_content = curText;
+  }
+  if (!name) { toast('Nom requis', 'error'); return; }
+  try {
+    await api('/api/templates/dockerfiles/' + encodeURIComponent(name), {
+      method: 'PUT',
+      body: { content: p.content || '', entrypoint_content: p.entrypoint_content || '' }
+    });
+    p.name = name;
+    delete p._new;
+    delete _tplDockerfileDirty[_tplDockerfileSel];
+    _tplDockerfilesRender();
+    toast((_tplDockerfileTab === 'entrypoint' ? 'Entrypoint' : 'Dockerfile') + ' sauvegarde', 'success');
+  } catch (e) {
+    toast('Erreur: ' + e.message, 'error');
+  }
+}
+
+async function tplDockerfileBuild() {
+  const p = _tplDockerfiles[_tplDockerfileSel];
+  if (!p) return;
+  const name = (document.getElementById('tpl-dockerfile-name')?.value || p.name).trim();
+  if (!name) { toast('Nom requis', 'error'); return; }
+  // Show build log modal
+  const dotIdx = name.indexOf('.');
+  const label = dotIdx >= 0 ? name.substring(dotIdx + 1) : name;
+  const buildTime = new Date().toLocaleTimeString();
+  showModal(`
+    <div class="modal-header">
+      <h3>Build — ${escHtml(label)}</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div id="docker-build-status" style="margin-bottom:0.5rem;font-size:0.85rem;color:var(--text-secondary)">Compilation en cours... (${escHtml(buildTime)})</div>
+    <pre id="docker-build-log" style="background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;padding:0.75rem;font-size:0.75rem;height:400px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;color:var(--text-primary)"></pre>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="copyToClipboard(document.getElementById('docker-build-log')?.textContent||'').then(()=>toast('Copie dans le presse-papier','success'))">Copier</button>
+      <button class="btn btn-outline" onclick="closeModal()">Fermer</button>
+    </div>
+  `, 'modal-wide');
+  try {
+    // Abort any previous build stream
+    if (_tplDockerfileBuildAbort) { try { _tplDockerfileBuildAbort.abort(); } catch {} }
+    _tplDockerfileBuildAbort = new AbortController();
+    const resp = await fetch('/api/templates/dockerfiles/' + encodeURIComponent(name) + '/build?no_cache=1', { method: 'POST', signal: _tplDockerfileBuildAbort.signal });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    const logEl = document.getElementById('docker-build-log');
+    const statusEl = document.getElementById('docker-build-status');
+    let buffer = '';
+    let buildResult = null;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done || buildResult) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const evt = JSON.parse(line.slice(6));
+          if (evt.done) {
+            buildResult = evt;
+            try { reader.cancel(); } catch {}
+            break;
+          } else if (evt.line != null && logEl) {
+            if (evt.error) {
+              const span = document.createElement('span');
+              span.style.color = '#ff6b6b';
+              span.textContent = evt.line + '\n';
+              logEl.appendChild(span);
+            } else {
+              logEl.appendChild(document.createTextNode(evt.line + '\n'));
+            }
+            logEl.scrollTop = logEl.scrollHeight;
+          }
+        } catch {}
+      }
+    }
+    if (buildResult) {
+      if (statusEl) {
+        statusEl.textContent = buildResult.ok ? '✓ Build reussi — image: ' + buildResult.image : '✗ Echec du build';
+        statusEl.style.color = buildResult.ok ? '#4caf50' : '#ff6b6b';
+      }
+      toast(buildResult.ok ? 'Build reussi: ' + buildResult.image : 'Build echoue', buildResult.ok ? 'success' : 'error');
+      if (buildResult.ok) loadTplDockerfiles();
+    }
+  } catch (e) {
+    const logEl = document.getElementById('docker-build-log');
+    const statusEl = document.getElementById('docker-build-status');
+    if (logEl) { logEl.textContent = e.message; logEl.style.color = '#ff6b6b'; }
+    if (statusEl) { statusEl.textContent = '✗ Erreur'; statusEl.style.color = '#ff6b6b'; }
+    toast('Erreur build: ' + e.message, 'error');
+  }
+  _tplDockerfileBuildAbort = null;
+}
+
+async function tplDockerfileDelete(idx) {
+  const p = _tplDockerfiles[idx];
+  if (!p) return;
+  if (!confirm(`Supprimer ${p.name} ?`)) return;
+  if (!p._new) {
+    try {
+      await api('/api/templates/dockerfiles/' + encodeURIComponent(p.name), { method: 'DELETE' });
+    } catch (e) {
+      toast('Erreur: ' + e.message, 'error');
+      return;
+    }
+  }
+  _tplDockerfiles.splice(idx, 1);
+  delete _tplDockerfileDirty[idx];
+  if (_tplDockerfileSel >= _tplDockerfiles.length) _tplDockerfileSel = _tplDockerfiles.length - 1;
+  _tplDockerfilesRender();
+  toast('Dockerfile supprime', 'success');
+}
+
+// ── Template Models (Shared/Models/<culture>/) ──────────
+
+let _tplModels = [];
+let _tplModelSel = -1;
+let _tplModelDirty = {};
+let _tplModelCulture = '';
+
+async function loadTplModels() {
+  try {
+    if (!_allCultures.length) {
+      const cd = await api('/api/templates/cultures');
+      _allCultures = cd.cultures || [];
+      _defaultCulture = cd.default || 'fr-fr';
+    }
+    const sel = document.getElementById('tpl-models-culture-select');
+    if (sel) {
+      const enabled = _allCultures.filter(c => c.enabled);
+      sel.innerHTML = enabled.map(c =>
+        `<option value="${escHtml(c.key)}" ${c.key === (_tplModelCulture || _defaultCulture) ? 'selected' : ''}>${c.flag} ${escHtml(c.key)} — ${escHtml(c.language)}</option>`
+      ).join('');
+      if (!_tplModelCulture) _tplModelCulture = sel.value || _defaultCulture;
+    }
+    const data = await api('/api/templates/models?culture=' + encodeURIComponent(_tplModelCulture));
+    _tplModels = data.models || [];
+    _tplModelSel = _tplModels.length ? 0 : -1;
+    _tplModelDirty = {};
+    _tplModelsRender();
+  } catch (e) {
+    toast('Erreur chargement models: ' + e.message, 'error');
+  }
+}
+
+function tplModelSwitchCulture(culture) {
+  _tplModelCulture = culture;
+  loadTplModels();
+}
+
+function _tplModelsRender() {
+  const items = document.getElementById('tpl-models-items');
+  const editor = document.getElementById('tpl-models-editor');
+  if (!items || !editor) return;
+
+  items.innerHTML = _tplModels.map((p, i) => `
+    <div class="ps-list-item${i === _tplModelSel ? ' active' : ''}${_tplModelDirty[i] ? ' dirty' : ''}" onclick="tplModelSelect(${i})">
+      <span class="ps-list-num">${i + 1}</span>
+      <div class="ps-list-text">
+        <div class="ps-list-name">${escHtml(p.name.replace(/\.md$/, ''))}</div>
+        <div class="ps-list-key">${escHtml(p.name)}</div>
+      </div>
+      <button class="btn-icon ps-list-del" onclick="event.stopPropagation();tplModelDelete(${i})" title="Supprimer">&times;</button>
+    </div>
+  `).join('');
+
+  if (_tplModelSel >= 0 && _tplModels[_tplModelSel]) {
+    const p = _tplModels[_tplModelSel];
+    editor.innerHTML = `
+      <div class="ps-edit-row">
+        <div class="form-group" style="flex:0 0 250px">
+          <label>Fichier</label>
+          <input id="tpl-model-name" value="${escHtml(p.name)}" placeholder="nom.md"
+                 oninput="tplModelUpdateName(this.value)" />
+        </div>
+        <div style="flex:1"></div>
+        <button class="btn btn-primary btn-sm" onclick="tplModelSave()" style="align-self:flex-end;margin-bottom:2px">Sauvegarder</button>
+      </div>
+      <textarea id="tpl-model-content" class="ps-edit-instr" placeholder="Contenu du model..."
+                oninput="_tplModelDirty[${_tplModelSel}]=true;_tplModels[${_tplModelSel}].content=this.value;_tplModelsRenderList()"
+                style="flex:1;min-height:300px">${escHtml(p.content || '')}</textarea>
+    `;
+  } else {
+    editor.innerHTML = '<div class="ps-edit-empty">Selectionnez un model ou ajoutez-en un avec +</div>';
+  }
+}
+
+function _tplModelsRenderList() {
+  const items = document.getElementById('tpl-models-items');
+  if (!items) return;
+  items.querySelectorAll('.ps-list-item').forEach((el, i) => {
+    el.classList.toggle('dirty', !!_tplModelDirty[i]);
+  });
+}
+
+function tplModelSelect(idx) {
+  _tplModelSel = idx;
+  _tplModelsRender();
+}
+
+function tplModelUpdateName(val) {
+  if (_tplModelSel >= 0 && _tplModels[_tplModelSel]) {
+    _tplModels[_tplModelSel].name = val;
+    _tplModelDirty[_tplModelSel] = true;
+    const item = document.querySelectorAll('#tpl-models-items .ps-list-item')[_tplModelSel];
+    if (item) {
+      item.querySelector('.ps-list-name').textContent = val.replace(/\.md$/, '') || '...';
+      item.querySelector('.ps-list-key').textContent = val || '...';
+      item.classList.add('dirty');
+    }
+  }
+}
+
+function tplModelAdd() {
+  _tplModels.push({ name: 'nouveau.md', content: '', _new: true });
+  _tplModelSel = _tplModels.length - 1;
+  _tplModelDirty[_tplModelSel] = true;
+  _tplModelsRender();
+  setTimeout(() => {
+    const inp = document.getElementById('tpl-model-name');
+    if (inp) { inp.focus(); inp.select(); }
+  }, 50);
+}
+
+async function tplModelSave() {
+  const p = _tplModels[_tplModelSel];
+  if (!p) return;
+  const name = (document.getElementById('tpl-model-name')?.value || p.name).trim();
+  const content = document.getElementById('tpl-model-content')?.value ?? p.content;
+  if (!name) { toast('Nom requis', 'error'); return; }
+  if (!name.endsWith('.md')) { toast('Le nom doit finir par .md', 'error'); return; }
+  const jsonErrs = validateJsonBlocks(content);
+  if (jsonErrs.length) { toast(`JSON invalide: ${jsonErrs.join(', ')}`, 'error'); return; }
+  try {
+    await api('/api/templates/models/' + encodeURIComponent(name) + '?culture=' + encodeURIComponent(_tplModelCulture), {
+      method: 'PUT',
+      body: { content }
+    });
+    p.name = name;
+    p.content = content;
+    delete p._new;
+    delete _tplModelDirty[_tplModelSel];
+    _tplModelsRender();
+    toast('Model sauvegarde', 'success');
+  } catch (e) {
+    toast('Erreur: ' + e.message, 'error');
+  }
+}
+
+async function tplModelDelete(idx) {
+  const p = _tplModels[idx];
+  if (!p) return;
+  if (!confirm(`Supprimer ${p.name} ?`)) return;
+  if (!p._new) {
+    try {
+      await api('/api/templates/models/' + encodeURIComponent(p.name) + '?culture=' + encodeURIComponent(_tplModelCulture), { method: 'DELETE' });
+    } catch (e) {
+      toast('Erreur: ' + e.message, 'error');
+      return;
+    }
+  }
+  _tplModels.splice(idx, 1);
+  delete _tplModelDirty[idx];
+  if (_tplModelSel >= _tplModels.length) _tplModelSel = _tplModels.length - 1;
+  _tplModelsRender();
+  toast('Model supprime', 'success');
+}
+
 // ── Shared Agents (Shared/Agents/{id}/) — Split Panel ──────────
 
 let sharedAgentsData = [];
@@ -4648,6 +5026,8 @@ let saAgentData = null;
 let saChatHistory = [];
 let _saLlmNames = [];
 let _saMcpInstalled = [];
+let _saDockerfiles = [];
+let _saDirty = {};  // { info: true, identity: true, 'role:xxx': true, ... }
 
 async function loadSharedAgents() {
   try {
@@ -4689,7 +5069,6 @@ function _renderSaLeft() {
       html += _saMenuItem('identity', '\uD83E\uDEAA', 'Identite', sec);
       html += _saMenuItem('prompt', '\uD83D\uDCDD', 'Prompt', sec);
     }
-    html += _saMenuItem('assign', '\uD83D\uDD00', 'Assignations', sec);
     if (saAgentData.type !== 'orchestrator') {
       html += _saMenuItem('chat', '\uD83D\uDCAC', 'Chat', sec);
       // Roles
@@ -4718,13 +5097,15 @@ function _renderSaLeft() {
 }
 
 function _saMenuItem(key, icon, label, active) {
-  return '<div class="sa-menu-item' + (active === key ? ' active' : '') + '" onclick="_saSetSection(\'' + key + '\')">' + icon + ' ' + escHtml(label) + '</div>';
+  const dirty = _saDirty[key] ? ' dirty' : '';
+  return '<div class="sa-menu-item' + (active === key ? ' active' : '') + dirty + '" onclick="_saSetSection(\'' + key + '\')">' + icon + ' ' + escHtml(label) + '</div>';
 }
 
 function _saSubItem(key, label, active) {
   const type = key.split(':')[0];
   const name = key.split(':').slice(1).join(':');
-  return '<div class="sa-sub-item' + (active === key ? ' active' : '') + '" onclick="_saSetSection(\'' + escHtml(key) + '\')">' +
+  const dirty = _saDirty[key] ? ' dirty' : '';
+  return '<div class="sa-sub-item' + (active === key ? ' active' : '') + dirty + '" onclick="_saSetSection(\'' + escHtml(key) + '\')">' +
     '<span>' + escHtml(label) + '</span>' +
     '<span class="sa-sub-delete" onclick="event.stopPropagation();_saDeleteDynamic(\'' + type + '\',\'' + escHtml(name) + '\')" title="Supprimer">\u2716</span>' +
     '</div>';
@@ -4744,7 +5125,9 @@ async function selectSharedAgent(id) {
   // Load LLM + MCP lists (cached)
   if (!_saLlmNames.length) { try { const d = await api('/api/templates/llm'); _saLlmNames = Object.keys(d.providers || {}); } catch {} }
   if (!_saMcpInstalled.length) { try { const d = await api('/api/mcp/servers'); _saMcpInstalled = Object.keys(d.servers || {}); } catch {} }
+  if (!_saDockerfiles.length) { try { const d = await api('/api/templates/dockerfiles'); _saDockerfiles = (d.files || []).map(f => f.name); } catch {} }
   saChatHistory = [];
+  _saDirty = {};
   if (saActiveSection === 'chat') saActiveSection = 'info';
   _renderSaLeft();
   _renderSaRight();
@@ -4763,18 +5146,16 @@ function _renderSaRight() {
   }
   if (sec === 'info') {
     right.innerHTML = _renderSaInfo(agent, id);
+    _saBindInfoDirty();
     return;
   }
   if (sec === 'identity') {
     right.innerHTML = _renderSaMdEditor('Identite', agent.identity_content || '', '_saSaveIdentity');
+    _saBindMdDirty('identity', agent.identity_content || '');
     return;
   }
   if (sec === 'prompt') {
     right.innerHTML = _renderSaPromptReadonly(agent);
-    return;
-  }
-  if (sec === 'assign') {
-    right.innerHTML = _renderSaAssign(agent, id);
     return;
   }
   // Dynamic: role:xxx, mission:xxx, skill:xxx
@@ -4790,6 +5171,71 @@ function _renderSaRight() {
   const content = item ? item.content : '';
   const filename = prefix + name;
   right.innerHTML = _renderSaDynamicEditor(type, name, content, filename);
+  _saBindMdDirty(sec, content);
+}
+
+// ── Dirty tracking ──
+
+function _saBindInfoDirty() {
+  const ids = ['sa-name', 'sa-desc', 'sa-type', 'sa-llm', 'sa-temp', 'sa-tokens', 'sa-docker-mode', 'sa-docker-image'];
+  for (const fid of ids) {
+    const el = document.getElementById(fid);
+    if (el) el.addEventListener('input', _saCheckInfoDirty);
+    if (el) el.addEventListener('change', _saCheckInfoDirty);
+  }
+  // MCP checkboxes
+  document.querySelectorAll('#sa-mcp-tags input[type=checkbox]').forEach(cb => cb.addEventListener('change', _saCheckInfoDirty));
+  // Deliver checkboxes
+  document.querySelectorAll('[id^="sa-delivers_"]').forEach(cb => cb.addEventListener('change', _saCheckInfoDirty));
+}
+
+function _saCheckInfoDirty() {
+  if (!saAgentData) return;
+  const a = saAgentData;
+  const name = (document.getElementById('sa-name')?.value || '').trim();
+  const desc = document.getElementById('sa-desc')?.value || '';
+  const type = document.getElementById('sa-type')?.value || 'single';
+  const llm = document.getElementById('sa-llm')?.value || '';
+  const temp = parseFloat(document.getElementById('sa-temp')?.value) || 0.3;
+  const tokens = parseInt(document.getElementById('sa-tokens')?.value) || 32768;
+  const dockerMode = document.getElementById('sa-docker-mode')?.checked || false;
+  const dockerImage = document.getElementById('sa-docker-image')?.value || '';
+  const mcp = [...document.querySelectorAll('#sa-mcp-tags input[type=checkbox]:checked')].map(cb => cb.value).sort().join(',');
+  const origMcp = (a.mcp_access || []).slice().sort().join(',');
+  const deliverKeys = ['delivers_docs','delivers_code','delivers_design','delivers_automation','delivers_tasklist','delivers_specs','delivers_contract'];
+  const deliverChanged = deliverKeys.some(k => (document.getElementById('sa-' + k)?.checked || false) !== (!!a[k]));
+  const dirty = name !== (a.name || '') || desc !== (a.description || '') || type !== (a.type || 'single') ||
+    llm !== (a.llm || '') || temp !== (a.temperature ?? 0.3) || tokens !== (a.max_tokens ?? 32768) ||
+    dockerMode !== (!!a.docker_mode) || dockerImage !== (a.docker_image || '') ||
+    mcp !== origMcp || deliverChanged;
+  const wasDirty = !!_saDirty['info'];
+  _saDirty['info'] = dirty;
+  if (dirty !== wasDirty) _saUpdateDirtyMenu('info', dirty);
+}
+
+function _saBindMdDirty(sectionKey, originalContent) {
+  const el = document.getElementById('sa-md-editor') || document.getElementById('sa-dyn-editor');
+  if (!el) return;
+  el.addEventListener('input', () => {
+    const dirty = el.value !== originalContent;
+    const wasDirty = !!_saDirty[sectionKey];
+    _saDirty[sectionKey] = dirty;
+    if (dirty !== wasDirty) _saUpdateDirtyMenu(sectionKey, dirty);
+  });
+}
+
+function _saUpdateDirtyMenu(sectionKey, dirty) {
+  // Update the menu item without full re-render
+  const left = document.getElementById('sa-left');
+  if (!left) return;
+  const items = left.querySelectorAll('.sa-menu-item, .sa-sub-item');
+  for (const item of items) {
+    const onclick = item.getAttribute('onclick') || '';
+    if (onclick.includes("'" + sectionKey + "'")) {
+      item.classList.toggle('dirty', dirty);
+      break;
+    }
+  }
 }
 
 // ── Right panel renderers ──
@@ -4891,25 +5337,38 @@ function _renderSaInfo(agent, id) {
     '<div class="form-group"><label>ID</label><input id="sa-id" value="' + escHtml(id) + '" readonly style="background:var(--bg-secondary)" /></div>' +
     '<div class="form-group"><label>Nom</label><input id="sa-name" value="' + escHtml(agent.name || '') + '" /></div>' +
     '</div>' +
-    '<div class="form-group"><label>Description</label><textarea id="sa-desc" style="min-height:60px">' + escHtml(agent.description || '') + '</textarea></div>' +
+    '<div class="form-group"><label>Description</label><textarea id="sa-desc" style="min-height:210px">' + escHtml(agent.description || '') + '</textarea></div>' +
     '<div class="form-row">' +
     '<div class="form-group"><label>Type</label><select id="sa-type" onchange="_saTypeChanged(this.value)">' +
       '<option value="single"' + ((agent.type || 'single') === 'single' ? ' selected' : '') + '>Single</option>' +
       '<option value="pipeline"' + (agent.type === 'pipeline' ? ' selected' : '') + '>Pipeline</option>' +
       '<option value="orchestrator"' + (agent.type === 'orchestrator' ? ' selected' : '') + '>Orchestrator</option>' +
     '</select></div>' +
-    '<div class="form-group"><label>Modele LLM</label><select id="sa-llm">' + llmOptions + '</select></div>' +
     '<div class="form-group"><label>Temperature</label><input id="sa-temp" type="number" step="0.1" min="0" max="2" value="' + (agent.temperature ?? 0.3) + '" /></div>' +
     '<div class="form-group"><label>Max Tokens</label><input id="sa-tokens" type="number" value="' + (agent.max_tokens ?? 32768) + '" /></div>' +
     '</div>' +
+    '<div class="form-row" style="align-items:flex-end">' +
+    '<div class="form-group"><label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer"><input type="checkbox" id="sa-docker-mode" ' + (agent.docker_mode ? 'checked' : '') + ' onchange="_saDockerModeChanged(this.checked)" /> Mode Docker</label></div>' +
+    '<div class="form-group" id="sa-llm-group" style="flex:1;' + (agent.docker_mode ? 'display:none' : '') + '"><label>Modele LLM</label><select id="sa-llm">' + llmOptions + '</select></div>' +
+    '<div class="form-group" id="sa-docker-group" style="flex:1;' + (agent.docker_mode ? '' : 'display:none') + '"><label>Image Docker</label><select id="sa-docker-image">' +
+      '<option value="">-- Aucune --</option>' + _saDockerfiles.map(f => '<option value="' + escHtml(f) + '" ' + (f === (agent.docker_image || '') ? 'selected' : '') + '>' + escHtml(f) + '</option>').join('') +
+    '</select></div>' +
+    '</div>' +
     '<div class="form-group"><label>Services MCP</label><div class="mcp-check-tags" id="sa-mcp-tags">' + mcpTags + '</div></div>' +
-    '<div class="form-group"><label>Type de livrable</label><div style="display:flex;flex-wrap:wrap;gap:1.5rem;margin-top:0.25rem">' + deliverHtml + '</div></div>';
+    '<div class="form-group"><label>Type de services</label><div style="display:flex;flex-wrap:wrap;gap:1.5rem;margin-top:0.25rem">' + deliverHtml + '</div></div>';
 }
 
 function _saTypeChanged(newType) {
   if (!saAgentData) return;
   saAgentData.type = newType;
   _renderSaLeft();
+}
+
+function _saDockerModeChanged(checked) {
+  const llmGroup = document.getElementById('sa-llm-group');
+  const dockerGroup = document.getElementById('sa-docker-group');
+  if (llmGroup) llmGroup.style.display = checked ? 'none' : '';
+  if (dockerGroup) dockerGroup.style.display = checked ? '' : 'none';
 }
 
 function _composeAgentPrompt(agent) {
@@ -4942,16 +5401,6 @@ function _renderSaMdEditor(title, content, saveFn, hasGenerate) {
     '<textarea id="sa-md-editor">' + escHtml(content) + '</textarea></div>';
 }
 
-function _renderSaAssign(agent, id) {
-  return '<div class="sa-editor-wrap"><div class="sa-right-header"><h3>Assignations</h3><button class="btn btn-primary btn-sm" onclick="saveSharedAgentAssign(\'' + escHtml(id) + '\')">Sauvegarder</button></div>' +
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem"><label style="margin:0">Exemples de routing correct</label>' +
-    '<button class="btn btn-outline btn-sm" id="sa-btn-gen-assign" onclick="generateSharedAgentAssign(\'' + escHtml(id) + '\')" title="Generer">\u2728</button></div>' +
-    '<textarea id="sa-assign-edit">' + escHtml(agent.assign_content || '') + '</textarea>' +
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:0.5rem;margin-bottom:0.5rem"><label style="margin:0">Exemples de routing incorrect</label>' +
-    '<button class="btn btn-outline btn-sm" id="sa-btn-gen-unassign" onclick="generateSharedAgentUnassign(\'' + escHtml(id) + '\')" title="Generer">\u2728</button></div>' +
-    '<textarea id="sa-unassign-edit">' + escHtml(agent.unassign_content || '') + '</textarea></div>';
-}
-
 function _renderSaDynamicEditor(type, name, content, filename) {
   const typeLabels = { role: 'Role', mission: 'Mission', skill: 'Competence' };
   return '<div class="sa-editor-wrap"><div class="sa-right-header"><h3>' + (typeLabels[type] || type) + ' — ' + escHtml(name) + '</h3><button class="btn btn-primary btn-sm" onclick="_saSaveDynamic(\'' + escHtml(filename) + '\')">Sauvegarder</button></div>' +
@@ -4965,6 +5414,8 @@ async function _saSaveIdentity() {
   try {
     await api('/api/shared-agents/' + encodeURIComponent(saSelectedId), { method: 'PUT', body: { id: saSelectedId, identity_content: content } });
     saAgentData.identity_content = content;
+    delete _saDirty['identity'];
+    _renderSaLeft();
     toast('Identite sauvegardee', 'success');
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -4985,6 +5436,7 @@ async function _saSaveDynamic(filename) {
   try {
     await api('/api/shared-agents/' + encodeURIComponent(saSelectedId) + '/files/' + encodeURIComponent(filename), { method: 'PUT', body: { content } });
     toast('Fichier sauvegarde', 'success');
+    delete _saDirty[saActiveSection];
     // Refresh agent data
     saAgentData = await api('/api/shared-agents/' + encodeURIComponent(saSelectedId));
     _renderSaLeft();
@@ -5030,53 +5482,6 @@ async function _saDeleteDynamic(type, name) {
 
 // ── Existing functions (adapted) ──
 
-async function saveSharedAgentAssign(id) {
-  const assignContent = document.getElementById('sa-assign-edit').value;
-  const unassignContent = document.getElementById('sa-unassign-edit').value;
-  try {
-    await api('/api/shared-agents/' + encodeURIComponent(id), { method: 'PUT', body: {
-      id, assign_content: assignContent, unassign_content: unassignContent
-    }});
-    saAgentData.assign_content = assignContent;
-    saAgentData.unassign_content = unassignContent;
-    toast('Assignations sauvegardees', 'success');
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-async function generateSharedAgentAssign(id) {
-  const name = saAgentData?.name || id;
-  const prompt = saAgentData?.prompt_content || '';
-  const editor = document.getElementById('sa-assign-edit');
-  const btn = document.getElementById('sa-btn-gen-assign');
-  const savedContent = editor.value;
-  const savedBtn = btn.innerHTML;
-  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Generation...';
-  editor.disabled = true; editor.value = 'Generation en cours...';
-  try {
-    const result = await api('/api/agents/generate-assign', { method: 'POST', body: { agent_id: id, agent_name: name, agent_prompt: prompt }});
-    editor.disabled = false; editor.value = result.content || '';
-    toast('Exemples d\'assignation generes', 'success');
-  } catch (e) { editor.disabled = false; editor.value = savedContent; toast(e.message, 'error'); }
-  finally { btn.disabled = false; btn.innerHTML = savedBtn; }
-}
-
-async function generateSharedAgentUnassign(id) {
-  const name = saAgentData?.name || id;
-  const prompt = saAgentData?.prompt_content || '';
-  const editor = document.getElementById('sa-unassign-edit');
-  const btn = document.getElementById('sa-btn-gen-unassign');
-  const savedContent = editor.value;
-  const savedBtn = btn.innerHTML;
-  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Generation...';
-  editor.disabled = true; editor.value = 'Generation en cours...';
-  try {
-    const result = await api('/api/agents/generate-unassign', { method: 'POST', body: { agent_id: id, agent_name: name, agent_prompt: prompt }});
-    editor.disabled = false; editor.value = result.content || '';
-    toast('Exemples de non-assignation generes', 'success');
-  } catch (e) { editor.disabled = false; editor.value = savedContent; toast(e.message, 'error'); }
-  finally { btn.disabled = false; btn.innerHTML = savedBtn; }
-}
-
 function showCreateSharedAgentModal() {
   showModal('<div class="modal-header"><h3>Nouvel agent</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
     '<div class="form-group"><label>ID unique (lettres, chiffres, _)</label><input id="sa-new-id" placeholder="mon_agent" pattern="[a-zA-Z0-9_]+" oninput="this.value=this.value.replace(/[^a-zA-Z0-9_]/g,\'\')" /></div>' +
@@ -5104,6 +5509,8 @@ async function saveSharedAgent(id) {
   const llm = document.getElementById('sa-llm')?.value || '';
   const temperature = parseFloat(document.getElementById('sa-temp')?.value) || 0.3;
   const max_tokens = parseInt(document.getElementById('sa-tokens')?.value) || 32768;
+  const docker_mode = document.getElementById('sa-docker-mode')?.checked || false;
+  const docker_image = document.getElementById('sa-docker-image')?.value || '';
   const mcp_access = [...document.querySelectorAll('#sa-mcp-tags input[type=checkbox]:checked')].map(cb => cb.value);
   const delivers_docs = document.getElementById('sa-delivers_docs')?.checked || false;
   const delivers_code = document.getElementById('sa-delivers_code')?.checked || false;
@@ -5115,7 +5522,7 @@ async function saveSharedAgent(id) {
   if (!name) { toast('Nom requis', 'error'); return; }
   try {
     await api('/api/shared-agents/' + encodeURIComponent(id), { method: 'PUT', body: {
-      id, name, description, type, llm, temperature, max_tokens, mcp_access, delivers_docs, delivers_code, delivers_design, delivers_automation, delivers_tasklist, delivers_specs, delivers_contract
+      id, name, description, type, llm, temperature, max_tokens, docker_mode, docker_image, mcp_access, delivers_docs, delivers_code, delivers_design, delivers_automation, delivers_tasklist, delivers_specs, delivers_contract
     }});
     toast('Agent sauvegarde', 'success');
     const ag = sharedAgentsData.find(a => a.id === id);
@@ -5123,6 +5530,20 @@ async function saveSharedAgent(id) {
     saAgentData.name = name;
     saAgentData.description = description;
     saAgentData.type = type;
+    saAgentData.llm = llm;
+    saAgentData.temperature = temperature;
+    saAgentData.max_tokens = max_tokens;
+    saAgentData.docker_mode = docker_mode;
+    saAgentData.docker_image = docker_image;
+    saAgentData.mcp_access = mcp_access;
+    saAgentData.delivers_docs = delivers_docs;
+    saAgentData.delivers_code = delivers_code;
+    saAgentData.delivers_design = delivers_design;
+    saAgentData.delivers_automation = delivers_automation;
+    saAgentData.delivers_tasklist = delivers_tasklist;
+    saAgentData.delivers_specs = delivers_specs;
+    saAgentData.delivers_contract = delivers_contract;
+    delete _saDirty['info'];
     _renderSaLeft();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -5216,12 +5637,22 @@ function renderTplLLM() {
   const throttling = tplLlmData.throttling || {};
   const defaultId = tplLlmData.default || '';
 
-  // Default select
+  // Default select (agents)
   const sel = document.getElementById('tpl-llm-default-select');
   sel.innerHTML = `<option value="">-- Aucun --</option>` +
     Object.entries(providers).map(([id, p]) =>
       `<option value="${escHtml(id)}" ${id === defaultId ? 'selected' : ''}>${escHtml(id)} — ${escHtml(p.description || p.model)}</option>`
     ).join('');
+
+  // Admin LLM select (dashboard)
+  const adminId = tplLlmData.admin_llm || '';
+  const adminSel = document.getElementById('tpl-llm-admin-select');
+  if (adminSel) {
+    adminSel.innerHTML = `<option value="">-- Meme que defaut --</option>` +
+      Object.entries(providers).map(([id, p]) =>
+        `<option value="${escHtml(id)}" ${id === adminId ? 'selected' : ''}>${escHtml(id)} — ${escHtml(p.description || p.model)}</option>`
+      ).join('');
+  }
 
   // Providers table
   const tbl = document.getElementById('tpl-llm-providers-table');
@@ -5293,6 +5724,15 @@ async function setTplLLMDefault(providerId) {
   try {
     await api('/api/templates/llm', { method: 'PUT', body: tplLlmData });
     toast('Modele par defaut du template mis a jour', 'success');
+    loadTplLLM();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function setTplLLMAdmin(providerId) {
+  tplLlmData.admin_llm = providerId;
+  try {
+    await api('/api/templates/llm', { method: 'PUT', body: tplLlmData });
+    toast('LLM Admin mis a jour', 'success');
     loadTplLLM();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -5762,15 +6202,18 @@ function renderTplTeams() {
     const agentEntries = tpl ? Object.entries(tpl.agents) : [];
     const mcpAccess = tpl ? (tpl.mcp_access || {}) : {};
     const dir = t.directory || '';
+    const orchPromptOk = tpl ? !!tpl.orchestrator_prompt_exists : false;
+    const reportExists = tpl ? !!tpl.report_exists : false;
 
-    const orchId = t.orchestrator || '';
+    const orchId = t.orchestrator || agentEntries.find(([, a]) => a.type === 'orchestrator')?.[0] || '';
     const agentCards = agentEntries.map(([aid, a]) => {
       const mcpList = mcpAccess[aid] || [];
-      const isOrch = aid === orchId;
-      return `<div class="agent-card${isOrch ? ' agent-orchestrator' : ''}" style="cursor:pointer">
+      const isOrch = aid === orchId || a.type === 'orchestrator';
+      const orchBorder = isOrch ? (orchPromptOk ? 'box-shadow:0 0 0 2px rgba(212,175,55,0.5)' : 'box-shadow:0 0 0 2px rgba(220,80,80,0.45)') : '';
+      return `<div class="agent-card${isOrch ? ' agent-orchestrator' : ''}" style="cursor:pointer;${orchBorder}">
         <div class="agent-card-header">
           <div onclick="editTplAgent('${escHtml(dir)}','${escHtml(aid)}')" style="flex:1;cursor:pointer">
-            <h4>${isOrch ? '<span class="orch-badge" title="Orchestrateur">&#9733;</span> ' : ''}${escHtml(a.name)}</h4>
+            <h4>${isOrch ? '<span class="orch-badge" title="Orchestrateur">&#9733;</span> ' : ''}${escHtml(a.name)}${a.docker_mode ? ' <svg title="Docker" width="18" height="13" viewBox="0 0 256 185" style="vertical-align:middle;margin-left:4px"><path fill="#0db7ed" d="M250 87c-3-2-10-4-18-3-2-13-10-24-19-31l-4-2-2 4c-3 5-5 12-4 18 0 4 1 8 3 12-5 2-13 4-24 4H1l-1 4c-1 12 2 27 9 38 8 12 20 18 36 18 34 0 60-16 72-49 5 0 15 0 20-10l1-2-3-1zM28 81H8v20h20V81zm26 0H34v20h20V81zm26 0H60v20h20V81zm26 0H86v20h20V81zm-78-24H8v20h20V57zm26 0H34v20h20V57zm26 0H60v20h20V57zm26 0H86v20h20V57zm0-24H86v20h20V33z"/></svg>' : ''}</h4>
             <code style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(aid)}</code>
           </div>
           ${isOrch ? '' : `<button class="btn-icon danger" onclick="event.stopPropagation();deleteTplAgent('${escHtml(dir)}','${escHtml(aid)}')" title="Supprimer">
@@ -5800,11 +6243,15 @@ function renderTplTeams() {
           </h3>
           <span class="tag tag-blue" style="margin-left:0.5rem">${agentEntries.length} agent${agentEntries.length > 1 ? 's' : ''}</span>
         </div>
-        <div style="display:flex;gap:0.5rem">
+        <div style="display:flex;gap:0.5rem;align-items:center">
+          ${reportExists ? `<button class="btn-icon" onclick="event.stopPropagation();showTplTeamReport('${escHtml(dir)}')" title="Voir le rapport de coherence" style="opacity:0.7;color:var(--accent)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+          </button>` : ''}
           <button class="btn-icon" onclick="event.stopPropagation();editTplTeamQuick(${i})" title="Modifier l'equipe" style="opacity:0.5">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
           </button>
           <button class="btn btn-primary btn-sm" onclick="showAddTplAgentModal('${escHtml(dir)}')">+ Agent</button>
+          <button class="btn btn-outline btn-sm" id="btn-coherence-tpl-${escHtml(dir)}" onclick="checkTplTeamCoherence('${escHtml(dir)}')">Verifier</button>
           <button class="btn btn-outline btn-sm" id="btn-wf-tpl-${escHtml(dir)}" onclick="showTplWorkflow('${escHtml(dir)}')">Workflow</button>
           <button class="btn btn-outline btn-sm" onclick="showTplRawRegistry('${escHtml(dir)}')">Raw</button>
           <button class="btn btn-outline btn-sm" onclick="copyTplRegistry('${escHtml(dir)}')">Copier</button>
@@ -5827,6 +6274,41 @@ function renderTplTeams() {
     const dir = t.directory || '';
     _wfCheckStatus(dir, '/api/templates/workflow', '/api/templates/registry', 'tpl');
   });
+}
+
+async function checkTplTeamCoherence(dir) {
+  const btn = document.getElementById('btn-coherence-tpl-' + dir);
+  if (btn) { btn.disabled = true; btn.textContent = 'Analyse...'; }
+  try {
+    const res = await api('/api/templates/teams/' + encodeURIComponent(dir) + '/coherence/check', { method: 'POST' });
+    toast('Rapport de coherence genere', 'success');
+    await loadTplTeamsList();
+    showTplTeamReport(dir);
+  } catch (e) {
+    toast(e.message || 'Erreur lors de la verification', 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Verifier'; }
+  }
+}
+
+async function showTplTeamReport(dir) {
+  try {
+    const res = await api('/api/templates/teams/' + encodeURIComponent(dir) + '/coherence/report');
+    const content = res.content || '';
+    showModal(`
+      <div class="modal-header">
+        <h3>Rapport de coherence — ${escHtml(dir)}</h3>
+        <button class="btn-icon" onclick="closeModal()">&times;</button>
+      </div>
+      <pre id="coherence-report-content" style="background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;padding:0.75rem;font-size:0.75rem;height:400px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;color:var(--text-primary)">${escHtml(content)}</pre>
+      <div class="modal-actions">
+        <button class="btn btn-outline" onclick="copyToClipboard(document.getElementById('coherence-report-content')?.textContent||'').then(()=>toast('Copie dans le presse-papier','success'))">Copier</button>
+        <button class="btn btn-outline" onclick="closeModal()">Fermer</button>
+      </div>
+    `, 'modal-wide');
+  } catch (e) {
+    toast(e.message || 'Rapport introuvable', 'error');
+  }
 }
 
 async function showAddTplAgentModal(dir) {
@@ -5950,9 +6432,9 @@ async function editTplAgent(dir, agentId) {
       <button class="btn-icon" onclick="closeModal()">&times;</button>
     </div>
     <div class="prompt-tabs" style="margin-bottom:0.5rem">
-      <div class="prompt-tab active" id="tpl-modal-tab-info" onclick="switchTplModalTab('info')">Signaletique</div>
+      <div class="prompt-tab active" id="tpl-modal-tab-info" onclick="switchTplModalTab('info')">Identite</div>
       <div class="prompt-tab" id="tpl-modal-tab-prompt" onclick="switchTplModalTab('prompt')">Prompt</div>
-      <div class="prompt-tab" id="tpl-modal-tab-pipeline" onclick="switchTplModalTab('pipeline')" style="${hasPipeline ? '' : 'display:none'}">Pipeline</div>
+      <div class="prompt-tab" id="tpl-modal-tab-manager" onclick="switchTplModalTab('manager')">Manager</div>
     </div>
     <div id="tpl-modal-pane-info">
       <div class="form-row">
@@ -5979,7 +6461,7 @@ async function editTplAgent(dir, agentId) {
         <label>Type</label>
         <select id="tpl-agent-edit-type" onchange="_onTplTypeChange(this.value)">
           <option value="single" ${curType==='single'?'selected':''}>Single</option>
-          <option value="pipeline" ${curType==='pipeline'?'selected':''}>Pipeline</option>
+          <option value="pipeline" ${curType==='pipeline'?'selected':''}>Manager</option>
           <option value="orchestrator" ${curType==='orchestrator'?'selected':''} ${hasOtherOrch && curType!=='orchestrator'?'disabled':''}>Orchestrator</option>
         </select>
       </div>
@@ -5988,7 +6470,7 @@ async function editTplAgent(dir, agentId) {
         <div style="display:flex;flex-wrap:wrap;gap:0.35rem;margin-top:0.25rem">${mcpReadOnly}</div>
       </div>
       <div class="form-group">
-        <label>Type de livrable</label>
+        <label>Type de services</label>
         <div style="display:flex;flex-wrap:wrap;gap:0.35rem;margin-top:0.25rem">${delivTags}</div>
       </div>
     </div>
@@ -6004,30 +6486,65 @@ async function editTplAgent(dir, agentId) {
         <div id="tpl-pipeline-steps" class="pipeline-steps-container"></div>
       </div>
     </div>
+    <div id="tpl-modal-pane-manager" style="display:none">
+      <div class="form-group">
+        <label>Agents sous responsabilite</label>
+        <div id="tpl-manager-agents" style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-top:0.35rem"></div>
+      </div>
+    </div>
     <div class="modal-actions">
       ${isOrchestrator ? '<button class="btn btn-outline" onclick="buildTeamOrchestratorPrompt(\'' + escHtml(dir) + '\')" style="gap:0.3rem">&#9881; Construire prompt</button>' : ''}
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
       <button class="btn btn-primary" onclick="saveTplAgent('${escHtml(dir)}','${escHtml(agentId)}')">Sauvegarder</button>
     </div>
-  `, 'modal-wide');
+  `, 'modal-agent-edit');
   // Set prompt after modal creation to avoid template literal issues with backticks
   const promptEl = document.getElementById('tpl-agent-prompt-preview');
   if (promptEl) promptEl.innerHTML = promptHtml;
   renderPipelineSteps('tpl-pipeline-steps', a.pipeline_steps || []);
+
+  // Populate manager agents list
+  const delegatesTo = a.delegates_to || [];
+  // Collect agents already managed by another agent (not this one)
+  const alreadyManaged = new Set();
+  Object.entries(tpl.agents || {}).forEach(([aid, ag]) => {
+    if (aid !== agentId && ag.delegates_to) {
+      ag.delegates_to.forEach(sub => alreadyManaged.add(sub));
+    }
+  });
+  const managerEl = document.getElementById('tpl-manager-agents');
+  if (managerEl) {
+    const chips = Object.entries(tpl.agents || {})
+      .filter(([aid, ag]) => aid !== agentId && ag.type !== 'orchestrator' && !alreadyManaged.has(aid))
+      .map(([aid, ag]) => {
+        const checked = delegatesTo.includes(aid);
+        return `<label class="mcp-chip${checked ? ' active' : ''}" title="${escHtml(aid)}">
+          <input type="checkbox" class="tpl-delegate-cb" value="${escHtml(aid)}" ${checked ? 'checked' : ''} onchange="this.parentElement.classList.toggle('active',this.checked)" />
+          ${escHtml(ag.name || aid)}
+        </label>`;
+      }).join('');
+    managerEl.innerHTML = chips || '<span style="color:var(--text-secondary);font-size:0.85rem">Aucun agent disponible</span>';
+  }
 }
 
 async function buildTeamOrchestratorPrompt(teamDir) {
+  const modalBtns = document.querySelectorAll('.modal-overlay button, .modal-overlay .btn');
+  modalBtns.forEach(b => { b.disabled = true; b.style.opacity = '0.5'; b.style.pointerEvents = 'none'; });
   try {
     const res = await api('/api/templates/teams/' + encodeURIComponent(teamDir) + '/orchestrator/build', { method: 'POST' });
     toast('Prompt orchestrateur genere', 'success');
-    showModal('<div class="modal-header"><h3>Prompt orchestrateur — ' + escHtml(teamDir) + '</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
-      '<textarea readonly rows="20" style="width:100%;font-family:monospace;font-size:0.8rem;background:var(--bg-secondary);border:1px solid var(--border);padding:0.5rem;resize:vertical">' + escHtml(res.content || '') + '</textarea>' +
-      '<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Fermer</button></div>', 'modal-wide');
+    const preview = document.getElementById('tpl-agent-prompt-preview');
+    if (preview) {
+      const html = typeof marked !== 'undefined' ? marked.parse(res.content || '') : escHtml(res.content || '');
+      preview.innerHTML = html;
+    }
+    switchTplModalTab('prompt');
   } catch (e) { toast(e.message, 'error'); }
+  modalBtns.forEach(b => { b.disabled = false; b.style.opacity = ''; b.style.pointerEvents = ''; });
 }
 
 function switchTplModalTab(tab) {
-  ['info', 'prompt', 'pipeline'].forEach(t => {
+  ['info', 'prompt', 'pipeline', 'manager'].forEach(t => {
     const pane = document.getElementById('tpl-modal-pane-' + t);
     const tabEl = document.getElementById('tpl-modal-tab-' + t);
     if (pane) pane.style.display = t === tab ? '' : 'none';
@@ -6052,11 +6569,13 @@ async function saveTplAgent(dir, agentId) {
     toast('Un orchestrator existe deja dans cette equipe', 'error'); return;
   }
   const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('tpl-pipeline-steps') : [];
+  const delegates_to = Array.from(document.querySelectorAll('.tpl-delegate-cb:checked')).map(cb => cb.value);
   try {
     await api(`/api/templates/agents/${encodeURIComponent(agentId)}`, { method: 'PUT', body: {
       id: agentId, name: agentId,
       type: agentType,
       pipeline_steps,
+      delegates_to,
       team_id: dir,
     }});
     toast('Agent sauvegarde', 'success');

@@ -58,6 +58,7 @@
 .sa-menu-item { padding: 5px 10px 5px 16px; cursor: pointer; border-radius: 4px; font-size: 0.82rem; display: flex; align-items: center; gap: 6px; }
 .sa-menu-item:hover { background: var(--bg-input); }
 .sa-menu-item.active { background: var(--bg-input); color: var(--accent-primary); font-weight: 600; }
+.sa-menu-item.dirty::after, .sa-sub-item.dirty::after { content: ' *'; color: #f59e0b; font-weight: 700; }
 .sa-sub-item { padding: 4px 10px 4px 32px; cursor: pointer; border-radius: 4px; font-size: 0.78rem; color: var(--text-secondary); display: flex; align-items: center; justify-content: space-between; }
 .sa-sub-item:hover { background: var(--bg-input); }
 .sa-sub-item.active { background: var(--bg-input); color: var(--accent-primary); }
@@ -432,6 +433,11 @@ tr:hover { background: rgba(255,255,255,0.02); }
 
 .modal.modal-wide { max-width: 950px; }
 .modal.modal-agent { max-width: 1050px; max-height: 95vh; min-height: 85vh; }
+.modal.modal-agent-edit { width: 750px; height: 750px; max-width: 95vw; max-height: 95vh; overflow: hidden; display: flex; flex-direction: column; }
+.modal.modal-agent-edit .modal-header { flex-shrink: 0; }
+.modal.modal-agent-edit .prompt-tabs { flex-shrink: 0; }
+.modal.modal-agent-edit [id*="modal-pane"] { flex: 1; overflow-y: auto; }
+.modal.modal-agent-edit .modal-actions { flex-shrink: 0; }
 .modal.modal-lg { max-width: 700px; }
 
 .modal-header h3 { font-size: 1.1rem; }
@@ -1246,6 +1252,10 @@ tr:hover { background: rgba(255,255,255,0.02); }
 .ps-list-item:hover .ps-list-del { opacity: 1; }
 .ps-list-del:hover { color: #ef4444; }
 .ps-list-item.dirty .ps-list-name::after { content: ' *'; color: #f59e0b; }
+
+/* CodeMirror integration */
+#tpl-dockerfile-cm .CodeMirror { height: 100%; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
+#tpl-dockerfile-cm { display: flex; flex-direction: column; }
 
 /* Right: editor */
 .ps-editor {
