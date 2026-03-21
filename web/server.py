@@ -93,17 +93,15 @@ LLM_PROVIDERS_FILE = CONFIGS / "llm_providers.json"
 TEAMS_FILE = CONFIGS / "teams.json"
 SHARED_GIT_FILE = SHARED_DIR / "git.json"
 CONFIGS_GIT_FILE = CONFIGS / "git.json"
-GIT_SERVICE_FILE = CONFIGS / "git_service.json"        # Templates scope
-CFG_GIT_SERVICE_FILE = CONFIGS / "cfg_git_service.json"  # Config scope
 SHARED_TEAMS_DIR = SHARED_DIR / "Teams"
 SHARED_AGENTS_DIR = SHARED_DIR / "Agents"
-SHARED_LLM_FILE = SHARED_TEAMS_DIR / "llm_providers.json"
+SHARED_LLM_FILE = SHARED_DIR / "llm_providers.json"
 SHARED_MCP_FILE = SHARED_TEAMS_DIR / "mcp_servers.json"
 SHARED_TEAMS_FILE = SHARED_TEAMS_DIR / "teams.json"
-MAIL_FILE = CONFIGS / "mail.json"
-DISCORD_FILE = CONFIGS / "discord.json"
-HITL_FILE = CONFIGS / "hitl.json"
-OTHERS_FILE = CONFIGS / "others.json"
+MAIL_FILE = SHARED_DIR / "mail.json"
+DISCORD_FILE = SHARED_DIR / "discord.json"
+HITL_FILE = SHARED_DIR / "hitl.json"
+OTHERS_FILE = SHARED_DIR / "others.json"
 OUTLINE_FILE = CONFIGS / "outline.json"
 
 logging.basicConfig(
@@ -761,16 +759,24 @@ async def get_agents():
         agents = data.get("agents", {})
         result = {}
         for aid, acfg in agents.items():
+            # Merge catalog properties (name, llm, temperature, etc.) with registry overrides
+            catalog = {}
+            for cat_dir in [CFG_AGENTS_DIR / aid, SHARED_AGENTS_DIR / aid]:
+                cat_file = cat_dir / "agent.json"
+                if cat_file.exists():
+                    catalog = json.loads(cat_file.read_text(encoding="utf-8"))
+                    break
+            merged = {**catalog, **acfg, "id": aid}
             prompt_file = tdir / acfg.get("prompt", f"{aid}.md")
             prompt_content = ""
             if prompt_file.exists():
                 prompt_content = prompt_file.read_text(encoding="utf-8")
-            # For orchestrator type, load orchestrator_prompt.md from team dir
             if acfg.get("type") == "orchestrator":
                 orch_prompt_file = tdir / "orchestrator_prompt.md"
                 if orch_prompt_file.exists():
                     prompt_content = orch_prompt_file.read_text(encoding="utf-8")
-            result[aid] = {**acfg, "prompt_content": prompt_content}
+            merged["prompt_content"] = prompt_content
+            result[aid] = merged
         mcp_access = _read_json(tdir / "agent_mcp_access.json") if (tdir / "agent_mcp_access.json").exists() else {}
         groups.append({
             "team_id": tid,
@@ -794,7 +800,6 @@ class AgentConfig(BaseModel):
     prompt_content: str = ""
     llm: str = ""
     type: str = ""
-    pipeline_steps: list = []
     delegates_to: list = []
     team_id: str = "default"
     delivers_docs: bool | None = None
@@ -810,7 +815,7 @@ class AgentConfig(BaseModel):
 async def add_agent(cfg: AgentConfig):
     """Add an agent reference to a config team directory.
 
-    Only stores type (+ pipeline_steps if applicable).
+    Only stores type.
     Agent properties come from Shared/Agents/{id}/agent.json.
     """
     tdir = _team_dir(cfg.team_id)
@@ -825,12 +830,10 @@ async def add_agent(cfg: AgentConfig):
         data["agents"] = {}
     if cfg.id in data["agents"]:
         raise HTTPException(409, f"Agent {cfg.id} already exists")
-    # Store only reference: type + pipeline_steps
+    # Store only reference: type
     agent_data: dict = {}
     if cfg.type:
         agent_data["type"] = cfg.type
-    if cfg.pipeline_steps:
-        agent_data["pipeline_steps"] = cfg.pipeline_steps
     data["agents"][cfg.id] = agent_data
     _write_json(registry_path, data)
     return {"ok": True}
@@ -840,7 +843,7 @@ async def add_agent(cfg: AgentConfig):
 async def update_agent(agent_id: str, cfg: AgentConfig):
     """Update an agent reference in a config team directory.
 
-    Only type and pipeline_steps can be overridden per-team.
+    Only type can be overridden per-team.
     """
     tdir = _team_dir(cfg.team_id)
     registry_path = tdir / "agents_registry.json"
@@ -850,10 +853,6 @@ async def update_agent(agent_id: str, cfg: AgentConfig):
     existing = data["agents"][agent_id]
     if cfg.type:
         existing["type"] = cfg.type
-    if cfg.pipeline_steps:
-        existing["pipeline_steps"] = cfg.pipeline_steps
-    elif "pipeline_steps" in existing:
-        del existing["pipeline_steps"]
     # delegates_to: list of agent keys this pipeline agent can delegate to
     old_delegates = existing.get("delegates_to", [])
     if cfg.delegates_to:
@@ -1349,37 +1348,56 @@ def _list_shared_agents() -> list[dict]:
     return agents
 
 
-@app.get("/api/shared-agents")
-async def get_shared_agents():
-    return {"agents": _list_shared_agents()}
+CFG_AGENTS_DIR = CONFIGS / "Agents"
 
 
-@app.get("/api/shared-agents/{agent_id}")
-async def get_shared_agent(agent_id: str):
-    agent_dir = SHARED_AGENTS_DIR / agent_id
+def _list_agents(base_dir: Path) -> list[dict]:
+    """List all agents from a base_dir/*/agent.json."""
+    base_dir.mkdir(parents=True, exist_ok=True)
+    agents = []
+    for d in sorted(base_dir.iterdir()):
+        if d.is_dir():
+            cfg_file = d / "agent.json"
+            if cfg_file.exists():
+                cfg = json.loads(cfg_file.read_text(encoding="utf-8"))
+                cfg["id"] = d.name
+                prompt_file = d / "prompt.md"
+                if prompt_file.exists():
+                    cfg["prompt_content"] = prompt_file.read_text(encoding="utf-8")
+                cfg["role_names"] = []
+                cfg["mission_names"] = []
+                cfg["skill_names"] = []
+                for f in sorted(d.iterdir()):
+                    if not f.is_file() or f.suffix != ".md":
+                        continue
+                    stem = f.stem
+                    if stem.startswith("role_"):
+                        cfg["role_names"].append(stem[5:])
+                    elif stem.startswith("mission_"):
+                        cfg["mission_names"].append(stem[8:])
+                    elif stem.startswith("skill_"):
+                        cfg["skill_names"].append(stem[6:])
+                agents.append(cfg)
+    return agents
+
+
+def _get_agent_detail(base_dir: Path, agent_id: str) -> dict:
+    agent_dir = base_dir / agent_id
     cfg_file = agent_dir / "agent.json"
     if not cfg_file.exists():
         raise HTTPException(404, f"Agent '{agent_id}' introuvable")
     cfg = json.loads(cfg_file.read_text(encoding="utf-8"))
     cfg["id"] = agent_id
-    prompt_file = agent_dir / "prompt.md"
-    if prompt_file.exists():
-        cfg["prompt_content"] = prompt_file.read_text(encoding="utf-8")
-    assign_file = agent_dir / f"{agent_id}_assign.md"
-    if assign_file.exists():
-        cfg["assign_content"] = assign_file.read_text(encoding="utf-8")
-    unassign_file = agent_dir / f"{agent_id}_unassign.md"
-    if unassign_file.exists():
-        cfg["unassign_content"] = unassign_file.read_text(encoding="utf-8")
-    # Extended files: identity, roles, missions, skills
-    identity_file = agent_dir / "identity.md"
-    cfg["identity_content"] = identity_file.read_text(encoding="utf-8") if identity_file.exists() else ""
+    for key, fname in [("prompt_content", "prompt.md"), ("assign_content", f"{agent_id}_assign.md"),
+                        ("unassign_content", f"{agent_id}_unassign.md"), ("identity_content", "identity.md")]:
+        fpath = agent_dir / fname
+        cfg[key] = fpath.read_text(encoding="utf-8") if fpath.exists() else ""
     cfg["roles"] = []
     cfg["missions"] = []
     cfg["skills"] = []
     if agent_dir.exists():
         for f in sorted(agent_dir.iterdir()):
-            if not f.is_file() or not f.suffix == ".md":
+            if not f.is_file() or f.suffix != ".md":
                 continue
             stem = f.stem
             if stem.startswith("role_"):
@@ -1391,11 +1409,10 @@ async def get_shared_agent(agent_id: str):
     return cfg
 
 
-@app.post("/api/shared-agents")
-async def create_shared_agent(entry: SharedAgentEntry):
+def _create_agent(base_dir: Path, entry):
     if not entry.id or not entry.id.replace("_", "").isalnum():
         raise HTTPException(400, "ID invalide (lettres, chiffres, _ uniquement)")
-    agent_dir = SHARED_AGENTS_DIR / entry.id
+    agent_dir = base_dir / entry.id
     if agent_dir.exists():
         raise HTTPException(409, f"Agent '{entry.id}' existe deja")
     agent_dir.mkdir(parents=True)
@@ -1416,7 +1433,6 @@ async def create_shared_agent(entry: SharedAgentEntry):
         "delivers_contract": entry.delivers_contract or False,
     }
     (agent_dir / "agent.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
-    # Default prompt from Shared/Prompts/<culture>/New.md
     new_prompt = PROMPTS_DIR / "New.md"
     prompt = new_prompt.read_text(encoding="utf-8") if new_prompt.exists() else f"# {entry.name or entry.id}\n\n"
     if entry.prompt_content:
@@ -1425,46 +1441,21 @@ async def create_shared_agent(entry: SharedAgentEntry):
     return {"ok": True}
 
 
-@app.put("/api/shared-agents/{agent_id}")
-async def update_shared_agent(agent_id: str, entry: SharedAgentEntry):
-    agent_dir = SHARED_AGENTS_DIR / agent_id
+def _update_agent(base_dir: Path, agent_id: str, entry):
+    agent_dir = base_dir / agent_id
     if not agent_dir.exists():
         raise HTTPException(404, f"Agent '{agent_id}' introuvable")
-    # Read existing config and merge only provided fields
     cfg_file = agent_dir / "agent.json"
     cfg = json.loads(cfg_file.read_text(encoding="utf-8")) if cfg_file.exists() else {}
-    if entry.name is not None:
-        cfg["name"] = entry.name or agent_id
-    if entry.description is not None:
-        cfg["description"] = entry.description
-    if entry.type is not None:
-        cfg["type"] = entry.type
-    if entry.llm is not None:
-        cfg["llm"] = entry.llm
-    if entry.temperature is not None:
-        cfg["temperature"] = entry.temperature
-    if entry.max_tokens is not None:
-        cfg["max_tokens"] = entry.max_tokens
-    if entry.mcp_access is not None:
-        cfg["mcp_access"] = entry.mcp_access
-    if entry.docker_mode is not None:
-        cfg["docker_mode"] = entry.docker_mode
-    if entry.docker_image is not None:
-        cfg["docker_image"] = entry.docker_image
-    if entry.delivers_docs is not None:
-        cfg["delivers_docs"] = entry.delivers_docs
-    if entry.delivers_code is not None:
-        cfg["delivers_code"] = entry.delivers_code
-    if entry.delivers_design is not None:
-        cfg["delivers_design"] = entry.delivers_design
-    if entry.delivers_automation is not None:
-        cfg["delivers_automation"] = entry.delivers_automation
-    if entry.delivers_tasklist is not None:
-        cfg["delivers_tasklist"] = entry.delivers_tasklist
-    if entry.delivers_specs is not None:
-        cfg["delivers_specs"] = entry.delivers_specs
-    if entry.delivers_contract is not None:
-        cfg["delivers_contract"] = entry.delivers_contract
+    for field in ["name", "description", "type", "llm", "temperature", "max_tokens", "mcp_access",
+                   "docker_mode", "docker_image", "delivers_docs", "delivers_code", "delivers_design",
+                   "delivers_automation", "delivers_tasklist", "delivers_specs", "delivers_contract"]:
+        val = getattr(entry, field, None)
+        if val is not None:
+            if field == "name":
+                cfg[field] = val or agent_id
+            else:
+                cfg[field] = val
     (agent_dir / "agent.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
     if entry.prompt_content is not None:
         (agent_dir / "prompt.md").write_text(entry.prompt_content, encoding="utf-8")
@@ -1474,41 +1465,30 @@ async def update_shared_agent(agent_id: str, entry: SharedAgentEntry):
         (agent_dir / f"{agent_id}_unassign.md").write_text(entry.unassign_content, encoding="utf-8")
     if entry.identity_content is not None:
         (agent_dir / "identity.md").write_text(entry.identity_content, encoding="utf-8")
-    _invalidate_orchestrator_prompts(agent_id)
     return {"ok": True}
 
 
-@app.delete("/api/shared-agents/{agent_id}")
-async def delete_shared_agent(agent_id: str):
-    agent_dir = SHARED_AGENTS_DIR / agent_id
+def _delete_agent(base_dir: Path, agent_id: str):
+    agent_dir = base_dir / agent_id
     if not agent_dir.exists():
         raise HTTPException(404, f"Agent '{agent_id}' introuvable")
     shutil.rmtree(agent_dir)
-    _invalidate_orchestrator_prompts(agent_id)
     return {"ok": True}
 
 
-@app.put("/api/shared-agents/{agent_id}/files/{filename}")
-async def put_shared_agent_file(agent_id: str, filename: str, request: Request):
-    """Save a specific .md file inside an agent directory."""
-    agent_dir = SHARED_AGENTS_DIR / agent_id
+def _put_agent_file(base_dir: Path, agent_id: str, filename: str, content: str):
+    agent_dir = base_dir / agent_id
     if not agent_dir.exists():
         raise HTTPException(404, f"Agent '{agent_id}' introuvable")
-    # Sanitize filename — only allow alphanumeric + underscore
     safe = filename.replace("-", "_")
     if not safe.replace("_", "").isalnum():
         raise HTTPException(400, "Nom de fichier invalide")
-    body = await request.json()
-    content = body.get("content", "")
     (agent_dir / f"{safe}.md").write_text(content, encoding="utf-8")
-    _invalidate_orchestrator_prompts(agent_id)
     return {"ok": True}
 
 
-@app.delete("/api/shared-agents/{agent_id}/files/{filename}")
-async def delete_shared_agent_file(agent_id: str, filename: str):
-    """Delete a specific .md file inside an agent directory."""
-    agent_dir = SHARED_AGENTS_DIR / agent_id
+def _delete_agent_file(base_dir: Path, agent_id: str, filename: str):
+    agent_dir = base_dir / agent_id
     if not agent_dir.exists():
         raise HTTPException(404, f"Agent '{agent_id}' introuvable")
     safe = filename.replace("-", "_")
@@ -1516,6 +1496,47 @@ async def delete_shared_agent_file(agent_id: str, filename: str):
     if not target.exists():
         raise HTTPException(404, "Fichier introuvable")
     target.unlink()
+    return {"ok": True}
+
+
+# ── Shared agents routes (Configuration / Templates) ──
+
+@app.get("/api/shared-agents")
+async def get_shared_agents():
+    return {"agents": _list_agents(SHARED_AGENTS_DIR)}
+
+
+@app.get("/api/shared-agents/{agent_id}")
+async def get_shared_agent(agent_id: str):
+    return _get_agent_detail(SHARED_AGENTS_DIR, agent_id)
+
+@app.post("/api/shared-agents")
+async def create_shared_agent(entry: SharedAgentEntry):
+    r = _create_agent(SHARED_AGENTS_DIR, entry)
+    return r
+
+@app.put("/api/shared-agents/{agent_id}")
+async def update_shared_agent(agent_id: str, entry: SharedAgentEntry):
+    r = _update_agent(SHARED_AGENTS_DIR, agent_id, entry)
+    _invalidate_orchestrator_prompts(agent_id)
+    return r
+
+@app.delete("/api/shared-agents/{agent_id}")
+async def delete_shared_agent(agent_id: str):
+    r = _delete_agent(SHARED_AGENTS_DIR, agent_id)
+    _invalidate_orchestrator_prompts(agent_id)
+    return r
+
+@app.put("/api/shared-agents/{agent_id}/files/{filename}")
+async def put_shared_agent_file(agent_id: str, filename: str, request: Request):
+    body = await request.json()
+    r = _put_agent_file(SHARED_AGENTS_DIR, agent_id, filename, body.get("content", ""))
+    _invalidate_orchestrator_prompts(agent_id)
+    return r
+
+@app.delete("/api/shared-agents/{agent_id}/files/{filename}")
+async def delete_shared_agent_file(agent_id: str, filename: str):
+    r = _delete_agent_file(SHARED_AGENTS_DIR, agent_id, filename)
     return {"ok": True}
 
 def _parse_chat_blocks(raw: str) -> dict:
@@ -1703,67 +1724,155 @@ async def import_shared_agent(file: UploadFile, agent_id: str | None = None):
     return {"ok": True, "id": final_id}
 
 
+# ── Production agents routes (config/Agents/) ──
+
+@app.get("/api/prod-agents")
+async def get_prod_agents():
+    return {"agents": _list_agents(CFG_AGENTS_DIR)}
+
+@app.get("/api/prod-agents/{agent_id}")
+async def get_prod_agent(agent_id: str):
+    return _get_agent_detail(CFG_AGENTS_DIR, agent_id)
+
+@app.post("/api/prod-agents")
+async def create_prod_agent(entry: SharedAgentEntry):
+    return _create_agent(CFG_AGENTS_DIR, entry)
+
+@app.put("/api/prod-agents/{agent_id}")
+async def update_prod_agent(agent_id: str, entry: SharedAgentEntry):
+    return _update_agent(CFG_AGENTS_DIR, agent_id, entry)
+
+@app.delete("/api/prod-agents/{agent_id}")
+async def delete_prod_agent(agent_id: str):
+    return _delete_agent(CFG_AGENTS_DIR, agent_id)
+
+@app.put("/api/prod-agents/{agent_id}/files/{filename}")
+async def put_prod_agent_file(agent_id: str, filename: str, request: Request):
+    body = await request.json()
+    return _put_agent_file(CFG_AGENTS_DIR, agent_id, filename, body.get("content", ""))
+
+@app.delete("/api/prod-agents/{agent_id}/files/{filename}")
+async def delete_prod_agent_file(agent_id: str, filename: str):
+    return _delete_agent_file(CFG_AGENTS_DIR, agent_id, filename)
+
+@app.post("/api/prod-agents/copy-from-config")
+async def copy_prod_agents_from_config(request: Request):
+    """Copy selected agent directories from Shared/Agents/ to config/Agents/."""
+    body = await request.json()
+    agent_ids = body.get("agent_ids", [])
+    if not agent_ids:
+        raise HTTPException(400, "Aucun agent selectionne")
+    CFG_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for aid in agent_ids:
+        src = SHARED_AGENTS_DIR / aid
+        if not src.exists():
+            continue
+        dst = CFG_AGENTS_DIR / aid
+        if dst.exists():
+            shutil.rmtree(dst)
+        shutil.copytree(src, dst)
+        copied += 1
+    return {"ok": True, "copied": copied}
+
+@app.post("/api/prod-agents/import")
+async def import_prod_agent(file: UploadFile, agent_id: str | None = None):
+    """Import an agent zip into config/Agents/."""
+    data = await file.read()
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data), 'r')
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "Fichier zip invalide")
+    names = [n for n in zf.namelist() if not n.startswith('__MACOSX')]
+    roots = set()
+    for n in names:
+        parts = n.strip('/').split('/')
+        if parts and parts[0]:
+            roots.add(parts[0])
+    zip_root = roots.pop() if len(roots) == 1 else None
+    final_id = agent_id or zip_root
+    if not final_id or not final_id.replace("_", "").replace("-", "").isalnum():
+        raise HTTPException(400, "Impossible de determiner l'ID de l'agent depuis le zip")
+    agent_dir = CFG_AGENTS_DIR / final_id
+    if agent_dir.exists() and not agent_id:
+        return {"conflict": True, "existing_id": final_id}
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    for entry in names:
+        parts = entry.strip('/').split('/')
+        if zip_root and parts[0] == zip_root:
+            rel_parts = parts[1:]
+        else:
+            rel_parts = parts
+        if not rel_parts or not rel_parts[-1]:
+            continue
+        dest = agent_dir / '/'.join(rel_parts)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(zf.read(entry))
+    zf.close()
+    return {"ok": True, "id": final_id}
+
+
 # ── API: Mail ──────────────────────────────────────
 
-@app.get("/api/mail")
+@app.get("/api/templates/mail")
 async def get_mail():
-    """Read mail.json config."""
+    """Read mail.json config from Shared/."""
     if not MAIL_FILE.exists():
         return {"smtp": [], "imap": [], "listener": {}, "templates": {}, "security": {}, "presets": {}}
     return _read_json(MAIL_FILE)
 
 
-@app.put("/api/mail")
+@app.put("/api/templates/mail")
 async def save_mail(request: Request):
-    """Write mail.json config."""
+    """Write mail.json config to Shared/."""
     data = await request.json()
     _write_json(MAIL_FILE, data)
     return {"ok": True}
 
 
-@app.get("/api/discord")
+@app.get("/api/templates/discord")
 async def get_discord():
-    """Read discord.json config."""
+    """Read discord.json config from Shared/."""
     if not DISCORD_FILE.exists():
         return {"enabled": True, "default_channel": "discord", "bot": {}, "channels": {}, "guild": {}, "aliases": {}, "formatting": {}, "timeouts": {}}
     return _read_json(DISCORD_FILE)
 
 
-@app.put("/api/discord")
+@app.put("/api/templates/discord")
 async def save_discord(request: Request):
-    """Write discord.json config."""
+    """Write discord.json config to Shared/."""
     data = await request.json()
     _write_json(DISCORD_FILE, data)
     return {"ok": True}
 
 
-@app.get("/api/hitl-config")
+@app.get("/api/templates/hitl-config")
 async def get_hitl_config():
-    """Read hitl.json config."""
+    """Read hitl.json config from Shared/."""
     if not HITL_FILE.exists():
         return {"auth": {"jwt_expire_hours": 24, "allow_registration": True, "default_role": "undefined"}, "google_oauth": {"enabled": False, "client_id": "", "client_secret_env": "GOOGLE_CLIENT_SECRET", "allowed_domains": []}}
     return _read_json(HITL_FILE)
 
 
-@app.put("/api/hitl-config")
+@app.put("/api/templates/hitl-config")
 async def save_hitl_config(request: Request):
-    """Write hitl.json config."""
+    """Write hitl.json config to Shared/."""
     data = await request.json()
     _write_json(HITL_FILE, data)
     return {"ok": True}
 
 
-@app.get("/api/others")
+@app.get("/api/templates/others")
 async def get_others():
-    """Read others.json config."""
+    """Read others.json config from Shared/."""
     if not OTHERS_FILE.exists():
         return {"password_reset": {"smtp_name": "", "from_address": ""}}
     return _read_json(OTHERS_FILE)
 
 
-@app.put("/api/others")
+@app.put("/api/templates/others")
 async def save_others(request: Request):
-    """Write others.json config."""
+    """Write others.json config to Shared/."""
     data = await request.json()
     _write_json(OTHERS_FILE, data)
     return {"ok": True}
@@ -2205,7 +2314,7 @@ async def chat(req: ChatRequest):
     data = _read_json(SHARED_LLM_FILE)
     chosen_id = req.provider_id or data.get(default_key, "") or data.get("default", "")
     if not chosen_id or chosen_id not in data.get("providers", {}):
-        raise HTTPException(400, "Aucun provider LLM configure dans Shared/Teams/llm_providers.json")
+        raise HTTPException(400, "Aucun provider LLM configure dans Shared/llm_providers.json")
 
     provider = data["providers"][chosen_id]
     ptype = provider["type"]
@@ -2386,16 +2495,31 @@ async def config_check():
 
         # Check each agent has a name
         for aid, aconf in reg.get("agents", {}).items():
-            if not aconf.get("name"):
+            # Name can come from registry or shared/config agent catalog
+            has_name = bool(aconf.get("name"))
+            if not has_name:
+                for cat_dir in [SHARED_DIR / "Agents" / aid, CFG_AGENTS_DIR / aid]:
+                    cat_file = cat_dir / "agent.json"
+                    if cat_file.exists():
+                        cat = json.loads(cat_file.read_text(encoding="utf-8"))
+                        if cat.get("name"):
+                            has_name = True
+                            break
+            if not has_name:
                 issues.append({"level": "warning", "category": "agents", "message": f"Agent '{aid}' (equipe {tid}) : champ 'name' manquant"})
 
-            # Check prompt file exists
+            # Check prompt file exists (skip orchestrator — prompt is generated)
+            if aconf.get("type") == "orchestrator":
+                continue
             prompt_file = aconf.get("prompt", f"{aid}.md")
             prompt_path = tdir / prompt_file
             if not prompt_path.exists():
-                # Check shared agents fallback
+                # Check shared agents fallback (prompt.md or identity.md)
                 shared_found = False
-                for base in [SHARED_DIR / "Agents" / aid / "prompt.md"]:
+                for base in [SHARED_DIR / "Agents" / aid / "prompt.md",
+                             SHARED_DIR / "Agents" / aid / "identity.md",
+                             CFG_AGENTS_DIR / aid / "prompt.md",
+                             CFG_AGENTS_DIR / aid / "identity.md"]:
                     if base.exists():
                         shared_found = True
                         break
@@ -2422,13 +2546,6 @@ async def config_check():
                 shared_prompt = SHARED_DIR / "Agents" / aid / "prompt.md"
                 if shared_prompt.exists():
                     _check_json_blocks(shared_prompt.read_text(encoding="utf-8"), f"Prompt '{aid}' (shared)")
-            # Check pipeline step instructions
-            for step in aconf.get("pipeline_steps", []):
-                instr = step.get("instruction", "")
-                if instr:
-                    step_name = step.get("name", step.get("output_key", "?"))
-                    _check_json_blocks(instr, f"Agent '{aid}' step '{step_name}' (equipe {tid})")
-
         # 4. Check workflow references valid agents
         wf_path = tdir / "Workflow.json"
         if not wf_path.exists():
@@ -2455,21 +2572,6 @@ async def config_check():
                         issues.append({"level": "error", "category": "workflow", "message": f"{dlabel} : agent '{d_agent}' n'existe pas dans le registry"})
                     elif d_agent not in phase_agents:
                         issues.append({"level": "error", "category": "workflow", "message": f"{dlabel} : agent '{d_agent}' n'est pas assigne a cette phase"})
-
-                    # Pipeline step must be set and exist in agent's steps
-                    d_step = dconf.get("pipeline_step", "")
-                    if not d_step:
-                        issues.append({"level": "warning", "category": "workflow", "message": f"{dlabel} : champ 'pipeline_step' manquant"})
-                    elif d_agent:
-                        agent_conf = reg.get("agents", {}).get(d_agent, {})
-                        steps = [s.get("output_key") for s in agent_conf.get("pipeline_steps", [])]
-                        if steps and d_step not in steps:
-                            issues.append({"level": "warning", "category": "workflow", "message": f"{dlabel} : pipeline_step '{d_step}' n'existe pas dans les steps de '{d_agent}'"})
-                        # Check that the step has an instruction
-                        if steps:
-                            step_conf = next((s for s in agent_conf.get("pipeline_steps", []) if s.get("output_key") == d_step), None)
-                            if step_conf and not step_conf.get("instruction", "").strip():
-                                issues.append({"level": "warning", "category": "workflow", "message": f"{dlabel} : l'instruction de la step '{d_step}' est vide"})
 
                     # Type must be set
                     if not dconf.get("type"):
@@ -2509,9 +2611,17 @@ async def config_check():
         if not img:
             issues.append({"level": "error", "category": "agents", "message": f"Agent '{aid}' : docker_mode actif mais aucune image Docker configuree"})
         else:
+            # docker_image can be a Dockerfile name (e.g. "Dockerfile.claude-code") or an image name
+            # Convert Dockerfile name to image prefix: agflow-{label}
+            check_name = img
+            if img.startswith("Dockerfile"):
+                dot_idx = img.find(".")
+                label = img[dot_idx + 1:] if dot_idx >= 0 else img
+                check_name = f"agflow-{label.lower()}"
             try:
-                r = subprocess.run(["docker", "image", "inspect", img], capture_output=True, timeout=5)
-                if r.returncode != 0:
+                r = subprocess.run(["docker", "images", "--filter", f"reference={check_name}", "-q"],
+                                   capture_output=True, timeout=5, text=True)
+                if r.returncode != 0 or not r.stdout.strip():
                     issues.append({"level": "warning", "category": "agents", "message": f"Agent '{aid}' : image Docker '{img}' non compilee"})
             except Exception:
                 issues.append({"level": "warning", "category": "agents", "message": f"Agent '{aid}' : impossible de verifier l'image Docker '{img}'"})
@@ -2524,10 +2634,7 @@ async def config_check():
         if stdir.exists() and not (stdir / "orchestrator_prompt.md").exists():
             issues.append({"level": "error", "category": "agents", "message": f"Equipe '{tid}' : orchestrator_prompt.md manquant — construisez-le depuis Templates > Equipes"})
 
-    # 5. Validate JSON blocks in system prompts (Shared/Prompts/{culture}/)
-    if PROMPTS_DIR.exists():
-        for f in PROMPTS_DIR.glob("*.md"):
-            _check_json_blocks(f.read_text(encoding="utf-8"), f"Prompt systeme '{f.name}'")
+    # 5. System prompts contain illustrative JSON examples with placeholders — skip validation
 
     errors = [i for i in issues if i["level"] == "error"]
     warnings = [i for i in issues if i["level"] == "warning"]
@@ -2712,157 +2819,245 @@ async def delete_deliverable_type(key: str):
     return {"ok": True}
 
 
-@app.get("/api/templates/prompts")
-async def list_template_prompts(culture: str | None = None):
-    """List all prompt templates from Shared/Prompts/<culture>/."""
-    d = _prompts_dir(culture)
+CFG_PROMPTS_BASE = CONFIGS / "Prompts"
+
+
+def _resolve_prompts_dir(base: Path, culture: str | None = None) -> Path:
+    c = culture or _CULTURE
+    if ".." in c or "/" in c or "\\" in c:
+        raise HTTPException(400, "Culture invalide")
+    return base / c
+
+
+def _list_prompts(base: Path, culture: str | None = None) -> list:
+    d = _resolve_prompts_dir(base, culture)
     d.mkdir(parents=True, exist_ok=True)
-    prompts = []
-    for f in sorted(d.glob("*.md")):
-        prompts.append({"name": f.name, "content": f.read_text(encoding="utf-8")})
-    return {"culture": culture or _CULTURE, "prompts": prompts}
-
-
-@app.get("/api/templates/prompts/{name}")
-async def get_template_prompt(name: str, culture: str | None = None):
-    """Return a single prompt template."""
-    if ".." in name or "/" in name or "\\" in name:
-        raise HTTPException(400, "Nom invalide")
-    path = _prompts_dir(culture) / name
-    if not path.exists():
-        raise HTTPException(404, f"Prompt '{name}' introuvable")
-    return {"name": name, "content": path.read_text(encoding="utf-8")}
+    return [{"name": f.name, "content": f.read_text(encoding="utf-8")} for f in sorted(d.glob("*.md"))]
 
 
 class PromptTemplateUpdate(BaseModel):
     content: str
 
 
-@app.put("/api/templates/prompts/{name}")
-async def put_template_prompt(name: str, body: PromptTemplateUpdate, culture: str | None = None):
-    """Create or update a prompt template."""
-    if ".." in name or "/" in name or "\\" in name:
-        raise HTTPException(400, "Nom invalide")
-    if not name.endswith(".md"):
-        raise HTTPException(400, "Le nom doit finir par .md")
-    d = _prompts_dir(culture)
+def _put_prompt(base: Path, name: str, content: str, culture: str | None = None):
+    _name_check_md(name)
+    d = _resolve_prompts_dir(base, culture)
     d.mkdir(parents=True, exist_ok=True)
-    (d / name).write_text(body.content, encoding="utf-8")
+    (d / name).write_text(content, encoding="utf-8")
     return {"ok": True}
 
 
-@app.delete("/api/templates/prompts/{name}")
-async def delete_template_prompt(name: str, culture: str | None = None):
-    """Delete a prompt template."""
+def _delete_prompt(base: Path, name: str, culture: str | None = None):
     if ".." in name or "/" in name or "\\" in name:
         raise HTTPException(400, "Nom invalide")
-    path = _prompts_dir(culture) / name
+    path = _resolve_prompts_dir(base, culture) / name
     if not path.exists():
         raise HTTPException(404, f"Prompt '{name}' introuvable")
     path.unlink()
     return {"ok": True}
 
 
-# ── API: Template Models (Shared/Models/<culture>/) ─────────────
+# Configuration (Templates) routes
+@app.get("/api/templates/prompts")
+async def list_template_prompts(culture: str | None = None):
+    return {"culture": culture or _CULTURE, "prompts": _list_prompts(PROMPTS_BASE, culture)}
+
+@app.get("/api/templates/prompts/{name}")
+async def get_template_prompt(name: str, culture: str | None = None):
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(400, "Nom invalide")
+    path = _resolve_prompts_dir(PROMPTS_BASE, culture) / name
+    if not path.exists():
+        raise HTTPException(404, f"Prompt '{name}' introuvable")
+    return {"name": name, "content": path.read_text(encoding="utf-8")}
+
+@app.put("/api/templates/prompts/{name}")
+async def put_template_prompt(name: str, body: PromptTemplateUpdate, culture: str | None = None):
+    return _put_prompt(PROMPTS_BASE, name, body.content, culture)
+
+@app.delete("/api/templates/prompts/{name}")
+async def delete_template_prompt(name: str, culture: str | None = None):
+    return _delete_prompt(PROMPTS_BASE, name, culture)
+
+
+# Production routes
+@app.get("/api/prod-prompts")
+async def list_prod_prompts(culture: str | None = None):
+    return {"culture": culture or _CULTURE, "prompts": _list_prompts(CFG_PROMPTS_BASE, culture)}
+
+@app.put("/api/prod-prompts/{name}")
+async def put_prod_prompt(name: str, body: PromptTemplateUpdate, culture: str | None = None):
+    return _put_prompt(CFG_PROMPTS_BASE, name, body.content, culture)
+
+@app.delete("/api/prod-prompts/{name}")
+async def delete_prod_prompt(name: str, culture: str | None = None):
+    return _delete_prompt(CFG_PROMPTS_BASE, name, culture)
+
+@app.post("/api/prod-prompts/copy-from-config")
+async def copy_prod_prompts_from_config(request: Request, culture: str | None = None):
+    """Copy selected prompt files from Shared/Prompts/ to config/Prompts/."""
+    body = await request.json()
+    names = body.get("names", [])
+    if not names:
+        raise HTTPException(400, "Aucun prompt selectionne")
+    src_dir = _resolve_prompts_dir(PROMPTS_BASE, culture)
+    dst_dir = _resolve_prompts_dir(CFG_PROMPTS_BASE, culture)
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for name in names:
+        src = src_dir / name
+        if src.exists():
+            shutil.copy2(src, dst_dir / name)
+            copied += 1
+    return {"ok": True, "copied": copied}
+
+
+# ── API: Models (factorized for templates + production) ─────────────
 
 MODELS_BASE = SHARED_DIR / "Models"
+CFG_MODELS_BASE = CONFIGS / "Models"
 
 
-def _models_dir(culture: str | None = None) -> Path:
-    """Return the models directory for a given culture (validated)."""
+def _resolve_models_dir(base: Path, culture: str | None = None) -> Path:
     c = culture or _CULTURE
     if ".." in c or "/" in c or "\\" in c:
         raise HTTPException(400, "Culture invalide")
-    return MODELS_BASE / c
+    return base / c
 
 
-@app.get("/api/templates/models")
-async def list_template_models(culture: str | None = None):
-    """List all model templates from Shared/Models/<culture>/."""
-    d = _models_dir(culture)
+def _list_models(base: Path, culture: str | None = None) -> list:
+    d = _resolve_models_dir(base, culture)
     d.mkdir(parents=True, exist_ok=True)
-    models = []
-    for f in sorted(d.glob("*.md")):
-        models.append({"name": f.name, "content": f.read_text(encoding="utf-8")})
-    return {"culture": culture or _CULTURE, "models": models}
+    return [{"name": f.name, "content": f.read_text(encoding="utf-8")} for f in sorted(d.glob("*.md"))]
 
 
-@app.get("/api/templates/models/{name}")
-async def get_template_model(name: str, culture: str | None = None):
-    """Return a single model template."""
+def _name_check_md(name: str):
     if ".." in name or "/" in name or "\\" in name:
         raise HTTPException(400, "Nom invalide")
-    path = _models_dir(culture) / name
-    if not path.exists():
-        raise HTTPException(404, f"Model '{name}' introuvable")
-    return {"name": name, "content": path.read_text(encoding="utf-8")}
+    if not name.endswith(".md"):
+        raise HTTPException(400, "Le nom doit finir par .md")
 
 
 class ModelTemplateUpdate(BaseModel):
     content: str
 
 
-@app.put("/api/templates/models/{name}")
-async def put_template_model(name: str, body: ModelTemplateUpdate, culture: str | None = None):
-    """Create or update a model template."""
-    if ".." in name or "/" in name or "\\" in name:
-        raise HTTPException(400, "Nom invalide")
-    if not name.endswith(".md"):
-        raise HTTPException(400, "Le nom doit finir par .md")
-    d = _models_dir(culture)
+def _put_model(base: Path, name: str, content: str, culture: str | None = None):
+    _name_check_md(name)
+    d = _resolve_models_dir(base, culture)
     d.mkdir(parents=True, exist_ok=True)
-    (d / name).write_text(body.content, encoding="utf-8")
+    (d / name).write_text(content, encoding="utf-8")
     return {"ok": True}
 
 
-@app.delete("/api/templates/models/{name}")
-async def delete_template_model(name: str, culture: str | None = None):
-    """Delete a model template."""
+def _delete_model(base: Path, name: str, culture: str | None = None):
     if ".." in name or "/" in name or "\\" in name:
         raise HTTPException(400, "Nom invalide")
-    path = _models_dir(culture) / name
+    path = _resolve_models_dir(base, culture) / name
     if not path.exists():
         raise HTTPException(404, f"Model '{name}' introuvable")
     path.unlink()
     return {"ok": True}
 
 
-# ── API: Template Dockerfiles (Shared/Dockerfiles/) ─────────────
+# Keep legacy helper for other code using _models_dir
+def _models_dir(culture: str | None = None) -> Path:
+    return _resolve_models_dir(MODELS_BASE, culture)
+
+
+# Configuration (Templates) routes
+@app.get("/api/templates/models")
+async def list_template_models(culture: str | None = None):
+    return {"culture": culture or _CULTURE, "models": _list_models(MODELS_BASE, culture)}
+
+@app.get("/api/templates/models/{name}")
+async def get_template_model(name: str, culture: str | None = None):
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(400, "Nom invalide")
+    path = _resolve_models_dir(MODELS_BASE, culture) / name
+    if not path.exists():
+        raise HTTPException(404, f"Model '{name}' introuvable")
+    return {"name": name, "content": path.read_text(encoding="utf-8")}
+
+@app.put("/api/templates/models/{name}")
+async def put_template_model(name: str, body: ModelTemplateUpdate, culture: str | None = None):
+    return _put_model(MODELS_BASE, name, body.content, culture)
+
+@app.delete("/api/templates/models/{name}")
+async def delete_template_model(name: str, culture: str | None = None):
+    return _delete_model(MODELS_BASE, name, culture)
+
+
+# Production routes
+@app.get("/api/prod-models")
+async def list_prod_models(culture: str | None = None):
+    return {"culture": culture or _CULTURE, "models": _list_models(CFG_MODELS_BASE, culture)}
+
+@app.put("/api/prod-models/{name}")
+async def put_prod_model(name: str, body: ModelTemplateUpdate, culture: str | None = None):
+    return _put_model(CFG_MODELS_BASE, name, body.content, culture)
+
+@app.delete("/api/prod-models/{name}")
+async def delete_prod_model(name: str, culture: str | None = None):
+    return _delete_model(CFG_MODELS_BASE, name, culture)
+
+@app.post("/api/prod-models/copy-from-config")
+async def copy_prod_models_from_config(request: Request, culture: str | None = None):
+    """Copy selected model files from Shared/Models/ to config/Models/."""
+    body = await request.json()
+    names = body.get("names", [])
+    if not names:
+        raise HTTPException(400, "Aucun model selectionne")
+    src_dir = _resolve_models_dir(MODELS_BASE, culture)
+    dst_dir = _resolve_models_dir(CFG_MODELS_BASE, culture)
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for name in names:
+        src = src_dir / name
+        if src.exists():
+            shutil.copy2(src, dst_dir / name)
+            copied += 1
+    return {"ok": True, "copied": copied}
+
+
+# ── API: Dockerfiles (factorized for templates + production) ─────
+
 
 DOCKERFILES_DIR = SHARED_DIR / "Dockerfiles"
+CFG_DOCKERFILES_DIR = CONFIGS / "Dockerfiles"
+
+_DOCKERFILES_DIRS = {"templates": DOCKERFILES_DIR, "production": CFG_DOCKERFILES_DIR}
 
 
-@app.get("/api/templates/dockerfiles")
-async def list_template_dockerfiles():
-    """List all Dockerfiles from Shared/Dockerfiles/."""
-    DOCKERFILES_DIR.mkdir(parents=True, exist_ok=True)
+def _dockerfile_name_check(name: str):
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(400, "Nom invalide")
+
+
+def _list_dockerfiles(base_dir: Path) -> list:
+    base_dir.mkdir(parents=True, exist_ok=True)
     files = []
-    for f in sorted(DOCKERFILES_DIR.iterdir()):
+    for f in sorted(base_dir.iterdir()):
         if f.is_file() and f.name.startswith("Dockerfile"):
             dot_idx = f.name.find(".")
             label = f.name[dot_idx + 1:] if dot_idx >= 0 else f.name
-            entrypoint_name = f"entrypoint.{label}.sh"
-            entrypoint_path = DOCKERFILES_DIR / entrypoint_name
+            ep_path = base_dir / f"entrypoint.{label}.sh"
             df_content = f.read_text(encoding="utf-8")
-            ep_content = entrypoint_path.read_text(encoding="utf-8") if entrypoint_path.exists() else ""
+            ep_content = ep_path.read_text(encoding="utf-8") if ep_path.exists() else ""
             content_hash = hashlib.sha256((df_content + ep_content).encode("utf-8")).hexdigest()[:8]
             image_tag = f"agflow-{label.lower()}:{content_hash}"
-            # Check if image exists
             try:
                 r = subprocess.run(["docker", "image", "inspect", image_tag], capture_output=True, timeout=5)
                 image_built = r.returncode == 0
             except Exception:
                 image_built = False
-            files.append({"name": f.name, "content": df_content, "entrypoint_name": entrypoint_name, "entrypoint_content": ep_content, "image_tag": image_tag, "image_built": image_built})
-    return {"files": files}
+            files.append({"name": f.name, "content": df_content, "entrypoint_name": f"entrypoint.{label}.sh", "entrypoint_content": ep_content, "image_tag": image_tag, "image_built": image_built})
+    return files
 
 
-@app.get("/api/templates/dockerfiles/{name}")
-async def get_template_dockerfile(name: str):
-    """Return a single Dockerfile."""
-    if ".." in name or "/" in name or "\\" in name:
-        raise HTTPException(400, "Nom invalide")
-    path = DOCKERFILES_DIR / name
+def _get_dockerfile(base_dir: Path, name: str) -> dict:
+    _dockerfile_name_check(name)
+    path = base_dir / name
     if not path.exists():
         raise HTTPException(404, f"Dockerfile '{name}' introuvable")
     return {"name": name, "content": path.read_text(encoding="utf-8")}
@@ -2873,64 +3068,96 @@ class DockerfileUpdate(BaseModel):
     entrypoint_content: str | None = None
 
 
-@app.put("/api/templates/dockerfiles/{name}")
-async def put_template_dockerfile(name: str, body: DockerfileUpdate):
-    """Create or update a Dockerfile and its entrypoint."""
-    if ".." in name or "/" in name or "\\" in name:
-        raise HTTPException(400, "Nom invalide")
-    DOCKERFILES_DIR.mkdir(parents=True, exist_ok=True)
-    is_new = not (DOCKERFILES_DIR / name).exists()
-    (DOCKERFILES_DIR / name).write_text(body.content, encoding="utf-8")
-    # Resolve entrypoint name
+def _put_dockerfile(base_dir: Path, name: str, body: DockerfileUpdate):
+    _dockerfile_name_check(name)
+    base_dir.mkdir(parents=True, exist_ok=True)
+    is_new = not (base_dir / name).exists()
+    (base_dir / name).write_text(body.content, encoding="utf-8")
     dot_idx = name.find(".")
     label = name[dot_idx + 1:] if dot_idx >= 0 else name
-    entrypoint_name = f"entrypoint.{label}.sh"
-    entrypoint_path = DOCKERFILES_DIR / entrypoint_name
-    # Create companion entrypoint script for new Dockerfiles
-    if is_new and not entrypoint_path.exists():
-        entrypoint_path.write_text("#!/bin/bash\nset -e\n\nexec \"$@\"\n", encoding="utf-8")
-    # Save entrypoint content if provided
+    ep_path = base_dir / f"entrypoint.{label}.sh"
+    if is_new and not ep_path.exists():
+        ep_path.write_text("#!/bin/bash\nset -e\n\nexec \"$@\"\n", encoding="utf-8")
     if body.entrypoint_content is not None:
-        entrypoint_path.write_text(body.entrypoint_content, encoding="utf-8")
+        ep_path.write_text(body.entrypoint_content, encoding="utf-8")
     return {"ok": True}
 
 
-@app.delete("/api/templates/dockerfiles/{name}")
-async def delete_template_dockerfile(name: str):
-    """Delete a Dockerfile."""
-    if ".." in name or "/" in name or "\\" in name:
-        raise HTTPException(400, "Nom invalide")
-    path = DOCKERFILES_DIR / name
+def _delete_dockerfile(base_dir: Path, name: str):
+    _dockerfile_name_check(name)
+    path = base_dir / name
     if not path.exists():
         raise HTTPException(404, f"Dockerfile '{name}' introuvable")
     path.unlink()
-    # Also delete companion entrypoint if deleting a Dockerfile
     if name.startswith("Dockerfile"):
         dot_idx = name.find(".")
         label = name[dot_idx + 1:] if dot_idx >= 0 else name
-        entrypoint_path = DOCKERFILES_DIR / f"entrypoint.{label}.sh"
-        if entrypoint_path.exists():
-            entrypoint_path.unlink()
+        ep_path = base_dir / f"entrypoint.{label}.sh"
+        if ep_path.exists():
+            ep_path.unlink()
     return {"ok": True}
 
 
-@app.post("/api/templates/dockerfiles/{name}/build")
-async def build_template_dockerfile(name: str, no_cache: bool = False):
-    """Build a Docker image from a Dockerfile, streaming output via SSE."""
-    if ".." in name or "/" in name or "\\" in name:
-        raise HTTPException(400, "Nom invalide")
-    dockerfile_path = DOCKERFILES_DIR / name
+def _build_dockerfile_info(base_dir: Path, name: str):
+    _dockerfile_name_check(name)
+    dockerfile_path = base_dir / name
     if not dockerfile_path.exists():
         raise HTTPException(404, f"Dockerfile '{name}' introuvable")
     dot_idx = name.find(".")
     tag = name[dot_idx + 1:] if dot_idx >= 0 else "default"
-    # Compute short hash from dockerfile + entrypoint content
     df_content = dockerfile_path.read_text(encoding="utf-8")
-    ep_path = DOCKERFILES_DIR / f"entrypoint.{tag}.sh"
+    ep_path = base_dir / f"entrypoint.{tag}.sh"
     ep_content = ep_path.read_text(encoding="utf-8") if ep_path.exists() else ""
     content_hash = hashlib.sha256((df_content + ep_content).encode("utf-8")).hexdigest()[:8]
     image_name = f"agflow-{tag.lower()}:{content_hash}"
+    return base_dir, image_name, name
 
+
+# Templates routes
+@app.get("/api/templates/dockerfiles")
+async def list_template_dockerfiles():
+    return {"files": _list_dockerfiles(DOCKERFILES_DIR)}
+
+@app.get("/api/templates/dockerfiles/{name}")
+async def get_template_dockerfile(name: str):
+    return _get_dockerfile(DOCKERFILES_DIR, name)
+
+@app.put("/api/templates/dockerfiles/{name}")
+async def put_template_dockerfile(name: str, body: DockerfileUpdate):
+    return _put_dockerfile(DOCKERFILES_DIR, name, body)
+
+@app.delete("/api/templates/dockerfiles/{name}")
+async def delete_template_dockerfile(name: str):
+    return _delete_dockerfile(DOCKERFILES_DIR, name)
+
+@app.post("/api/templates/dockerfiles/{name}/build")
+async def build_template_dockerfile(name: str, no_cache: bool = False):
+    return _stream_docker_build(DOCKERFILES_DIR, name, no_cache)
+
+# Production routes
+@app.get("/api/dockerfiles")
+async def list_prod_dockerfiles():
+    return {"files": _list_dockerfiles(CFG_DOCKERFILES_DIR)}
+
+@app.get("/api/dockerfiles/{name}")
+async def get_prod_dockerfile(name: str):
+    return _get_dockerfile(CFG_DOCKERFILES_DIR, name)
+
+@app.put("/api/dockerfiles/{name}")
+async def put_prod_dockerfile(name: str, body: DockerfileUpdate):
+    return _put_dockerfile(CFG_DOCKERFILES_DIR, name, body)
+
+@app.delete("/api/dockerfiles/{name}")
+async def delete_prod_dockerfile(name: str):
+    return _delete_dockerfile(CFG_DOCKERFILES_DIR, name)
+
+@app.post("/api/dockerfiles/{name}/build")
+async def build_prod_dockerfile(name: str, no_cache: bool = False):
+    return _stream_docker_build(CFG_DOCKERFILES_DIR, name, no_cache)
+
+
+def _stream_docker_build(base_dir: Path, name: str, no_cache: bool):
+    base_dir, image_name, name = _build_dockerfile_info(base_dir, name)
     _err_words = ("error", "failed", "invalid", "denied", "not found", "cannot", "fatal", "COPY failed")
 
     async def stream_build():
@@ -2942,7 +3169,7 @@ async def build_template_dockerfile(name: str, no_cache: bool = False):
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-                cwd=str(DOCKERFILES_DIR),
+                cwd=str(base_dir),
             )
             async for raw in proc.stdout:
                 text = raw.decode("utf-8", errors="replace").rstrip()
@@ -2960,20 +3187,19 @@ async def build_template_dockerfile(name: str, no_cache: bool = False):
 # ── API: Template Projects (Shared/Projects/) ─────────────
 
 SHARED_PROJECTS_DIR = SHARED_DIR / "Projects"
+CFG_PROJECTS_DIR = CONFIGS / "Projects"
 
 
-@app.get("/api/templates/projects")
-async def list_template_projects():
-    """List all project types from Shared/Projects/."""
+def _list_projects(base_dir: Path) -> list:
     projects = []
-    if SHARED_PROJECTS_DIR.exists():
-        for d in sorted(SHARED_PROJECTS_DIR.iterdir()):
+    if base_dir.exists():
+        for d in sorted(base_dir.iterdir()):
             if d.is_dir():
                 cfg_file = d / "project.json"
                 cfg = json.loads(cfg_file.read_text(encoding="utf-8")) if cfg_file.exists() else {}
                 workflows = [f.stem.removesuffix(".wrk") for f in sorted(d.glob("*.wrk.json"))]
                 projects.append({"id": d.name, "name": cfg.get("name", d.name), "description": cfg.get("description", ""), "team": cfg.get("team", ""), "workflows": workflows})
-    return {"projects": projects}
+    return projects
 
 
 class ProjectCreate(BaseModel):
@@ -2983,13 +3209,17 @@ class ProjectCreate(BaseModel):
     team: str = ""
 
 
-@app.post("/api/templates/projects")
-async def create_template_project(entry: ProjectCreate):
-    """Create a new project type directory with project.json."""
+class ProjectUpdate(BaseModel):
+    name: str
+    description: str = ""
+    team: str = ""
+
+
+def _create_project(base_dir: Path, entry: ProjectCreate):
     pid = entry.id.strip()
     if not pid or not pid.replace("_", "").replace("-", "").isalnum():
         raise HTTPException(400, "ID invalide (lettres, chiffres, _, - uniquement)")
-    project_dir = SHARED_PROJECTS_DIR / pid
+    project_dir = base_dir / pid
     if project_dir.exists():
         raise HTTPException(409, f"Le projet '{pid}' existe deja")
     project_dir.mkdir(parents=True)
@@ -2998,18 +3228,10 @@ async def create_template_project(entry: ProjectCreate):
     return {"ok": True}
 
 
-class ProjectUpdate(BaseModel):
-    name: str
-    description: str = ""
-    team: str = ""
-
-
-@app.put("/api/templates/projects/{project_id}")
-async def update_template_project(project_id: str, entry: ProjectUpdate):
-    """Update a project type."""
+def _update_project(base_dir: Path, project_id: str, entry: ProjectUpdate):
     if ".." in project_id or "/" in project_id or "\\" in project_id:
         raise HTTPException(400, "ID invalide")
-    project_dir = SHARED_PROJECTS_DIR / project_id
+    project_dir = base_dir / project_id
     if not project_dir.exists():
         raise HTTPException(404, f"Projet '{project_id}' introuvable")
     cfg_file = project_dir / "project.json"
@@ -3021,23 +3243,85 @@ async def update_template_project(project_id: str, entry: ProjectUpdate):
     return {"ok": True}
 
 
-@app.delete("/api/templates/projects/{project_id}")
-async def delete_template_project(project_id: str):
-    """Delete a project type directory."""
+def _delete_project(base_dir: Path, project_id: str):
     if ".." in project_id or "/" in project_id or "\\" in project_id:
         raise HTTPException(400, "ID invalide")
-    project_dir = SHARED_PROJECTS_DIR / project_id
+    project_dir = base_dir / project_id
     if not project_dir.exists():
         raise HTTPException(404, f"Projet '{project_id}' introuvable")
-    import shutil
     shutil.rmtree(project_dir)
     return {"ok": True}
+
+
+# Configuration (Templates) routes
+@app.get("/api/templates/projects")
+async def list_template_projects():
+    return {"projects": _list_projects(SHARED_PROJECTS_DIR)}
+
+@app.post("/api/templates/projects")
+async def create_template_project(entry: ProjectCreate):
+    return _create_project(SHARED_PROJECTS_DIR, entry)
+
+@app.put("/api/templates/projects/{project_id}")
+async def update_template_project(project_id: str, entry: ProjectUpdate):
+    return _update_project(SHARED_PROJECTS_DIR, project_id, entry)
+
+@app.delete("/api/templates/projects/{project_id}")
+async def delete_template_project(project_id: str):
+    return _delete_project(SHARED_PROJECTS_DIR, project_id)
+
+
+# Production routes
+@app.get("/api/prod-projects")
+async def list_prod_projects():
+    return {"projects": _list_projects(CFG_PROJECTS_DIR)}
+
+@app.post("/api/prod-projects")
+async def create_prod_project(entry: ProjectCreate):
+    return _create_project(CFG_PROJECTS_DIR, entry)
+
+@app.put("/api/prod-projects/{project_id}")
+async def update_prod_project(project_id: str, entry: ProjectUpdate):
+    return _update_project(CFG_PROJECTS_DIR, project_id, entry)
+
+@app.delete("/api/prod-projects/{project_id}")
+async def delete_prod_project(project_id: str):
+    return _delete_project(CFG_PROJECTS_DIR, project_id)
+
+@app.post("/api/prod-projects/copy-from-config")
+async def copy_prod_projects_from_config(request: Request):
+    """Copy selected project directories from Shared/Projects/ to config/Projects/."""
+    body = await request.json()
+    project_ids = body.get("project_ids", [])
+    if not project_ids:
+        raise HTTPException(400, "Aucun projet selectionne")
+    CFG_PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for pid in project_ids:
+        src = SHARED_PROJECTS_DIR / pid
+        if not src.exists():
+            continue
+        dst = CFG_PROJECTS_DIR / pid
+        if dst.exists():
+            shutil.rmtree(dst)
+        shutil.copytree(src, dst)
+        copied += 1
+    return {"ok": True, "copied": copied}
 
 
 def _project_dir_or_404(project_id: str) -> Path:
     if ".." in project_id or "/" in project_id or "\\" in project_id:
         raise HTTPException(400, "ID invalide")
     d = SHARED_PROJECTS_DIR / project_id
+    if not d.exists():
+        raise HTTPException(404, f"Projet '{project_id}' introuvable")
+    return d
+
+
+def _cfg_project_dir_or_404(project_id: str) -> Path:
+    if ".." in project_id or "/" in project_id or "\\" in project_id:
+        raise HTTPException(400, "ID invalide")
+    d = CFG_PROJECTS_DIR / project_id
     if not d.exists():
         raise HTTPException(404, f"Projet '{project_id}' introuvable")
     return d
@@ -3253,6 +3537,192 @@ async def get_project_workflow_design(project_id: str, wf_name: str):
 @app.put("/api/templates/project-workflow-design/{project_id}/{wf_name}")
 async def put_project_workflow_design(project_id: str, wf_name: str, request: Request):
     project_dir = _project_dir_or_404(project_id)
+    name = _wf_name_safe(wf_name)
+    data = await request.json()
+    _write_json(project_dir / f"{name}.wrk.design.json", data)
+    return {"ok": True}
+
+
+# ── API: Production Project Workflows ──────────────────────────
+
+@app.post("/api/prod-projects/{project_id}/workflows")
+async def create_prod_project_workflow(project_id: str, entry: WorkflowCreate):
+    project_dir = _cfg_project_dir_or_404(project_id)
+    name = _wf_name_safe(entry.name.strip())
+    wf = project_dir / f"{name}.wrk.json"
+    if wf.exists():
+        raise HTTPException(409, f"Le workflow '{name}' existe deja")
+    data = {"phases": {}}
+    if entry.team.strip():
+        data["team"] = entry.team.strip()
+    wf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {"ok": True}
+
+
+@app.post("/api/prod-projects/{project_id}/workflows/generate")
+async def generate_prod_project_workflow(project_id: str, entry: WorkflowGenerate):
+    """Generate a workflow for a production project."""
+    import re as _re
+    project_dir = _cfg_project_dir_or_404(project_id)
+    name = _wf_name_safe(entry.name.strip())
+    wf_path = project_dir / f"{name}.wrk.json"
+    if wf_path.exists():
+        raise HTTPException(409, f"Le workflow '{name}' existe deja")
+    meta_path = PROMPTS_DIR / "CreateWorkflow.md"
+    if not meta_path.exists():
+        raise HTTPException(500, "Meta-prompt CreateWorkflow.md introuvable")
+    system_template = meta_path.read_text(encoding="utf-8")
+    cfg_file = project_dir / "project.json"
+    project_cfg = json.loads(cfg_file.read_text(encoding="utf-8")) if cfg_file.exists() else {}
+    project_prompt_parts = []
+    if project_cfg.get("name"):
+        project_prompt_parts.append(f"Nom du projet : {project_cfg['name']}")
+    if project_cfg.get("description"):
+        project_prompt_parts.append(f"Description : {project_cfg['description']}")
+    if project_cfg.get("team"):
+        project_prompt_parts.append(f"Equipe : {project_cfg['team']}")
+    project_prompt_parts.append(entry.prompt.strip())
+    project_prompt = "\n".join(project_prompt_parts)
+    agents_parts = []
+    _team_id = entry.team or project_cfg.get("team", "")
+    _team_dir = None
+    if _team_id and SHARED_TEAMS_FILE.exists():
+        _teams_cfg = json.loads(SHARED_TEAMS_FILE.read_text(encoding="utf-8"))
+        for t in _teams_cfg.get("teams", []):
+            if t["id"].lower() == _team_id.lower():
+                _team_dir = SHARED_TEAMS_DIR / t["directory"]
+                break
+    _registry_agents = {}
+    if _team_dir:
+        _reg_file = _team_dir / "agents_registry.json"
+        if _reg_file.exists():
+            _registry_agents = json.loads(_reg_file.read_text(encoding="utf-8")).get("agents", {})
+    for agent_id in sorted(_registry_agents):
+        acfg_reg = _registry_agents[agent_id]
+        if acfg_reg.get("type") == "orchestrator":
+            continue
+        sa_dir = SHARED_AGENTS_DIR / agent_id
+        lines = [f"- **{agent_id}**"]
+        agent_json = sa_dir / "agent.json" if sa_dir.is_dir() else None
+        if agent_json and agent_json.exists():
+            acfg = json.loads(agent_json.read_text(encoding="utf-8"))
+            desc = acfg.get("description", "")
+            if desc:
+                lines[0] += f" : {desc}"
+        lines.append("")
+        agents_parts.append("\n".join(lines))
+    available_agents = "\n\n".join(agents_parts) if agents_parts else "(aucun agent disponible)"
+    specs_path = PROJECT_DIR / "docs" / "workflow-model.md"
+    if not specs_path.exists():
+        specs_path = Path(__file__).resolve().parent.parent / "docs" / "workflow-model.md"
+    workflow_spec = specs_path.read_text(encoding="utf-8") if specs_path.exists() else "(specifications non disponibles)"
+    team_id = entry.team or project_cfg.get("team", "")
+    system_prompt = system_template.replace("{project_prompt}", project_prompt).replace("{team_id}", team_id).replace("{available_agents}", available_agents).replace("{workflow_spec}", workflow_spec)
+    user_msg = "Genere le workflow complet pour ce projet. Retourne uniquement le JSON."
+    from datetime import datetime as _dt
+    chat_dir = project_dir / "chat"
+    chat_dir.mkdir(exist_ok=True)
+    ts = _dt.now().strftime("%y%m%d-%H%M%S")
+    trace_content = f"# System Prompt\n\n{system_prompt}\n\n# User Message\n\n{user_msg}\n"
+    (chat_dir / f"{ts}_create.md").write_text(trace_content, encoding="utf-8")
+    try:
+        result = await chat(ChatRequest(messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_msg},
+        ], use_admin_llm=True))
+        raw = result.get("content", "")
+    except Exception as e:
+        raise HTTPException(500, f"Generation echouee: {e}")
+    (chat_dir / f"{ts}_response.md").write_text(raw, encoding="utf-8")
+    json_match = _re.search(r"```(?:json)?\s*\n?(.*?)```", raw, _re.DOTALL)
+    json_str = json_match.group(1).strip() if json_match else raw.strip()
+    try:
+        workflow_data = json.loads(json_str)
+    except json.JSONDecodeError:
+        raise HTTPException(422, "Le LLM n'a pas retourne un JSON valide.")
+    wf_path.write_text(json.dumps(workflow_data, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {"ok": True, "workflow": workflow_data}
+
+
+@app.get("/api/prod-projects/{project_id}/workflows/{wf_name}")
+async def get_prod_project_workflow(project_id: str, wf_name: str):
+    project_dir = _cfg_project_dir_or_404(project_id)
+    name = _wf_name_safe(wf_name)
+    wf = project_dir / f"{name}.wrk.json"
+    if not wf.exists():
+        raise HTTPException(404, f"Workflow '{name}' introuvable")
+    return {"name": name, "content": wf.read_text(encoding="utf-8")}
+
+
+@app.put("/api/prod-projects/{project_id}/workflows/{wf_name}")
+async def put_prod_project_workflow(project_id: str, wf_name: str, entry: WorkflowUpdate):
+    project_dir = _cfg_project_dir_or_404(project_id)
+    name = _wf_name_safe(wf_name)
+    content = entry.content.strip()
+    try:
+        json.loads(content)
+    except json.JSONDecodeError as e:
+        raise HTTPException(400, f"JSON invalide: {e}")
+    (project_dir / f"{name}.wrk.json").write_text(content, encoding="utf-8")
+    return {"ok": True}
+
+
+@app.delete("/api/prod-projects/{project_id}/workflows/{wf_name}")
+async def delete_prod_project_workflow(project_id: str, wf_name: str):
+    project_dir = _cfg_project_dir_or_404(project_id)
+    name = _wf_name_safe(wf_name)
+    wf = project_dir / f"{name}.wrk.json"
+    if not wf.exists():
+        raise HTTPException(404, f"Workflow '{name}' introuvable")
+    wf.unlink()
+    return {"ok": True}
+
+
+@app.post("/api/prod-projects/{project_id}/orchestrator/build")
+async def build_prod_orchestrator_prompt_endpoint(project_id: str):
+    """Build orchestrator prompt for a production project's team."""
+    project_dir = _cfg_project_dir_or_404(project_id)
+    project_json = project_dir / "project.json"
+    if not project_json.exists():
+        raise HTTPException(404, "project.json introuvable")
+    project_cfg = json.loads(project_json.read_text(encoding="utf-8"))
+    team = project_cfg.get("team", "").strip()
+    if not team:
+        raise HTTPException(400, "Le projet n'a pas d'equipe (champ 'team' vide)")
+    return await build_team_orchestrator_prompt(team)
+
+
+# Production project workflow — visual editor endpoints
+@app.get("/api/prod-project-workflow/{project_id}/{wf_name}")
+async def get_prod_project_workflow_editor(project_id: str, wf_name: str):
+    project_dir = _cfg_project_dir_or_404(project_id)
+    name = _wf_name_safe(wf_name)
+    wf = project_dir / f"{name}.wrk.json"
+    return _read_json(wf) if wf.exists() else {}
+
+
+@app.put("/api/prod-project-workflow/{project_id}/{wf_name}")
+async def put_prod_project_workflow_editor(project_id: str, wf_name: str, request: Request):
+    project_dir = _cfg_project_dir_or_404(project_id)
+    name = _wf_name_safe(wf_name)
+    data = await request.json()
+    _write_json(project_dir / f"{name}.wrk.json", data)
+    team_id = data.get("team", "")
+    _generate_phase_files(data, f"{name}.wrk", project_dir, team_id)
+    return {"ok": True}
+
+
+@app.get("/api/prod-project-workflow-design/{project_id}/{wf_name}")
+async def get_prod_project_workflow_design(project_id: str, wf_name: str):
+    project_dir = _cfg_project_dir_or_404(project_id)
+    name = _wf_name_safe(wf_name)
+    path = project_dir / f"{name}.wrk.design.json"
+    return _read_json(path) if path.exists() else {}
+
+
+@app.put("/api/prod-project-workflow-design/{project_id}/{wf_name}")
+async def put_prod_project_workflow_design(project_id: str, wf_name: str, request: Request):
+    project_dir = _cfg_project_dir_or_404(project_id)
     name = _wf_name_safe(wf_name)
     data = await request.json()
     _write_json(project_dir / f"{name}.wrk.design.json", data)
@@ -3506,6 +3976,58 @@ async def deliverable_skillmatch(project_id: str, req: SkillMatchRequest):
     raise HTTPException(500, f"Reponse LLM non parseable: {raw[:500]}")
 
 
+@app.post("/api/prod-projects/{project_id}/deliverable-skillmatch")
+async def prod_deliverable_skillmatch(project_id: str, req: SkillMatchRequest):
+    """Use SkillMatcher.md to auto-select roles/missions/skills for a deliverable (prod scope)."""
+    _cfg_project_dir_or_404(project_id)
+    # Reuse template implementation but skip its _project_dir_or_404 check
+    agent_dir = SHARED_AGENTS_DIR / req.agent_id
+    if not agent_dir.exists():
+        raise HTTPException(404, f"Agent '{req.agent_id}' introuvable")
+    meta_path = PROMPTS_DIR / "SkillMatcher.md"
+    if not meta_path.exists():
+        raise HTTPException(500, "Meta-prompt SkillMatcher.md introuvable")
+    system_prompt = meta_path.read_text(encoding="utf-8")
+    profile_parts = []
+    for f in sorted(agent_dir.iterdir()):
+        if f.is_file() and f.suffix == ".md" and not f.name.endswith("_assign.md") and not f.name.endswith("_unassign.md"):
+            if f.parent.name == "chat":
+                continue
+            content = f.read_text(encoding="utf-8")
+            profile_parts.append(f"--------------- {f.name} ---------------\n{content}")
+    agent_profile = "\n\n".join(profile_parts) if profile_parts else "(aucun profil)"
+    deliverable_ctx = json.dumps({"description": req.description, "agent_id": req.agent_id}, ensure_ascii=False, indent=2)
+    system_prompt = system_prompt.replace("{deliverable}", deliverable_ctx).replace("{agent_profile}", agent_profile)
+    user_msg = "Analyse le livrable et le profil agent. Retourne uniquement le JSON demande, sans bloc de code markdown."
+    result = await chat(ChatRequest(messages=[
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_msg},
+    ], use_admin_llm=True))
+    from datetime import datetime
+    chat_dir = agent_dir / "chat"
+    chat_dir.mkdir(exist_ok=True)
+    ts = datetime.now().strftime("%y%m%d%H%M%S")
+    (chat_dir / f"{ts}_skillmatch_send.md").write_text(
+        json.dumps([{"role": "system", "content": system_prompt}, {"role": "user", "content": user_msg}], indent=2, ensure_ascii=False),
+        encoding="utf-8"
+    )
+    (chat_dir / f"{ts}_skillmatch_response.md").write_text(result.get("content", ""), encoding="utf-8")
+    raw = result.get("content", "")
+    import re as _re
+    json_match = _re.search(r'\{[\s\S]*\}', raw)
+    if json_match:
+        try:
+            parsed = json.loads(json_match.group())
+            roles = [e["file"].removeprefix("role_").removesuffix(".md") for e in (parsed.get("selected_files", {}).get("roles", []))]
+            missions = [e["file"].removeprefix("mission_").removesuffix(".md") for e in (parsed.get("selected_files", {}).get("missions", []))]
+            skills = [e["file"].removeprefix("skill_").removesuffix(".md") for e in (parsed.get("selected_files", {}).get("skills", []))]
+            full_profile = parsed.get("full_profile", False)
+            return {"roles": roles, "missions": missions, "skills": skills, "full_profile": full_profile}
+        except (json.JSONDecodeError, KeyError):
+            pass
+    raise HTTPException(500, f"Reponse LLM non parseable: {raw[:500]}")
+
+
 @app.post("/api/templates/projects/{project_id}/orchestrator/build")
 async def build_orchestrator_prompt_endpoint(project_id: str):
     """Build orchestrator prompt for the project's team — delegates to team build."""
@@ -3586,13 +4108,11 @@ async def get_teams():
         agents_raw = reg.get("agents", {})
         agents_detail = {}
         for aid, acfg in agents_raw.items():
-            # Merge: shared agent properties + team overrides (type, pipeline_steps)
+            # Merge: shared agent properties + team overrides (type)
             shared = shared_agents_map.get(aid, {})
             merged = {**shared}
             if acfg.get("type"):
                 merged["type"] = acfg["type"]
-            if acfg.get("pipeline_steps"):
-                merged["pipeline_steps"] = acfg["pipeline_steps"]
             if "id" not in merged:
                 merged["id"] = aid
             # Orchestrator exception: prefer built prompt (orchestrator_prompt.md), fallback to registry prompt
@@ -3602,13 +4122,19 @@ async def get_teams():
                     team_prompt_file = tdir / acfg.get("prompt", f"{aid}.md")
                 if team_prompt_file.exists():
                     merged["prompt_content"] = team_prompt_file.read_text(encoding="utf-8")
-            # Fallback: if shared agent not found, use legacy registry data
+            # Fallback: if shared agent not found, try config/Agents catalog
             if not shared:
+                for cat_dir in [CFG_AGENTS_DIR / aid]:
+                    cat_file = cat_dir / "agent.json"
+                    if cat_file.exists():
+                        cat = json.loads(cat_file.read_text(encoding="utf-8"))
+                        merged = {**cat, **acfg, "id": aid}
+                        break
+                else:
+                    merged = {**acfg, "id": aid}
                 prompt_file = tdir / acfg.get("prompt", f"{aid}.md")
-                prompt_content = ""
                 if prompt_file.exists():
-                    prompt_content = prompt_file.read_text(encoding="utf-8")
-                merged = {**acfg, "prompt_content": prompt_content, "id": aid}
+                    merged["prompt_content"] = prompt_file.read_text(encoding="utf-8")
             agents_detail[aid] = merged
         # Read MCP access
         mcp_access = _read_json(tdir / "agent_mcp_access.json") if (tdir / "agent_mcp_access.json").exists() else {}
@@ -3777,7 +4303,7 @@ async def delete_team(team_id: str):
 async def list_templates():
     """List available team templates from Shared/Teams/.
 
-    The registry only stores references (type + pipeline_steps).
+    The registry only stores references (type).
     Agent properties are resolved from Shared/Agents/{id}/agent.json + prompt.md.
     """
     # Build name lookup from teams.json
@@ -3824,24 +4350,28 @@ async def list_templates():
                 agents_raw = reg.get("agents", {})
                 agents_detail = {}
                 for aid, acfg in agents_raw.items():
-                    # Merge: shared agent properties + team overrides (type, pipeline_steps)
+                    # Merge: shared agent properties + team overrides (type)
                     shared = shared_agents_map.get(aid, {})
                     merged = {**shared}
                     if acfg.get("type"):
                         merged["type"] = acfg["type"]
-                    if acfg.get("pipeline_steps"):
-                        merged["pipeline_steps"] = acfg["pipeline_steps"]
                     if acfg.get("delegates_to"):
                         merged["delegates_to"] = acfg["delegates_to"]
                     if "id" not in merged:
                         merged["id"] = aid
-                    # Fallback: if shared agent not found, use legacy registry data
+                    # Fallback: if shared agent not found, try config/Agents catalog
                     if not shared:
+                        for cat_dir in [CFG_AGENTS_DIR / aid]:
+                            cat_file = cat_dir / "agent.json"
+                            if cat_file.exists():
+                                cat = json.loads(cat_file.read_text(encoding="utf-8"))
+                                merged = {**cat, **acfg, "id": aid}
+                                break
+                        else:
+                            merged = {**acfg, "id": aid}
                         prompt_file = d / acfg.get("prompt", f"{aid}.md")
-                        prompt_content = ""
                         if prompt_file.exists():
-                            prompt_content = prompt_file.read_text(encoding="utf-8")
-                        merged = {**acfg, "prompt_content": prompt_content, "id": aid}
+                            merged["prompt_content"] = prompt_file.read_text(encoding="utf-8")
                     # For orchestrator type, load orchestrator_prompt.md from team dir
                     if merged.get("type") == "orchestrator":
                         orch_prompt_file = d / "orchestrator_prompt.md"
@@ -3862,6 +4392,124 @@ async def list_templates():
                     "report_exists": (d / "report.md").exists(),
                 })
     return {"templates": templates}
+
+
+# ── Production teams endpoints (config/Teams/) ──
+
+@app.get("/api/prod-teams")
+async def get_prod_teams():
+    """Read production teams list from config/teams.json."""
+    return _read_json(TEAMS_FILE) if TEAMS_FILE.exists() else {"teams": [], "channel_mapping": {}}
+
+
+@app.put("/api/prod-teams")
+async def save_prod_teams(request: Request):
+    """Write production teams list and ensure directories exist."""
+    data = await request.json()
+    _write_json(TEAMS_FILE, data)
+    for team in data.get("teams", []):
+        directory = team.get("directory", "")
+        if directory:
+            team_dir = TEAMS_DIR / directory
+            if not team_dir.exists():
+                team_dir.mkdir(parents=True, exist_ok=True)
+                _write_json(team_dir / "agents_registry.json", {"agents": {
+                    "orchestrator": {
+                        "name": "Orchestrateur",
+                        "temperature": 0.2,
+                        "max_tokens": 4096,
+                        "prompt": "orchestrator.md",
+                        "type": "orchestrator"
+                    }
+                }})
+                _write_json(team_dir / "agent_mcp_access.json", {})
+    return {"ok": True}
+
+
+@app.get("/api/prod-teams-detail")
+async def list_prod_teams_detail():
+    """List production team templates from config/Teams/, merging with config/Agents/."""
+    teams_cfg = _read_json(TEAMS_FILE) if TEAMS_FILE.exists() else {}
+    name_map = {t.get("directory", ""): t.get("name", "") for t in teams_cfg.get("teams", []) if t.get("directory")}
+    agents_map = {}
+    if CFG_AGENTS_DIR.exists():
+        for sa_dir in CFG_AGENTS_DIR.iterdir():
+            if sa_dir.is_dir():
+                cfg_file = sa_dir / "agent.json"
+                if cfg_file.exists():
+                    cfg = json.loads(cfg_file.read_text(encoding="utf-8"))
+                    cfg["id"] = sa_dir.name
+                    agents_map[sa_dir.name] = cfg
+    templates = []
+    if TEAMS_DIR.exists():
+        for d in sorted(TEAMS_DIR.iterdir()):
+            if d.is_dir():
+                reg = _read_json(d / "agents_registry.json") if (d / "agents_registry.json").exists() else {}
+                agents_raw = reg.get("agents", {})
+                agents_detail = {}
+                for aid, acfg in agents_raw.items():
+                    shared = agents_map.get(aid, {})
+                    merged = {**shared}
+                    for k in ("type", "delegates_to"):
+                        if acfg.get(k):
+                            merged[k] = acfg[k]
+                    if "id" not in merged:
+                        merged["id"] = aid
+                    if not shared:
+                        # Try Shared/Agents catalog as secondary fallback
+                        sa_file = SHARED_AGENTS_DIR / aid / "agent.json"
+                        if sa_file.exists():
+                            cat = json.loads(sa_file.read_text(encoding="utf-8"))
+                            merged = {**cat, **acfg, "id": aid}
+                        else:
+                            merged = {**acfg, "id": aid}
+                    agents_detail[aid] = merged
+                mcp_access = _read_json(d / "agent_mcp_access.json") if (d / "agent_mcp_access.json").exists() else {}
+                templates.append({
+                    "id": d.name,
+                    "name": name_map.get(d.name, d.name),
+                    "agents": agents_detail,
+                    "agent_count": len(agents_raw),
+                    "mcp_access": mcp_access,
+                })
+    return {"templates": templates}
+
+
+@app.post("/api/prod-teams/copy-from-config")
+async def copy_prod_teams_from_config(request: Request):
+    """Copy selected team directories from Shared/Teams/ to config/Teams/."""
+    body = await request.json()
+    team_ids = body.get("team_ids", [])
+    if not team_ids:
+        raise HTTPException(400, "Aucune equipe selectionnee")
+    # Read source teams metadata
+    src_teams = _read_json(SHARED_TEAMS_FILE) if SHARED_TEAMS_FILE.exists() else {}
+    src_list = src_teams.get("teams", [])
+    # Read/init destination teams metadata
+    dst_teams = _read_json(TEAMS_FILE) if TEAMS_FILE.exists() else {"teams": [], "channel_mapping": {}}
+    dst_ids = {t["id"] for t in dst_teams.get("teams", [])}
+    copied = 0
+    for tid in team_ids:
+        src_team = next((t for t in src_list if t.get("id") == tid), None)
+        if not src_team:
+            continue
+        directory = src_team.get("directory", "")
+        if not directory:
+            continue
+        src_dir = SHARED_TEAMS_DIR / directory
+        if not src_dir.exists():
+            continue
+        dst_dir = TEAMS_DIR / directory
+        if dst_dir.exists():
+            shutil.rmtree(dst_dir)
+        shutil.copytree(src_dir, dst_dir)
+        # Add to teams.json if not already there
+        if tid not in dst_ids:
+            dst_teams["teams"].append(src_team)
+            dst_ids.add(tid)
+        copied += 1
+    _write_json(TEAMS_FILE, dst_teams)
+    return {"ok": True, "copied": copied}
 
 
 @app.get("/api/templates/llm")
@@ -4024,7 +4672,7 @@ def _shared_team_dir(directory: str) -> Path:
 async def add_template_agent(cfg: AgentConfig):
     """Add an agent reference to a Shared template directory.
 
-    Only stores type (+ pipeline_steps if applicable).
+    Only stores type.
     Agent properties come from Shared/Agents/{id}/agent.json.
     """
     tdir = _shared_team_dir(cfg.team_id)
@@ -4039,12 +4687,10 @@ async def add_template_agent(cfg: AgentConfig):
         data["agents"] = {}
     if cfg.id in data["agents"]:
         raise HTTPException(409, f"Agent {cfg.id} already exists")
-    # Store only reference: type + pipeline_steps
+    # Store only reference: type
     agent_data: dict = {}
     if cfg.type:
         agent_data["type"] = cfg.type
-    if cfg.pipeline_steps:
-        agent_data["pipeline_steps"] = cfg.pipeline_steps
     data["agents"][cfg.id] = agent_data
     _write_json(registry_path, data)
     _invalidate_orchestrator_prompt_for_team(cfg.team_id)
@@ -4055,7 +4701,7 @@ async def add_template_agent(cfg: AgentConfig):
 async def update_template_agent(agent_id: str, cfg: AgentConfig):
     """Update an agent reference in a Shared template directory.
 
-    Only type and pipeline_steps can be overridden per-team.
+    Only type can be overridden per-team.
     """
     tdir = _shared_team_dir(cfg.team_id)
     registry_path = tdir / "agents_registry.json"
@@ -4066,10 +4712,6 @@ async def update_template_agent(agent_id: str, cfg: AgentConfig):
     old_delegates = sorted(existing.get("delegates_to", []))
     if cfg.type:
         existing["type"] = cfg.type
-    if cfg.pipeline_steps:
-        existing["pipeline_steps"] = cfg.pipeline_steps
-    elif "pipeline_steps" in existing:
-        del existing["pipeline_steps"]
     if cfg.delegates_to:
         existing["delegates_to"] = cfg.delegates_to
     elif "delegates_to" in existing:
@@ -4100,6 +4742,68 @@ async def delete_template_agent(agent_id: str, team_id: str = ""):
         prompt_path.unlink()
         log.info("Deleted prompt file: %s", prompt_path)
     _invalidate_orchestrator_prompt_for_team(team_id)
+    return {"ok": True}
+
+
+# ── Production agents-in-team (config/Teams/) ──────
+
+def _cfg_team_dir(directory: str) -> Path:
+    if ".." in directory or "/" in directory or "\\" in directory:
+        raise HTTPException(400, "Directory invalide")
+    return TEAMS_DIR / directory
+
+
+@app.post("/api/prod-team-agents")
+async def add_prod_team_agent(cfg: AgentConfig):
+    tdir = _cfg_team_dir(cfg.team_id)
+    tdir.mkdir(parents=True, exist_ok=True)
+    agent_dir = CFG_AGENTS_DIR / cfg.id
+    if not (agent_dir / "agent.json").exists():
+        raise HTTPException(404, f"Agent '{cfg.id}' introuvable dans config/Agents/")
+    registry_path = tdir / "agents_registry.json"
+    data = _read_json(registry_path) if registry_path.exists() else {"agents": {}}
+    if "agents" not in data:
+        data["agents"] = {}
+    if cfg.id in data["agents"]:
+        raise HTTPException(409, f"Agent {cfg.id} existe deja")
+    agent_data = {}
+    if cfg.type:
+        agent_data["type"] = cfg.type
+    data["agents"][cfg.id] = agent_data
+    _write_json(registry_path, data)
+    return {"ok": True}
+
+
+@app.put("/api/prod-team-agents/{agent_id}")
+async def update_prod_team_agent(agent_id: str, cfg: AgentConfig):
+    tdir = _cfg_team_dir(cfg.team_id)
+    registry_path = tdir / "agents_registry.json"
+    data = _read_json(registry_path) if registry_path.exists() else {"agents": {}}
+    if agent_id not in data.get("agents", {}):
+        raise HTTPException(404, f"Agent {agent_id} introuvable")
+    existing = data["agents"][agent_id]
+    if cfg.type:
+        existing["type"] = cfg.type
+    if cfg.delegates_to:
+        existing["delegates_to"] = cfg.delegates_to
+    elif "delegates_to" in existing:
+        del existing["delegates_to"]
+    data["agents"][agent_id] = existing
+    _write_json(registry_path, data)
+    return {"ok": True}
+
+
+@app.delete("/api/prod-team-agents/{agent_id}")
+async def delete_prod_team_agent(agent_id: str, team_id: str = ""):
+    tdir = _cfg_team_dir(team_id)
+    registry_path = tdir / "agents_registry.json"
+    data = _read_json(registry_path) if registry_path.exists() else {"agents": {}}
+    if agent_id not in data.get("agents", {}):
+        raise HTTPException(404, f"Agent {agent_id} introuvable")
+    if data["agents"][agent_id].get("type") == "orchestrator":
+        raise HTTPException(403, "L'orchestrateur ne peut pas etre supprime")
+    del data["agents"][agent_id]
+    _write_json(registry_path, data)
     return {"ok": True}
 
 
@@ -4156,7 +4860,13 @@ def _invalidate_orchestrator_prompt_for_team(team_dir: str):
 
 @app.post("/api/templates/teams/{team_dir}/orchestrator/build")
 async def build_team_orchestrator_prompt(team_dir: str):
-    """Build orchestrator prompt for a team using translateOrchestrator.md + LLM."""
+    """Build orchestrator prompt for a template team."""
+    tdir = _shared_team_dir(team_dir)
+    return await _build_orchestrator_prompt(tdir, team_dir)
+
+
+async def _build_orchestrator_prompt_old(tdir: Path, team_dir: str):
+    """Old build function — dead code, kept temporarily."""
     tdir = _shared_team_dir(team_dir)
     reg_file = tdir / "agents_registry.json"
     if not reg_file.exists():
@@ -4198,6 +4908,13 @@ async def build_team_orchestrator_prompt(team_dir: str):
         for sub_id in acfg.get("delegates_to", []):
             boss_map.setdefault(sub_id, []).append(aid)
 
+    # Helper: resolve agent name from catalog
+    def _resolve_name(aid):
+        for cat in [SHARED_AGENTS_DIR / aid / "agent.json", CFG_AGENTS_DIR / aid / "agent.json"]:
+            if cat.exists():
+                return json.loads(cat.read_text(encoding="utf-8")).get("name", aid)
+        return agents.get(aid, {}).get("name", aid)
+
     # Process each agent individually: one LLM call per agent, with hash-based cache
     chat_dir = tdir / "chat"
     chat_dir.mkdir(exist_ok=True)
@@ -4211,12 +4928,20 @@ async def build_team_orchestrator_prompt(team_dir: str):
         if agent_cfg.get("type") == "orchestrator" or agent_id == "orchestrator":
             continue
 
-        agent_name = agent_cfg.get("name", agent_id)
+        # Resolve agent name from catalog (not registry)
+        agent_name = agent_id
+        agent_catalog_dir = None
+        for cat_dir in [SHARED_AGENTS_DIR / agent_id, CFG_AGENTS_DIR / agent_id]:
+            cat_file = cat_dir / "agent.json"
+            if cat_file.exists():
+                cat_data = json.loads(cat_file.read_text(encoding="utf-8"))
+                agent_name = cat_data.get("name", agent_id)
+                agent_catalog_dir = cat_dir
+                break
 
-        # Build agent_profile from all .md files in Shared/Agents/{agent_id}/
+        # Build agent_profile from all .md files in agent catalog dir
         profile_parts = []
-        agent_catalog_dir = SHARED_AGENTS_DIR / agent_id
-        if agent_catalog_dir.is_dir():
+        if agent_catalog_dir and agent_catalog_dir.is_dir():
             for f in sorted(agent_catalog_dir.iterdir()):
                 if f.is_file() and f.suffix == ".md":
                     content = f.read_text(encoding="utf-8").strip()
@@ -4225,7 +4950,7 @@ async def build_team_orchestrator_prompt(team_dir: str):
                         profile_parts.append(f"{label} : {content}")
 
         # Also read description from agent.json
-        agent_json = agent_catalog_dir / "agent.json" if agent_catalog_dir.is_dir() else None
+        agent_json = agent_catalog_dir / "agent.json" if agent_catalog_dir and agent_catalog_dir.is_dir() else None
         description = ""
         if agent_json and agent_json.exists():
             acfg_data = json.loads(agent_json.read_text(encoding="utf-8"))
@@ -4236,10 +4961,10 @@ async def build_team_orchestrator_prompt(team_dir: str):
         # Inject hierarchy block (Boss/Sub relationships)
         hierarchy_lines = []
         for sub_id in agent_cfg.get("delegates_to", []):
-            sub_name = agents.get(sub_id, {}).get("name", sub_id)
+            sub_name = _resolve_name(sub_id)
             hierarchy_lines.append(f"-  Sub : {sub_name} id {sub_id}")
         for boss_id in boss_map.get(agent_id, []):
-            boss_name = agents.get(boss_id, {}).get("name", boss_id)
+            boss_name = _resolve_name(boss_id)
             hierarchy_lines.append(f"-  managed_by : id {boss_id} {boss_name}")
         if hierarchy_lines:
             hierarchy_block = "\n".join(hierarchy_lines) + "\n"
@@ -4297,6 +5022,144 @@ async def build_team_orchestrator_prompt(team_dir: str):
     output_file.write_text(content, encoding="utf-8")
     log.info("Orchestrator prompt built for team %s: %s", team_dir, output_file)
 
+    return {"ok": True, "content": content}
+
+
+@app.post("/api/prod-teams/{team_dir}/orchestrator/build")
+async def build_prod_team_orchestrator_prompt(team_dir: str):
+    """Build orchestrator prompt for a production team — delegates to same logic."""
+    # Reuse the same function but with config/Teams/ directory
+    tdir = _cfg_team_dir(team_dir)
+    reg_file = tdir / "agents_registry.json"
+    if not reg_file.exists():
+        raise HTTPException(404, f"agents_registry.json introuvable pour {team_dir}")
+    # Temporarily swap _shared_team_dir resolution for the build
+    # The build function uses SHARED_AGENTS_DIR which is fine for catalog lookup
+    # We just need to make sure it reads from the right team dir
+    return await _build_orchestrator_prompt(tdir, team_dir)
+
+
+async def _build_orchestrator_prompt(tdir: Path, team_dir: str):
+    """Shared orchestrator prompt build logic."""
+    reg_file = tdir / "agents_registry.json"
+    if not reg_file.exists():
+        raise HTTPException(404, f"agents_registry.json introuvable pour {team_dir}")
+
+    registry = json.loads(reg_file.read_text(encoding="utf-8"))
+    agents = registry.get("agents", {})
+
+    _parents = {}
+    for aid, acfg in agents.items():
+        for sub in acfg.get("delegates_to", []):
+            _parents.setdefault(sub, set()).add(aid)
+    _in_degree = {aid: len(_parents.get(aid, set())) for aid in agents}
+    _queue = [aid for aid, deg in _in_degree.items() if deg == 0]
+    sorted_agent_ids = []
+    while _queue:
+        _queue.sort()
+        aid = _queue.pop(0)
+        sorted_agent_ids.append(aid)
+        for sub in agents[aid].get("delegates_to", []):
+            if sub in _in_degree:
+                _in_degree[sub] -= 1
+                if _in_degree[sub] == 0:
+                    _queue.append(sub)
+    for aid in agents:
+        if aid not in sorted_agent_ids:
+            sorted_agent_ids.append(aid)
+
+    template_path = SHARED_DIR / "Prompts" / _CULTURE / "translateOrchestrator.md"
+    if not template_path.exists():
+        raise HTTPException(404, f"Template translateOrchestrator.md introuvable pour culture {_CULTURE}")
+    template = template_path.read_text(encoding="utf-8")
+
+    boss_map = {}
+    for aid, acfg in agents.items():
+        for sub_id in acfg.get("delegates_to", []):
+            boss_map.setdefault(sub_id, []).append(aid)
+
+    def _resolve_name(aid):
+        for cat in [SHARED_AGENTS_DIR / aid / "agent.json", CFG_AGENTS_DIR / aid / "agent.json"]:
+            if cat.exists():
+                return json.loads(cat.read_text(encoding="utf-8")).get("name", aid)
+        return agents.get(aid, {}).get("name", aid)
+
+    chat_dir = tdir / "chat"
+    chat_dir.mkdir(exist_ok=True)
+    cache_dir = tdir / "tmp"
+    cache_dir.mkdir(exist_ok=True)
+    ts = datetime.now().strftime("%y%m%d-%H%M%S")
+    all_cards = []
+
+    for agent_id in sorted_agent_ids:
+        agent_cfg = agents[agent_id]
+        if agent_cfg.get("type") == "orchestrator" or agent_id == "orchestrator":
+            continue
+
+        agent_name = _resolve_name(agent_id)
+        agent_catalog_dir = None
+        for cat_dir in [SHARED_AGENTS_DIR / agent_id, CFG_AGENTS_DIR / agent_id]:
+            if cat_dir.is_dir():
+                agent_catalog_dir = cat_dir
+                break
+
+        profile_parts = []
+        if agent_catalog_dir and agent_catalog_dir.is_dir():
+            for f in sorted(agent_catalog_dir.iterdir()):
+                if f.is_file() and f.suffix == ".md":
+                    content = f.read_text(encoding="utf-8").strip()
+                    if content:
+                        label = f.stem.split("_")[0]
+                        profile_parts.append(f"{label} : {content}")
+
+        agent_json = agent_catalog_dir / "agent.json" if agent_catalog_dir else None
+        description = ""
+        if agent_json and agent_json.exists():
+            acfg_data = json.loads(agent_json.read_text(encoding="utf-8"))
+            description = acfg_data.get("description", "")
+        if description:
+            profile_parts.insert(0, f"{description}\n")
+
+        hierarchy_lines = []
+        for sub_id in agent_cfg.get("delegates_to", []):
+            hierarchy_lines.append(f"-  Sub : {_resolve_name(sub_id)} id {sub_id}")
+        for boss_id in boss_map.get(agent_id, []):
+            hierarchy_lines.append(f"-  managed_by : id {boss_id} {_resolve_name(boss_id)}")
+        if hierarchy_lines:
+            insert_pos = 1 if description else 0
+            profile_parts.insert(insert_pos, "\n".join(hierarchy_lines) + "\n")
+
+        agent_profile = "\n".join(profile_parts) if profile_parts else "(aucun profil disponible)"
+        agent_prompt = template.replace("{agent_profile}", agent_profile).replace("{agent_id}", agent_id).replace("{agent_name}", agent_name)
+
+        prompt_hash = hashlib.sha256(agent_prompt.encode("utf-8")).hexdigest()
+        cache_file = cache_dir / f"{prompt_hash}.xml"
+
+        if cache_file.exists():
+            card = cache_file.read_text(encoding="utf-8").strip()
+        else:
+            send_file = chat_dir / f"{ts}_orchestrator_build_{agent_id}_send.md"
+            send_file.write_text(agent_prompt, encoding="utf-8")
+            try:
+                result = await chat(ChatRequest(messages=[{"role": "user", "content": agent_prompt}], use_admin_llm=True))
+                card = result.get("content", "").strip()
+                (chat_dir / f"{ts}_orchestrator_build_{agent_id}_response.md").write_text(card, encoding="utf-8")
+                cache_file.write_text(card, encoding="utf-8")
+            except Exception as e:
+                all_cards.append((agent_id, agent_name, f"<!-- Erreur: {e} -->"))
+                continue
+
+        all_cards.append((agent_id, agent_name, card))
+        clean_card = re.sub(r"</?(?:orchestrator_card|card)[^>]*>", "", card).strip()
+        (tdir / f"orch_{agent_id}.md").write_text(f"### {agent_name} - id : {agent_id}\n{clean_card}\n", encoding="utf-8")
+
+    stripped_cards = []
+    for aid, aname, card in all_cards:
+        clean = re.sub(r"</?orchestrator_card[^>]*>", "", card).strip()
+        stripped_cards.append(f"### {aname} - id : {aid}\n\n{clean}")
+    content = "\n\n".join(stripped_cards)
+
+    (tdir / "orchestrator_prompt.md").write_text(content, encoding="utf-8")
     return {"ok": True, "content": content}
 
 
@@ -4404,8 +5267,8 @@ def _get_repo_cfg(repo_key: str) -> dict:
         if data.get("path"):
             return data
     # Fallback: derive from git_service.json
-    if GIT_SERVICE_FILE.exists():
-        svc = _read_json(GIT_SERVICE_FILE)
+    if SHARED_GIT_FILE.exists():
+        svc = _read_json(SHARED_GIT_FILE)
         login = svc.get("login", "")
         token = svc.get("token", "")
         if login and token:
@@ -4523,8 +5386,8 @@ async def git_service_types():
 def _git_svc_file(scope: str) -> Path:
     """Return the git service config file for a scope."""
     if scope == "configs":
-        return CFG_GIT_SERVICE_FILE
-    return GIT_SERVICE_FILE
+        return CONFIGS_GIT_FILE
+    return SHARED_GIT_FILE
 
 
 @app.get("/api/git-svc/{scope}/config")
@@ -4545,13 +5408,15 @@ async def save_git_svc_config(scope: str, request: Request):
     body = await request.json()
     f = _git_svc_file(scope)
     f.parent.mkdir(parents=True, exist_ok=True)
-    _write_json(f, {
+    existing = _read_json(f) if f.exists() else {}
+    existing.update({
         "service": body.get("service", ""),
         "url": body.get("url", ""),
         "login": body.get("login", ""),
         "token": body.get("token", ""),
         "repo_name": body.get("repo_name", ""),
     })
+    _write_json(f, existing)
     return {"ok": True}
 
 

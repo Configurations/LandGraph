@@ -240,9 +240,9 @@ function showModal(html, cssClass = '') {
 }
 
 function closeModal(id) {
-  if (_tplDockerfileBuildAbort) {
-    try { _tplDockerfileBuildAbort.abort(); } catch {}
-    _tplDockerfileBuildAbort = null;
+  // Abort any running docker build stream
+  for (const s of Object.values(_dfScopes)) {
+    if (s.abort) { try { s.abort.abort(); } catch {} s.abort = null; }
   }
   if (id) {
     const el = document.getElementById(id);
@@ -1034,7 +1034,7 @@ function renderAgents() {
       return `<div class="agent-card${isOrch ? ' agent-orchestrator' : ''}" onclick="editAgent('${escHtml(id)}')">
         <div class="agent-card-header">
           <div>
-            <h4>${isOrch ? '<span class="orch-badge" title="Orchestrateur">&#9733;</span> ' : ''}${escHtml(a.name)}${a.docker_mode ? ' <svg title="Docker" width="18" height="13" viewBox="0 0 256 185" style="vertical-align:middle;margin-left:4px"><path fill="#0db7ed" d="M250 87c-3-2-10-4-18-3-2-13-10-24-19-31l-4-2-2 4c-3 5-5 12-4 18 0 4 1 8 3 12-5 2-13 4-24 4H1l-1 4c-1 12 2 27 9 38 8 12 20 18 36 18 34 0 60-16 72-49 5 0 15 0 20-10l1-2-3-1zM28 81H8v20h20V81zm26 0H34v20h20V81zm26 0H60v20h20V81zm26 0H86v20h20V81zm-78-24H8v20h20V57zm26 0H34v20h20V57zm26 0H60v20h20V57zm26 0H86v20h20V57zm0-24H86v20h20V33z"/></svg>' : ''}</h4>
+            <h4>${isOrch ? '<span class="orch-badge" title="Orchestrateur">&#9733;</span> ' : ''}${escHtml(a.name || a.id || '')}${a.docker_mode ? ' <svg title="Docker" width="18" height="13" viewBox="0 0 256 185" style="vertical-align:middle;margin-left:4px"><path fill="#0db7ed" d="M250 87c-3-2-10-4-18-3-2-13-10-24-19-31l-4-2-2 4c-3 5-5 12-4 18 0 4 1 8 3 12-5 2-13 4-24 4H1l-1 4c-1 12 2 27 9 38 8 12 20 18 36 18 34 0 60-16 72-49 5 0 15 0 20-10l1-2-3-1zM28 81H8v20h20V81zm26 0H34v20h20V81zm26 0H60v20h20V81zm26 0H86v20h20V81zm-78-24H8v20h20V57zm26 0H34v20h20V57zm26 0H60v20h20V57zm26 0H86v20h20V57zm0-24H86v20h20V33z"/></svg>' : ''}</h4>
             <code style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(id)}</code>
           </div>
           ${isOrch ? '' : `<button class="btn-icon danger" onclick="event.stopPropagation();deleteAgent('${escHtml(id)}')" title="Supprimer">
@@ -1045,7 +1045,7 @@ function renderAgents() {
           <span class="tag tag-blue">temp: ${a.temperature}</span>
           <span class="tag tag-blue">tokens: ${a.max_tokens}</span>
           ${a.model ? `<span class="tag tag-yellow">${escHtml(a.model)}</span>` : ''}
-          ${a.type ? `<span class="tag tag-gray">${escHtml(a.type)}</span>` : ''}
+          ${a.type ? `<span class="tag tag-gray">${escHtml(a.type === 'pipeline' ? 'manager' : a.type)}</span>` : ''}
         </div>
         ${mcpList.length ? `<div class="agent-meta" style="margin-top:0.5rem">
           ${mcpList.map(m => `<span class="tag tag-green">${escHtml(m)}</span>`).join('')}
@@ -1085,7 +1085,7 @@ async function editAgent(id) {
     : '<p style="color:var(--text-secondary);font-size:0.8rem">Aucun serveur MCP installe.</p>';
 
   const isOrchestrator = a.type === 'orchestrator';
-  const hasPipeline = a.type === 'pipeline' || (a.pipeline_steps && a.pipeline_steps.length > 0);
+  const hasPipeline = a.type === 'pipeline';
   const curType = isOrchestrator ? 'orchestrator' : (hasPipeline ? 'pipeline' : 'single');
   const hasOtherOrch = Object.entries(agents).some(([aid, ag]) => aid !== id && ag.type === 'orchestrator');
 
@@ -1104,12 +1104,11 @@ async function editAgent(id) {
 
   showModal(`
     <div class="modal-header">
-      <h3>Agent: ${escHtml(a.name)} (${escHtml(id)})</h3>
+      <h3>Agent: ${escHtml(a.name || a.id || '')} (${escHtml(id)})</h3>
       <button class="btn-icon" onclick="closeModal()">&times;</button>
     </div>
     <div class="agent-tabs">
       <div class="agent-tab active" onclick="switchAgentTab('divers')">Divers</div>
-      <div class="agent-tab" onclick="switchAgentTab('pipeline')">Pipeline Steps</div>
       <div class="agent-tab" id="agent-tab-header-delegates" onclick="switchAgentTab('delegates')" style="${curType === 'pipeline' ? '' : 'display:none'}">Sous-traitance</div>
     </div>
 
@@ -1118,7 +1117,7 @@ async function editAgent(id) {
       <div class="form-row">
         <div class="form-group">
           <label>Nom</label>
-          <input id="agent-edit-name" value="${escHtml(a.name)}" />
+          <input id="agent-edit-name" value="${escHtml(a.name || a.id || '')}" />
         </div>
         <div class="form-group">
           <label>Modele LLM</label>
@@ -1142,7 +1141,7 @@ async function editAgent(id) {
         <label>Type</label>
         <select id="agent-edit-type" onchange="document.getElementById('agent-tab-header-delegates').style.display=this.value==='pipeline'?'':'none'">
           <option value="single" ${curType==='single'?'selected':''}>Single</option>
-          <option value="pipeline" ${curType==='pipeline'?'selected':''}>Pipeline</option>
+          <option value="pipeline" ${curType==='pipeline'?'selected':''}>Manager</option>
           <option value="orchestrator" ${curType==='orchestrator'?'selected':''} ${hasOtherOrch && curType!=='orchestrator'?'disabled':''}>Orchestrator</option>
         </select>
       </div>
@@ -1152,11 +1151,6 @@ async function editAgent(id) {
           ${mcpChips}
         </div>
       </div>
-    </div>
-
-    <!-- Tab: Pipeline Steps -->
-    <div id="agent-tab-pipeline" class="agent-tab-content">
-      <div id="agent-edit-pipeline-steps" class="pipeline-steps-container"></div>
     </div>
 
     <!-- Tab: Sous-traitance -->
@@ -1172,7 +1166,6 @@ async function editAgent(id) {
       <button class="btn btn-outline" onclick="closeModal()">Fermer</button>
     </div>
   `, 'modal-agent');
-  renderPipelineSteps('agent-edit-pipeline-steps', a.pipeline_steps || []);
 }
 
 function switchPromptTab(tab) {
@@ -1239,12 +1232,6 @@ async function saveAgent(id) {
   if (agentType === 'orchestrator' && Object.entries(agents).some(([aid, ag]) => aid !== id && ag.type === 'orchestrator')) {
     toast('Un orchestrator existe deja dans cette equipe', 'error'); return;
   }
-  const pipeline_steps = getPipelineSteps('agent-edit-pipeline-steps');
-  // Validate JSON blocks in pipeline step instructions
-  for (const step of pipeline_steps) {
-    const errs = validateJsonBlocks(step.instruction || '');
-    if (errs.length) { toast(`Step "${step.name}": ${errs.join(', ')}`, 'error'); return; }
-  }
   const mcpCheckboxes = document.querySelectorAll('.agent-mcp-cb:checked');
   const mcpList = Array.from(mcpCheckboxes).map(cb => cb.value);
   const delegateCbs = document.querySelectorAll('.agent-delegate-cb:checked');
@@ -1255,7 +1242,7 @@ async function saveAgent(id) {
     await Promise.all([
       api(`/api/agents/${id}`, {
         method: 'PUT',
-        body: { id, name, model, temperature, max_tokens, prompt_file: '', type: agentType, pipeline_steps, delegates_to, team_id: agents[id]._team_id || 'default' }
+        body: { id, name, model, temperature, max_tokens, prompt_file: '', type: agentType, delegates_to, team_id: agents[id]._team_id || 'default' }
       }),
       api(`/api/agents/mcp-access/${encodeURIComponent(teamDir)}/${encodeURIComponent(id)}`, { method: 'PUT', body: { servers: mcpList } }),
     ]);
@@ -1271,7 +1258,7 @@ async function showAddAgentModal() {
 
   // Load shared agents catalog
   let sharedList = [];
-  try { const d = await api('/api/shared-agents'); sharedList = d.agents || []; } catch {}
+  try { const d = await api(_saApiBase); sharedList = d.agents || []; } catch {}
   const agentOpts = sharedList.length
     ? sharedList.map(a => `<option value="${escHtml(a.id)}" data-name="${escHtml(a.name || a.id)}" data-llm="${escHtml(a.llm || '')}" data-temp="${a.temperature ?? 0.2}">${escHtml(a.name || a.id)} (${escHtml(a.id)})</option>`).join('')
     : '';
@@ -1316,7 +1303,7 @@ async function showAddAgentModal() {
       <label>Type</label>
       <select id="agent-new-type">
         <option value="single" selected>Single</option>
-        <option value="pipeline">Pipeline</option>
+        <option value="pipeline">Manager</option>
         <option value="orchestrator" ${Object.values(agents).some(ag => ag.type === 'orchestrator') ? 'disabled' : ''}>Orchestrator</option>
       </select>
     </div>
@@ -1356,7 +1343,7 @@ async function addAgent() {
   // Load prompt + MCP from the shared agent catalog
   let prompt_content = '', mcp_access = [];
   try {
-    const sa = await api(`/api/shared-agents/${encodeURIComponent(id)}`);
+    const sa = await api(_saApiBase + '/' + encodeURIComponent(id));
     prompt_content = sa.prompt_content || '';
     mcp_access = sa.mcp_access || [];
   } catch {}
@@ -1364,7 +1351,7 @@ async function addAgent() {
   try {
     await api('/api/agents', {
       method: 'POST',
-      body: { id, name, model, temperature, max_tokens: 32768, prompt_content, prompt_file: '', type: agentType, pipeline_steps: [], team_id }
+      body: { id, name, model, temperature, max_tokens: 32768, prompt_content, prompt_file: '', type: agentType, team_id }
     });
     if (mcp_access.length) {
       await api(`/api/agents/mcp-access/${encodeURIComponent(teamDir)}/${encodeURIComponent(id)}`, { method: 'PUT', body: { servers: mcp_access } });
@@ -2579,7 +2566,7 @@ function renderTeams() {
       return `<div class="agent-card${isOrch ? ' agent-orchestrator' : ''}" style="cursor:pointer">
         <div class="agent-card-header">
           <div onclick="editCfgAgent('${escHtml(dir)}','${escHtml(aid)}')" style="flex:1;cursor:pointer">
-            <h4>${isOrch ? '<span class="orch-badge" title="Orchestrateur">&#9733;</span> ' : ''}${escHtml(a.name)}${a.docker_mode ? ' <svg title="Docker" width="18" height="13" viewBox="0 0 256 185" style="vertical-align:middle;margin-left:4px"><path fill="#0db7ed" d="M250 87c-3-2-10-4-18-3-2-13-10-24-19-31l-4-2-2 4c-3 5-5 12-4 18 0 4 1 8 3 12-5 2-13 4-24 4H1l-1 4c-1 12 2 27 9 38 8 12 20 18 36 18 34 0 60-16 72-49 5 0 15 0 20-10l1-2-3-1zM28 81H8v20h20V81zm26 0H34v20h20V81zm26 0H60v20h20V81zm26 0H86v20h20V81zm-78-24H8v20h20V57zm26 0H34v20h20V57zm26 0H60v20h20V57zm26 0H86v20h20V57zm0-24H86v20h20V33z"/></svg>' : ''}</h4>
+            <h4>${isOrch ? '<span class="orch-badge" title="Orchestrateur">&#9733;</span> ' : ''}${escHtml(a.name || a.id || '')}${a.docker_mode ? ' <svg title="Docker" width="18" height="13" viewBox="0 0 256 185" style="vertical-align:middle;margin-left:4px"><path fill="#0db7ed" d="M250 87c-3-2-10-4-18-3-2-13-10-24-19-31l-4-2-2 4c-3 5-5 12-4 18 0 4 1 8 3 12-5 2-13 4-24 4H1l-1 4c-1 12 2 27 9 38 8 12 20 18 36 18 34 0 60-16 72-49 5 0 15 0 20-10l1-2-3-1zM28 81H8v20h20V81zm26 0H34v20h20V81zm26 0H60v20h20V81zm26 0H86v20h20V81zm-78-24H8v20h20V57zm26 0H34v20h20V57zm26 0H60v20h20V57zm26 0H86v20h20V57zm0-24H86v20h20V33z"/></svg>' : ''}</h4>
             <code style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(aid)}</code>
           </div>
           ${isOrch ? '' : `<button class="btn-icon danger" onclick="event.stopPropagation();deleteCfgAgent('${escHtml(dir)}','${escHtml(aid)}')" title="Supprimer">
@@ -2590,7 +2577,7 @@ function renderTeams() {
           ${a.temperature != null ? `<span class="tag tag-blue">temp: ${a.temperature}</span>` : ''}
           ${a.max_tokens != null ? `<span class="tag tag-blue">tokens: ${a.max_tokens}</span>` : ''}
           ${a.llm || a.model ? `<span class="tag tag-yellow">${escHtml(a.llm || a.model)}</span>` : ''}
-          ${a.type ? `<span class="tag tag-gray">${escHtml(a.type)}</span>` : ''}
+          ${a.type ? `<span class="tag tag-gray">${escHtml(a.type === 'pipeline' ? 'manager' : a.type)}</span>` : ''}
           ${a.delivers_docs ? '<span class="tag tag-purple">Documentation</span>' : ''}
           ${a.delivers_code ? '<span class="tag tag-purple">Code</span>' : ''}
           ${a.delivers_design ? '<span class="tag tag-purple">Maquette / Design</span>' : ''}
@@ -2647,7 +2634,7 @@ function renderTeams() {
 async function showAddCfgAgentModal(dir) {
   let sharedList = [], hasOrch = false;
   try {
-    const d = await api('/api/shared-agents');
+    const d = await api(_saApiBase);
     sharedList = d.agents || [];
   } catch { /* ignore */ }
   try {
@@ -2676,7 +2663,7 @@ async function showAddCfgAgentModal(dir) {
       <label>Type</label>
       <select id="cfg-agent-new-type">
         <option value="single" selected>Single</option>
-        <option value="pipeline">Pipeline</option>
+        <option value="pipeline">Manager</option>
         <option value="orchestrator" ${hasOrch?'disabled':''}>Orchestrator</option>
       </select>
     </div>
@@ -2754,7 +2741,7 @@ async function editCfgAgent(dir, agentId) {
 
   const promptRaw = _composeAgentPrompt(a);
   const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
-  const hasPipeline = a.type === 'pipeline' || (a.pipeline_steps && a.pipeline_steps.length > 0);
+  const hasPipeline = a.type === 'pipeline';
   const isOrchestrator = a.type === 'orchestrator';
   const curType = isOrchestrator ? 'orchestrator' : (hasPipeline ? 'pipeline' : 'single');
   const hasOtherOrch = Object.entries(team.agents || {}).some(([aid, ag]) => aid !== agentId && ag.type === 'orchestrator');
@@ -2767,7 +2754,6 @@ async function editCfgAgent(dir, agentId) {
     <div class="prompt-tabs" style="margin-bottom:0.5rem">
       <div class="prompt-tab active" id="cfg-modal-tab-info" onclick="switchCfgModalTab('info')">Signaletique</div>
       <div class="prompt-tab" id="cfg-modal-tab-prompt" onclick="switchCfgModalTab('prompt')">Prompt</div>
-      <div class="prompt-tab" id="cfg-modal-tab-pipeline" onclick="switchCfgModalTab('pipeline')" style="${hasPipeline ? '' : 'display:none'}">Pipeline</div>
     </div>
     <div id="cfg-modal-pane-info">
       <div class="form-row">
@@ -2794,7 +2780,7 @@ async function editCfgAgent(dir, agentId) {
         <label>Type</label>
         <select id="cfg-agent-edit-type" onchange="_onCfgTypeChange(this.value)">
           <option value="single" ${curType==='single'?'selected':''}>Single</option>
-          <option value="pipeline" ${curType==='pipeline'?'selected':''}>Pipeline</option>
+          <option value="pipeline" ${curType==='pipeline'?'selected':''}>Manager</option>
           <option value="orchestrator" ${curType==='orchestrator'?'selected':''} ${hasOtherOrch && curType!=='orchestrator'?'disabled':''}>Orchestrator</option>
         </select>
       </div>
@@ -2813,12 +2799,6 @@ async function editCfgAgent(dir, agentId) {
         <div class="prompt-preview" id="cfg-agent-prompt-preview" style="max-height:500px;overflow-y:auto"></div>
       </div>
     </div>
-    <div id="cfg-modal-pane-pipeline" style="display:none">
-      <div class="form-group">
-        <label>Pipeline Steps</label>
-        <div id="cfg-pipeline-steps" class="pipeline-steps-container"></div>
-      </div>
-    </div>
     <div class="modal-actions">
       <button class="btn btn-primary" onclick="saveCfgAgent('${escHtml(dir)}','${escHtml(agentId)}')">Sauvegarder</button>
       <button class="btn btn-outline" onclick="closeModal()">Fermer</button>
@@ -2827,11 +2807,10 @@ async function editCfgAgent(dir, agentId) {
   // Set prompt after modal creation to avoid template literal issues with backticks
   const cfgPromptEl = document.getElementById('cfg-agent-prompt-preview');
   if (cfgPromptEl) cfgPromptEl.innerHTML = promptHtml;
-  renderPipelineSteps('cfg-pipeline-steps', a.pipeline_steps || []);
 }
 
 function switchCfgModalTab(tab) {
-  ['info', 'prompt', 'pipeline'].forEach(t => {
+  ['info', 'prompt'].forEach(t => {
     const pane = document.getElementById('cfg-modal-pane-' + t);
     const tabEl = document.getElementById('cfg-modal-tab-' + t);
     if (pane) pane.style.display = t === tab ? '' : 'none';
@@ -2840,12 +2819,7 @@ function switchCfgModalTab(tab) {
 }
 
 function _onCfgTypeChange(val) {
-  const tabEl = document.getElementById('cfg-modal-tab-pipeline');
-  if (tabEl) tabEl.style.display = val === 'pipeline' ? '' : 'none';
-  if (val !== 'pipeline') {
-    const pane = document.getElementById('cfg-modal-pane-pipeline');
-    if (pane && pane.style.display !== 'none') switchCfgModalTab('info');
-  }
+  // Type change handler (no-op)
 }
 
 async function saveCfgAgent(dir, agentId) {
@@ -2854,17 +2828,10 @@ async function saveCfgAgent(dir, agentId) {
   if (agentType === 'orchestrator' && Object.entries(team.agents || {}).some(([aid, ag]) => aid !== agentId && ag.type === 'orchestrator')) {
     toast('Un orchestrator existe deja dans cette equipe', 'error'); return;
   }
-  const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('cfg-pipeline-steps') : [];
-  // Validate JSON blocks in pipeline step instructions
-  for (const step of pipeline_steps) {
-    const errs = validateJsonBlocks(step.instruction || '');
-    if (errs.length) { toast(`Step "${step.name}": ${errs.join(', ')}`, 'error'); return; }
-  }
   try {
     await api(`/api/agents/${encodeURIComponent(agentId)}`, { method: 'PUT', body: {
       id: agentId, name: agentId,
       type: agentType,
-      pipeline_steps,
       team_id: dir,
     }});
     toast('Agent sauvegarde', 'success');
@@ -3138,7 +3105,7 @@ function showConfigTab(tabId) {
   // Show/hide save button depending on tab
   const saveWrap = document.getElementById('cfg-tab-save-btn');
   const saveBtn = document.getElementById('cfg-tab-save-action');
-  const saveTabs = { 'cfg-mail': saveMail, 'cfg-misc': saveCfgMisc };
+  const saveTabs = {};
   if (saveTabs[tabId]) {
     saveWrap.style.display = '';
     saveBtn.onclick = saveTabs[tabId];
@@ -3147,10 +3114,12 @@ function showConfigTab(tabId) {
   }
   if (tabId === 'cfg-llm') loadCfgLLM();
   else if (tabId === 'cfg-mcp') loadCfgMCP();
-  else if (tabId === 'cfg-teams') loadCfgTeams();
-  else if (tabId === 'cfg-mail') loadMail();
-  else if (tabId === 'cfg-security') { loadApiKeys(); loadAuthConfig(); }
-  else if (tabId === 'cfg-misc') loadCfgMisc();
+  else if (tabId === 'cfg-prod-teams') loadProdTeams();
+  else if (tabId === 'cfg-prod-projects') loadProdProjects();
+  else if (tabId === 'cfg-agents') loadProdAgents();
+  else if (tabId === 'cfg-models') loadCfgModels();
+  else if (tabId === 'cfg-prompts') loadCfgPrompts();
+  else if (tabId === 'cfg-dockerfiles') loadCfgDockerfiles();
   else if (tabId === 'cfg-git') loadCfgGit();
 }
 
@@ -3159,14 +3128,14 @@ let _miscData = {};
 
 async function loadCfgMisc() {
   try {
-    _miscData = await api('/api/others');
+    _miscData = await api('/api/templates/others');
     // Populate SMTP + Template dropdowns from mail config
     const smtpSel = document.getElementById('misc-reset-smtp');
     const tplSel = document.getElementById('misc-reset-template');
     smtpSel.innerHTML = '<option value="">— aucun —</option>';
     tplSel.innerHTML = '<option value="">— aucun —</option>';
     try {
-      const mailCfg = await api('/api/mail');
+      const mailCfg = await api('/api/templates/mail');
       const smtpList = Array.isArray(mailCfg.smtp) ? mailCfg.smtp : [];
       smtpList.forEach(s => {
         const label = `${s.name || 'sans nom'} (${s.host || '?'}:${s.port || '?'})`;
@@ -3210,7 +3179,7 @@ async function saveCfgMisc() {
         template_name: document.getElementById('misc-reset-template').value,
       }
     };
-    await api('/api/others', { method: 'PUT', body: data });
+    await api('/api/templates/others', { method: 'PUT', body: data });
     _miscData = data;
     toast('Configuration sauvegardee', 'success');
   } catch (e) { toast(e.message, 'error'); }
@@ -3480,13 +3449,79 @@ async function copyCfgLLMFromTemplate() {
     const tplProviders = tplData.providers || {};
     const tplThrottling = tplData.throttling || {};
     const cfgProviders = cfgLlmData.providers || {};
+
+    if (Object.keys(tplProviders).length === 0) {
+      toast('Aucun provider dans Configuration', 'info');
+      return;
+    }
+
+    // Build selection modal
+    let rows = '';
+    for (const [id, p] of Object.entries(tplProviders)) {
+      const exists = cfgProviders[id];
+      const identical = exists && JSON.stringify(exists) === JSON.stringify(p);
+      const status = identical ? '<span class="tag tag-green" style="font-size:0.7rem">identique</span>'
+        : exists ? '<span class="tag" style="font-size:0.7rem;background:var(--warning);color:#000">different</span>'
+        : '<span class="tag tag-blue" style="font-size:0.7rem">nouveau</span>';
+      rows += '<tr>' +
+        '<td><label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer">' +
+          '<input type="checkbox" value="' + escHtml(id) + '" ' + (identical ? '' : 'checked') + ' />' +
+          '<strong>' + escHtml(id) + '</strong></label></td>' +
+        '<td><span class="tag tag-blue">' + escHtml(p.type) + '</span></td>' +
+        '<td><code style="font-size:0.8rem">' + escHtml(p.model) + '</code></td>' +
+        '<td>' + status + '</td>' +
+      '</tr>';
+    }
+
+    // Throttling rows
+    let tRows = '';
     const cfgThrottling = cfgLlmData.throttling || {};
+    for (const [key, t] of Object.entries(tplThrottling)) {
+      const exists = cfgThrottling[key];
+      const status = exists ? '<span class="tag tag-green" style="font-size:0.7rem">existe</span>'
+        : '<span class="tag tag-blue" style="font-size:0.7rem">nouveau</span>';
+      tRows += '<tr>' +
+        '<td><label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer">' +
+          '<input type="checkbox" class="copy-throttle-cb" value="' + escHtml(key) + '" ' + (exists ? '' : 'checked') + ' />' +
+          '<code>' + escHtml(key) + '</code></label></td>' +
+        '<td>' + t.rpm + '</td><td>' + t.tpm.toLocaleString() + '</td>' +
+        '<td>' + status + '</td>' +
+      '</tr>';
+    }
 
-    let addedP = 0, addedT = 0, skippedIdentical = 0;
+    const el = document.getElementById('modal-copy-llm-body');
+    el.innerHTML =
+      '<p style="font-size:0.85rem;margin-bottom:0.75rem">Selectionnez les providers a copier depuis Configuration :</p>' +
+      '<div style="margin-bottom:0.5rem"><label style="cursor:pointer;font-size:0.8rem"><input type="checkbox" id="copy-llm-toggle-all" onchange="document.querySelectorAll(\'#modal-copy-llm-body input[type=checkbox]:not(#copy-llm-toggle-all)\').forEach(c=>c.checked=this.checked)" checked /> Tout selectionner</label></div>' +
+      '<div class="table-container" style="max-height:300px;overflow-y:auto"><table><thead><tr><th>Provider</th><th>Type</th><th>Modele</th><th>Statut</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      (tRows ? '<h4 style="margin-top:1rem;margin-bottom:0.5rem">Throttling</h4><div class="table-container" style="max-height:150px;overflow-y:auto"><table><thead><tr><th>Cle API</th><th>RPM</th><th>TPM</th><th>Statut</th></tr></thead><tbody>' + tRows + '</tbody></table></div>' : '');
+
+    document.getElementById('modal-copy-llm').style.display = 'flex';
+    document.getElementById('modal-copy-llm')._tplData = tplData;
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function _execCopyLLMFromTemplate() {
+  const modal = document.getElementById('modal-copy-llm');
+  const tplData = modal._tplData;
+  const tplProviders = tplData.providers || {};
+  const tplThrottling = tplData.throttling || {};
+  const cfgProviders = cfgLlmData.providers || {};
+
+  const selected = [...document.querySelectorAll('#modal-copy-llm-body input[type=checkbox]:checked:not(#copy-llm-toggle-all):not(.copy-throttle-cb)')].map(c => c.value);
+  const selectedT = [...document.querySelectorAll('#modal-copy-llm-body .copy-throttle-cb:checked')].map(c => c.value);
+
+  if (selected.length === 0 && selectedT.length === 0) {
+    toast('Aucune selection', 'info');
+    return;
+  }
+
+  try {
+    let addedP = 0, skippedIdentical = 0;
     const conflicts = [];
-
-    // Copy missing providers, detect conflicts
-    for (const [id, prov] of Object.entries(tplProviders)) {
+    for (const id of selected) {
+      const prov = tplProviders[id];
+      if (!prov) continue;
       if (!cfgProviders[id]) {
         await api('/api/llm/providers/provider', { method: 'POST', body: { id, ...prov } });
         addedP++;
@@ -3497,19 +3532,17 @@ async function copyCfgLLMFromTemplate() {
       }
     }
 
-    // Copy missing throttling rules
-    for (const [key, t] of Object.entries(tplThrottling)) {
-      if (!cfgThrottling[key]) {
+    let addedT = 0;
+    const cfgThrottling = cfgLlmData.throttling || {};
+    for (const key of selectedT) {
+      const t = tplThrottling[key];
+      if (t && !cfgThrottling[key]) {
         await api('/api/llm/providers/throttling', { method: 'PUT', body: { env_key: key, rpm: t.rpm, tpm: t.tpm } });
         addedT++;
       }
     }
 
-    // Copy default if not set
-    if (!cfgLlmData.default && tplData.default && (cfgProviders[tplData.default] || tplProviders[tplData.default])) {
-      await api('/api/llm/providers/default', { method: 'PUT', body: { provider_id: tplData.default } });
-    }
-
+    closeModal('modal-copy-llm');
     await loadCfgLLM();
     const summaryData = { added_providers: addedP, added_throttling: addedT, skipped_identical: skippedIdentical, conflicts };
     if (conflicts.length > 0) {
@@ -3918,19 +3951,52 @@ async function copyCfgMCPFromTemplate() {
     const cfgData = await api('/api/mcp/cfg-servers');
     const cfgServers = cfgData.servers || {};
 
-    const missing = Object.entries(tplServers).filter(([id]) => !cfgServers[id]);
-    if (missing.length === 0) {
-      toast('Aucun service MCP manquant a copier', 'info');
+    if (Object.keys(tplServers).length === 0) {
+      toast('Aucun service MCP dans Configuration', 'info');
       return;
     }
 
-    // Copy servers directly (preserves args, params, etc.)
+    let rows = '';
+    for (const [id, s] of Object.entries(tplServers)) {
+      const exists = cfgServers[id];
+      const status = exists
+        ? '<span class="tag tag-green" style="font-size:0.7rem">existe</span>'
+        : '<span class="tag tag-blue" style="font-size:0.7rem">nouveau</span>';
+      const type = s.type || s.command || '?';
+      const desc = s.description || '';
+      rows += '<tr>' +
+        '<td><label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer">' +
+          '<input type="checkbox" class="copy-mcp-cb" value="' + escHtml(id) + '" ' + (exists ? '' : 'checked') + ' />' +
+          '<strong>' + escHtml(id) + '</strong></label></td>' +
+        '<td><span class="tag tag-blue" style="font-size:0.7rem">' + escHtml(type) + '</span></td>' +
+        '<td style="font-size:0.8rem;color:var(--text-secondary)">' + escHtml(desc) + '</td>' +
+        '<td>' + status + '</td>' +
+      '</tr>';
+    }
+
+    const el = document.getElementById('modal-copy-mcp-body');
+    el.innerHTML =
+      '<p style="font-size:0.85rem;margin-bottom:0.75rem">Selectionnez les services MCP a copier depuis Configuration :</p>' +
+      '<div style="margin-bottom:0.5rem"><label style="cursor:pointer;font-size:0.8rem"><input type="checkbox" id="copy-mcp-toggle-all" onchange="document.querySelectorAll(\'.copy-mcp-cb\').forEach(c=>c.checked=this.checked)" checked /> Tout selectionner</label></div>' +
+      '<div class="table-container" style="max-height:400px;overflow-y:auto"><table><thead><tr><th>Service</th><th>Type</th><th>Description</th><th>Statut</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+
+    document.getElementById('modal-copy-mcp').style.display = 'flex';
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function _execCopyMCPFromTemplate() {
+  const selected = [...document.querySelectorAll('.copy-mcp-cb:checked')].map(c => c.value);
+  if (selected.length === 0) {
+    toast('Aucune selection', 'info');
+    return;
+  }
+  try {
     await api('/api/mcp/copy-from-template', {
       method: 'POST',
-      body: { server_ids: missing.map(([id]) => id) },
+      body: { server_ids: selected },
     });
-
-    toast(`${missing.length} service(s) MCP copie(s) depuis le template`, 'success');
+    closeModal('modal-copy-mcp');
+    toast(selected.length + ' service(s) MCP copie(s)', 'success');
     loadCfgMCP();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -3967,7 +4033,9 @@ function showTemplateTab(tabId) {
   else if (tabId === 'tpl-models') loadTplModels();
   else if (tabId === 'tpl-dockerfiles') loadTplDockerfiles();
   else if (tabId === 'tpl-i18n') loadTplI18n();
-  else if (tabId === 'tpl-others') loadTplOthers();
+  else if (tabId === 'tpl-mail') loadMail();
+  else if (tabId === 'tpl-security') { loadApiKeys(); loadAuthConfig(); }
+  else if (tabId === 'tpl-misc') { loadCfgMisc(); loadTplOthers(); }
   else if (tabId === 'tpl-git') loadTplGit();
 }
 
@@ -4242,11 +4310,17 @@ function _getEnabledCultures() {
 
 // ── Template Projects (Shared/Projects/) ──────────
 
+let _projApiBase = '/api/templates/projects';  // switchable: '/api/templates/projects' or '/api/prod-projects'
+let _projPrefix = 'proj';  // switchable: 'proj' or 'ppj' for prod project elements
+function _projEl(suffix) { return document.getElementById(_projPrefix + '-' + suffix); }
+function _projReload() { return _projPrefix === 'ppj' ? loadProdProjects() : loadTplProjects(); }
+
 let _tplProjects = [];
 let _projSelectedId = null;   // currently selected project ID
 let _projActiveWf = null;     // currently open workflow name
 
 async function loadTplProjects() {
+  _projApiBase = '/api/templates/projects'; _projPrefix = 'proj';
   try {
     if (!tplTeamsData.teams.length) {
       try {
@@ -4255,7 +4329,7 @@ async function loadTplProjects() {
         if (!Array.isArray(tplTeamsData.teams)) tplTeamsData.teams = [];
       } catch { /* ignore */ }
     }
-    const data = await api('/api/templates/projects');
+    const data = await api(_projApiBase);
     _tplProjects = data.projects || [];
     _projRenderSelector();
     if (_projSelectedId) _projSelectProject(_projSelectedId);
@@ -4264,7 +4338,7 @@ async function loadTplProjects() {
 
 // ── Dropdown selector ──
 function _projRenderSelector() {
-  const dd = document.getElementById('proj-selector-dropdown');
+  const dd = _projEl('selector-dropdown');
   if (!dd) return;
   const sorted = _tplProjects.slice().sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id, 'fr'));
   dd.innerHTML = sorted.map(p =>
@@ -4277,13 +4351,13 @@ function _projRenderSelector() {
 }
 
 function _projOpenDropdown() {
-  const dd = document.getElementById('proj-selector-dropdown');
+  const dd = _projEl('selector-dropdown');
   if (dd) { dd.style.display = ''; _projFilterDropdown(); }
 }
 
 function _projFilterDropdown() {
-  const filter = (document.getElementById('proj-selector-input').value || '').toLowerCase();
-  const dd = document.getElementById('proj-selector-dropdown');
+  const filter = (_projEl('selector-input').value || '').toLowerCase();
+  const dd = _projEl('selector-dropdown');
   if (!dd) return;
   dd.style.display = '';
   dd.querySelectorAll('.proj-selector-item').forEach(item => {
@@ -4294,7 +4368,7 @@ function _projFilterDropdown() {
 
 function _projPickItem(el) {
   const id = el.dataset.id;
-  document.getElementById('proj-selector-dropdown').style.display = 'none';
+  _projEl('selector-dropdown').style.display = 'none';
   _projSelectProject(id);
 }
 
@@ -4303,31 +4377,33 @@ function _projSelectProject(id) {
   if (!p) {
     _projSelectedId = null;
     _projActiveWf = null;
-    document.getElementById('proj-selector-input').value = '';
-    document.getElementById('proj-content').style.display = 'none';
-    document.getElementById('proj-btn-edit').style.display = 'none';
-    document.getElementById('proj-btn-delete').style.display = 'none';
-    document.getElementById('proj-btn-add-wf').style.display = 'none';
-    document.getElementById('proj-btn-orch').style.display = 'none';
+    _projEl('selector-input').value = '';
+    _projEl('content').style.display = 'none';
+    _projEl('btn-edit').style.display = 'none';
+    _projEl('btn-delete').style.display = 'none';
+    _projEl('btn-add-wf').style.display = 'none';
+    _projEl('btn-orch').style.display = 'none';
     return;
   }
   _projSelectedId = id;
-  const input = document.getElementById('proj-selector-input');
+  const input = _projEl('selector-input');
   input.value = p.name || p.id;
-  document.getElementById('proj-btn-edit').style.display = '';
-  document.getElementById('proj-btn-delete').style.display = '';
-  document.getElementById('proj-btn-add-wf').style.display = '';
-  document.getElementById('proj-btn-orch').style.display = '';
-  document.getElementById('proj-content').style.display = '';
+  _projEl('btn-edit').style.display = '';
+  _projEl('btn-delete').style.display = '';
+  _projEl('btn-add-wf').style.display = '';
+  _projEl('btn-orch').style.display = '';
+  _projEl('content').style.display = '';
   _projRenderSelector();
   _projRenderWorkflows();
 }
 
-// Close dropdown on outside click
+// Close dropdown on outside click (both scopes)
 document.addEventListener('click', function(e) {
-  const dd = document.getElementById('proj-selector-dropdown');
-  const inp = document.getElementById('proj-selector-input');
-  if (dd && inp && !dd.contains(e.target) && e.target !== inp) dd.style.display = 'none';
+  ['proj', 'ppj'].forEach(function(pfx) {
+    var dd = document.getElementById(pfx + '-selector-dropdown');
+    var inp = document.getElementById(pfx + '-selector-input');
+    if (dd && inp && !dd.contains(e.target) && e.target !== inp) dd.style.display = 'none';
+  });
 });
 
 // ── Workflow chips ──
@@ -4335,7 +4411,7 @@ function _projRenderWorkflows() {
   const p = _tplProjects.find(x => x.id === _projSelectedId);
   if (!p) return;
   const wfs = p.workflows || [];
-  const chipsDiv = document.getElementById('proj-wf-chips');
+  const chipsDiv = _projEl('wf-chips');
   chipsDiv.innerHTML = wfs.map(w =>
     '<span class="proj-wf-chip' + (w === _projActiveWf ? ' active' : '') + '" onclick="_projOpenWf(\'' + escHtml(w) + '\')">' +
       escHtml(w) +
@@ -4345,7 +4421,7 @@ function _projRenderWorkflows() {
   // If active workflow was deleted, clear editor
   if (_projActiveWf && !wfs.includes(_projActiveWf)) {
     _projActiveWf = null;
-    document.getElementById('proj-wf-editor').innerHTML = '';
+    _projEl('wf-editor').innerHTML = '';
   }
 }
 
@@ -4353,17 +4429,18 @@ async function _projOpenWf(wfName) {
   if (_projActiveWf === wfName) { _projCloseWf(); return; }
   _projActiveWf = wfName;
   _projRenderWorkflows();
-  const el = document.getElementById('proj-wf-editor');
+  const el = _projEl('wf-editor');
   el.classList.add('active');
   const p = _tplProjects.find(x => x.id === _projSelectedId);
   const teamDir = p && p.team ? p.team : '';
-  const apiBase = '/api/templates/project-workflow/' + encodeURIComponent(_projSelectedId);
-  await openWorkflowEditor(wfName, apiBase, 'Projects/' + _projSelectedId, teamDir, 'proj-wf-editor');
+  const wfApiPrefix = _projPrefix === 'ppj' ? '/api/prod-project-workflow/' : '/api/templates/project-workflow/';
+  const apiBase = wfApiPrefix + encodeURIComponent(_projSelectedId);
+  await openWorkflowEditor(wfName, apiBase, 'Projects/' + _projSelectedId, teamDir, _projPrefix + '-wf-editor');
 }
 
 function _projCloseWf() {
   _projActiveWf = null;
-  const el = document.getElementById('proj-wf-editor');
+  const el = _projEl('wf-editor');
   el.classList.remove('active');
   el.innerHTML = '';
   _projRenderWorkflows();
@@ -4371,7 +4448,7 @@ function _projCloseWf() {
 
 // ── Project CRUD (modals) ──
 function _projTeamOptions(selected) {
-  const teams = (tplTeamsData.teams || []);
+  const teams = (_projPrefix === 'ppj' ? (_prodTeamsData.teams || []) : (tplTeamsData.teams || []));
   return '<option value="">-- Aucune --</option>' +
     teams.map(t => '<option value="' + escHtml(t.directory || t.id) + '"' + ((t.directory || t.id) === selected ? ' selected' : '') + '>' + escHtml(t.name || t.directory || t.id) + '</option>').join('');
 }
@@ -4393,11 +4470,11 @@ async function createTplProject() {
   if (!id) { toast('ID requis', 'error'); return; }
   if (!name) { toast('Nom requis', 'error'); return; }
   try {
-    await api('/api/templates/projects', { method: 'POST', body: { id, name, description, team } });
+    await api(_projApiBase, { method: 'POST', body: { id, name, description, team } });
     closeModal();
     toast('Projet cree', 'success');
     _projSelectedId = id;
-    loadTplProjects();
+    _projReload();
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -4419,10 +4496,10 @@ async function _projSaveEdit() {
   const team = (document.getElementById('proj-edit-team').value || '').trim();
   if (!name) { toast('Nom requis', 'error'); return; }
   try {
-    await api('/api/templates/projects/' + encodeURIComponent(id), { method: 'PUT', body: { name, description, team } });
+    await api(_projApiBase + '/' + encodeURIComponent(id), { method: 'PUT', body: { name, description, team } });
     closeModal();
     toast('Projet mis a jour', 'success');
-    loadTplProjects();
+    _projReload();
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -4430,24 +4507,24 @@ async function _projDeleteSelected() {
   if (!_projSelectedId) return;
   if (!(await confirmModal('Supprimer le type de projet "' + _projSelectedId + '" ?'))) return;
   try {
-    await api('/api/templates/projects/' + encodeURIComponent(_projSelectedId), { method: 'DELETE' });
+    await api(_projApiBase + '/' + encodeURIComponent(_projSelectedId), { method: 'DELETE' });
     toast('Projet supprime', 'success');
     _projSelectedId = null;
     _projActiveWf = null;
-    loadTplProjects();
-    document.getElementById('proj-content').style.display = 'none';
-    document.getElementById('proj-btn-edit').style.display = 'none';
-    document.getElementById('proj-btn-delete').style.display = 'none';
-    document.getElementById('proj-btn-add-wf').style.display = 'none';
-    document.getElementById('proj-btn-orch').style.display = 'none';
-    document.getElementById('proj-selector-input').value = '';
+    _projReload();
+    _projEl('content').style.display = 'none';
+    _projEl('btn-edit').style.display = 'none';
+    _projEl('btn-delete').style.display = 'none';
+    _projEl('btn-add-wf').style.display = 'none';
+    _projEl('btn-orch').style.display = 'none';
+    _projEl('selector-input').value = '';
   } catch (e) { toast(e.message, 'error'); }
 }
 
 async function _projBuildOrchPrompt() {
   if (!_projSelectedId) return;
   try {
-    const res = await api('/api/templates/projects/' + encodeURIComponent(_projSelectedId) + '/orchestrator/build', { method: 'POST' });
+    const res = await api(_projApiBase + '/' + encodeURIComponent(_projSelectedId) + '/orchestrator/build', { method: 'POST' });
     toast('Prompt orchestrateur genere', 'success');
     showModal('<div class="modal-header"><h3>Prompt orchestrateur — ' + escHtml(_projSelectedId) + '</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
       '<textarea readonly rows="20" style="width:100%;font-family:monospace;font-size:0.8rem;background:var(--bg-secondary);border:1px solid var(--border);padding:0.5rem;resize:vertical">' + escHtml(res.content || '') + '</textarea>' +
@@ -4489,13 +4566,13 @@ async function generateProjectWorkflow(projectId) {
   const genBtn = document.getElementById('proj-wf-gen-btn');
   if (genBtn) genBtn.textContent = 'Generation...';
   try {
-    await api('/api/templates/projects/' + encodeURIComponent(projectId) + '/workflows/generate', {
+    await api(_projApiBase + '/' + encodeURIComponent(projectId) + '/workflows/generate', {
       method: 'POST', body: { name, prompt, team }
     });
     closeModal();
     toast('Workflow genere et sauvegarde', 'success');
     _projActiveWf = name;
-    loadTplProjects();
+    _projReload();
   } catch (e) {
     btns.forEach(b => { b.disabled = false; b.style.opacity = ''; });
     if (genBtn) genBtn.innerHTML = '&#10024; Generer';
@@ -4509,21 +4586,21 @@ async function createProjectWorkflow(projectId) {
   const team = (document.getElementById('proj-wf-team')?.value || '').trim();
   if (!name) { toast('Nom requis', 'error'); return; }
   try {
-    await api('/api/templates/projects/' + encodeURIComponent(projectId) + '/workflows', { method: 'POST', body: { name, team } });
+    await api(_projApiBase + '/' + encodeURIComponent(projectId) + '/workflows', { method: 'POST', body: { name, team } });
     closeModal();
     toast('Workflow cree', 'success');
     _projActiveWf = name;
-    loadTplProjects();
+    _projReload();
   } catch (e) { toast(e.message, 'error'); }
 }
 
 async function _projDeleteWf(wfName) {
   if (!(await confirmModal('Supprimer le workflow "' + wfName + '" ?'))) return;
   try {
-    await api('/api/templates/projects/' + encodeURIComponent(_projSelectedId) + '/workflows/' + encodeURIComponent(wfName), { method: 'DELETE' });
+    await api(_projApiBase + '/' + encodeURIComponent(_projSelectedId) + '/workflows/' + encodeURIComponent(wfName), { method: 'DELETE' });
     toast('Workflow supprime', 'success');
     if (_projActiveWf === wfName) _projActiveWf = null;
-    loadTplProjects();
+    _projReload();
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -4541,280 +4618,260 @@ async function saveTplProject(id) { _projSelectedId = id; await _projSaveEdit();
 
 // ── Template Prompts (Shared/Prompts/<culture>/) ──────────
 
-let _tplPrompts = [];      // [{name, content}]
-let _tplPromptSel = -1;    // selected index
-let _tplPromptDirty = {};  // {idx: true} tracks unsaved changes
-let _tplPromptCulture = ''; // current culture for prompts
+// ── Prompts (factorized for tpl + cfg scopes) ──────────
 
-async function loadTplPrompts() {
+const _prmScopes = {
+  tpl: { files: [], sel: -1, dirty: {}, culture: '', api: '/api/templates/prompts', prefix: 'tpl-prompts' },
+  cfg: { files: [], sel: -1, dirty: {}, culture: '', api: '/api/prod-prompts', prefix: 'cfg-prompts' },
+};
+
+async function _prmLoad(scope) {
+  const s = _prmScopes[scope];
   try {
-    // Load cultures if not yet loaded
     if (!_allCultures.length) {
       const cd = await api('/api/templates/cultures');
       _allCultures = cd.cultures || [];
       _defaultCulture = cd.default || 'fr-fr';
     }
-    // Build culture selector
-    const sel = document.getElementById('tpl-prompts-culture-select');
+    const sel = document.getElementById(s.prefix + '-culture-select');
     if (sel) {
       const enabled = _allCultures.filter(c => c.enabled);
       sel.innerHTML = enabled.map(c =>
-        `<option value="${escHtml(c.key)}" ${c.key === (_tplPromptCulture || _defaultCulture) ? 'selected' : ''}>${c.flag} ${escHtml(c.key)} — ${escHtml(c.language)}</option>`
+        '<option value="' + escHtml(c.key) + '" ' + (c.key === (s.culture || _defaultCulture) ? 'selected' : '') + '>' + c.flag + ' ' + escHtml(c.key) + ' — ' + escHtml(c.language) + '</option>'
       ).join('');
-      if (!_tplPromptCulture) _tplPromptCulture = sel.value || _defaultCulture;
+      if (!s.culture) s.culture = sel.value || _defaultCulture;
     }
-    // Load prompts for selected culture
-    const data = await api('/api/templates/prompts?culture=' + encodeURIComponent(_tplPromptCulture));
-    _tplPrompts = data.prompts || [];
-    _tplPromptSel = _tplPrompts.length ? 0 : -1;
-    _tplPromptDirty = {};
-    _tplPromptsRender();
-  } catch (e) {
-    toast('Erreur chargement prompts: ' + e.message, 'error');
-  }
+    const data = await api(s.api + '?culture=' + encodeURIComponent(s.culture));
+    s.files = data.prompts || [];
+    s.sel = s.files.length ? 0 : -1;
+    s.dirty = {};
+    _prmRender(scope);
+  } catch (e) { toast('Erreur chargement prompts: ' + e.message, 'error'); }
 }
 
-function tplPromptSwitchCulture(culture) {
-  _tplPromptCulture = culture;
-  loadTplPrompts();
-}
-
-function _tplPromptsRender() {
-  const items = document.getElementById('tpl-prompts-items');
-  const editor = document.getElementById('tpl-prompts-editor');
+function _prmRender(scope) {
+  const s = _prmScopes[scope];
+  const items = document.getElementById(s.prefix + '-items');
+  const editor = document.getElementById(s.prefix + '-editor');
   if (!items || !editor) return;
-
-  items.innerHTML = _tplPrompts.map((p, i) => `
-    <div class="ps-list-item${i === _tplPromptSel ? ' active' : ''}${_tplPromptDirty[i] ? ' dirty' : ''}" onclick="tplPromptSelect(${i})">
-      <span class="ps-list-num">${i + 1}</span>
-      <div class="ps-list-text">
-        <div class="ps-list-name">${escHtml(p.name.replace(/\.md$/, ''))}</div>
-        <div class="ps-list-key">${escHtml(p.name)}</div>
-      </div>
-      <button class="btn-icon ps-list-del" onclick="event.stopPropagation();tplPromptDelete(${i})" title="Supprimer">&times;</button>
-    </div>
-  `).join('');
-
-  if (_tplPromptSel >= 0 && _tplPrompts[_tplPromptSel]) {
-    const p = _tplPrompts[_tplPromptSel];
-    editor.innerHTML = `
-      <div class="ps-edit-row">
-        <div class="form-group" style="flex:0 0 250px">
-          <label>Fichier</label>
-          <input id="tpl-prompt-name" value="${escHtml(p.name)}" placeholder="nom.md"
-                 oninput="tplPromptUpdateName(this.value)" />
-        </div>
-        <div style="flex:1"></div>
-        <button class="btn btn-primary btn-sm" onclick="tplPromptSave()" style="align-self:flex-end;margin-bottom:2px">Sauvegarder</button>
-      </div>
-      <textarea id="tpl-prompt-content" class="ps-edit-instr" placeholder="Contenu du prompt..."
-                oninput="_tplPromptDirty[${_tplPromptSel}]=true;_tplPrompts[${_tplPromptSel}].content=this.value;_tplPromptsRenderList()"
-                style="flex:1;min-height:300px">${escHtml(p.content || '')}</textarea>
-    `;
+  items.innerHTML = s.files.map((p, i) =>
+    '<div class="ps-list-item' + (i === s.sel ? ' active' : '') + (s.dirty[i] ? ' dirty' : '') + '" onclick="prmSelect(\'' + scope + '\',' + i + ')">' +
+      '<span class="ps-list-num">' + (i + 1) + '</span>' +
+      '<div class="ps-list-text"><div class="ps-list-name">' + escHtml(p.name.replace(/\.md$/, '')) + '</div><div class="ps-list-key">' + escHtml(p.name) + '</div></div>' +
+      '<button class="btn-icon ps-list-del" onclick="event.stopPropagation();prmDelete(\'' + scope + '\',' + i + ')" title="Supprimer">&times;</button>' +
+    '</div>'
+  ).join('');
+  if (s.sel >= 0 && s.files[s.sel]) {
+    const p = s.files[s.sel];
+    const si = s.sel;
+    editor.innerHTML =
+      '<div class="ps-edit-row"><div class="form-group" style="flex:0 0 250px"><label>Fichier</label>' +
+        '<input id="' + scope + '-prompt-name" value="' + escHtml(p.name) + '" placeholder="nom.md" oninput="prmUpdateName(\'' + scope + '\',this.value)" />' +
+      '</div><div style="flex:1"></div>' +
+      '<button class="btn btn-primary btn-sm" onclick="prmSave(\'' + scope + '\')" style="align-self:flex-end;margin-bottom:2px">Sauvegarder</button></div>' +
+      '<textarea id="' + scope + '-prompt-content" class="ps-edit-instr" placeholder="Contenu du prompt..." ' +
+        'oninput="_prmScopes.' + scope + '.dirty[' + si + ']=true;_prmScopes.' + scope + '.files[' + si + '].content=this.value;_prmRenderList(\'' + scope + '\')" ' +
+        'style="flex:1;min-height:300px">' + escHtml(p.content || '') + '</textarea>';
   } else {
     editor.innerHTML = '<div class="ps-edit-empty">Selectionnez un prompt ou ajoutez-en un avec +</div>';
   }
 }
 
-function _tplPromptsRenderList() {
-  const items = document.getElementById('tpl-prompts-items');
+function _prmRenderList(scope) {
+  const s = _prmScopes[scope];
+  const items = document.getElementById(s.prefix + '-items');
   if (!items) return;
-  items.querySelectorAll('.ps-list-item').forEach((el, i) => {
-    el.classList.toggle('dirty', !!_tplPromptDirty[i]);
-  });
+  items.querySelectorAll('.ps-list-item').forEach((el, i) => { el.classList.toggle('dirty', !!s.dirty[i]); });
 }
 
-function tplPromptSelect(idx) {
-  _tplPromptSel = idx;
-  _tplPromptsRender();
-}
+function prmSelect(scope, idx) { _prmScopes[scope].sel = idx; _prmRender(scope); }
+function prmSwitchCulture(scope, culture) { _prmScopes[scope].culture = culture; _prmLoad(scope); }
 
-function tplPromptUpdateName(val) {
-  if (_tplPromptSel >= 0 && _tplPrompts[_tplPromptSel]) {
-    _tplPrompts[_tplPromptSel].name = val;
-    _tplPromptDirty[_tplPromptSel] = true;
-    const item = document.querySelectorAll('#tpl-prompts-items .ps-list-item')[_tplPromptSel];
-    if (item) {
-      item.querySelector('.ps-list-name').textContent = val.replace(/\.md$/, '') || '...';
-      item.querySelector('.ps-list-key').textContent = val || '...';
-      item.classList.add('dirty');
-    }
+function prmUpdateName(scope, val) {
+  const s = _prmScopes[scope];
+  if (s.sel >= 0 && s.files[s.sel]) {
+    s.files[s.sel].name = val; s.dirty[s.sel] = true;
+    const item = document.querySelectorAll('#' + s.prefix + '-items .ps-list-item')[s.sel];
+    if (item) { item.querySelector('.ps-list-name').textContent = val.replace(/\.md$/, '') || '...'; item.querySelector('.ps-list-key').textContent = val || '...'; item.classList.add('dirty'); }
   }
 }
 
-function tplPromptAdd() {
-  _tplPrompts.push({ name: 'nouveau.md', content: '', _new: true });
-  _tplPromptSel = _tplPrompts.length - 1;
-  _tplPromptDirty[_tplPromptSel] = true;
-  _tplPromptsRender();
-  setTimeout(() => {
-    const inp = document.getElementById('tpl-prompt-name');
-    if (inp) { inp.focus(); inp.select(); }
-  }, 50);
+function prmAdd(scope) {
+  const s = _prmScopes[scope];
+  s.files.push({ name: 'nouveau.md', content: '', _new: true });
+  s.sel = s.files.length - 1; s.dirty[s.sel] = true;
+  _prmRender(scope);
+  setTimeout(() => { const inp = document.getElementById(scope + '-prompt-name'); if (inp) { inp.focus(); inp.select(); } }, 50);
 }
 
-async function tplPromptSave() {
-  const p = _tplPrompts[_tplPromptSel];
-  if (!p) return;
-  const name = (document.getElementById('tpl-prompt-name')?.value || p.name).trim();
-  const content = document.getElementById('tpl-prompt-content')?.value ?? p.content;
+async function prmSave(scope) {
+  const s = _prmScopes[scope];
+  const p = s.files[s.sel]; if (!p) return;
+  const name = (document.getElementById(scope + '-prompt-name')?.value || p.name).trim();
+  const content = document.getElementById(scope + '-prompt-content')?.value ?? p.content;
   if (!name) { toast('Nom requis', 'error'); return; }
   if (!name.endsWith('.md')) { toast('Le nom doit finir par .md', 'error'); return; }
-  const jsonErrs = validateJsonBlocks(content);
-  if (jsonErrs.length) { toast(`JSON invalide: ${jsonErrs.join(', ')}`, 'error'); return; }
+  if (typeof validateJsonBlocks === 'function') { const errs = validateJsonBlocks(content); if (errs.length) { toast('JSON invalide: ' + errs.join(', '), 'error'); return; } }
   try {
-    await api('/api/templates/prompts/' + encodeURIComponent(name) + '?culture=' + encodeURIComponent(_tplPromptCulture), {
-      method: 'PUT',
-      body: { content }
-    });
-    p.name = name;
-    p.content = content;
-    delete p._new;
-    delete _tplPromptDirty[_tplPromptSel];
-    _tplPromptsRender();
-    toast('Prompt sauvegarde', 'success');
-  } catch (e) {
-    toast('Erreur: ' + e.message, 'error');
-  }
+    await api(s.api + '/' + encodeURIComponent(name) + '?culture=' + encodeURIComponent(s.culture), { method: 'PUT', body: { content } });
+    p.name = name; p.content = content; delete p._new; delete s.dirty[s.sel];
+    _prmRender(scope); toast('Prompt sauvegarde', 'success');
+  } catch (e) { toast('Erreur: ' + e.message, 'error'); }
 }
 
-async function tplPromptDelete(idx) {
-  const p = _tplPrompts[idx];
-  if (!p) return;
-  if (!confirm(`Supprimer ${p.name} ?`)) return;
-  if (!p._new) {
-    try {
-      await api('/api/templates/prompts/' + encodeURIComponent(p.name) + '?culture=' + encodeURIComponent(_tplPromptCulture), { method: 'DELETE' });
-    } catch (e) {
-      toast('Erreur: ' + e.message, 'error');
-      return;
+async function prmDelete(scope, idx) {
+  const s = _prmScopes[scope];
+  const p = s.files[idx]; if (!p || !confirm('Supprimer ' + p.name + ' ?')) return;
+  if (!p._new) { try { await api(s.api + '/' + encodeURIComponent(p.name) + '?culture=' + encodeURIComponent(s.culture), { method: 'DELETE' }); } catch (e) { toast('Erreur: ' + e.message, 'error'); return; } }
+  s.files.splice(idx, 1); delete s.dirty[idx];
+  if (s.sel >= s.files.length) s.sel = s.files.length - 1;
+  _prmRender(scope); toast('Prompt supprime', 'success');
+}
+
+async function copyProdPromptsFromConfig() {
+  try {
+    const sc = _prmScopes.cfg;
+    const srcData = await api('/api/templates/prompts?culture=' + encodeURIComponent(sc.culture || _defaultCulture));
+    const srcPrompts = srcData.prompts || [];
+    const dstNames = new Set(sc.files.map(f => f.name));
+    if (srcPrompts.length === 0) { toast('Aucun prompt dans Configuration', 'info'); return; }
+    let rows = '';
+    for (const p of srcPrompts) {
+      const exists = dstNames.has(p.name);
+      const status = exists
+        ? '<span class="tag" style="font-size:0.7rem;background:var(--warning);color:#000">sera ecrase</span>'
+        : '<span class="tag tag-blue" style="font-size:0.7rem">nouveau</span>';
+      rows += '<tr><td><label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer">' +
+        '<input type="checkbox" class="copy-prm-cb" value="' + escHtml(p.name) + '" checked />' +
+        '<strong>' + escHtml(p.name.replace(/\.md$/, '')) + '</strong></label></td>' +
+        '<td><code style="font-size:0.8rem">' + escHtml(p.name) + '</code></td>' +
+        '<td>' + status + '</td></tr>';
     }
-  }
-  _tplPrompts.splice(idx, 1);
-  delete _tplPromptDirty[idx];
-  if (_tplPromptSel >= _tplPrompts.length) _tplPromptSel = _tplPrompts.length - 1;
-  _tplPromptsRender();
-  toast('Prompt supprime', 'success');
+    document.getElementById('modal-copy-prompts-body').innerHTML =
+      '<p style="font-size:0.85rem;margin-bottom:0.5rem">Selectionnez les prompts a copier vers Production :</p>' +
+      '<p style="font-size:0.8rem;color:var(--warning);margin-bottom:0.75rem">Les prompts existants seront ecrases.</p>' +
+      '<div style="margin-bottom:0.5rem"><label style="cursor:pointer;font-size:0.8rem"><input type="checkbox" id="copy-prm-toggle-all" onchange="document.querySelectorAll(\'.copy-prm-cb\').forEach(c=>c.checked=this.checked)" checked /> Tout selectionner</label></div>' +
+      '<div class="table-container" style="max-height:350px;overflow-y:auto"><table><thead><tr><th>Prompt</th><th>Fichier</th><th>Statut</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    document.getElementById('modal-copy-prompts').style.display = 'flex';
+  } catch (e) { toast(e.message, 'error'); }
 }
 
-// ── Template Dockerfiles (Shared/Dockerfiles/) ──────────
-
-let _tplDockerfiles = [];
-let _tplDockerfileSel = -1;
-let _tplDockerfileDirty = {};
-let _tplDockerfileTab = 'dockerfile'; // 'dockerfile' or 'entrypoint'
-let _tplDockerfileBuildAbort = null; // AbortController for current build
-
-async function loadTplDockerfiles() {
+async function _execCopyPrompts() {
+  const selected = [...document.querySelectorAll('.copy-prm-cb:checked')].map(c => c.value);
+  if (selected.length === 0) { toast('Aucune selection', 'info'); return; }
+  const sc = _prmScopes.cfg;
   try {
-    const data = await api('/api/templates/dockerfiles');
-    _tplDockerfiles = data.files || [];
-    _tplDockerfileSel = _tplDockerfiles.length ? 0 : -1;
-    _tplDockerfileDirty = {};
-    _tplDockerfilesRender();
-  } catch (e) {
-    toast('Erreur chargement dockerfiles: ' + e.message, 'error');
-  }
+    await api('/api/prod-prompts/copy-from-config?culture=' + encodeURIComponent(sc.culture || _defaultCulture), { method: 'POST', body: { names: selected } });
+    closeModal('modal-copy-prompts');
+    toast(selected.length + ' prompt(s) copie(s)', 'success');
+    _prmLoad('cfg');
+  } catch (e) { toast(e.message, 'error'); }
 }
+
+// Aliases for backward compat
+function loadTplPrompts() { _prmLoad('tpl'); }
+function loadCfgPrompts() { _prmLoad('cfg'); }
+function tplPromptSwitchCulture(c) { prmSwitchCulture('tpl', c); }
+function tplPromptSelect(i) { prmSelect('tpl', i); }
+function tplPromptUpdateName(v) { prmUpdateName('tpl', v); }
+function tplPromptAdd() { prmAdd('tpl'); }
+function tplPromptSave() { prmSave('tpl'); }
+function tplPromptDelete(idx) { prmDelete('tpl', idx); }
+function _tplPromptsRenderList() { _prmRenderList('tpl'); }
+
+// ── Dockerfiles (factorized for tpl + cfg scopes) ──────────
+
+const _dfScopes = {
+  tpl: { files: [], sel: -1, dirty: {}, tab: 'dockerfile', abort: null, api: '/api/templates/dockerfiles', prefix: 'tpl-dockerfiles', loadFn: 'loadTplDockerfiles' },
+  cfg: { files: [], sel: -1, dirty: {}, tab: 'dockerfile', abort: null, api: '/api/dockerfiles', prefix: 'cfg-dockerfiles', loadFn: 'loadCfgDockerfiles' },
+};
 
 function _dockerfileLabel(name) {
   const idx = name.indexOf('.');
   return idx >= 0 ? name.substring(idx + 1) : name;
 }
 
-function _tplDockerfilesRender() {
-  const items = document.getElementById('tpl-dockerfiles-items');
-  const editor = document.getElementById('tpl-dockerfiles-editor');
+async function _dfLoad(scope) {
+  const s = _dfScopes[scope];
+  try {
+    const data = await api(s.api);
+    s.files = data.files || [];
+    s.sel = s.files.length ? 0 : -1;
+    s.dirty = {};
+    _dfRender(scope);
+  } catch (e) { toast('Erreur chargement dockerfiles: ' + e.message, 'error'); }
+}
+
+function _dfRender(scope) {
+  const s = _dfScopes[scope];
+  const items = document.getElementById(s.prefix + '-items');
+  const editor = document.getElementById(s.prefix + '-editor');
   if (!items || !editor) return;
 
-  items.innerHTML = _tplDockerfiles.map((p, i) => `
-    <div class="ps-list-item${i === _tplDockerfileSel ? ' active' : ''}${_tplDockerfileDirty[i] ? ' dirty' : ''}" onclick="tplDockerfileSelect(${i})">
-      <span class="ps-list-num">${i + 1}</span>
-      <div class="ps-list-text">
-        <div class="ps-list-name">${escHtml(_dockerfileLabel(p.name))}</div>
-        <div class="ps-list-key">${escHtml(p.name)}</div>
-      </div>
-      <button class="btn-icon ps-list-del" onclick="event.stopPropagation();tplDockerfileDelete(${i})" title="Supprimer">&times;</button>
-    </div>
-  `).join('');
+  items.innerHTML = s.files.map((p, i) =>
+    '<div class="ps-list-item' + (i === s.sel ? ' active' : '') + (s.dirty[i] ? ' dirty' : '') + '" onclick="dfSelect(\'' + scope + '\',' + i + ')">' +
+      '<span class="ps-list-num">' + (i + 1) + '</span>' +
+      '<div class="ps-list-text"><div class="ps-list-name">' + escHtml(_dockerfileLabel(p.name)) + '</div><div class="ps-list-key">' + escHtml(p.name) + '</div></div>' +
+      '<button class="btn-icon ps-list-del" onclick="event.stopPropagation();dfDelete(\'' + scope + '\',' + i + ')" title="Supprimer">&times;</button>' +
+    '</div>'
+  ).join('');
 
-  if (_tplDockerfileSel >= 0 && _tplDockerfiles[_tplDockerfileSel]) {
-    const p = _tplDockerfiles[_tplDockerfileSel];
-    const isDockerTab = _tplDockerfileTab === 'dockerfile';
-    editor.innerHTML = `
-      <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;font-size:0.8rem">
-        <span style="display:inline-flex;align-items:center;gap:0.3rem;padding:0.2rem 0.6rem;border-radius:4px;background:${p.image_built ? 'rgba(76,175,80,0.15)' : 'rgba(239,68,68,0.15)'};color:${p.image_built ? '#4caf50' : '#ef4444'}">
-          <span style="font-size:0.7rem">${p.image_built ? '●' : '○'}</span>
-          ${p.image_built ? 'Image compilee' : 'Non compile'}
-        </span>
-        <code style="color:var(--text-secondary);font-size:0.75rem">${escHtml(p.image_tag || '')}</code>
-      </div>
-      <div class="ps-edit-row">
-        <div class="form-group" style="flex:0 0 250px">
-          <label>Fichier</label>
-          <input id="tpl-dockerfile-name" value="${escHtml(p.name)}" placeholder="Dockerfile.xxx"
-                 oninput="tplDockerfileUpdateName(this.value)" />
-        </div>
-        <div style="flex:1"></div>
-        <button class="btn btn-primary btn-sm" onclick="tplDockerfileSave()" style="align-self:flex-end;margin-bottom:2px">Sauvegarder</button>
-        <button class="btn btn-outline btn-sm" id="tpl-dockerfile-build-btn" onclick="tplDockerfileBuild()" style="align-self:flex-end;margin-bottom:2px">Compiler</button>
-        <button class="btn btn-outline btn-sm" onclick="tplDockerfileDelete(${_tplDockerfileSel})" style="align-self:flex-end;margin-bottom:2px;color:#ef4444;border-color:#ef4444">Supprimer</button>
-      </div>
-      <div class="prompt-tabs" style="margin-bottom:0.5rem">
-        <div class="prompt-tab${isDockerTab ? ' active' : ''}" onclick="_tplDockerfileTab='dockerfile';_tplDockerfilesRender()">Dockerfile</div>
-        <div class="prompt-tab${!isDockerTab ? ' active' : ''}" onclick="_tplDockerfileTab='entrypoint';_tplDockerfilesRender()">Entrypoint</div>
-      </div>
-      <div id="tpl-dockerfile-cm" style="flex:1;min-height:300px;border:1px solid var(--border);border-radius:4px;overflow:hidden"></div>
-    `;
-    // Init CodeMirror
-    const cmEl = document.getElementById('tpl-dockerfile-cm');
+  if (s.sel >= 0 && s.files[s.sel]) {
+    const p = s.files[s.sel];
+    const isDockerTab = s.tab === 'dockerfile';
+    const cmId = scope + '-dockerfile-cm';
+    editor.innerHTML =
+      '<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;font-size:0.8rem">' +
+        '<span style="display:inline-flex;align-items:center;gap:0.3rem;padding:0.2rem 0.6rem;border-radius:4px;background:' + (p.image_built ? 'rgba(76,175,80,0.15)' : 'rgba(239,68,68,0.15)') + ';color:' + (p.image_built ? '#4caf50' : '#ef4444') + '">' +
+          '<span style="font-size:0.7rem">' + (p.image_built ? '\u25cf' : '\u25cb') + '</span>' +
+          (p.image_built ? 'Image compilee' : 'Non compile') +
+        '</span>' +
+        '<code style="color:var(--text-secondary);font-size:0.75rem">' + escHtml(p.image_tag || '') + '</code>' +
+      '</div>' +
+      '<div class="ps-edit-row">' +
+        '<div class="form-group" style="flex:0 0 250px"><label>Fichier</label>' +
+          '<input id="' + scope + '-dockerfile-name" value="' + escHtml(p.name) + '" placeholder="Dockerfile.xxx" oninput="dfUpdateName(\'' + scope + '\',this.value)" />' +
+        '</div><div style="flex:1"></div>' +
+        '<button class="btn btn-primary btn-sm" onclick="dfSave(\'' + scope + '\')" style="align-self:flex-end;margin-bottom:2px">Sauvegarder</button>' +
+        '<button class="btn btn-outline btn-sm" onclick="dfBuild(\'' + scope + '\')" style="align-self:flex-end;margin-bottom:2px">Compiler</button>' +
+        '<button class="btn btn-outline btn-sm" onclick="dfDelete(\'' + scope + '\',' + s.sel + ')" style="align-self:flex-end;margin-bottom:2px;color:#ef4444;border-color:#ef4444">Supprimer</button>' +
+      '</div>' +
+      '<div class="prompt-tabs" style="margin-bottom:0.5rem">' +
+        '<div class="prompt-tab' + (isDockerTab ? ' active' : '') + '" onclick="_dfScopes.' + scope + '.tab=\'dockerfile\';_dfRender(\'' + scope + '\')">Dockerfile</div>' +
+        '<div class="prompt-tab' + (!isDockerTab ? ' active' : '') + '" onclick="_dfScopes.' + scope + '.tab=\'entrypoint\';_dfRender(\'' + scope + '\')">Entrypoint</div>' +
+      '</div>' +
+      '<div id="' + cmId + '" style="flex:1;min-height:300px;border:1px solid var(--border);border-radius:4px;overflow:hidden"></div>';
+    const cmEl = document.getElementById(cmId);
     if (cmEl && typeof CodeMirror !== 'undefined') {
       const mode = isDockerTab ? 'dockerfile' : 'shell';
       const val = isDockerTab ? (p.content || '') : (p.entrypoint_content || '');
-      const cm = CodeMirror(cmEl, {
-        value: val,
-        mode: mode,
-        theme: 'material-darker',
-        lineNumbers: true,
-        lineWrapping: true,
-        tabSize: 2,
-        indentWithTabs: false,
-      });
+      const cm = CodeMirror(cmEl, { value: val, mode, theme: 'material-darker', lineNumbers: true, lineWrapping: true, tabSize: 2, indentWithTabs: false });
       cm.setSize('100%', '100%');
-      const sel = _tplDockerfileSel;
+      const sel = s.sel;
       const key = isDockerTab ? 'content' : 'entrypoint_content';
-      cm.on('change', () => {
-        _tplDockerfiles[sel][key] = cm.getValue();
-        _tplDockerfileDirty[sel] = true;
-        _tplDockerfilesRenderList();
-      });
-      // Store ref for save
-      window._tplDockerfileCM = cm;
+      cm.on('change', () => { s.files[sel][key] = cm.getValue(); s.dirty[sel] = true; _dfRenderList(scope); });
+      window['_dfCM_' + scope] = cm;
     }
   } else {
     editor.innerHTML = '<div class="ps-edit-empty">Selectionnez un Dockerfile ou ajoutez-en un avec +</div>';
   }
 }
 
-function _tplDockerfilesRenderList() {
-  const items = document.getElementById('tpl-dockerfiles-items');
+function _dfRenderList(scope) {
+  const s = _dfScopes[scope];
+  const items = document.getElementById(s.prefix + '-items');
   if (!items) return;
-  items.querySelectorAll('.ps-list-item').forEach((el, i) => {
-    el.classList.toggle('dirty', !!_tplDockerfileDirty[i]);
-  });
+  items.querySelectorAll('.ps-list-item').forEach((el, i) => { el.classList.toggle('dirty', !!s.dirty[i]); });
 }
 
-function tplDockerfileSelect(idx) {
-  _tplDockerfileSel = idx;
-  _tplDockerfileTab = 'dockerfile';
-  _tplDockerfilesRender();
-}
+function dfSelect(scope, idx) { const s = _dfScopes[scope]; s.sel = idx; s.tab = 'dockerfile'; _dfRender(scope); }
 
-function tplDockerfileUpdateName(val) {
-  if (_tplDockerfileSel >= 0 && _tplDockerfiles[_tplDockerfileSel]) {
-    _tplDockerfiles[_tplDockerfileSel].name = val;
-    _tplDockerfileDirty[_tplDockerfileSel] = true;
-    const item = document.querySelectorAll('#tpl-dockerfiles-items .ps-list-item')[_tplDockerfileSel];
+function dfUpdateName(scope, val) {
+  const s = _dfScopes[scope];
+  if (s.sel >= 0 && s.files[s.sel]) {
+    s.files[s.sel].name = val;
+    s.dirty[s.sel] = true;
+    const item = document.querySelectorAll('#' + s.prefix + '-items .ps-list-item')[s.sel];
     if (item) {
       item.querySelector('.ps-list-name').textContent = _dockerfileLabel(val) || '...';
       item.querySelector('.ps-list-key').textContent = val || '...';
@@ -4823,296 +4880,327 @@ function tplDockerfileUpdateName(val) {
   }
 }
 
-function tplDockerfileAdd() {
-  _tplDockerfiles.push({ name: 'Dockerfile.new', content: '', _new: true });
-  _tplDockerfileSel = _tplDockerfiles.length - 1;
-  _tplDockerfileDirty[_tplDockerfileSel] = true;
-  _tplDockerfilesRender();
-  setTimeout(() => {
-    const inp = document.getElementById('tpl-dockerfile-name');
-    if (inp) { inp.focus(); inp.select(); }
-  }, 50);
+function dfAdd(scope) {
+  const s = _dfScopes[scope];
+  s.files.push({ name: 'Dockerfile.new', content: '', _new: true });
+  s.sel = s.files.length - 1;
+  s.dirty[s.sel] = true;
+  _dfRender(scope);
+  setTimeout(() => { const inp = document.getElementById(scope + '-dockerfile-name'); if (inp) { inp.focus(); inp.select(); } }, 50);
 }
 
-async function tplDockerfileSave() {
-  const p = _tplDockerfiles[_tplDockerfileSel];
+async function dfSave(scope) {
+  const s = _dfScopes[scope];
+  const p = s.files[s.sel];
   if (!p) return;
-  const name = (document.getElementById('tpl-dockerfile-name')?.value || p.name).trim();
-  // Update current tab content from CodeMirror
-  if (window._tplDockerfileCM) {
-    const curText = window._tplDockerfileCM.getValue();
-    if (_tplDockerfileTab === 'dockerfile') p.content = curText;
-    else p.entrypoint_content = curText;
-  }
+  const name = (document.getElementById(scope + '-dockerfile-name')?.value || p.name).trim();
+  const cm = window['_dfCM_' + scope];
+  if (cm) { const t = cm.getValue(); if (s.tab === 'dockerfile') p.content = t; else p.entrypoint_content = t; }
   if (!name) { toast('Nom requis', 'error'); return; }
   try {
-    await api('/api/templates/dockerfiles/' + encodeURIComponent(name), {
-      method: 'PUT',
-      body: { content: p.content || '', entrypoint_content: p.entrypoint_content || '' }
-    });
-    p.name = name;
-    delete p._new;
-    delete _tplDockerfileDirty[_tplDockerfileSel];
-    _tplDockerfilesRender();
-    toast((_tplDockerfileTab === 'entrypoint' ? 'Entrypoint' : 'Dockerfile') + ' sauvegarde', 'success');
-  } catch (e) {
-    toast('Erreur: ' + e.message, 'error');
-  }
+    await api(s.api + '/' + encodeURIComponent(name), { method: 'PUT', body: { content: p.content || '', entrypoint_content: p.entrypoint_content || '' } });
+    p.name = name; delete p._new; delete s.dirty[s.sel];
+    _dfRender(scope);
+    toast((s.tab === 'entrypoint' ? 'Entrypoint' : 'Dockerfile') + ' sauvegarde', 'success');
+  } catch (e) { toast('Erreur: ' + e.message, 'error'); }
 }
 
-async function tplDockerfileBuild() {
-  const p = _tplDockerfiles[_tplDockerfileSel];
+async function dfBuild(scope) {
+  const s = _dfScopes[scope];
+  const p = s.files[s.sel];
   if (!p) return;
-  const name = (document.getElementById('tpl-dockerfile-name')?.value || p.name).trim();
+  const name = (document.getElementById(scope + '-dockerfile-name')?.value || p.name).trim();
   if (!name) { toast('Nom requis', 'error'); return; }
-  // Show build log modal
   const dotIdx = name.indexOf('.');
   const label = dotIdx >= 0 ? name.substring(dotIdx + 1) : name;
-  const buildTime = new Date().toLocaleTimeString();
-  showModal(`
-    <div class="modal-header">
-      <h3>Build — ${escHtml(label)}</h3>
-      <button class="btn-icon" onclick="closeModal()">&times;</button>
-    </div>
-    <div id="docker-build-status" style="margin-bottom:0.5rem;font-size:0.85rem;color:var(--text-secondary)">Compilation en cours... (${escHtml(buildTime)})</div>
-    <pre id="docker-build-log" style="background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;padding:0.75rem;font-size:0.75rem;height:400px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;color:var(--text-primary)"></pre>
-    <div class="modal-actions">
-      <button class="btn btn-outline" onclick="copyToClipboard(document.getElementById('docker-build-log')?.textContent||'').then(()=>toast('Copie dans le presse-papier','success'))">Copier</button>
-      <button class="btn btn-outline" onclick="closeModal()">Fermer</button>
-    </div>
-  `, 'modal-wide');
+  showModal(
+    '<div class="modal-header"><h3>Build — ' + escHtml(label) + '</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
+    '<div id="docker-build-status" style="margin-bottom:0.5rem;font-size:0.85rem;color:var(--text-secondary)">Compilation en cours...</div>' +
+    '<pre id="docker-build-log" style="background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;padding:0.75rem;font-size:0.75rem;height:400px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;color:var(--text-primary)"></pre>' +
+    '<div class="modal-actions"><button class="btn btn-outline" onclick="copyToClipboard(document.getElementById(\'docker-build-log\')?.textContent||\'\').then(()=>toast(\'Copie\',\'success\'))">Copier</button><button class="btn btn-outline" onclick="closeModal()">Fermer</button></div>',
+    'modal-wide'
+  );
   try {
-    // Abort any previous build stream
-    if (_tplDockerfileBuildAbort) { try { _tplDockerfileBuildAbort.abort(); } catch {} }
-    _tplDockerfileBuildAbort = new AbortController();
-    const resp = await fetch('/api/templates/dockerfiles/' + encodeURIComponent(name) + '/build?no_cache=1', { method: 'POST', signal: _tplDockerfileBuildAbort.signal });
+    if (s.abort) { try { s.abort.abort(); } catch {} }
+    s.abort = new AbortController();
+    const resp = await fetch(s.api + '/' + encodeURIComponent(name) + '/build?no_cache=1', { method: 'POST', signal: s.abort.signal });
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     const logEl = document.getElementById('docker-build-log');
     const statusEl = document.getElementById('docker-build-status');
-    let buffer = '';
-    let buildResult = null;
+    let buffer = '', buildResult = null;
     while (true) {
       const { done, value } = await reader.read();
       if (done || buildResult) break;
       buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
+      const lines = buffer.split('\n'); buffer = lines.pop();
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
         try {
           const evt = JSON.parse(line.slice(6));
-          if (evt.done) {
-            buildResult = evt;
-            try { reader.cancel(); } catch {}
-            break;
-          } else if (evt.line != null && logEl) {
-            if (evt.error) {
-              const span = document.createElement('span');
-              span.style.color = '#ff6b6b';
-              span.textContent = evt.line + '\n';
-              logEl.appendChild(span);
-            } else {
-              logEl.appendChild(document.createTextNode(evt.line + '\n'));
-            }
+          if (evt.done) { buildResult = evt; try { reader.cancel(); } catch {} break; }
+          else if (evt.line != null && logEl) {
+            if (evt.error) { const span = document.createElement('span'); span.style.color = '#ff6b6b'; span.textContent = evt.line + '\n'; logEl.appendChild(span); }
+            else { logEl.appendChild(document.createTextNode(evt.line + '\n')); }
             logEl.scrollTop = logEl.scrollHeight;
           }
         } catch {}
       }
     }
     if (buildResult) {
-      if (statusEl) {
-        statusEl.textContent = buildResult.ok ? '✓ Build reussi — image: ' + buildResult.image : '✗ Echec du build';
-        statusEl.style.color = buildResult.ok ? '#4caf50' : '#ff6b6b';
-      }
+      if (statusEl) { statusEl.textContent = buildResult.ok ? '\u2713 Build reussi — image: ' + buildResult.image : '\u2717 Echec'; statusEl.style.color = buildResult.ok ? '#4caf50' : '#ff6b6b'; }
       toast(buildResult.ok ? 'Build reussi: ' + buildResult.image : 'Build echoue', buildResult.ok ? 'success' : 'error');
-      if (buildResult.ok) loadTplDockerfiles();
+      if (buildResult.ok) _dfLoad(scope);
     }
   } catch (e) {
     const logEl = document.getElementById('docker-build-log');
     const statusEl = document.getElementById('docker-build-status');
     if (logEl) { logEl.textContent = e.message; logEl.style.color = '#ff6b6b'; }
-    if (statusEl) { statusEl.textContent = '✗ Erreur'; statusEl.style.color = '#ff6b6b'; }
+    if (statusEl) { statusEl.textContent = '\u2717 Erreur'; statusEl.style.color = '#ff6b6b'; }
     toast('Erreur build: ' + e.message, 'error');
   }
-  _tplDockerfileBuildAbort = null;
+  s.abort = null;
 }
 
-async function tplDockerfileDelete(idx) {
-  const p = _tplDockerfiles[idx];
-  if (!p) return;
-  if (!confirm(`Supprimer ${p.name} ?`)) return;
-  if (!p._new) {
-    try {
-      await api('/api/templates/dockerfiles/' + encodeURIComponent(p.name), { method: 'DELETE' });
-    } catch (e) {
-      toast('Erreur: ' + e.message, 'error');
-      return;
-    }
-  }
-  _tplDockerfiles.splice(idx, 1);
-  delete _tplDockerfileDirty[idx];
-  if (_tplDockerfileSel >= _tplDockerfiles.length) _tplDockerfileSel = _tplDockerfiles.length - 1;
-  _tplDockerfilesRender();
+async function dfDelete(scope, idx) {
+  const s = _dfScopes[scope];
+  const p = s.files[idx];
+  if (!p || !confirm('Supprimer ' + p.name + ' ?')) return;
+  if (!p._new) { try { await api(s.api + '/' + encodeURIComponent(p.name), { method: 'DELETE' }); } catch (e) { toast('Erreur: ' + e.message, 'error'); return; } }
+  s.files.splice(idx, 1); delete s.dirty[idx];
+  if (s.sel >= s.files.length) s.sel = s.files.length - 1;
+  _dfRender(scope);
   toast('Dockerfile supprime', 'success');
 }
 
-// ── Template Models (Shared/Models/<culture>/) ──────────
+// ── Copy Dockerfiles from Configuration (templates) to Production ──
+async function copyProdDockerfilesFromConfig() {
+  try {
+    const tplData = await api('/api/templates/dockerfiles');
+    const tplFiles = tplData.files || [];
+    const cfgFiles = _dfScopes.cfg.files;
+    const cfgNames = new Set(cfgFiles.map(f => f.name));
+    if (tplFiles.length === 0) { toast('Aucun Dockerfile dans Configuration', 'info'); return; }
+    let rows = '';
+    for (const f of tplFiles) {
+      const exists = cfgNames.has(f.name);
+      const status = exists
+        ? '<span class="tag tag-green" style="font-size:0.7rem">existe</span>'
+        : '<span class="tag tag-blue" style="font-size:0.7rem">nouveau</span>';
+      rows += '<tr><td><label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer">' +
+        '<input type="checkbox" class="copy-df-cb" value="' + escHtml(f.name) + '" checked />' +
+        '<strong>' + escHtml(f.name) + '</strong></label></td>' +
+        '<td style="font-size:0.8rem;color:var(--text-secondary)">' + escHtml(f.image_tag || '') + '</td>' +
+        '<td>' + status + '</td></tr>';
+    }
+    document.getElementById('modal-copy-dockerfiles-body').innerHTML =
+      '<p style="font-size:0.85rem;margin-bottom:0.75rem">Selectionnez les Dockerfiles a copier depuis Configuration :</p>' +
+      '<div style="margin-bottom:0.5rem"><label style="cursor:pointer;font-size:0.8rem"><input type="checkbox" id="copy-df-toggle-all" onchange="document.querySelectorAll(\'.copy-df-cb\').forEach(c=>c.checked=this.checked)" checked /> Tout selectionner</label></div>' +
+      '<div class="table-container" style="max-height:350px;overflow-y:auto"><table><thead><tr><th>Fichier</th><th>Image</th><th>Statut</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    document.getElementById('modal-copy-dockerfiles').style.display = 'flex';
+    document.getElementById('modal-copy-dockerfiles')._tplFiles = tplFiles;
+  } catch (e) { toast(e.message, 'error'); }
+}
 
-let _tplModels = [];
-let _tplModelSel = -1;
-let _tplModelDirty = {};
-let _tplModelCulture = '';
+async function _execCopyDockerfiles() {
+  const selected = new Set([...document.querySelectorAll('.copy-df-cb:checked')].map(c => c.value));
+  if (selected.size === 0) { toast('Aucune selection', 'info'); return; }
+  const tplFiles = document.getElementById('modal-copy-dockerfiles')._tplFiles || [];
+  try {
+    let count = 0;
+    for (const f of tplFiles) {
+      if (!selected.has(f.name)) continue;
+      await api('/api/dockerfiles/' + encodeURIComponent(f.name), {
+        method: 'PUT', body: { content: f.content || '', entrypoint_content: f.entrypoint_content || '' }
+      });
+      count++;
+    }
+    closeModal('modal-copy-dockerfiles');
+    toast(count + ' Dockerfile(s) copie(s)', 'success');
+    loadCfgDockerfiles();
+  } catch (e) { toast(e.message, 'error'); }
+}
 
-async function loadTplModels() {
+// Aliases for backward compat and HTML bindings
+function loadTplDockerfiles() { _dfLoad('tpl'); }
+function loadCfgDockerfiles() { _dfLoad('cfg'); }
+function tplDockerfileSelect(i) { dfSelect('tpl', i); }
+function tplDockerfileUpdateName(v) { dfUpdateName('tpl', v); }
+function tplDockerfileAdd() { dfAdd('tpl'); }
+function tplDockerfileSave() { dfSave('tpl'); }
+function tplDockerfileBuild() { dfBuild('tpl'); }
+function tplDockerfileDelete(i) { dfDelete('tpl', i); }
+
+// ── Models (factorized for tpl + cfg scopes) ──────────
+
+const _mdlScopes = {
+  tpl: { files: [], sel: -1, dirty: {}, culture: '', api: '/api/templates/models', prefix: 'tpl-models' },
+  cfg: { files: [], sel: -1, dirty: {}, culture: '', api: '/api/prod-models', prefix: 'cfg-models' },
+};
+
+async function _mdlLoad(scope) {
+  const s = _mdlScopes[scope];
   try {
     if (!_allCultures.length) {
       const cd = await api('/api/templates/cultures');
       _allCultures = cd.cultures || [];
       _defaultCulture = cd.default || 'fr-fr';
     }
-    const sel = document.getElementById('tpl-models-culture-select');
+    const sel = document.getElementById(s.prefix + '-culture-select');
     if (sel) {
       const enabled = _allCultures.filter(c => c.enabled);
       sel.innerHTML = enabled.map(c =>
-        `<option value="${escHtml(c.key)}" ${c.key === (_tplModelCulture || _defaultCulture) ? 'selected' : ''}>${c.flag} ${escHtml(c.key)} — ${escHtml(c.language)}</option>`
+        '<option value="' + escHtml(c.key) + '" ' + (c.key === (s.culture || _defaultCulture) ? 'selected' : '') + '>' + c.flag + ' ' + escHtml(c.key) + ' — ' + escHtml(c.language) + '</option>'
       ).join('');
-      if (!_tplModelCulture) _tplModelCulture = sel.value || _defaultCulture;
+      if (!s.culture) s.culture = sel.value || _defaultCulture;
     }
-    const data = await api('/api/templates/models?culture=' + encodeURIComponent(_tplModelCulture));
-    _tplModels = data.models || [];
-    _tplModelSel = _tplModels.length ? 0 : -1;
-    _tplModelDirty = {};
-    _tplModelsRender();
-  } catch (e) {
-    toast('Erreur chargement models: ' + e.message, 'error');
-  }
+    const data = await api(s.api + '?culture=' + encodeURIComponent(s.culture));
+    s.files = data.models || [];
+    s.sel = s.files.length ? 0 : -1;
+    s.dirty = {};
+    _mdlRender(scope);
+  } catch (e) { toast('Erreur chargement models: ' + e.message, 'error'); }
 }
 
-function tplModelSwitchCulture(culture) {
-  _tplModelCulture = culture;
-  loadTplModels();
-}
-
-function _tplModelsRender() {
-  const items = document.getElementById('tpl-models-items');
-  const editor = document.getElementById('tpl-models-editor');
+function _mdlRender(scope) {
+  const s = _mdlScopes[scope];
+  const items = document.getElementById(s.prefix + '-items');
+  const editor = document.getElementById(s.prefix + '-editor');
   if (!items || !editor) return;
-
-  items.innerHTML = _tplModels.map((p, i) => `
-    <div class="ps-list-item${i === _tplModelSel ? ' active' : ''}${_tplModelDirty[i] ? ' dirty' : ''}" onclick="tplModelSelect(${i})">
-      <span class="ps-list-num">${i + 1}</span>
-      <div class="ps-list-text">
-        <div class="ps-list-name">${escHtml(p.name.replace(/\.md$/, ''))}</div>
-        <div class="ps-list-key">${escHtml(p.name)}</div>
-      </div>
-      <button class="btn-icon ps-list-del" onclick="event.stopPropagation();tplModelDelete(${i})" title="Supprimer">&times;</button>
-    </div>
-  `).join('');
-
-  if (_tplModelSel >= 0 && _tplModels[_tplModelSel]) {
-    const p = _tplModels[_tplModelSel];
-    editor.innerHTML = `
-      <div class="ps-edit-row">
-        <div class="form-group" style="flex:0 0 250px">
-          <label>Fichier</label>
-          <input id="tpl-model-name" value="${escHtml(p.name)}" placeholder="nom.md"
-                 oninput="tplModelUpdateName(this.value)" />
-        </div>
-        <div style="flex:1"></div>
-        <button class="btn btn-primary btn-sm" onclick="tplModelSave()" style="align-self:flex-end;margin-bottom:2px">Sauvegarder</button>
-      </div>
-      <textarea id="tpl-model-content" class="ps-edit-instr" placeholder="Contenu du model..."
-                oninput="_tplModelDirty[${_tplModelSel}]=true;_tplModels[${_tplModelSel}].content=this.value;_tplModelsRenderList()"
-                style="flex:1;min-height:300px">${escHtml(p.content || '')}</textarea>
-    `;
+  items.innerHTML = s.files.map((p, i) =>
+    '<div class="ps-list-item' + (i === s.sel ? ' active' : '') + (s.dirty[i] ? ' dirty' : '') + '" onclick="mdlSelect(\'' + scope + '\',' + i + ')">' +
+      '<span class="ps-list-num">' + (i + 1) + '</span>' +
+      '<div class="ps-list-text"><div class="ps-list-name">' + escHtml(p.name.replace(/\.md$/, '')) + '</div><div class="ps-list-key">' + escHtml(p.name) + '</div></div>' +
+      '<button class="btn-icon ps-list-del" onclick="event.stopPropagation();mdlDelete(\'' + scope + '\',' + i + ')" title="Supprimer">&times;</button>' +
+    '</div>'
+  ).join('');
+  if (s.sel >= 0 && s.files[s.sel]) {
+    const p = s.files[s.sel];
+    const si = s.sel;
+    editor.innerHTML =
+      '<div class="ps-edit-row"><div class="form-group" style="flex:0 0 250px"><label>Fichier</label>' +
+        '<input id="' + scope + '-model-name" value="' + escHtml(p.name) + '" placeholder="nom.md" oninput="mdlUpdateName(\'' + scope + '\',this.value)" />' +
+      '</div><div style="flex:1"></div>' +
+      '<button class="btn btn-primary btn-sm" onclick="mdlSave(\'' + scope + '\')" style="align-self:flex-end;margin-bottom:2px">Sauvegarder</button></div>' +
+      '<textarea id="' + scope + '-model-content" class="ps-edit-instr" placeholder="Contenu du model..." ' +
+        'oninput="_mdlScopes.' + scope + '.dirty[' + si + ']=true;_mdlScopes.' + scope + '.files[' + si + '].content=this.value;_mdlRenderList(\'' + scope + '\')" ' +
+        'style="flex:1;min-height:300px">' + escHtml(p.content || '') + '</textarea>';
   } else {
     editor.innerHTML = '<div class="ps-edit-empty">Selectionnez un model ou ajoutez-en un avec +</div>';
   }
 }
 
-function _tplModelsRenderList() {
-  const items = document.getElementById('tpl-models-items');
+function _mdlRenderList(scope) {
+  const s = _mdlScopes[scope];
+  const items = document.getElementById(s.prefix + '-items');
   if (!items) return;
-  items.querySelectorAll('.ps-list-item').forEach((el, i) => {
-    el.classList.toggle('dirty', !!_tplModelDirty[i]);
-  });
+  items.querySelectorAll('.ps-list-item').forEach((el, i) => { el.classList.toggle('dirty', !!s.dirty[i]); });
 }
 
-function tplModelSelect(idx) {
-  _tplModelSel = idx;
-  _tplModelsRender();
-}
+function mdlSelect(scope, idx) { _mdlScopes[scope].sel = idx; _mdlRender(scope); }
 
-function tplModelUpdateName(val) {
-  if (_tplModelSel >= 0 && _tplModels[_tplModelSel]) {
-    _tplModels[_tplModelSel].name = val;
-    _tplModelDirty[_tplModelSel] = true;
-    const item = document.querySelectorAll('#tpl-models-items .ps-list-item')[_tplModelSel];
-    if (item) {
-      item.querySelector('.ps-list-name').textContent = val.replace(/\.md$/, '') || '...';
-      item.querySelector('.ps-list-key').textContent = val || '...';
-      item.classList.add('dirty');
-    }
+function mdlSwitchCulture(scope, culture) { _mdlScopes[scope].culture = culture; _mdlLoad(scope); }
+
+function mdlUpdateName(scope, val) {
+  const s = _mdlScopes[scope];
+  if (s.sel >= 0 && s.files[s.sel]) {
+    s.files[s.sel].name = val; s.dirty[s.sel] = true;
+    const item = document.querySelectorAll('#' + s.prefix + '-items .ps-list-item')[s.sel];
+    if (item) { item.querySelector('.ps-list-name').textContent = val.replace(/\.md$/, '') || '...'; item.querySelector('.ps-list-key').textContent = val || '...'; item.classList.add('dirty'); }
   }
 }
 
-function tplModelAdd() {
-  _tplModels.push({ name: 'nouveau.md', content: '', _new: true });
-  _tplModelSel = _tplModels.length - 1;
-  _tplModelDirty[_tplModelSel] = true;
-  _tplModelsRender();
-  setTimeout(() => {
-    const inp = document.getElementById('tpl-model-name');
-    if (inp) { inp.focus(); inp.select(); }
-  }, 50);
+function mdlAdd(scope) {
+  const s = _mdlScopes[scope];
+  s.files.push({ name: 'nouveau.md', content: '', _new: true });
+  s.sel = s.files.length - 1; s.dirty[s.sel] = true;
+  _mdlRender(scope);
+  setTimeout(() => { const inp = document.getElementById(scope + '-model-name'); if (inp) { inp.focus(); inp.select(); } }, 50);
 }
 
-async function tplModelSave() {
-  const p = _tplModels[_tplModelSel];
-  if (!p) return;
-  const name = (document.getElementById('tpl-model-name')?.value || p.name).trim();
-  const content = document.getElementById('tpl-model-content')?.value ?? p.content;
+async function mdlSave(scope) {
+  const s = _mdlScopes[scope];
+  const p = s.files[s.sel]; if (!p) return;
+  const name = (document.getElementById(scope + '-model-name')?.value || p.name).trim();
+  const content = document.getElementById(scope + '-model-content')?.value ?? p.content;
   if (!name) { toast('Nom requis', 'error'); return; }
   if (!name.endsWith('.md')) { toast('Le nom doit finir par .md', 'error'); return; }
-  const jsonErrs = validateJsonBlocks(content);
-  if (jsonErrs.length) { toast(`JSON invalide: ${jsonErrs.join(', ')}`, 'error'); return; }
+  if (typeof validateJsonBlocks === 'function') { const errs = validateJsonBlocks(content); if (errs.length) { toast('JSON invalide: ' + errs.join(', '), 'error'); return; } }
   try {
-    await api('/api/templates/models/' + encodeURIComponent(name) + '?culture=' + encodeURIComponent(_tplModelCulture), {
-      method: 'PUT',
-      body: { content }
-    });
-    p.name = name;
-    p.content = content;
-    delete p._new;
-    delete _tplModelDirty[_tplModelSel];
-    _tplModelsRender();
-    toast('Model sauvegarde', 'success');
-  } catch (e) {
-    toast('Erreur: ' + e.message, 'error');
-  }
+    await api(s.api + '/' + encodeURIComponent(name) + '?culture=' + encodeURIComponent(s.culture), { method: 'PUT', body: { content } });
+    p.name = name; p.content = content; delete p._new; delete s.dirty[s.sel];
+    _mdlRender(scope); toast('Model sauvegarde', 'success');
+  } catch (e) { toast('Erreur: ' + e.message, 'error'); }
 }
 
-async function tplModelDelete(idx) {
-  const p = _tplModels[idx];
-  if (!p) return;
-  if (!confirm(`Supprimer ${p.name} ?`)) return;
-  if (!p._new) {
-    try {
-      await api('/api/templates/models/' + encodeURIComponent(p.name) + '?culture=' + encodeURIComponent(_tplModelCulture), { method: 'DELETE' });
-    } catch (e) {
-      toast('Erreur: ' + e.message, 'error');
-      return;
-    }
-  }
-  _tplModels.splice(idx, 1);
-  delete _tplModelDirty[idx];
-  if (_tplModelSel >= _tplModels.length) _tplModelSel = _tplModels.length - 1;
-  _tplModelsRender();
-  toast('Model supprime', 'success');
+async function mdlDelete(scope, idx) {
+  const s = _mdlScopes[scope];
+  const p = s.files[idx]; if (!p || !confirm('Supprimer ' + p.name + ' ?')) return;
+  if (!p._new) { try { await api(s.api + '/' + encodeURIComponent(p.name) + '?culture=' + encodeURIComponent(s.culture), { method: 'DELETE' }); } catch (e) { toast('Erreur: ' + e.message, 'error'); return; } }
+  s.files.splice(idx, 1); delete s.dirty[idx];
+  if (s.sel >= s.files.length) s.sel = s.files.length - 1;
+  _mdlRender(scope); toast('Model supprime', 'success');
 }
+
+// Copy from Configuration to Production
+async function copyProdModelsFromConfig() {
+  try {
+    const sc = _mdlScopes.cfg;
+    const srcData = await api('/api/templates/models?culture=' + encodeURIComponent(sc.culture || _defaultCulture));
+    const srcModels = srcData.models || [];
+    const dstNames = new Set(sc.files.map(f => f.name));
+    if (srcModels.length === 0) { toast('Aucun model dans Configuration', 'info'); return; }
+    let rows = '';
+    for (const m of srcModels) {
+      const exists = dstNames.has(m.name);
+      const status = exists
+        ? '<span class="tag" style="font-size:0.7rem;background:var(--warning);color:#000">sera ecrase</span>'
+        : '<span class="tag tag-blue" style="font-size:0.7rem">nouveau</span>';
+      rows += '<tr><td><label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer">' +
+        '<input type="checkbox" class="copy-mdl-cb" value="' + escHtml(m.name) + '" checked />' +
+        '<strong>' + escHtml(m.name.replace(/\.md$/, '')) + '</strong></label></td>' +
+        '<td><code style="font-size:0.8rem">' + escHtml(m.name) + '</code></td>' +
+        '<td>' + status + '</td></tr>';
+    }
+    document.getElementById('modal-copy-models-body').innerHTML =
+      '<p style="font-size:0.85rem;margin-bottom:0.5rem">Selectionnez les models a copier vers Production :</p>' +
+      '<p style="font-size:0.8rem;color:var(--warning);margin-bottom:0.75rem">Les models existants seront ecrases.</p>' +
+      '<div style="margin-bottom:0.5rem"><label style="cursor:pointer;font-size:0.8rem"><input type="checkbox" id="copy-mdl-toggle-all" onchange="document.querySelectorAll(\'.copy-mdl-cb\').forEach(c=>c.checked=this.checked)" checked /> Tout selectionner</label></div>' +
+      '<div class="table-container" style="max-height:350px;overflow-y:auto"><table><thead><tr><th>Model</th><th>Fichier</th><th>Statut</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    document.getElementById('modal-copy-models').style.display = 'flex';
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function _execCopyModels() {
+  const selected = [...document.querySelectorAll('.copy-mdl-cb:checked')].map(c => c.value);
+  if (selected.length === 0) { toast('Aucune selection', 'info'); return; }
+  const sc = _mdlScopes.cfg;
+  try {
+    await api('/api/prod-models/copy-from-config?culture=' + encodeURIComponent(sc.culture || _defaultCulture), { method: 'POST', body: { names: selected } });
+    closeModal('modal-copy-models');
+    toast(selected.length + ' model(s) copie(s)', 'success');
+    _mdlLoad('cfg');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// Aliases for backward compat
+function loadTplModels() { _mdlLoad('tpl'); }
+function loadCfgModels() { _mdlLoad('cfg'); }
+function tplModelSwitchCulture(c) { mdlSwitchCulture('tpl', c); }
+function tplModelSelect(i) { mdlSelect('tpl', i); }
+function tplModelUpdateName(v) { mdlUpdateName('tpl', v); }
+function tplModelAdd() { mdlAdd('tpl'); }
+function tplModelSave() { mdlSave('tpl'); }
+function tplModelDelete(i) { mdlDelete('tpl', i); }
+function _tplModelsRenderList() { _mdlRenderList('tpl'); }
 
 // ── Shared Agents (Shared/Agents/{id}/) — Split Panel ──────────
+
+let _saApiBase = '/api/shared-agents';  // switchable for prod scope
+let _saLlmApi = '/api/templates/llm';   // LLM source for dropdowns
+let _saScope = 'tpl';                    // 'tpl' or 'cfg'
+let _saLeftId = 'sa-left';
+let _saRightId = 'sa-right';
 
 let sharedAgentsData = [];
 let saSelectedId = '';
@@ -5124,9 +5212,27 @@ let _saMcpInstalled = [];
 let _saDockerfiles = [];
 let _saDirty = {};  // { info: true, identity: true, 'role:xxx': true, ... }
 
+function _saSetScope(scope) {
+  if (scope === 'cfg') {
+    _saApiBase = '/api/prod-agents';
+    _saLlmApi = '/api/llm/providers';
+    _saScope = 'cfg';
+    _saLeftId = 'pa-left';
+    _saRightId = 'pa-right';
+  } else {
+    _saApiBase = '/api/shared-agents';
+    _saLlmApi = '/api/templates/llm';
+    _saScope = 'tpl';
+    _saLeftId = 'sa-left';
+    _saRightId = 'sa-right';
+  }
+  _saLlmNames = [];  // reset cache on scope switch
+}
+
 async function loadSharedAgents() {
+  _saSetScope('tpl');
   try {
-    const data = await api('/api/shared-agents');
+    const data = await api(_saApiBase);
     sharedAgentsData = (data.agents || []).sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id, 'fr'));
   } catch { sharedAgentsData = []; }
   const prev = saSelectedId;
@@ -5136,12 +5242,12 @@ async function loadSharedAgents() {
     saSelectedId = '';
     saAgentData = null;
     _renderSaLeft();
-    document.getElementById('sa-right').innerHTML = '<div style="padding:2rem;color:var(--text-secondary);text-align:center">Selectionnez un agent</div>';
+    document.getElementById(_saRightId).innerHTML = '<div style="padding:2rem;color:var(--text-secondary);text-align:center">Selectionnez un agent</div>';
   }
 }
 
 function _renderSaLeft() {
-  const left = document.getElementById('sa-left');
+  const left = document.getElementById(_saLeftId);
   if (!left) return;
   let html = '<div class="sa-toolbar">';
   html += '<button class="btn btn-primary btn-sm" onclick="showCreateSharedAgentModal()" style="flex:1">+ Ajouter</button>';
@@ -5214,11 +5320,11 @@ function _saSetSection(section) {
 
 async function selectSharedAgent(id) {
   saSelectedId = id;
-  if (!id) { saAgentData = null; _renderSaLeft(); document.getElementById('sa-right').innerHTML = ''; return; }
-  try { saAgentData = await api('/api/shared-agents/' + encodeURIComponent(id)); }
+  if (!id) { saAgentData = null; _renderSaLeft(); document.getElementById(_saRightId).innerHTML = ''; return; }
+  try { saAgentData = await api(_saApiBase + '/' + encodeURIComponent(id)); }
   catch (e) { toast(e.message, 'error'); return; }
   // Load LLM + MCP lists (cached)
-  if (!_saLlmNames.length) { try { const d = await api('/api/templates/llm'); _saLlmNames = Object.keys(d.providers || {}); } catch {} }
+  if (!_saLlmNames.length) { try { const d = await api(_saLlmApi); _saLlmNames = Object.keys(d.providers || {}); } catch {} }
   if (!_saMcpInstalled.length) { try { const d = await api('/api/mcp/servers'); _saMcpInstalled = Object.keys(d.servers || {}); } catch {} }
   if (!_saDockerfiles.length) { try { const d = await api('/api/templates/dockerfiles'); _saDockerfiles = (d.files || []).map(f => f.name); } catch {} }
   saChatHistory = [];
@@ -5229,7 +5335,7 @@ async function selectSharedAgent(id) {
 }
 
 function _renderSaRight() {
-  const right = document.getElementById('sa-right');
+  const right = document.getElementById(_saRightId);
   if (!right || !saAgentData) { if (right) right.innerHTML = ''; return; }
   const agent = saAgentData;
   const id = saSelectedId;
@@ -5387,7 +5493,7 @@ async function _saSendChat() {
   const box = document.getElementById('sa-chat-msgs');
   if (box) box.scrollTop = box.scrollHeight;
   try {
-    const result = await api('/api/shared-agents/' + encodeURIComponent(saSelectedId) + '/chat', {
+    const result = await api(_saApiBase + '/' + encodeURIComponent(saSelectedId) + '/chat', {
       method: 'POST', body: { message: msg, history: saChatHistory.slice(0, -1) }
     });
     saChatHistory.push({
@@ -5398,7 +5504,7 @@ async function _saSendChat() {
     });
     // Refresh agent data if files were updated
     if ((result.file_status || []).some(f => f.status === 'updated')) {
-      saAgentData = await api('/api/shared-agents/' + encodeURIComponent(saSelectedId));
+      saAgentData = await api(_saApiBase + '/' + encodeURIComponent(saSelectedId));
       _renderSaLeft();
     }
   } catch (e) {
@@ -5436,7 +5542,7 @@ function _renderSaInfo(agent, id) {
     '<div class="form-row">' +
     '<div class="form-group"><label>Type</label><select id="sa-type" onchange="_saTypeChanged(this.value)">' +
       '<option value="single"' + ((agent.type || 'single') === 'single' ? ' selected' : '') + '>Single</option>' +
-      '<option value="pipeline"' + (agent.type === 'pipeline' ? ' selected' : '') + '>Pipeline</option>' +
+      '<option value="pipeline"' + (agent.type === 'pipeline' ? ' selected' : '') + '>Manager</option>' +
       '<option value="orchestrator"' + (agent.type === 'orchestrator' ? ' selected' : '') + '>Orchestrator</option>' +
     '</select></div>' +
     '<div class="form-group"><label>Temperature</label><input id="sa-temp" type="number" step="0.1" min="0" max="2" value="' + (agent.temperature ?? 0.3) + '" /></div>' +
@@ -5507,7 +5613,7 @@ function _renderSaDynamicEditor(type, name, content, filename) {
 async function _saSaveIdentity() {
   const content = document.getElementById('sa-md-editor').value;
   try {
-    await api('/api/shared-agents/' + encodeURIComponent(saSelectedId), { method: 'PUT', body: { id: saSelectedId, identity_content: content } });
+    await api(_saApiBase + '/' + encodeURIComponent(saSelectedId), { method: 'PUT', body: { id: saSelectedId, identity_content: content } });
     saAgentData.identity_content = content;
     delete _saDirty['identity'];
     _renderSaLeft();
@@ -5520,7 +5626,7 @@ async function _saSavePrompt() {
   const promptJsonErrs = validateJsonBlocks(content);
   if (promptJsonErrs.length) { toast('Prompt: JSON invalide — ' + promptJsonErrs.join(', '), 'error'); return; }
   try {
-    await api('/api/shared-agents/' + encodeURIComponent(saSelectedId), { method: 'PUT', body: { id: saSelectedId, prompt_content: content } });
+    await api(_saApiBase + '/' + encodeURIComponent(saSelectedId), { method: 'PUT', body: { id: saSelectedId, prompt_content: content } });
     saAgentData.prompt_content = content;
     toast('Prompt sauvegarde', 'success');
   } catch (e) { toast(e.message, 'error'); }
@@ -5529,11 +5635,11 @@ async function _saSavePrompt() {
 async function _saSaveDynamic(filename) {
   const content = document.getElementById('sa-dyn-editor').value;
   try {
-    await api('/api/shared-agents/' + encodeURIComponent(saSelectedId) + '/files/' + encodeURIComponent(filename), { method: 'PUT', body: { content } });
+    await api(_saApiBase + '/' + encodeURIComponent(saSelectedId) + '/files/' + encodeURIComponent(filename), { method: 'PUT', body: { content } });
     toast('Fichier sauvegarde', 'success');
     delete _saDirty[saActiveSection];
     // Refresh agent data
-    saAgentData = await api('/api/shared-agents/' + encodeURIComponent(saSelectedId));
+    saAgentData = await api(_saApiBase + '/' + encodeURIComponent(saSelectedId));
     _renderSaLeft();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -5549,9 +5655,9 @@ async function _saAddDynamic(type) {
     if (!name) { toast('Nom requis', 'error'); return; }
     const filename = prefixes[type] + name;
     try {
-      await api('/api/shared-agents/' + encodeURIComponent(saSelectedId) + '/files/' + encodeURIComponent(filename), { method: 'PUT', body: { content: '# ' + name + '\n\n' } });
+      await api(_saApiBase + '/' + encodeURIComponent(saSelectedId) + '/files/' + encodeURIComponent(filename), { method: 'PUT', body: { content: '# ' + name + '\n\n' } });
       closeModal();
-      saAgentData = await api('/api/shared-agents/' + encodeURIComponent(saSelectedId));
+      saAgentData = await api(_saApiBase + '/' + encodeURIComponent(saSelectedId));
       saActiveSection = type + ':' + name;
       _renderSaLeft();
       _renderSaRight();
@@ -5566,8 +5672,8 @@ async function _saDeleteDynamic(type, name) {
   if (!(await confirmModal('Supprimer ' + labels[type] + ' "' + name + '" ?'))) return;
   const filename = prefixes[type] + name;
   try {
-    await api('/api/shared-agents/' + encodeURIComponent(saSelectedId) + '/files/' + encodeURIComponent(filename), { method: 'DELETE' });
-    saAgentData = await api('/api/shared-agents/' + encodeURIComponent(saSelectedId));
+    await api(_saApiBase + '/' + encodeURIComponent(saSelectedId) + '/files/' + encodeURIComponent(filename), { method: 'DELETE' });
+    saAgentData = await api(_saApiBase + '/' + encodeURIComponent(saSelectedId));
     if (saActiveSection === type + ':' + name) saActiveSection = 'info';
     _renderSaLeft();
     _renderSaRight();
@@ -5588,7 +5694,7 @@ async function createSharedAgent() {
   if (!id) { toast('ID requis', 'error'); return; }
   if (!/^[a-z0-9_]+$/.test(id)) { toast('ID invalide (minuscules, chiffres, _ uniquement)', 'error'); return; }
   try {
-    await api('/api/shared-agents', { method: 'POST', body: { id, name: id } });
+    await api(_saApiBase, { method: 'POST', body: { id, name: id } });
     toast('Agent cree', 'success');
     closeModal();
     saSelectedId = id;
@@ -5616,7 +5722,7 @@ async function saveSharedAgent(id) {
   const delivers_contract = document.getElementById('sa-delivers_contract')?.checked || false;
   if (!name) { toast('Nom requis', 'error'); return; }
   try {
-    await api('/api/shared-agents/' + encodeURIComponent(id), { method: 'PUT', body: {
+    await api(_saApiBase + '/' + encodeURIComponent(id), { method: 'PUT', body: {
       id, name, description, type, llm, temperature, max_tokens, docker_mode, docker_image, mcp_access, delivers_docs, delivers_code, delivers_design, delivers_automation, delivers_tasklist, delivers_specs, delivers_contract
     }});
     toast('Agent sauvegarde', 'success');
@@ -5647,7 +5753,7 @@ async function deleteSharedAgent(id) {
   if (!id) return;
   if (!(await confirmModal('Supprimer l\'agent "' + id + '" ?'))) return;
   try {
-    await api('/api/shared-agents/' + encodeURIComponent(id), { method: 'DELETE' });
+    await api(_saApiBase + '/' + encodeURIComponent(id), { method: 'DELETE' });
     toast('Agent supprime', 'success');
     saSelectedId = '';
     saAgentData = null;
@@ -5666,7 +5772,7 @@ function importSharedAgent() {
     const form = new FormData();
     form.append('file', file);
     try {
-      const res = await fetch('/api/shared-agents/import', { method: 'POST', body: form });
+      const res = await fetch(_saApiBase + '/import', { method: 'POST', body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Erreur import');
       if (data.conflict) { _showImportRenameModal(file, data.existing_id); return; }
@@ -5689,7 +5795,7 @@ function _showImportRenameModal(file, existingId) {
     const form = new FormData();
     form.append('file', file);
     try {
-      const res = await fetch('/api/shared-agents/import?agent_id=' + encodeURIComponent(newId), { method: 'POST', body: form });
+      const res = await fetch(_saApiBase + '/import?agent_id=' + encodeURIComponent(newId), { method: 'POST', body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Erreur import');
       if (data.conflict) { toast('L\'agent "' + newId + '" existe aussi', 'error'); return; }
@@ -5715,6 +5821,391 @@ async function generateSharedAgentPrompt(id) {
     editor.value = result.prompt || '';
     toast('Prompt genere', 'success');
   } catch (e) { editor.disabled = false; editor.value = savedContent; toast(e.message, 'error'); }
+}
+
+// ── Production Teams ──
+let _prodTeamsData = { teams: [], channel_mapping: {} };
+let _prodTeamsDetail = [];
+
+async function loadProdTeams() {
+  try {
+    const [teamsRes, detailRes] = await Promise.all([
+      api('/api/prod-teams'),
+      api('/api/prod-teams-detail'),
+    ]);
+    _prodTeamsData = teamsRes;
+    if (!Array.isArray(_prodTeamsData.teams)) _prodTeamsData.teams = [];
+    _prodTeamsDetail = detailRes.templates || [];
+    _renderProdTeams();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function _renderProdTeams() {
+  const el = document.getElementById('prod-teams-table');
+  if (!el) return;
+  if (_prodTeamsData.teams.length === 0) {
+    el.innerHTML = '<p style="color:var(--text-secondary);padding:1rem;text-align:center">Aucune equipe. Utilisez "Copier depuis Configuration" pour commencer.</p>';
+    return;
+  }
+  el.innerHTML = _prodTeamsData.teams.map((t, i) => {
+    const dir = t.directory || '';
+    const tpl = _prodTeamsDetail.find(d => d.id === dir) || null;
+    const agentEntries = tpl ? Object.entries(tpl.agents) : [];
+    const mcpAccess = tpl ? (tpl.mcp_access || {}) : {};
+    const orchId = t.orchestrator || agentEntries.find(([, a]) => a.type === 'orchestrator')?.[0] || '';
+
+    const agentCards = agentEntries.map(([aid, a]) => {
+      const mcpList = mcpAccess[aid] || [];
+      const isOrch = aid === orchId || a.type === 'orchestrator';
+      return '<div class="agent-card' + (isOrch ? ' agent-orchestrator' : '') + '" style="cursor:pointer">' +
+        '<div class="agent-card-header">' +
+          '<div onclick="editProdAgent(\'' + escHtml(dir) + '\',\'' + escHtml(aid) + '\')" style="flex:1;cursor:pointer">' +
+            '<h4>' + (isOrch ? '<span class="orch-badge" title="Orchestrateur">&#9733;</span> ' : '') + escHtml(a.name || aid) + '</h4>' +
+            '<code style="font-size:0.75rem;color:var(--text-secondary)">' + escHtml(aid) + '</code>' +
+          '</div>' +
+          (isOrch ? '' : '<button class="btn-icon danger" onclick="event.stopPropagation();deleteProdTeamAgent(\'' + escHtml(dir) + '\',\'' + escHtml(aid) + '\')" title="Supprimer">' +
+            '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
+          '</button>') +
+        '</div>' +
+        '<div class="agent-meta" onclick="editProdAgent(\'' + escHtml(dir) + '\',\'' + escHtml(aid) + '\')">' +
+          '<span class="tag tag-blue">temp: ' + (a.temperature ?? '') + '</span>' +
+          '<span class="tag tag-blue">tokens: ' + (a.max_tokens ?? '') + '</span>' +
+          (a.llm ? '<span class="tag tag-yellow">' + escHtml(a.llm) + '</span>' : '') +
+          (a.type ? '<span class="tag tag-gray">' + escHtml(a.type === 'pipeline' ? 'manager' : a.type) + '</span>' : '') +
+        '</div>' +
+        (mcpList.length ? '<div class="agent-meta">' + mcpList.map(m => '<span class="tag tag-green">' + escHtml(m) + '</span>').join('') + '</div>' : '') +
+      '</div>';
+    }).join('');
+
+    return '<div class="team-block">' +
+      '<div class="team-block-header">' +
+        '<div style="display:flex;align-items:center;gap:0.5rem;flex:1;cursor:pointer" onclick="toggleTeamBlock(this)">' +
+          '<svg class="team-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>' +
+          '<h3 style="margin:0">' + escHtml(t.name) +
+            ' <span style="font-weight:400;font-size:0.75rem;color:var(--text-secondary)">' + escHtml(t.id) + '</span>' +
+            ' <code style="font-weight:400;font-size:0.7rem;color:var(--text-secondary)">config/Teams/' + escHtml(dir) + '/</code>' +
+          '</h3>' +
+          '<span class="tag tag-blue" style="margin-left:0.5rem">' + agentEntries.length + ' agent' + (agentEntries.length > 1 ? 's' : '') + '</span>' +
+        '</div>' +
+        '<div style="display:flex;gap:0.5rem;align-items:center">' +
+          '<button class="btn-icon" onclick="event.stopPropagation();editProdTeamQuick(' + i + ')" title="Modifier l\'equipe" style="opacity:0.5">' +
+            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>' +
+          '</button>' +
+          '<button class="btn btn-primary btn-sm" onclick="_teamEditScope=\'cfg\';showAddTplAgentModal(\'' + escHtml(dir) + '\')">+ Agent</button>' +
+          '<button class="btn btn-outline btn-sm" onclick="_teamEditScope=\'cfg\';showTplRawRegistry(\'' + escHtml(dir) + '\')">Raw</button>' +
+          '<button class="btn btn-outline btn-sm" onclick="copyProdRegistry(\'' + escHtml(dir) + '\')">Copier</button>' +
+          '<button class="btn btn-outline btn-sm" style="color:var(--error)" onclick="deleteProdTeam(' + i + ')">Suppr</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="team-block-body">' +
+        (t.description ? '<p style="color:var(--text-secondary);margin:0 0 0.5rem 0;font-size:0.85rem">' + escHtml(t.description) + '</p>' : '') +
+        '<div class="team-block-meta">' +
+          (t.discord_channels || []).map(c => '<span class="tag tag-green">#' + escHtml(c) + '</span>').join('') +
+        '</div>' +
+        '<div class="agents-grid">' + (agentCards || '<p style="color:var(--text-secondary);padding:0.5rem">Aucun agent.</p>') + '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function editProdTeamQuick(idx) {
+  const t = _prodTeamsData.teams[idx];
+  showModal(
+    '<div class="modal-header">' +
+      '<h3>Equipe: ' + escHtml(t.name || t.id) + '</h3>' +
+      '<button class="btn-icon" onclick="closeModal()">&times;</button>' +
+    '</div>' +
+    '<div class="form-group"><label>Nom</label><input id="m-prod-team-qname" value="' + escHtml(t.name || '') + '" /></div>' +
+    '<div class="form-group"><label>Description</label><input id="m-prod-team-qdesc" value="' + escHtml(t.description || '') + '" /></div>' +
+    '<div class="form-group"><label>Channels Discord (virgule)</label><input id="m-prod-team-qchannels" value="' + escHtml((t.discord_channels || []).join(', ')) + '" /></div>' +
+    '<div class="modal-actions">' +
+      '<button class="btn btn-outline" onclick="closeModal()">Annuler</button>' +
+      '<button class="btn btn-primary" onclick="saveProdTeamQuick(' + idx + ')">Sauvegarder</button>' +
+    '</div>',
+    'modal-confirm'
+  );
+}
+
+async function saveProdTeamQuick(idx) {
+  const name = document.getElementById('m-prod-team-qname').value.trim();
+  if (!name) { toast('Nom requis', 'error'); return; }
+  const channels = document.getElementById('m-prod-team-qchannels').value.trim();
+  _prodTeamsData.teams[idx] = {
+    ..._prodTeamsData.teams[idx],
+    name,
+    description: document.getElementById('m-prod-team-qdesc').value.trim(),
+    discord_channels: channels ? channels.split(',').map(s => s.trim()) : [],
+  };
+  try {
+    await api('/api/prod-teams', { method: 'PUT', body: _prodTeamsData });
+    toast('Equipe sauvegardee', 'success');
+    closeModal();
+    loadProdTeams();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteProdTeam(idx) {
+  const t = _prodTeamsData.teams[idx];
+  if (!t || !(await confirmModal('Supprimer l\'equipe "' + (t.name || t.id) + '" ?'))) return;
+  _prodTeamsData.teams.splice(idx, 1);
+  try {
+    await api('/api/prod-teams', { method: 'PUT', body: _prodTeamsData });
+    toast('Equipe supprimee', 'success');
+    loadProdTeams();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteProdTeamAgent(dir, agentId) {
+  if (!(await confirmModal('Supprimer l\'agent "' + agentId + '" ?'))) return;
+  _teamEditScope = 'cfg';
+  try {
+    await api('/api/prod-team-agents/' + encodeURIComponent(agentId) + '?team_id=' + encodeURIComponent(dir), { method: 'DELETE' });
+    toast('Agent supprime', 'success');
+    loadProdTeams();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function copyProdRegistry(dir) {
+  try {
+    const data = await api('/api/agents/registry/' + encodeURIComponent(dir));
+    await copyToClipboard(JSON.stringify(data, null, 2));
+    toast('Registry copie dans le presse-papier', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function copyProdTeamsFromConfig() {
+  try {
+    const [srcTeams, srcDetail, dstTeams, cfgAgents] = await Promise.all([
+      api('/api/templates/teams'),
+      api('/api/templates'),
+      api('/api/prod-teams'),
+      api('/api/prod-agents'),
+    ]);
+    const srcList = srcTeams.teams || [];
+    const srcTemplates = srcDetail.templates || [];
+    const dstIds = new Set((dstTeams.teams || []).map(t => t.id));
+    const cfgAgentIds = new Set((cfgAgents.agents || []).map(a => a.id));
+
+    if (srcList.length === 0) { toast('Aucune equipe dans Configuration', 'info'); return; }
+
+    let rows = '';
+    let hasBlocked = false;
+    for (const t of srcList) {
+      const exists = dstIds.has(t.id);
+      const tpl = srcTemplates.find(tp => tp.id === (t.directory || ''));
+      const agentIds = tpl ? Object.keys(tpl.agents || {}) : [];
+      const missingAgents = agentIds.filter(a => !cfgAgentIds.has(a));
+      const blocked = exists || missingAgents.length > 0;
+      if (blocked) hasBlocked = true;
+
+      const status = exists
+        ? '<span class="tag" style="font-size:0.7rem;background:var(--warning);color:#000">ID existante</span>'
+        : missingAgents.length > 0
+          ? '<span class="tag" style="font-size:0.7rem;background:#ef4444;color:#fff">agents manquants</span>'
+          : '<span class="tag tag-blue" style="font-size:0.7rem">nouveau</span>';
+
+      const agentHtml = agentIds.map(a => {
+        const missing = missingAgents.includes(a);
+        return '<span style="font-size:0.75rem;' + (missing ? 'color:#ef4444;font-weight:600' : 'color:var(--text-secondary)') + '">' + escHtml(a) + '</span>';
+      }).join(', ');
+
+      rows += '<tr style="' + (blocked ? 'opacity:0.5' : '') + '">' +
+        '<td><label style="display:flex;align-items:center;gap:0.4rem;cursor:' + (blocked ? 'not-allowed' : 'pointer') + '">' +
+          '<input type="checkbox" class="copy-team-cb" value="' + escHtml(t.id) + '" ' + (blocked ? 'disabled' : 'checked') + ' />' +
+          '<strong>' + escHtml(t.name || t.id) + '</strong></label></td>' +
+        '<td><code style="font-size:0.8rem">' + escHtml(t.id) + '</code></td>' +
+        '<td>' + status + '</td>' +
+        '<td style="font-size:0.8rem">' + (agentHtml || '<span style="color:var(--text-secondary)">—</span>') + '</td>' +
+      '</tr>';
+    }
+
+    document.getElementById('modal-copy-teams-body').innerHTML =
+      '<p style="font-size:0.85rem;margin-bottom:0.75rem">Selectionnez les equipes a copier vers Production :</p>' +
+      '<div class="table-container" style="max-height:400px;overflow-y:auto"><table><thead><tr><th>Equipe</th><th>ID</th><th>Statut</th><th>Agents</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+
+    const helpEl = document.getElementById('modal-copy-teams-help');
+    if (hasBlocked) {
+      helpEl.innerHTML = '<span style="color:var(--warning)">Les equipes avec une ID existante ou des agents manquants dans Production / Agents ne peuvent pas etre copiees. Copiez d\'abord les agents manquants depuis Configuration / Agents.</span>';
+    } else {
+      helpEl.innerHTML = '';
+    }
+
+    document.getElementById('modal-copy-teams').style.display = 'flex';
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function _execCopyTeams() {
+  const selected = [...document.querySelectorAll('.copy-team-cb:checked:not(:disabled)')].map(c => c.value);
+  if (selected.length === 0) { toast('Aucune selection', 'info'); return; }
+  try {
+    await api('/api/prod-teams/copy-from-config', { method: 'POST', body: { team_ids: selected } });
+    closeModal('modal-copy-teams');
+    toast(selected.length + ' equipe(s) copiee(s)', 'success');
+    loadProdTeams();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// editProdAgent delegates to the same full editor as editTplAgent but with prod scope
+let _teamEditScope = 'tpl'; // 'tpl' or 'cfg'
+
+function editProdAgent(dir, agentId) {
+  _teamEditScope = 'cfg';
+  editTplAgent(dir, agentId);
+}
+
+// Override: get the right data source based on scope
+function _getTeamEditData() {
+  return _teamEditScope === 'cfg' ? _prodTeamsDetail : tplTemplatesData;
+}
+function _getTeamEditAgentsApi() {
+  return _teamEditScope === 'cfg' ? '/api/prod-team-agents' : '/api/templates/agents';
+}
+function _getTeamEditRegistryApi() {
+  return _teamEditScope === 'cfg' ? '/api/agents/registry' : '/api/templates/registry';
+}
+function _getTeamEditReload() {
+  return _teamEditScope === 'cfg' ? loadProdTeams : loadTplTeamsList;
+}
+
+// ── Production Projects ──
+
+async function loadProdProjects() {
+  _projApiBase = '/api/prod-projects'; _projPrefix = 'ppj';
+  try {
+    if (!_prodTeamsData.teams.length) {
+      try { const t = await api('/api/prod-teams'); _prodTeamsData = t; } catch {}
+    }
+    const data = await api('/api/prod-projects');
+    _tplProjects = data.projects || [];
+    _projSelectedId = null;
+    _projActiveWf = null;
+    _projRenderSelector();
+    _projSelectProject(null);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function copyProdProjectsFromConfig() {
+  try {
+    const [srcData, dstData, dstTeams] = await Promise.all([
+      api('/api/templates/projects'),
+      api('/api/prod-projects'),
+      api('/api/prod-teams'),
+    ]);
+    const srcProjects = srcData.projects || [];
+    const dstIds = new Set((dstData.projects || []).map(p => p.id));
+    const dstTeamsList = dstTeams.teams || [];
+    const cfgTeamDirs = new Set(dstTeamsList.map(t => t.directory).filter(Boolean));
+
+    if (srcProjects.length === 0) { toast('Aucun type de projet dans Configuration', 'info'); return; }
+
+    let rows = '';
+    let hasBlocked = false;
+    for (const p of srcProjects) {
+      const exists = dstIds.has(p.id);
+      const teamMissing = p.team && !cfgTeamDirs.has(p.team);
+      const blocked = exists || teamMissing;
+      if (blocked) hasBlocked = true;
+
+      const status = exists
+        ? '<span class="tag" style="font-size:0.7rem;background:var(--warning);color:#000">ID existante</span>'
+        : teamMissing
+          ? '<span class="tag" style="font-size:0.7rem;background:#ef4444;color:#fff">equipe manquante</span>'
+          : '<span class="tag tag-blue" style="font-size:0.7rem">nouveau</span>';
+
+      const teamHtml = p.team
+        ? '<span style="font-size:0.8rem;' + (teamMissing ? 'color:#ef4444;font-weight:600' : 'color:var(--text-secondary)') + '">' + escHtml(p.team) + '</span>'
+        : '<span style="color:var(--text-secondary)">—</span>';
+
+      rows += '<tr style="' + (blocked ? 'opacity:0.5' : '') + '">' +
+        '<td><label style="display:flex;align-items:center;gap:0.4rem;cursor:' + (blocked ? 'not-allowed' : 'pointer') + '">' +
+          '<input type="checkbox" class="copy-proj-cb" value="' + escHtml(p.id) + '" ' + (blocked ? 'disabled' : 'checked') + ' />' +
+          '<strong>' + escHtml(p.name || p.id) + '</strong></label></td>' +
+        '<td><code style="font-size:0.8rem">' + escHtml(p.id) + '</code></td>' +
+        '<td>' + status + '</td>' +
+        '<td>' + teamHtml + '</td>' +
+      '</tr>';
+    }
+
+    document.getElementById('modal-copy-projects-body').innerHTML =
+      '<p style="font-size:0.85rem;margin-bottom:0.75rem">Selectionnez les types de projet a copier vers Production :</p>' +
+      '<div class="table-container" style="max-height:400px;overflow-y:auto"><table><thead><tr><th>Projet</th><th>ID</th><th>Statut</th><th>Equipe</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+
+    const helpEl = document.getElementById('modal-copy-projects-help');
+    helpEl.innerHTML = hasBlocked
+      ? '<span style="color:var(--warning)">Les projets avec une ID existante ou une equipe manquante dans Production / Equipes ne peuvent pas etre copies. Copiez d\'abord les equipes manquantes.</span>'
+      : '';
+
+    document.getElementById('modal-copy-projects').style.display = 'flex';
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function _execCopyProjects() {
+  const selected = [...document.querySelectorAll('.copy-proj-cb:checked:not(:disabled)')].map(c => c.value);
+  if (selected.length === 0) { toast('Aucune selection', 'info'); return; }
+  try {
+    await api('/api/prod-projects/copy-from-config', { method: 'POST', body: { project_ids: selected } });
+    closeModal('modal-copy-projects');
+    toast(selected.length + ' type(s) de projet copie(s)', 'success');
+    loadProdProjects();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ── Production Agents ──
+async function loadProdAgents() {
+  _saSetScope('cfg');
+  try {
+    const data = await api(_saApiBase);
+    sharedAgentsData = (data.agents || []).sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id, 'fr'));
+  } catch { sharedAgentsData = []; }
+  const prev = saSelectedId;
+  if (prev && sharedAgentsData.find(a => a.id === prev)) {
+    selectSharedAgent(prev);
+  } else {
+    saSelectedId = '';
+    saAgentData = null;
+    _renderSaLeft();
+    document.getElementById(_saRightId).innerHTML = '<div style="padding:2rem;color:var(--text-secondary);text-align:center">Selectionnez un agent</div>';
+  }
+}
+
+async function copyProdAgentsFromConfig() {
+  try {
+    _saSetScope('cfg');
+    const tplData = await api('/api/shared-agents');
+    const tplAgents = tplData.agents || [];
+    const cfgData = await api('/api/prod-agents');
+    const cfgIds = new Set((cfgData.agents || []).map(a => a.id));
+    if (tplAgents.length === 0) { toast('Aucun agent dans Configuration', 'info'); return; }
+    let rows = '';
+    for (const a of tplAgents) {
+      const exists = cfgIds.has(a.id);
+      const status = exists
+        ? '<span class="tag tag-green" style="font-size:0.7rem">existe</span>'
+        : '<span class="tag tag-blue" style="font-size:0.7rem">nouveau</span>';
+      rows += '<tr><td><label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer">' +
+        '<input type="checkbox" class="copy-agent-cb" value="' + escHtml(a.id) + '" checked />' +
+        '<strong>' + escHtml(a.id) + '</strong></label></td>' +
+        '<td style="font-size:0.85rem">' + escHtml(a.name || '') + '</td>' +
+        '<td style="font-size:0.8rem;color:var(--text-secondary)">' + escHtml(a.description || '').substring(0, 60) + '</td>' +
+        '<td>' + status + '</td></tr>';
+    }
+    document.getElementById('modal-copy-agents-body').innerHTML =
+      '<p style="font-size:0.85rem;margin-bottom:0.75rem">Selectionnez les agents a copier depuis Configuration :</p>' +
+      '<div style="margin-bottom:0.5rem"><label style="cursor:pointer;font-size:0.8rem"><input type="checkbox" id="copy-agent-toggle-all" onchange="document.querySelectorAll(\'.copy-agent-cb\').forEach(c=>c.checked=this.checked)" checked /> Tout selectionner</label></div>' +
+      '<div class="table-container" style="max-height:400px;overflow-y:auto"><table><thead><tr><th>ID</th><th>Nom</th><th>Description</th><th>Statut</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    document.getElementById('modal-copy-agents').style.display = 'flex';
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function _execCopyAgents() {
+  const selected = [...document.querySelectorAll('.copy-agent-cb:checked')].map(c => c.value);
+  if (selected.length === 0) { toast('Aucune selection', 'info'); return; }
+  try {
+    await api('/api/prod-agents/copy-from-config', { method: 'POST', body: { agent_ids: selected } });
+    closeModal('modal-copy-agents');
+    toast(selected.length + ' agent(s) copie(s)', 'success');
+    loadProdAgents();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 // ── Template Git (Enregistrement) — delegates to factorized functions ──
@@ -6318,7 +6809,7 @@ function renderTplTeams() {
       return `<div class="agent-card${isOrch ? ' agent-orchestrator' : ''}" style="cursor:pointer;${orchBorder}">
         <div class="agent-card-header">
           <div onclick="editTplAgent('${escHtml(dir)}','${escHtml(aid)}')" style="flex:1;cursor:pointer">
-            <h4>${isOrch ? '<span class="orch-badge" title="Orchestrateur">&#9733;</span> ' : ''}${escHtml(a.name)}${a.docker_mode ? ' <svg title="Docker" width="18" height="13" viewBox="0 0 256 185" style="vertical-align:middle;margin-left:4px"><path fill="#0db7ed" d="M250 87c-3-2-10-4-18-3-2-13-10-24-19-31l-4-2-2 4c-3 5-5 12-4 18 0 4 1 8 3 12-5 2-13 4-24 4H1l-1 4c-1 12 2 27 9 38 8 12 20 18 36 18 34 0 60-16 72-49 5 0 15 0 20-10l1-2-3-1zM28 81H8v20h20V81zm26 0H34v20h20V81zm26 0H60v20h20V81zm26 0H86v20h20V81zm-78-24H8v20h20V57zm26 0H34v20h20V57zm26 0H60v20h20V57zm26 0H86v20h20V57zm0-24H86v20h20V33z"/></svg>' : ''}</h4>
+            <h4>${isOrch ? '<span class="orch-badge" title="Orchestrateur">&#9733;</span> ' : ''}${escHtml(a.name || a.id || '')}${a.docker_mode ? ' <svg title="Docker" width="18" height="13" viewBox="0 0 256 185" style="vertical-align:middle;margin-left:4px"><path fill="#0db7ed" d="M250 87c-3-2-10-4-18-3-2-13-10-24-19-31l-4-2-2 4c-3 5-5 12-4 18 0 4 1 8 3 12-5 2-13 4-24 4H1l-1 4c-1 12 2 27 9 38 8 12 20 18 36 18 34 0 60-16 72-49 5 0 15 0 20-10l1-2-3-1zM28 81H8v20h20V81zm26 0H34v20h20V81zm26 0H60v20h20V81zm26 0H86v20h20V81zm-78-24H8v20h20V57zm26 0H34v20h20V57zm26 0H60v20h20V57zm26 0H86v20h20V57zm0-24H86v20h20V33z"/></svg>' : ''}</h4>
             <code style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(aid)}</code>
           </div>
           ${isOrch ? '' : `<button class="btn-icon danger" onclick="event.stopPropagation();deleteTplAgent('${escHtml(dir)}','${escHtml(aid)}')" title="Supprimer">
@@ -6329,7 +6820,7 @@ function renderTplTeams() {
           <span class="tag tag-blue">temp: ${a.temperature}</span>
           <span class="tag tag-blue">tokens: ${a.max_tokens}</span>
           ${a.llm ? `<span class="tag tag-yellow">${escHtml(a.llm)}</span>` : ''}
-          ${a.type ? `<span class="tag tag-gray">${escHtml(a.type)}</span>` : ''}
+          ${a.type ? `<span class="tag tag-gray">${escHtml(a.type === 'pipeline' ? 'manager' : a.type)}</span>` : ''}
         </div>
         ${mcpList.length ? `<div class="agent-meta">
           ${mcpList.map(m => `<span class="tag tag-green">${escHtml(m)}</span>`).join('')}
@@ -6357,7 +6848,6 @@ function renderTplTeams() {
           </button>
           <button class="btn btn-primary btn-sm" onclick="showAddTplAgentModal('${escHtml(dir)}')">+ Agent</button>
           <button class="btn btn-outline btn-sm" id="btn-coherence-tpl-${escHtml(dir)}" onclick="checkTplTeamCoherence('${escHtml(dir)}')">Verifier</button>
-          <button class="btn btn-outline btn-sm" id="btn-wf-tpl-${escHtml(dir)}" onclick="showTplWorkflow('${escHtml(dir)}')">Workflow</button>
           <button class="btn btn-outline btn-sm" onclick="showTplRawRegistry('${escHtml(dir)}')">Raw</button>
           <button class="btn btn-outline btn-sm" onclick="copyTplRegistry('${escHtml(dir)}')">Copier</button>
           <button class="btn btn-outline btn-sm" style="color:var(--error)" onclick="deleteTplTeam(${i})">Suppr</button>
@@ -6374,11 +6864,6 @@ function renderTplTeams() {
       </div>
     </div>`;
   }).join('');
-  // Validate workflows after render
-  tplTeamsData.teams.forEach(t => {
-    const dir = t.directory || '';
-    _wfCheckStatus(dir, '/api/templates/workflow', '/api/templates/registry', 'tpl');
-  });
 }
 
 async function checkTplTeamCoherence(dir) {
@@ -6418,12 +6903,14 @@ async function showTplTeamReport(dir) {
 
 async function showAddTplAgentModal(dir) {
   let sharedList = [], hasOrch = false;
+  const agentsCatalogApi = _teamEditScope === 'cfg' ? '/api/prod-agents' : _saApiBase;
+  const regApi = _getTeamEditRegistryApi();
   try {
-    const d = await api('/api/shared-agents');
+    const d = await api(agentsCatalogApi);
     sharedList = d.agents || [];
   } catch { /* ignore */ }
   try {
-    const reg = await api(`/api/templates/registry/${encodeURIComponent(dir)}`);
+    const reg = await api(regApi + '/' + encodeURIComponent(dir));
     hasOrch = Object.values(reg.agents || reg || {}).some(a => a.type === 'orchestrator');
   } catch { /* ignore */ }
   const sortedShared = sharedList.slice().sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id, 'fr'));
@@ -6448,7 +6935,7 @@ async function showAddTplAgentModal(dir) {
       <label>Type</label>
       <select id="tpl-agent-new-type">
         <option value="single" selected>Single</option>
-        <option value="pipeline">Pipeline</option>
+        <option value="pipeline">Manager</option>
         <option value="orchestrator" ${hasOrch?'disabled':''}>Orchestrator</option>
       </select>
     </div>
@@ -6483,16 +6970,18 @@ async function addTplAgent(dir) {
   const id = (document.getElementById('tpl-agent-new-id').value || '').trim();
   if (!id) { toast('Selectionnez un agent du catalogue', 'error'); return; }
   const agentType = document.getElementById('tpl-agent-new-type').value;
+  const regApi = _getTeamEditRegistryApi();
+  const agentsApi = _getTeamEditAgentsApi();
   if (agentType === 'orchestrator') {
     try {
-      const reg = await api(`/api/templates/registry/${encodeURIComponent(dir)}`);
+      const reg = await api(regApi + '/' + encodeURIComponent(dir));
       if (Object.values(reg.agents || reg || {}).some(a => a.type === 'orchestrator')) {
         toast('Un orchestrator existe deja dans cette equipe', 'error'); return;
       }
     } catch { /* ignore */ }
   }
   try {
-    await api('/api/templates/agents', { method: 'POST', body: {
+    await api(agentsApi, { method: 'POST', body: {
       id,
       name: id,
       type: agentType,
@@ -6500,12 +6989,13 @@ async function addTplAgent(dir) {
     }});
     toast('Agent ajoute', 'success');
     closeModal();
-    loadTplTeamsList();
+    _getTeamEditReload()();
   } catch (e) { toast(e.message, 'error'); }
 }
 
 async function editTplAgent(dir, agentId) {
-  const tpl = tplTemplatesData.find(tp => tp.id === dir);
+  if (_teamEditScope !== 'cfg') _teamEditScope = 'tpl';
+  const tpl = _getTeamEditData().find(tp => tp.id === dir);
   if (!tpl || !tpl.agents[agentId]) { toast('Agent introuvable', 'error'); return; }
   const a = tpl.agents[agentId];
 
@@ -6526,7 +7016,7 @@ async function editTplAgent(dir, agentId) {
 
   const promptRaw = _composeAgentPrompt(a);
   const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
-  const hasPipeline = a.type === 'pipeline' || (a.pipeline_steps && a.pipeline_steps.length > 0);
+  const hasPipeline = a.type === 'pipeline';
   const isOrchestrator = a.type === 'orchestrator';
   const curType = isOrchestrator ? 'orchestrator' : (hasPipeline ? 'pipeline' : 'single');
   const hasOtherOrch = Object.entries(tpl.agents || {}).some(([aid, ag]) => aid !== agentId && ag.type === 'orchestrator');
@@ -6539,7 +7029,7 @@ async function editTplAgent(dir, agentId) {
     <div class="prompt-tabs" style="margin-bottom:0.5rem">
       <div class="prompt-tab active" id="tpl-modal-tab-info" onclick="switchTplModalTab('info')">Identite</div>
       <div class="prompt-tab" id="tpl-modal-tab-prompt" onclick="switchTplModalTab('prompt')">Prompt</div>
-      <div class="prompt-tab" id="tpl-modal-tab-manager" onclick="switchTplModalTab('manager')">Manager</div>
+      ${curType === 'orchestrator' ? `<div class="prompt-tab" id="tpl-modal-tab-manager" onclick="switchTplModalTab('manager')">Manager</div>` : ''}
     </div>
     <div id="tpl-modal-pane-info">
       <div class="form-row">
@@ -6585,12 +7075,6 @@ async function editTplAgent(dir, agentId) {
         <div class="prompt-preview" id="tpl-agent-prompt-preview" style="max-height:500px;overflow-y:auto"></div>
       </div>
     </div>
-    <div id="tpl-modal-pane-pipeline" style="display:none">
-      <div class="form-group">
-        <label>Pipeline Steps</label>
-        <div id="tpl-pipeline-steps" class="pipeline-steps-container"></div>
-      </div>
-    </div>
     <div id="tpl-modal-pane-manager" style="display:none">
       <div class="form-group">
         <label>Agents sous responsabilite</label>
@@ -6606,8 +7090,6 @@ async function editTplAgent(dir, agentId) {
   // Set prompt after modal creation to avoid template literal issues with backticks
   const promptEl = document.getElementById('tpl-agent-prompt-preview');
   if (promptEl) promptEl.innerHTML = promptHtml;
-  renderPipelineSteps('tpl-pipeline-steps', a.pipeline_steps || []);
-
   // Populate manager agents list
   const delegatesTo = a.delegates_to || [];
   // Collect agents already managed by another agent (not this one)
@@ -6635,8 +7117,9 @@ async function editTplAgent(dir, agentId) {
 async function buildTeamOrchestratorPrompt(teamDir) {
   const modalBtns = document.querySelectorAll('.modal-overlay button, .modal-overlay .btn');
   modalBtns.forEach(b => { b.disabled = true; b.style.opacity = '0.5'; b.style.pointerEvents = 'none'; });
+  const base = _teamEditScope === 'cfg' ? '/api/prod-teams' : '/api/templates/teams';
   try {
-    const res = await api('/api/templates/teams/' + encodeURIComponent(teamDir) + '/orchestrator/build', { method: 'POST' });
+    const res = await api(base + '/' + encodeURIComponent(teamDir) + '/orchestrator/build', { method: 'POST' });
     toast('Prompt orchestrateur genere', 'success');
     const preview = document.getElementById('tpl-agent-prompt-preview');
     if (preview) {
@@ -6649,7 +7132,7 @@ async function buildTeamOrchestratorPrompt(teamDir) {
 }
 
 function switchTplModalTab(tab) {
-  ['info', 'prompt', 'pipeline', 'manager'].forEach(t => {
+  ['info', 'prompt', 'manager'].forEach(t => {
     const pane = document.getElementById('tpl-modal-pane-' + t);
     const tabEl = document.getElementById('tpl-modal-tab-' + t);
     if (pane) pane.style.display = t === tab ? '' : 'none';
@@ -6658,49 +7141,44 @@ function switchTplModalTab(tab) {
 }
 
 function _onTplTypeChange(val) {
-  const tabEl = document.getElementById('tpl-modal-tab-pipeline');
-  if (tabEl) tabEl.style.display = val === 'pipeline' ? '' : 'none';
-  // If switching away from pipeline, hide the pane if it was active
-  if (val !== 'pipeline') {
-    const pane = document.getElementById('tpl-modal-pane-pipeline');
-    if (pane && pane.style.display !== 'none') switchTplModalTab('info');
-  }
+  // Type change handler (no-op)
 }
 
 async function saveTplAgent(dir, agentId) {
   const agentType = document.getElementById('tpl-agent-edit-type').value;
-  const tpl = tplTemplatesData.find(tp => tp.id === dir);
+  const tpl = _getTeamEditData().find(tp => tp.id === dir);
   if (agentType === 'orchestrator' && Object.entries(tpl.agents || {}).some(([aid, ag]) => aid !== agentId && ag.type === 'orchestrator')) {
     toast('Un orchestrator existe deja dans cette equipe', 'error'); return;
   }
-  const pipeline_steps = agentType === 'pipeline' ? getPipelineSteps('tpl-pipeline-steps') : [];
   const delegates_to = Array.from(document.querySelectorAll('.tpl-delegate-cb:checked')).map(cb => cb.value);
+  const agentsApi = _getTeamEditAgentsApi();
   try {
-    await api(`/api/templates/agents/${encodeURIComponent(agentId)}`, { method: 'PUT', body: {
+    await api(`${agentsApi}/${encodeURIComponent(agentId)}`, { method: 'PUT', body: {
       id: agentId, name: agentId,
       type: agentType,
-      pipeline_steps,
       delegates_to,
       team_id: dir,
     }});
     toast('Agent sauvegarde', 'success');
     closeModal();
-    loadTplTeamsList();
+    _getTeamEditReload()();
   } catch (e) { toast(e.message, 'error'); }
 }
 
 async function deleteTplAgent(dir, agentId) {
   if (!(await confirmModal(`Supprimer l'agent "${agentId}" ?`))) return;
+  const agentsApi = _getTeamEditAgentsApi();
   try {
-    await api(`/api/templates/agents/${encodeURIComponent(agentId)}?team_id=${encodeURIComponent(dir)}`, { method: 'DELETE' });
+    await api(`${agentsApi}/${encodeURIComponent(agentId)}?team_id=${encodeURIComponent(dir)}`, { method: 'DELETE' });
     toast('Agent supprime', 'success');
-    loadTplTeamsList();
+    _getTeamEditReload()();
   } catch (e) { toast(e.message, 'error'); }
 }
 
 async function showTplRawRegistry(dir) {
   try {
-    const data = await api(`/api/templates/registry/${encodeURIComponent(dir)}`);
+    const regApi = _getTeamEditRegistryApi();
+    const data = await api(`${regApi}/${encodeURIComponent(dir)}`);
     const json = JSON.stringify(data, null, 2);
     showModal(`
       <div class="modal-header">
@@ -6723,10 +7201,11 @@ async function saveTplRawRegistry(dir) {
   let data;
   try { data = JSON.parse(raw); } catch { toast('JSON invalide', 'error'); return; }
   try {
-    await api(`/api/templates/registry/${encodeURIComponent(dir)}`, { method: 'PUT', body: data });
+    const regApi = _getTeamEditRegistryApi();
+    await api(regApi + '/' + encodeURIComponent(dir), { method: 'PUT', body: data });
     toast('Registry sauvegarde', 'success');
     closeModal();
-    loadTplTeamsList();
+    _getTeamEditReload()();
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -6739,10 +7218,6 @@ async function copyTplRegistry(dir) {
   } catch (e) {
     toast('Erreur: ' + e.message, 'error');
   }
-}
-
-function showTplWorkflow(dir) {
-  openWorkflowEditor(dir, '/api/templates/workflow', 'Shared/Teams');
 }
 
 async function _saveTplTeams() {
@@ -6932,28 +7407,14 @@ async function openWorkflowEditor(dir, apiBase, label, registryDir, inlineTarget
     let agentPipelines = {};
     let agentProfiles = {};
     try {
-      const sa = await api('/api/shared-agents');
+      const sa = await api(_saApiBase);
       (sa.agents || []).forEach(a => {
         agentCaps[a.id] = { documentation: !!a.delivers_docs, code: !!a.delivers_code, design: !!a.delivers_design, automation: !!a.delivers_automation, tasklist: !!a.delivers_tasklist, specs: !!a.delivers_specs, contract: !!a.delivers_contract };
-        agentPipelines[a.id] = a.pipeline_steps || [];
+        agentPipelines[a.id] = [];
         agentProfiles[a.id] = { name: a.name || a.id, roles: a.role_names || [], missions: a.mission_names || [], skills: a.skill_names || [] };
       });
     } catch {}
-    // Merge pipeline_steps from the registry in the SAME directory as the workflow
-    // Config workflow -> /api/agents/registry/{dir}
-    // Templates workflow -> /api/templates/registry/{dir}
-    // Project workflow -> use registryDir override (team directory)
-    // Priority: team persisted in workflow data > registryDir param > dir
     const regDir = (raw && raw.team) || registryDir || dir;
-    const registryUrl = apiBase.includes('/templates/')
-      ? `/api/templates/registry/${encodeURIComponent(regDir)}`
-      : `/api/agents/registry/${encodeURIComponent(regDir)}`;
-    try {
-      const reg = await api(registryUrl);
-      for (const [aid, acfg] of Object.entries(reg.agents || {})) {
-        if (acfg.pipeline_steps && acfg.pipeline_steps.length) agentPipelines[aid] = acfg.pipeline_steps;
-      }
-    } catch {}
     // Load available teams for the team selector
     let wfTeams = [];
     try {
@@ -7373,26 +7834,15 @@ async function _wfChangeTeam(teamDir) {
   if (!_wf) return;
   _wf.registryDir = teamDir;
   _wf.data.team = teamDir;
-  // Reload agents from the new team's registry
-  const registryBase = _wf.apiBase.includes('templates') ? '/api/templates/registry' : '/api/agents/registry';
   _wf.agentPipelines = {};
-  if (teamDir) {
-    try {
-      const reg = await api(`${registryBase}/${encodeURIComponent(teamDir)}`);
-      for (const [aid, acfg] of Object.entries(reg.agents || {})) {
-        if (acfg.pipeline_steps && acfg.pipeline_steps.length) _wf.agentPipelines[aid] = acfg.pipeline_steps;
-      }
-    } catch {}
-  }
   // Reload shared agent caps/profiles
   try {
-    const sa = await api('/api/shared-agents');
+    const sa = await api(_saApiBase);
     _wf.agentCaps = {};
     _wf.agentProfiles = {};
     (sa.agents || []).forEach(a => {
       _wf.agentCaps[a.id] = { documentation: !!a.delivers_docs, code: !!a.delivers_code, design: !!a.delivers_design, automation: !!a.delivers_automation, tasklist: !!a.delivers_tasklist, specs: !!a.delivers_specs, contract: !!a.delivers_contract };
       _wf.agentProfiles[a.id] = { name: a.name || a.id, roles: a.role_names || [], missions: a.mission_names || [], skills: a.skill_names || [] };
-      if (a.pipeline_steps && a.pipeline_steps.length) _wf.agentPipelines[a.id] = a.pipeline_steps;
     });
   } catch {}
   wfRender();
@@ -7500,18 +7950,12 @@ function _wfRenderPhaseProps(el, phaseId) {
   const allDelKeys = Object.keys(deliverables);
   let delsHtml = Object.entries(deliverables).map(([id, d]) => {
     const agOpts = agentIds.map(a => `<option value="${escHtml(a)}" ${a===d.agent?'selected':''}>${a}</option>`).join('');
-    // Pipeline steps for selected agent
-    const steps = (_wf.agentPipelines || {})[d.agent] || [];
-    const stepOpts = '<option value="">-- Step --</option>' + steps.map(s =>
-      `<option value="${escHtml(s.output_key || '')}" ${(s.output_key||'')===(d.pipeline_step||'')?'selected':''}>${escHtml(s.name || s.output_key || '')}</option>`
-    ).join('');
     // Filter types by agent capabilities
     const caps = (_wf.agentCaps || {})[d.agent];
     const hasCaps = caps && (caps.documentation || caps.code || caps.design || caps.automation || caps.tasklist || caps.specs || caps.contract);
     const availTypes = hasCaps ? WF_ALL_DELIV_TYPES.filter(t => caps[t.cap]) : WF_ALL_DELIV_TYPES;
     const typeOpts = '<option value="">-- Type --</option>' + availTypes.map(t => `<option value="${t.value}" ${t.value===(d.type||'')?'selected':''}>${t.label}</option>`).join('');
-    // Computed ID display
-    const computedId = (d.agent && d.pipeline_step) ? `${d.agent}:${d.pipeline_step}` : id;
+    const computedId = id;
     // Depends on — checkboxes of other deliverables in this phase
     const depsSet = new Set(d.depends_on || []);
     const otherDels = allDelKeys.filter(k => k !== id);
@@ -8146,16 +8590,14 @@ function wfAddDeliverable(phaseId) {
   if (agentIds.length === 0) { toast('Ajoutez d\'abord un agent a cette phase', 'error'); return; }
   if (!_wf.data.phases[phaseId].deliverables) _wf.data.phases[phaseId].deliverables = {};
   const agent = agentIds[0];
-  const steps = (_wf.agentPipelines || {})[agent] || [];
-  const stepKey = steps.length ? (steps[0].output_key || '') : '';
-  const id = (agent && stepKey) ? `${agent}:${stepKey}` : `deliverable_${Object.keys(_wf.data.phases[phaseId].deliverables).length + 1}`;
+  const existingCount = Object.keys(_wf.data.phases[phaseId].deliverables).filter(k => k.startsWith(agent + ':')).length;
+  const id = `${agent}:phase${existingCount + 1}`;
   if (_wf.data.phases[phaseId].deliverables[id]) {
     toast('Ce livrable existe deja', 'error'); return;
   }
   _wf.data.phases[phaseId].deliverables[id] = {
     description: '',
     agent,
-    pipeline_step: stepKey,
     type: '',
     required: true
   };
@@ -8168,23 +8610,19 @@ function _wfSetDelField(phaseId, delId, field, val) {
   const d = dels?.[delId];
   if (!d) return;
   d[field] = val;
-  // When agent changes, reset pipeline_step and type if incompatible
+  // When agent changes, reset type if incompatible and rename key
   if (field === 'agent') {
-    d.pipeline_step = '';
     if (d.type) {
       const caps = (_wf.agentCaps || {})[val];
       const hasCaps = caps && (caps.documentation || caps.code || caps.design || caps.automation || caps.tasklist || caps.specs || caps.contract);
       if (hasCaps && !caps[d.type]) d.type = '';
     }
-  }
-  // When agent or pipeline_step changes, rename the deliverable key
-  if (field === 'agent' || field === 'pipeline_step') {
-    if (d.agent && d.pipeline_step) {
-      const newId = `${d.agent}:${d.pipeline_step}`;
-      if (newId !== delId && !dels[newId]) {
-        dels[newId] = d;
-        delete dels[delId];
-      }
+    // Rename deliverable key to {agent}:phase{n}
+    const existingCount = Object.keys(dels).filter(k => k !== delId && k.startsWith(val + ':')).length;
+    const newId = `${val}:phase${existingCount + 1}`;
+    if (newId !== delId && !dels[newId]) {
+      dels[newId] = d;
+      delete dels[delId];
     }
   }
   wfRenderProps();
@@ -8290,14 +8728,15 @@ function _wfToggleDelProfile(phaseId, delId, field, value, checked) {
 async function wfSkillMatch(phaseId, delId) {
   const d = _wf.data.phases[phaseId]?.deliverables?.[delId];
   if (!d || !d.agent) { toast('Agent requis', 'error'); return; }
-  // Extract project_id from apiBase: /api/templates/project-workflow/{projectId}
+  // Extract project_id from apiBase: /api/{templates|prod}-project-workflow/{projectId}
   const m = (_wf.apiBase || '').match(/project-workflow\/([^/]+)/);
   if (!m) { toast('SkillMatcher disponible uniquement pour les projets', 'error'); return; }
   const projectId = m[1];
+  const smBase = (_wf.apiBase || '').includes('/prod-') ? '/api/prod-projects' : '/api/templates/projects';
   const btn = event?.target;
   if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; }
   try {
-    const res = await api(`/api/templates/projects/${encodeURIComponent(projectId)}/deliverable-skillmatch`, {
+    const res = await api(`${smBase}/${encodeURIComponent(projectId)}/deliverable-skillmatch`, {
       method: 'POST',
       body: { agent_id: d.agent, description: d.description || delId }
     });
@@ -8445,7 +8884,7 @@ function loadChannels() {
 // ── Discord ──
 async function loadDiscord() {
   try {
-    _discordData = await api('/api/discord');
+    _discordData = await api('/api/templates/discord');
     _renderDiscord();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -8564,7 +9003,7 @@ function _collectDiscordData() {
 async function saveDiscord() {
   try {
     const data = _collectDiscordData();
-    await api('/api/discord', { method: 'PUT', body: data });
+    await api('/api/templates/discord', { method: 'PUT', body: data });
     _discordData = data;
     toast('Configuration Discord sauvegardee', 'success');
     // Restart discord-bot container if enabled
@@ -8582,7 +9021,7 @@ async function saveDiscord() {
 // ── Mail ──
 async function loadMail() {
   try {
-    _mailData = await api('/api/mail');
+    _mailData = await api('/api/templates/mail');
     _renderMail();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -8919,7 +9358,7 @@ function _collectMailData() {
 async function saveMail() {
   try {
     const data = _collectMailData();
-    await api('/api/mail', { method: 'PUT', body: data });
+    await api('/api/templates/mail', { method: 'PUT', body: data });
     _mailData = data;
     toast('Configuration mail sauvegardee', 'success');
     try {
@@ -9484,7 +9923,7 @@ function toggleHitlAutoRefresh() {
 
 async function loadAuthConfig() {
   try {
-    const data = await api('/api/hitl-config');
+    const data = await api('/api/templates/hitl-config');
     const auth = data.auth || {};
     const google = data.google_oauth || {};
     // Google fields
@@ -9530,7 +9969,7 @@ async function saveAuthConfig() {
     }
   };
   try {
-    await api('/api/hitl-config', { method: 'PUT', body: config });
+    await api('/api/templates/hitl-config', { method: 'PUT', body: config });
     toast('Configuration enregistree.', 'success');
     loadAuthConfig();
   } catch (e) { toast(e.message, 'error'); }

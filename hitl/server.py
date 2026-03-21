@@ -43,7 +43,7 @@ JWT_ALGORITHM = "HS256"
 
 def _load_hitl_config() -> dict:
     """Load hitl.json from config directory."""
-    for path in ["/app/config/hitl.json", "config/hitl.json"]:
+    for path in ["/app/Shared/hitl.json", "/app/config/hitl.json", "Shared/hitl.json", "config/hitl.json"]:
         if os.path.exists(path):
             with open(path) as f:
                 return json.load(f)

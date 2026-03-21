@@ -30,11 +30,11 @@
       </div>
       <div class="nav-item" data-section="teams" onclick="showSection('teams')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-        Configuration
+        Production
       </div>
       <div class="nav-item" data-section="templates" onclick="showSection('templates')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-        Templates
+        Configuration
       </div>
       <div class="nav-item" data-section="channels" onclick="showSection('channels')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
@@ -125,7 +125,7 @@
       <!-- TEAMS SECTION -->
       <div class="section" id="section-teams">
         <div class="page-header">
-          <h2>Configuration</h2>
+          <h2>Production</h2>
           <div style="display:flex;gap:0.5rem;margin-left:auto">
             <button class="btn btn-outline btn-sm" onclick="loadTeams()">Rafraichir</button>
             <button class="btn btn-outline btn-sm" onclick="window.location='/api/export/configs'">Exporter</button>
@@ -134,23 +134,25 @@
           </div>
         </div>
         <p style="color:var(--text-secondary);margin-bottom:0.75rem;font-size:0.85rem">
-          Configuration active (<code>config/Teams/</code>) — modeles LLM, serveurs MCP et equipes operationnelles.
+          Configuration de production (<code>config/Teams/</code>) — serveurs MCP et equipes operationnelles.
         </p>
 
         <!-- Sub-tabs -->
         <div class="prompt-tabs" style="margin-bottom:1rem;align-items:center">
           <div class="prompt-tab active" data-cfg-tab="cfg-llm" onclick="showConfigTab('cfg-llm')">Modeles LLM</div>
           <div class="prompt-tab" data-cfg-tab="cfg-mcp" onclick="showConfigTab('cfg-mcp')">Services MCP</div>
-          <div class="prompt-tab" data-cfg-tab="cfg-teams" onclick="showConfigTab('cfg-teams')">Equipes</div>
-          <div class="prompt-tab" data-cfg-tab="cfg-mail" onclick="showConfigTab('cfg-mail')">Mail</div>
-          <div class="prompt-tab" data-cfg-tab="cfg-security" onclick="showConfigTab('cfg-security')">Securite</div>
-          <div class="prompt-tab" data-cfg-tab="cfg-misc" onclick="showConfigTab('cfg-misc')">Divers</div>
+          <div class="prompt-tab" data-cfg-tab="cfg-agents" onclick="showConfigTab('cfg-agents')">Agents</div>
+          <div class="prompt-tab" data-cfg-tab="cfg-prod-teams" onclick="showConfigTab('cfg-prod-teams')">Equipes</div>
+          <div class="prompt-tab" data-cfg-tab="cfg-prod-projects" onclick="showConfigTab('cfg-prod-projects')">Types de projet</div>
+          <div class="prompt-tab" data-cfg-tab="cfg-models" onclick="showConfigTab('cfg-models')">Models</div>
+          <div class="prompt-tab" data-cfg-tab="cfg-prompts" onclick="showConfigTab('cfg-prompts')">Prompts</div>
           <div class="prompt-tab" data-cfg-tab="cfg-git" onclick="showConfigTab('cfg-git')">Enregistrement</div>
           <div id="cfg-tab-save-btn" style="margin-left:auto;display:none">
             <button class="btn btn-primary btn-sm" id="cfg-tab-save-action">Sauvegarder</button>
           </div>
         </div>
 
+        <!-- Sub-tab: MCP -->
         <!-- Sub-tab: LLM -->
         <div class="cfg-tab-content active" id="cfg-tab-cfg-llm">
           <div class="card">
@@ -172,7 +174,7 @@
             <div class="card-header">
               <h3>Providers</h3>
               <div style="display:flex;gap:0.5rem">
-                <button class="btn btn-outline btn-sm" onclick="copyCfgLLMFromTemplate()">Copier depuis Template</button>
+                <button class="btn btn-outline btn-sm" onclick="copyCfgLLMFromTemplate()">Copier depuis Configuration</button>
                 <button class="btn btn-outline btn-sm" onclick="uploadCfgLLM()">Importer JSON</button>
                 <button class="btn btn-primary btn-sm" onclick="showAddCfgProviderModal()">+ Ajouter</button>
               </div>
@@ -189,13 +191,28 @@
           </div>
         </div>
 
+        <!-- Modal: Copy LLM from Configuration -->
+        <div class="modal-overlay" id="modal-copy-llm" style="display:none">
+          <div class="modal" style="max-width:700px">
+            <div class="modal-header">
+              <h3>Copier depuis Configuration</h3>
+              <button class="btn-close" onclick="closeModal('modal-copy-llm')">&times;</button>
+            </div>
+            <div id="modal-copy-llm-body"></div>
+            <div class="modal-footer">
+              <button class="btn btn-outline" onclick="closeModal('modal-copy-llm')">Annuler</button>
+              <button class="btn btn-primary" onclick="_execCopyLLMFromTemplate()">Copier la selection</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Sub-tab: MCP -->
         <div class="cfg-tab-content" id="cfg-tab-cfg-mcp">
           <div class="card">
             <div class="card-header">
               <h3>Services avec parametres</h3>
               <div style="display:flex;gap:0.5rem">
-                <button class="btn btn-outline btn-sm" onclick="copyCfgMCPFromTemplate()">Copier depuis Template</button>
+                <button class="btn btn-outline btn-sm" onclick="copyCfgMCPFromTemplate()">Copier depuis Configuration</button>
                 <button class="btn btn-primary btn-sm" onclick="showAddCfgCatalogModal()">+ Installer un service</button>
               </div>
             </div>
@@ -210,17 +227,502 @@
           </div>
         </div>
 
-        <!-- Sub-tab: Teams -->
-        <div class="cfg-tab-content" id="cfg-tab-cfg-teams">
+        <!-- Sub-tab: Equipes (Production) -->
+        <div class="cfg-tab-content" id="cfg-tab-cfg-prod-teams">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
-            <h3 style="margin:0">Equipes (Configs)</h3>
-            <button class="btn btn-primary btn-sm" onclick="showAddTeamModal()">+ Ajouter</button>
+            <h3 style="margin:0">Equipes (Production)</h3>
+            <button class="btn btn-outline btn-sm" onclick="copyProdTeamsFromConfig()">Copier depuis Configuration</button>
           </div>
-          <div id="teams-grid"></div>
+          <div class="table-container" id="prod-teams-table"></div>
+        </div>
+
+        <!-- Modal: Copy Teams from Configuration -->
+        <div class="modal-overlay" id="modal-copy-teams" style="display:none">
+          <div class="modal" style="max-width:750px">
+            <div class="modal-header">
+              <h3>Copier depuis Configuration</h3>
+              <button class="btn-close" onclick="closeModal('modal-copy-teams')">&times;</button>
+            </div>
+            <div id="modal-copy-teams-body"></div>
+            <div id="modal-copy-teams-help" style="font-size:0.8rem;color:var(--text-secondary);padding:0.5rem 0"></div>
+            <div class="modal-footer">
+              <button class="btn btn-outline" onclick="closeModal('modal-copy-teams')">Annuler</button>
+              <button class="btn btn-primary" id="btn-exec-copy-teams" onclick="_execCopyTeams()">Copier la selection</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sub-tab: Types de projet (Production) -->
+        <div class="cfg-tab-content" id="cfg-tab-cfg-prod-projects">
+          <div class="proj-selector-bar">
+            <div class="proj-selector-wrap">
+              <input type="text" id="ppj-selector-input" class="proj-selector-input" placeholder="Selectionner un projet..." autocomplete="off"
+                onfocus="_projOpenDropdown()" oninput="_projFilterDropdown()" />
+              <div id="ppj-selector-dropdown" class="proj-selector-dropdown" style="display:none"></div>
+            </div>
+            <button class="btn-icon proj-selector-action" id="ppj-btn-edit" onclick="_projEditSelected()" title="Editer le projet" style="display:none">&#9998;</button>
+            <button class="btn-icon proj-selector-action" id="ppj-btn-delete" onclick="_projDeleteSelected()" title="Supprimer le projet" style="display:none">&times;</button>
+            <button class="btn btn-primary btn-sm" onclick="showAddProjectModal()">+ Projet</button>
+            <button class="btn btn-outline btn-sm" id="ppj-btn-add-wf" onclick="_projAddWorkflow()" style="display:none">+ Workflow</button>
+            <button class="btn-icon proj-selector-action" id="ppj-btn-orch" onclick="_projBuildOrchPrompt()" title="Generer prompt orchestrateur" style="display:none">&#9881;</button>
+            <button class="btn btn-outline btn-sm" onclick="copyProdProjectsFromConfig()">Copier depuis Configuration</button>
+          </div>
+          <div id="ppj-content" class="proj-content" style="display:none">
+            <div class="proj-wf-bar">
+              <div class="proj-wf-chips" id="ppj-wf-chips"></div>
+            </div>
+            <div id="ppj-wf-editor" class="proj-wf-editor"></div>
+          </div>
+        </div>
+
+        <!-- Modal: Copy Projects from Configuration -->
+        <div class="modal-overlay" id="modal-copy-projects" style="display:none">
+          <div class="modal" style="max-width:700px">
+            <div class="modal-header">
+              <h3>Copier depuis Configuration</h3>
+              <button class="btn-close" onclick="closeModal('modal-copy-projects')">&times;</button>
+            </div>
+            <div id="modal-copy-projects-body"></div>
+            <div id="modal-copy-projects-help" style="font-size:0.8rem;color:var(--text-secondary);padding:0.5rem 0"></div>
+            <div class="modal-footer">
+              <button class="btn btn-outline" onclick="closeModal('modal-copy-projects')">Annuler</button>
+              <button class="btn btn-primary" onclick="_execCopyProjects()">Copier la selection</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sub-tab: Agents (Production) -->
+        <div class="cfg-tab-content" id="cfg-tab-cfg-agents">
+          <div style="display:flex;justify-content:flex-end;margin-bottom:0.5rem">
+            <button class="btn btn-outline btn-sm" onclick="copyProdAgentsFromConfig()">Copier depuis Configuration</button>
+          </div>
+          <div class="sa-split">
+            <div class="sa-left" id="pa-left"></div>
+            <div class="sa-right" id="pa-right"></div>
+          </div>
+        </div>
+
+        <!-- Modal: Copy Agents from Configuration -->
+        <div class="modal-overlay" id="modal-copy-agents" style="display:none">
+          <div class="modal" style="max-width:700px">
+            <div class="modal-header">
+              <h3>Copier depuis Configuration</h3>
+              <button class="btn-close" onclick="closeModal('modal-copy-agents')">&times;</button>
+            </div>
+            <div id="modal-copy-agents-body"></div>
+            <div class="modal-footer">
+              <button class="btn btn-outline" onclick="closeModal('modal-copy-agents')">Annuler</button>
+              <button class="btn btn-primary" onclick="_execCopyAgents()">Copier la selection</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sub-tab: Prompts (Production) -->
+        <div class="cfg-tab-content" id="cfg-tab-cfg-prompts">
+          <div class="card">
+            <div class="card-header">
+              <h3>Prompts systeme</h3>
+              <div style="display:flex;gap:0.5rem;align-items:center">
+                <select id="cfg-prompts-culture-select" onchange="prmSwitchCulture('cfg',this.value)" style="font-size:0.8rem;padding:0.25rem 0.5rem;width:auto;max-width:250px"></select>
+                <button class="btn btn-outline btn-sm" onclick="copyProdPromptsFromConfig()">Copier depuis Configuration</button>
+              </div>
+            </div>
+            <div class="ps-panel" id="cfg-prompts-panel">
+              <div class="ps-list" id="cfg-prompts-list" style="width:220px">
+                <div class="ps-list-header">
+                  <span>Fichiers</span>
+                  <button class="btn-icon ps-list-add" onclick="prmAdd('cfg')" title="Nouveau prompt">+</button>
+                </div>
+                <div class="ps-list-items" id="cfg-prompts-items"></div>
+              </div>
+              <div class="ps-editor" id="cfg-prompts-editor">
+                <div class="ps-edit-empty">Selectionnez un prompt</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Modal: Copy Prompts from Configuration -->
+        <div class="modal-overlay" id="modal-copy-prompts" style="display:none">
+          <div class="modal" style="max-width:600px">
+            <div class="modal-header">
+              <h3>Copier depuis Configuration</h3>
+              <button class="btn-close" onclick="closeModal('modal-copy-prompts')">&times;</button>
+            </div>
+            <div id="modal-copy-prompts-body"></div>
+            <div class="modal-footer">
+              <button class="btn btn-outline" onclick="closeModal('modal-copy-prompts')">Annuler</button>
+              <button class="btn btn-primary" onclick="_execCopyPrompts()">Copier la selection</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sub-tab: Models (Production) -->
+        <div class="cfg-tab-content" id="cfg-tab-cfg-models">
+          <div class="card">
+            <div class="card-header">
+              <h3>Models</h3>
+              <div style="display:flex;gap:0.5rem;align-items:center">
+                <select id="cfg-models-culture-select" onchange="mdlSwitchCulture('cfg',this.value)" style="font-size:0.8rem;padding:0.25rem 0.5rem;width:auto;max-width:250px"></select>
+                <button class="btn btn-outline btn-sm" onclick="copyProdModelsFromConfig()">Copier depuis Configuration</button>
+              </div>
+            </div>
+            <div class="ps-panel" id="cfg-models-panel">
+              <div class="ps-list" id="cfg-models-list" style="width:220px">
+                <div class="ps-list-header">
+                  <span>Fichiers</span>
+                  <button class="btn-icon ps-list-add" onclick="mdlAdd('cfg')" title="Nouveau model">+</button>
+                </div>
+                <div class="ps-list-items" id="cfg-models-items"></div>
+              </div>
+              <div class="ps-editor" id="cfg-models-editor">
+                <div class="ps-edit-empty">Selectionnez un model</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Modal: Copy Models from Configuration -->
+        <div class="modal-overlay" id="modal-copy-models" style="display:none">
+          <div class="modal" style="max-width:600px">
+            <div class="modal-header">
+              <h3>Copier depuis Configuration</h3>
+              <button class="btn-close" onclick="closeModal('modal-copy-models')">&times;</button>
+            </div>
+            <div id="modal-copy-models-body"></div>
+            <div class="modal-footer">
+              <button class="btn btn-outline" onclick="closeModal('modal-copy-models')">Annuler</button>
+              <button class="btn btn-primary" onclick="_execCopyModels()">Copier la selection</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sub-tab: Dockerfiles (Production) -->
+        <div class="cfg-tab-content" id="cfg-tab-cfg-dockerfiles">
+          <div class="card">
+            <div class="card-header">
+              <h3>Dockerfiles</h3>
+              <div style="display:flex;gap:0.5rem;align-items:center">
+                <button class="btn btn-outline btn-sm" onclick="copyProdDockerfilesFromConfig()">Copier depuis Configuration</button>
+                <button class="btn-icon ps-list-add" onclick="dfAdd('cfg')" title="Nouveau Dockerfile" style="font-size:1.2rem">+</button>
+              </div>
+            </div>
+            <div class="ps-panel" id="cfg-dockerfiles-panel">
+              <div class="ps-list" id="cfg-dockerfiles-list" style="width:180px">
+                <div class="ps-list-items" id="cfg-dockerfiles-items"></div>
+              </div>
+              <div class="ps-editor" id="cfg-dockerfiles-editor">
+                <div class="ps-edit-empty">Selectionnez un Dockerfile</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Modal: Copy Dockerfiles from Configuration -->
+        <div class="modal-overlay" id="modal-copy-dockerfiles" style="display:none">
+          <div class="modal" style="max-width:600px">
+            <div class="modal-header">
+              <h3>Copier depuis Configuration</h3>
+              <button class="btn-close" onclick="closeModal('modal-copy-dockerfiles')">&times;</button>
+            </div>
+            <div id="modal-copy-dockerfiles-body"></div>
+            <div class="modal-footer">
+              <button class="btn btn-outline" onclick="closeModal('modal-copy-dockerfiles')">Annuler</button>
+              <button class="btn btn-primary" onclick="_execCopyDockerfiles()">Copier la selection</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Modal: Copy MCP from Configuration -->
+        <div class="modal-overlay" id="modal-copy-mcp" style="display:none">
+          <div class="modal" style="max-width:700px">
+            <div class="modal-header">
+              <h3>Copier depuis Configuration</h3>
+              <button class="btn-close" onclick="closeModal('modal-copy-mcp')">&times;</button>
+            </div>
+            <div id="modal-copy-mcp-body"></div>
+            <div class="modal-footer">
+              <button class="btn btn-outline" onclick="closeModal('modal-copy-mcp')">Annuler</button>
+              <button class="btn btn-primary" onclick="_execCopyMCPFromTemplate()">Copier la selection</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sub-tab: Git (Enregistrement) -->
+        <div class="cfg-tab-content" id="cfg-tab-cfg-git">
+          <!-- ── Service Git (Config) ── -->
+          <div class="card" style="margin-bottom:1rem">
+            <div class="card-header">
+              <h3>Service Git</h3>
+              <span class="tag tag-blue" id="cgs-status-tag" style="display:none">Connecte</span>
+            </div>
+            <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem">
+              Configurez votre service Git pour creer ou recuperer des depots distants.
+            </p>
+            <div class="form-row">
+              <div class="form-group" style="flex:0.8">
+                <label>Service</label>
+                <select id="cgs-service" onchange="_onGitSvcChange('configs')">
+                  <option value="">-- Choisir --</option>
+                  <option value="github">GitHub</option>
+                  <option value="gitlab">GitLab</option>
+                  <option value="gitea">Gitea</option>
+                  <option value="forgejo">Forgejo</option>
+                  <option value="bitbucket">Bitbucket</option>
+                </select>
+              </div>
+              <div class="form-group" style="flex:2">
+                <label>URL du service</label>
+                <input id="cgs-url" placeholder="https://api.github.com" />
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Login / Utilisateur</label>
+                <input id="cgs-login" placeholder="username" autocomplete="off" oninput="_checkGitSvcBtns('configs')" />
+              </div>
+              <div class="form-group">
+                <label>Token d'acces</label>
+                <input id="cgs-token" type="password" placeholder="ghp_... / glpat-..." autocomplete="off" oninput="_checkGitSvcBtns('configs')" />
+              </div>
+            </div>
+            <div class="form-row" style="margin-top:0.5rem">
+              <div class="form-group" style="flex:1.5">
+                <label>Nom du depot</label>
+                <input id="cgs-repo-name" placeholder="my-project" oninput="_checkGitSvcBtns('configs')" />
+              </div>
+            </div>
+            <div style="display:flex;gap:0.5rem;margin-top:0.5rem;margin-bottom:0.75rem">
+              <button class="btn btn-primary btn-sm" onclick="_saveGitSvcConfig('configs')">Enregistrer</button>
+              <button class="btn btn-primary btn-sm" id="cgs-btn-init" disabled onclick="gitSvcInit('configs')">Init</button>
+              <button class="btn btn-outline btn-sm" id="cgs-btn-fetch" disabled onclick="gitSvcFetch('configs')">Fetch</button>
+              <button class="btn btn-success btn-sm" id="cgs-btn-commit" disabled onclick="gitSvcCommit('configs')">Commit</button>
+              <button class="btn btn-outline btn-sm" id="cgs-btn-reset" disabled onclick="gitSvcReset('configs')" style="display:none">Reset</button>
+            </div>
+            <p style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem">
+              <b>Init</b> : cree le depot distant + initialise le depot local. &nbsp;
+              <b>Fetch</b> : recupere un depot distant existant en local. &nbsp;
+              <b>Push</b> : pousse les commits locaux vers le depot distant.
+            </p>
+          </div>
+
+          <!-- ── Depot Config ── -->
+          <div class="card">
+            <div class="card-header">
+              <h3>Depot Config</h3>
+              <span class="tag tag-yellow">config/</span>
+            </div>
+            <input type="hidden" id="cfg-git-path" /><input type="hidden" id="cfg-git-login" /><input type="hidden" id="cfg-git-password" />
+            <div style="margin-top:0.5rem">
+              <label>Branche</label>
+              <div id="cfg-git-branch" style="font-size:1.1rem;font-weight:600;margin-top:0.25rem">-</div>
+            </div>
+            <div style="margin-top:0.75rem">
+              <label>Status</label>
+              <div class="terminal" id="cfg-git-status" style="max-height:120px">Chargement...</div>
+            </div>
+            <div style="margin-top:0.75rem">
+              <label>Versions</label>
+              <div id="cfg-git-commits" class="commits-table-wrap">
+                <p style="color:var(--text-secondary);font-size:0.8rem">Chargement...</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TEMPLATES SECTION -->
+      <div class="section" id="section-templates">
+        <div class="page-header">
+          <h2>Configuration</h2>
+          <div style="display:flex;gap:0.5rem;margin-left:auto">
+            <button class="btn btn-outline btn-sm" onclick="loadTemplates()">Rafraichir</button>
+            <button class="btn btn-outline btn-sm" onclick="window.location='/api/export/shared'">Exporter</button>
+            <button class="btn btn-outline btn-sm" onclick="document.getElementById('import-shared-file').click()" title="Remplace tous les fichiers existants par le contenu de l'archive">Importer</button>
+            <input type="file" id="import-shared-file" accept=".zip" style="display:none" onchange="importArchive('shared', this)">
+          </div>
+        </div>
+        <p style="color:var(--text-secondary);margin-bottom:0.75rem;font-size:0.85rem">
+          Configuration generale (<code>Shared/</code>) — modeles LLM, agents, equipes, prompts et services.
+        </p>
+
+        <!-- Sub-tabs -->
+        <div class="prompt-tabs" style="margin-bottom:1rem">
+          <div class="prompt-tab active" data-tpl-tab="tpl-llm" onclick="showTemplateTab('tpl-llm')">Modeles LLM</div>
+          <div class="prompt-tab" data-tpl-tab="tpl-mcp" onclick="showTemplateTab('tpl-mcp')">Services MCP</div>
+          <div class="prompt-tab" data-tpl-tab="tpl-dockerfiles" onclick="showTemplateTab('tpl-dockerfiles')">Dockerfiles</div>
+          <div class="prompt-tab" data-tpl-tab="tpl-agents" onclick="showTemplateTab('tpl-agents')">Agents</div>
+          <div class="prompt-tab" data-tpl-tab="tpl-teams" onclick="showTemplateTab('tpl-teams')">Equipes</div>
+          <div class="prompt-tab" data-tpl-tab="tpl-projects" onclick="showTemplateTab('tpl-projects')">Types de projet</div>
+          <div class="prompt-tab" data-tpl-tab="tpl-prompts" onclick="showTemplateTab('tpl-prompts')">Prompts</div>
+          <div class="prompt-tab" data-tpl-tab="tpl-models" onclick="showTemplateTab('tpl-models')">Models</div>
+          <div class="prompt-tab" data-tpl-tab="tpl-i18n" onclick="showTemplateTab('tpl-i18n')">I18n</div>
+          <div class="prompt-tab" data-tpl-tab="tpl-mail" onclick="showTemplateTab('tpl-mail')">Mail</div>
+          <div class="prompt-tab" data-tpl-tab="tpl-security" onclick="showTemplateTab('tpl-security')">Securite</div>
+          <div class="prompt-tab" data-tpl-tab="tpl-misc" onclick="showTemplateTab('tpl-misc')">Divers</div>
+          <div class="prompt-tab" data-tpl-tab="tpl-git" onclick="showTemplateTab('tpl-git')">Enregistrement</div>
+        </div>
+
+        <!-- Sub-tab: LLM -->
+        <div class="tpl-tab-content active" id="tpl-tab-tpl-llm">
+          <div class="card">
+            <div class="card-header">
+              <h3>Modele par defaut</h3>
+            </div>
+            <div class="form-row" style="align-items:flex-end;gap:1.5rem">
+              <div class="form-group" style="margin-bottom:0;flex:1">
+                <label style="font-size:0.8rem;margin-bottom:0.25rem">Modele par defaut (agents)</label>
+                <select id="tpl-llm-default-select" onchange="setTplLLMDefault(this.value)"></select>
+              </div>
+              <div class="form-group" style="margin-bottom:0;flex:1">
+                <label style="font-size:0.8rem;margin-bottom:0.25rem">LLM Admin (dashboard)</label>
+                <select id="tpl-llm-admin-select" onchange="setTplLLMAdmin(this.value)"></select>
+              </div>
+            </div>
+          </div>
+          <div class="card" style="margin-top:1rem">
+            <div class="card-header">
+              <h3>Providers</h3>
+              <div style="display:flex;gap:0.5rem">
+                <button class="btn btn-outline btn-sm" onclick="uploadTplLLM()">Importer JSON</button>
+                <button class="btn btn-primary btn-sm" onclick="showAddTplProviderModal()">+ Ajouter</button>
+              </div>
+            </div>
+            <input type="text" class="form-control" id="tpl-llm-filter" placeholder="Filtrer providers..." oninput="filterTplLLM()" style="margin:0.5rem 0;padding:0.4rem 0.6rem;font-size:0.85rem;width:100%;box-sizing:border-box">
+            <div class="table-container" id="tpl-llm-providers-table"></div>
+          </div>
+          <div class="card" style="margin-top:1rem">
+            <div class="card-header">
+              <h3>Throttling</h3>
+              <button class="btn btn-primary btn-sm" onclick="showAddTplThrottlingModal()">+ Ajouter</button>
+            </div>
+            <div class="table-container" id="tpl-llm-throttling-table"></div>
+          </div>
+        </div>
+
+        <!-- Sub-tab: MCP -->
+        <div class="tpl-tab-content" id="tpl-tab-tpl-mcp">
+          <div class="card">
+            <div class="card-header">
+              <h3>Services avec parametres</h3>
+              <button class="btn btn-primary btn-sm" onclick="showAddTplCatalogModal()">+ Installer un service</button>
+            </div>
+            <div class="table-container" id="tpl-mcp-configured"></div>
+          </div>
+          <div class="card" style="margin-top:1rem">
+            <div class="card-header">
+              <h3>Services sans parametres</h3>
+              <button id="btn-tpl-show-deprecated" class="btn btn-outline btn-sm" onclick="toggleTplDeprecated()">Afficher deprecies</button>
+            </div>
+            <div class="mcp-grid" id="tpl-mcp-catalog"></div>
+          </div>
+        </div>
+
+        <!-- Sub-tab: Agents -->
+        <div class="tpl-tab-content" id="tpl-tab-tpl-agents">
+          <div class="sa-split">
+            <div class="sa-left" id="sa-left"></div>
+            <div class="sa-right" id="sa-right"></div>
+          </div>
+        </div>
+
+        <!-- Sub-tab: Teams -->
+        <div class="tpl-tab-content" id="tpl-tab-tpl-teams">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+            <h3 style="margin:0">Equipes (Shared)</h3>
+            <button class="btn btn-primary btn-sm" onclick="showAddTplTeamModal()">+ Ajouter</button>
+          </div>
+          <div class="table-container" id="tpl-teams-table"></div>
+        </div>
+
+        <!-- Sub-tab: Projects -->
+        <div class="tpl-tab-content" id="tpl-tab-tpl-projects">
+          <!-- Project selector bar -->
+          <div class="proj-selector-bar">
+            <div class="proj-selector-wrap">
+              <input type="text" id="proj-selector-input" class="proj-selector-input" placeholder="Selectionner un projet..." autocomplete="off"
+                onfocus="_projOpenDropdown()" oninput="_projFilterDropdown()" />
+              <div id="proj-selector-dropdown" class="proj-selector-dropdown" style="display:none"></div>
+            </div>
+            <button class="btn-icon proj-selector-action" id="proj-btn-edit" onclick="_projEditSelected()" title="Editer le projet" style="display:none">&#9998;</button>
+            <button class="btn-icon proj-selector-action" id="proj-btn-delete" onclick="_projDeleteSelected()" title="Supprimer le projet" style="display:none">&times;</button>
+            <button class="btn btn-primary btn-sm" onclick="showAddProjectModal()">+ Projet</button>
+            <button class="btn btn-outline btn-sm" id="proj-btn-add-wf" onclick="_projAddWorkflow()" style="display:none">+ Workflow</button>
+            <button class="btn-icon proj-selector-action" id="proj-btn-orch" onclick="_projBuildOrchPrompt()" title="Generer prompt orchestrateur" style="display:none">&#9881;</button>
+          </div>
+          <!-- Project content: workflows -->
+          <div id="proj-content" class="proj-content" style="display:none">
+            <div class="proj-wf-bar">
+              <div class="proj-wf-chips" id="proj-wf-chips"></div>
+            </div>
+            <div id="proj-wf-editor" class="proj-wf-editor"></div>
+          </div>
+        </div>
+
+        <!-- Sub-tab: Prompts -->
+        <div class="tpl-tab-content" id="tpl-tab-tpl-prompts">
+          <div class="card">
+            <div class="card-header">
+              <h3>Prompts systeme</h3>
+              <select id="tpl-prompts-culture-select" onchange="tplPromptSwitchCulture(this.value)" style="font-size:0.8rem;padding:0.25rem 0.5rem;margin-left:auto;width:auto;max-width:250px"></select>
+            </div>
+            <div class="ps-panel" id="tpl-prompts-panel">
+              <div class="ps-list" id="tpl-prompts-list" style="width:220px">
+                <div class="ps-list-header">
+                  <span>Fichiers</span>
+                  <button class="btn-icon ps-list-add" onclick="tplPromptAdd()" title="Nouveau prompt">+</button>
+                </div>
+                <div class="ps-list-items" id="tpl-prompts-items"></div>
+              </div>
+              <div class="ps-editor" id="tpl-prompts-editor">
+                <div class="ps-edit-empty">Selectionnez un prompt</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sub-tab: Models -->
+        <div class="tpl-tab-content" id="tpl-tab-tpl-models">
+          <div class="card">
+            <div class="card-header">
+              <h3>Models</h3>
+              <select id="tpl-models-culture-select" onchange="tplModelSwitchCulture(this.value)" style="font-size:0.8rem;padding:0.25rem 0.5rem;margin-left:auto;width:auto;max-width:250px"></select>
+            </div>
+            <div class="ps-panel" id="tpl-models-panel">
+              <div class="ps-list" id="tpl-models-list" style="width:220px">
+                <div class="ps-list-header">
+                  <span>Fichiers</span>
+                  <button class="btn-icon ps-list-add" onclick="tplModelAdd()" title="Nouveau model">+</button>
+                </div>
+                <div class="ps-list-items" id="tpl-models-items"></div>
+              </div>
+              <div class="ps-editor" id="tpl-models-editor">
+                <div class="ps-edit-empty">Selectionnez un model</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sub-tab: Dockerfiles -->
+        <div class="tpl-tab-content" id="tpl-tab-tpl-dockerfiles">
+          <div class="card">
+            <div class="card-header">
+              <h3>Dockerfiles</h3>
+              <button class="btn-icon ps-list-add" onclick="tplDockerfileAdd()" title="Nouveau Dockerfile" style="font-size:1.2rem">+</button>
+            </div>
+            <div class="ps-panel" id="tpl-dockerfiles-panel">
+              <div class="ps-list" id="tpl-dockerfiles-list" style="width:180px">
+                <div class="ps-list-items" id="tpl-dockerfiles-items"></div>
+              </div>
+              <div class="ps-editor" id="tpl-dockerfiles-editor">
+                <div class="ps-edit-empty">Selectionnez un Dockerfile</div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- Sub-tab: Mail -->
-        <div class="cfg-tab-content" id="cfg-tab-cfg-mail">
+        <div class="tpl-tab-content" id="tpl-tab-tpl-mail">
           <!-- SMTP -->
           <div class="card" style="margin-top:1rem">
             <div class="card-header">
@@ -381,8 +883,8 @@
 
         </div>
 
-        <!-- Sub-tab: Security -->
-        <div class="cfg-tab-content" id="cfg-tab-cfg-security">
+        <!-- Sub-tab: Securite -->
+        <div class="tpl-tab-content" id="tpl-tab-tpl-security">
           <div class="card collapsible">
             <div class="card-header" onclick="this.parentElement.classList.toggle('collapsed')">
               <h3>Cles API</h3>
@@ -561,13 +1063,14 @@
           </div>
         </div>
 
-        <!-- cfg-auth removed: merged into cfg-security above -->
-
         <!-- Sub-tab: Divers -->
-        <div class="cfg-tab-content" id="cfg-tab-cfg-misc">
-          <p style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:1rem">
-            Parametres divers de la plateforme.
-          </p>
+        <div class="tpl-tab-content" id="tpl-tab-tpl-misc">
+          <div style="display:flex;align-items:center;margin-bottom:1rem">
+            <p style="color:var(--text-secondary);font-size:0.85rem;margin:0">
+              Parametres divers de la plateforme.
+            </p>
+            <button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="saveCfgMisc()">Sauvegarder</button>
+          </div>
 
           <!-- Domain / Hosts -->
           <div class="card">
@@ -632,282 +1135,9 @@
               </div>
             </div>
           </div>
-        </div>
 
-        <!-- Sub-tab: Git (Enregistrement) -->
-        <div class="cfg-tab-content" id="cfg-tab-cfg-git">
-          <!-- ── Service Git (Config) ── -->
-          <div class="card" style="margin-bottom:1rem">
-            <div class="card-header">
-              <h3>Service Git</h3>
-              <span class="tag tag-blue" id="cgs-status-tag" style="display:none">Connecte</span>
-            </div>
-            <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem">
-              Configurez votre service Git pour creer ou recuperer des depots distants.
-            </p>
-            <div class="form-row">
-              <div class="form-group" style="flex:0.8">
-                <label>Service</label>
-                <select id="cgs-service" onchange="_onGitSvcChange('configs')">
-                  <option value="">-- Choisir --</option>
-                  <option value="github">GitHub</option>
-                  <option value="gitlab">GitLab</option>
-                  <option value="gitea">Gitea</option>
-                  <option value="forgejo">Forgejo</option>
-                  <option value="bitbucket">Bitbucket</option>
-                </select>
-              </div>
-              <div class="form-group" style="flex:2">
-                <label>URL du service</label>
-                <input id="cgs-url" placeholder="https://api.github.com" />
-              </div>
-            </div>
-            <div class="form-row">
-              <div class="form-group">
-                <label>Login / Utilisateur</label>
-                <input id="cgs-login" placeholder="username" autocomplete="off" oninput="_checkGitSvcBtns('configs')" />
-              </div>
-              <div class="form-group">
-                <label>Token d'acces</label>
-                <input id="cgs-token" type="password" placeholder="ghp_... / glpat-..." autocomplete="off" oninput="_checkGitSvcBtns('configs')" />
-              </div>
-            </div>
-            <div class="form-row" style="margin-top:0.5rem">
-              <div class="form-group" style="flex:1.5">
-                <label>Nom du depot</label>
-                <input id="cgs-repo-name" placeholder="my-project" oninput="_checkGitSvcBtns('configs')" />
-              </div>
-            </div>
-            <div style="display:flex;gap:0.5rem;margin-top:0.5rem;margin-bottom:0.75rem">
-              <button class="btn btn-primary btn-sm" onclick="_saveGitSvcConfig('configs')">Enregistrer</button>
-              <button class="btn btn-primary btn-sm" id="cgs-btn-init" disabled onclick="gitSvcInit('configs')">Init</button>
-              <button class="btn btn-outline btn-sm" id="cgs-btn-fetch" disabled onclick="gitSvcFetch('configs')">Fetch</button>
-              <button class="btn btn-success btn-sm" id="cgs-btn-commit" disabled onclick="gitSvcCommit('configs')">Commit</button>
-              <button class="btn btn-outline btn-sm" id="cgs-btn-reset" disabled onclick="gitSvcReset('configs')" style="display:none">Reset</button>
-            </div>
-            <p style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem">
-              <b>Init</b> : cree le depot distant + initialise le depot local. &nbsp;
-              <b>Fetch</b> : recupere un depot distant existant en local. &nbsp;
-              <b>Push</b> : pousse les commits locaux vers le depot distant.
-            </p>
-          </div>
-
-          <!-- ── Depot Config ── -->
-          <div class="card">
-            <div class="card-header">
-              <h3>Depot Config</h3>
-              <span class="tag tag-yellow">config/</span>
-            </div>
-            <input type="hidden" id="cfg-git-path" /><input type="hidden" id="cfg-git-login" /><input type="hidden" id="cfg-git-password" />
-            <div style="margin-top:0.5rem">
-              <label>Branche</label>
-              <div id="cfg-git-branch" style="font-size:1.1rem;font-weight:600;margin-top:0.25rem">-</div>
-            </div>
-            <div style="margin-top:0.75rem">
-              <label>Status</label>
-              <div class="terminal" id="cfg-git-status" style="max-height:120px">Chargement...</div>
-            </div>
-            <div style="margin-top:0.75rem">
-              <label>Versions</label>
-              <div id="cfg-git-commits" class="commits-table-wrap">
-                <p style="color:var(--text-secondary);font-size:0.8rem">Chargement...</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- TEMPLATES SECTION -->
-      <div class="section" id="section-templates">
-        <div class="page-header">
-          <h2>Templates</h2>
-          <div style="display:flex;gap:0.5rem;margin-left:auto">
-            <button class="btn btn-outline btn-sm" onclick="loadTemplates()">Rafraichir</button>
-            <button class="btn btn-outline btn-sm" onclick="window.location='/api/export/shared'">Exporter</button>
-            <button class="btn btn-outline btn-sm" onclick="document.getElementById('import-shared-file').click()" title="Remplace tous les fichiers existants par le contenu de l'archive">Importer</button>
-            <input type="file" id="import-shared-file" accept=".zip" style="display:none" onchange="importArchive('shared', this)">
-          </div>
-        </div>
-        <p style="color:var(--text-secondary);margin-bottom:0.75rem;font-size:0.85rem">
-          Configuration des templates partages (<code>Shared/Teams/</code>) utilises comme base pour creer de nouvelles equipes.
-        </p>
-
-        <!-- Sub-tabs -->
-        <div class="prompt-tabs" style="margin-bottom:1rem">
-          <div class="prompt-tab active" data-tpl-tab="tpl-llm" onclick="showTemplateTab('tpl-llm')">Modeles LLM</div>
-          <div class="prompt-tab" data-tpl-tab="tpl-mcp" onclick="showTemplateTab('tpl-mcp')">Services MCP</div>
-          <div class="prompt-tab" data-tpl-tab="tpl-dockerfiles" onclick="showTemplateTab('tpl-dockerfiles')">Dockerfiles</div>
-          <div class="prompt-tab" data-tpl-tab="tpl-agents" onclick="showTemplateTab('tpl-agents')">Agents</div>
-          <div class="prompt-tab" data-tpl-tab="tpl-teams" onclick="showTemplateTab('tpl-teams')">Equipes</div>
-          <div class="prompt-tab" data-tpl-tab="tpl-projects" onclick="showTemplateTab('tpl-projects')">Projets</div>
-          <div class="prompt-tab" data-tpl-tab="tpl-prompts" onclick="showTemplateTab('tpl-prompts')">Prompts</div>
-          <div class="prompt-tab" data-tpl-tab="tpl-models" onclick="showTemplateTab('tpl-models')">Models</div>
-          <div class="prompt-tab" data-tpl-tab="tpl-i18n" onclick="showTemplateTab('tpl-i18n')">I18n</div>
-          <div class="prompt-tab" data-tpl-tab="tpl-others" onclick="showTemplateTab('tpl-others')">Autres</div>
-          <div class="prompt-tab" data-tpl-tab="tpl-git" onclick="showTemplateTab('tpl-git')">Enregistrement</div>
-        </div>
-
-        <!-- Sub-tab: LLM -->
-        <div class="tpl-tab-content active" id="tpl-tab-tpl-llm">
-          <div class="card">
-            <div class="card-header">
-              <h3>Modele par defaut</h3>
-            </div>
-            <div class="form-row" style="align-items:flex-end;gap:1.5rem">
-              <div class="form-group" style="margin-bottom:0;flex:1">
-                <label style="font-size:0.8rem;margin-bottom:0.25rem">Modele par defaut (agents)</label>
-                <select id="tpl-llm-default-select" onchange="setTplLLMDefault(this.value)"></select>
-              </div>
-              <div class="form-group" style="margin-bottom:0;flex:1">
-                <label style="font-size:0.8rem;margin-bottom:0.25rem">LLM Admin (dashboard)</label>
-                <select id="tpl-llm-admin-select" onchange="setTplLLMAdmin(this.value)"></select>
-              </div>
-            </div>
-          </div>
+          <!-- Cultures -->
           <div class="card" style="margin-top:1rem">
-            <div class="card-header">
-              <h3>Providers</h3>
-              <div style="display:flex;gap:0.5rem">
-                <button class="btn btn-outline btn-sm" onclick="uploadTplLLM()">Importer JSON</button>
-                <button class="btn btn-primary btn-sm" onclick="showAddTplProviderModal()">+ Ajouter</button>
-              </div>
-            </div>
-            <input type="text" class="form-control" id="tpl-llm-filter" placeholder="Filtrer providers..." oninput="filterTplLLM()" style="margin:0.5rem 0;padding:0.4rem 0.6rem;font-size:0.85rem;width:100%;box-sizing:border-box">
-            <div class="table-container" id="tpl-llm-providers-table"></div>
-          </div>
-          <div class="card" style="margin-top:1rem">
-            <div class="card-header">
-              <h3>Throttling</h3>
-              <button class="btn btn-primary btn-sm" onclick="showAddTplThrottlingModal()">+ Ajouter</button>
-            </div>
-            <div class="table-container" id="tpl-llm-throttling-table"></div>
-          </div>
-        </div>
-
-        <!-- Sub-tab: MCP -->
-        <div class="tpl-tab-content" id="tpl-tab-tpl-mcp">
-          <div class="card">
-            <div class="card-header">
-              <h3>Services avec parametres</h3>
-              <button class="btn btn-primary btn-sm" onclick="showAddTplCatalogModal()">+ Installer un service</button>
-            </div>
-            <div class="table-container" id="tpl-mcp-configured"></div>
-          </div>
-          <div class="card" style="margin-top:1rem">
-            <div class="card-header">
-              <h3>Services sans parametres</h3>
-              <button id="btn-tpl-show-deprecated" class="btn btn-outline btn-sm" onclick="toggleTplDeprecated()">Afficher deprecies</button>
-            </div>
-            <div class="mcp-grid" id="tpl-mcp-catalog"></div>
-          </div>
-        </div>
-
-        <!-- Sub-tab: Agents -->
-        <div class="tpl-tab-content" id="tpl-tab-tpl-agents">
-          <div class="sa-split">
-            <div class="sa-left" id="sa-left"></div>
-            <div class="sa-right" id="sa-right"></div>
-          </div>
-        </div>
-
-        <!-- Sub-tab: Teams -->
-        <div class="tpl-tab-content" id="tpl-tab-tpl-teams">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
-            <h3 style="margin:0">Equipes (Shared)</h3>
-            <button class="btn btn-primary btn-sm" onclick="showAddTplTeamModal()">+ Ajouter</button>
-          </div>
-          <div class="table-container" id="tpl-teams-table"></div>
-        </div>
-
-        <!-- Sub-tab: Projects -->
-        <div class="tpl-tab-content" id="tpl-tab-tpl-projects">
-          <!-- Project selector bar -->
-          <div class="proj-selector-bar">
-            <div class="proj-selector-wrap">
-              <input type="text" id="proj-selector-input" class="proj-selector-input" placeholder="Selectionner un projet..." autocomplete="off"
-                onfocus="_projOpenDropdown()" oninput="_projFilterDropdown()" />
-              <div id="proj-selector-dropdown" class="proj-selector-dropdown" style="display:none"></div>
-            </div>
-            <button class="btn-icon proj-selector-action" id="proj-btn-edit" onclick="_projEditSelected()" title="Editer le projet" style="display:none">&#9998;</button>
-            <button class="btn-icon proj-selector-action" id="proj-btn-delete" onclick="_projDeleteSelected()" title="Supprimer le projet" style="display:none">&times;</button>
-            <button class="btn btn-primary btn-sm" onclick="showAddProjectModal()">+ Projet</button>
-            <button class="btn btn-outline btn-sm" id="proj-btn-add-wf" onclick="_projAddWorkflow()" style="display:none">+ Workflow</button>
-            <button class="btn-icon proj-selector-action" id="proj-btn-orch" onclick="_projBuildOrchPrompt()" title="Generer prompt orchestrateur" style="display:none">&#9881;</button>
-          </div>
-          <!-- Project content: workflows -->
-          <div id="proj-content" class="proj-content" style="display:none">
-            <div class="proj-wf-bar">
-              <div class="proj-wf-chips" id="proj-wf-chips"></div>
-            </div>
-            <div id="proj-wf-editor" class="proj-wf-editor"></div>
-          </div>
-        </div>
-
-        <!-- Sub-tab: Prompts -->
-        <div class="tpl-tab-content" id="tpl-tab-tpl-prompts">
-          <div class="card">
-            <div class="card-header">
-              <h3>Prompts systeme</h3>
-              <select id="tpl-prompts-culture-select" onchange="tplPromptSwitchCulture(this.value)" style="font-size:0.8rem;padding:0.25rem 0.5rem;margin-left:auto;width:auto;max-width:250px"></select>
-            </div>
-            <div class="ps-panel" id="tpl-prompts-panel">
-              <div class="ps-list" id="tpl-prompts-list" style="width:220px">
-                <div class="ps-list-header">
-                  <span>Fichiers</span>
-                  <button class="btn-icon ps-list-add" onclick="tplPromptAdd()" title="Nouveau prompt">+</button>
-                </div>
-                <div class="ps-list-items" id="tpl-prompts-items"></div>
-              </div>
-              <div class="ps-editor" id="tpl-prompts-editor">
-                <div class="ps-edit-empty">Selectionnez un prompt</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Sub-tab: Models -->
-        <div class="tpl-tab-content" id="tpl-tab-tpl-models">
-          <div class="card">
-            <div class="card-header">
-              <h3>Models</h3>
-              <select id="tpl-models-culture-select" onchange="tplModelSwitchCulture(this.value)" style="font-size:0.8rem;padding:0.25rem 0.5rem;margin-left:auto;width:auto;max-width:250px"></select>
-            </div>
-            <div class="ps-panel" id="tpl-models-panel">
-              <div class="ps-list" id="tpl-models-list" style="width:220px">
-                <div class="ps-list-header">
-                  <span>Fichiers</span>
-                  <button class="btn-icon ps-list-add" onclick="tplModelAdd()" title="Nouveau model">+</button>
-                </div>
-                <div class="ps-list-items" id="tpl-models-items"></div>
-              </div>
-              <div class="ps-editor" id="tpl-models-editor">
-                <div class="ps-edit-empty">Selectionnez un model</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Sub-tab: Dockerfiles -->
-        <div class="tpl-tab-content" id="tpl-tab-tpl-dockerfiles">
-          <div class="card">
-            <div class="card-header">
-              <h3>Dockerfiles</h3>
-              <button class="btn-icon ps-list-add" onclick="tplDockerfileAdd()" title="Nouveau Dockerfile" style="font-size:1.2rem">+</button>
-            </div>
-            <div class="ps-panel" id="tpl-dockerfiles-panel">
-              <div class="ps-list" id="tpl-dockerfiles-list" style="width:180px">
-                <div class="ps-list-items" id="tpl-dockerfiles-items"></div>
-              </div>
-              <div class="ps-editor" id="tpl-dockerfiles-editor">
-                <div class="ps-edit-empty">Selectionnez un Dockerfile</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Sub-tab: Others -->
-        <div class="tpl-tab-content" id="tpl-tab-tpl-others">
-          <div class="card">
             <div class="card-header">
               <h3>Cultures</h3>
             </div>
@@ -915,6 +1145,8 @@
             <input type="text" class="form-control" id="tpl-cultures-filter" placeholder="Filtrer par pays, langue ou code..." oninput="filterCultures()" style="margin-bottom:0.75rem;padding:0.4rem 0.6rem;font-size:0.85rem;width:100%;box-sizing:border-box">
             <div id="tpl-cultures-list" class="cultures-grid"></div>
           </div>
+
+          <!-- Services -->
           <div class="card" style="margin-top:1rem">
             <div class="card-header">
               <h3>Services</h3>
