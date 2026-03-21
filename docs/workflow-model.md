@@ -70,12 +70,13 @@ Chaque livrable represente une unite de travail assignee a un agent. La cle du l
 
 | Champ | Type | Requis | Description |
 |---|---|---|---|
+| `name` | `string` | non | Nom affiche du livrable (dans le diagramme et les proprietes). Si absent, la cle technique est affichee. |
 | `agent` | `string` | oui | Agent responsable |
 | `pipeline_step` | `string` | oui | Cle du step dans le pipeline de l'agent |
 | `required` | `boolean` | oui | Bloquant pour la phase |
 | `type` | `string` | oui | Type de livrable (voir ci-dessous) |
-| `description` | `string` | non | Description du livrable |
-| `depends_on` | `array[string]` | non | Cles de livrables prerequis (MEME PHASE uniquement, pas de cross-phase) |
+| `description` | `string` | non | Description du livrable. Editable en popup plein ecran avec generation IA (baguette magique, prompt `WriteDescription.md`). |
+| `depends_on` | `array[string]` | non | Cles de livrables prerequis (MEME PHASE uniquement, pas de cross-phase). Affiches par leur `name` dans l'editeur. |
 | `roles` | `array[string]` | non | Roles de l'agent actives pour ce livrable (depuis `Shared/Agents/{id}/role_*.md`) |
 | `missions` | `array[string]` | non | Missions de l'agent activees pour ce livrable (depuis `Shared/Agents/{id}/mission_*.md`) |
 | `skills` | `array[string]` | non | Competences de l'agent activees pour ce livrable (depuis `Shared/Agents/{id}/skill_*.md`) |
@@ -216,12 +217,32 @@ En cas de perte de state (redemarrage), le workflow engine peut verifier l'exist
 
 ## Editeur visuel
 
-L'editeur de workflow dans le dashboard admin offre :
+### Layout
+
+L'onglet Templates > Projets utilise un layout inline (pas de popup) :
+
+- **Selecteur projet** : dropdown filtrable (nom, description, equipe) avec crayon pour editer les proprietes
+- **Barre d'actions** : `+ Projet`, `+ Workflow`, engrenage (prompt orchestrateur) — les deux derniers apparaissent quand un projet est selectionne
+- **Chips workflows** : tags cliquables pour chaque workflow du projet. Cliquer ouvre l'editeur inline, re-cliquer le ferme
+- **Editeur fullscreen** : l'editeur de workflow s'ouvre en `position: fixed` couvrant toute la page (z-index 200)
+- **Fleche retour** (en haut a gauche) : quitte l'editeur avec confirmation si modifications non sauvegardees
+
+### Canvas et proprietes
 
 - **Canvas visuel** avec phases draggables et fleches de transition (courbes de Bezier)
+- **Splitter vertical** entre le canvas et le panneau de proprietes — redimensionnable par drag (min 200px, max 60%)
+- **Boite a outils** : icone "Phase" draggable — glisser-deposer sur le canvas pour creer une phase a la position du drop
+- **Clic droit sur une phase** : menu contextuel avec "Supprimer" (confirmation requise)
+- **Clic sur un livrable** dans le diagramme : selectionne la phase, ouvre la section Livrables dans les proprietes, et deplie le livrable cible
+- **Livrables collapses** par defaut dans les proprietes — comportement accordeon (deplier un collapse les autres)
+- **Diagramme** : les livrables affichent leur `name` (si defini) au lieu de la cle technique
+
+### Outils IA
+
+- **Baguette magique skill-match** (sur le titre du livrable) : auto-selectionne roles/missions/skills en fonction de la description
+- **Baguette magique description** (dans la popup d'edition de description) : genere une description via le prompt `WriteDescription.md` avec variables contextuelles (deliverable_key, agent_id, agent_name, deliverable_type, phase_name, project_description, current_description). Les appels sont traces dans `Shared/Projects/{project}/chat/`
 - **Selecteur d'equipe** dans les proprietes du workflow — charge les agents depuis le registry de l'equipe selectionnee
 - **Ajout d'agents** par dropdown — liste filtree depuis le registry de l'equipe
 - **Groupes paralleles** editables (A → Z)
-- **Baguette magique** (skill-match) pour auto-selectionner roles/missions/skills d'un livrable
 - **Vue JSON** pour edition directe du workflow
 - **Double fichier** : le workflow (`.wrk.json`) et le design (`.wrk.design.json`) sont sauvegardes separement

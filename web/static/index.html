@@ -6,7 +6,7 @@
   <title>ag.flow Admin</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/style.css?v=20260320c">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260320d">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/codemirror.min.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/theme/material-darker.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/codemirror.min.js"></script>
@@ -821,11 +821,26 @@
 
         <!-- Sub-tab: Projects -->
         <div class="tpl-tab-content" id="tpl-tab-tpl-projects">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
-            <h3 style="margin:0">Types de projets</h3>
-            <button class="btn btn-primary btn-sm" onclick="showAddProjectModal()">+ Ajouter</button>
+          <!-- Project selector bar -->
+          <div class="proj-selector-bar">
+            <div class="proj-selector-wrap">
+              <input type="text" id="proj-selector-input" class="proj-selector-input" placeholder="Selectionner un projet..." autocomplete="off"
+                onfocus="_projOpenDropdown()" oninput="_projFilterDropdown()" />
+              <div id="proj-selector-dropdown" class="proj-selector-dropdown" style="display:none"></div>
+            </div>
+            <button class="btn-icon proj-selector-action" id="proj-btn-edit" onclick="_projEditSelected()" title="Editer le projet" style="display:none">&#9998;</button>
+            <button class="btn-icon proj-selector-action" id="proj-btn-delete" onclick="_projDeleteSelected()" title="Supprimer le projet" style="display:none">&times;</button>
+            <button class="btn btn-primary btn-sm" onclick="showAddProjectModal()">+ Projet</button>
+            <button class="btn btn-outline btn-sm" id="proj-btn-add-wf" onclick="_projAddWorkflow()" style="display:none">+ Workflow</button>
+            <button class="btn-icon proj-selector-action" id="proj-btn-orch" onclick="_projBuildOrchPrompt()" title="Generer prompt orchestrateur" style="display:none">&#9881;</button>
           </div>
-          <div class="table-container" id="tpl-projects-table"></div>
+          <!-- Project content: workflows -->
+          <div id="proj-content" class="proj-content" style="display:none">
+            <div class="proj-wf-bar">
+              <div class="proj-wf-chips" id="proj-wf-chips"></div>
+            </div>
+            <div id="proj-wf-editor" class="proj-wf-editor"></div>
+          </div>
         </div>
 
         <!-- Sub-tab: Prompts -->
@@ -1360,6 +1375,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="/static/js/app.js?v=20260320g"></script>
+  <script src="/static/js/app.js?v=20260320h"></script>
 </body>
 </html>

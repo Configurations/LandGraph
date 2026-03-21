@@ -206,14 +206,51 @@ REMOTE_ENV
     log "Sync complete."
 }
 
-do_rebuild() {
-    log "Rebuilding and restarting containers on ${SSH_TARGET} ..."
+detect_services() {
+    # Detect which services need rebuild based on git diff
+    local changed
+    changed=$(git diff --name-only HEAD 2>/dev/null || git diff --name-only 2>/dev/null || echo "")
+    if [[ -z "$changed" ]]; then
+        # No git info or no changes tracked — rebuild all
+        echo "langgraph-admin langgraph-api discord-bot mail-bot hitl-console"
+        return
+    fi
+    local svcs=""
+    # web/ → langgraph-admin only
+    if echo "$changed" | grep -q "^web/"; then svcs="$svcs langgraph-admin"; fi
+    # hitl/ → hitl-console only
+    if echo "$changed" | grep -q "^hitl/"; then svcs="$svcs hitl-console"; fi
+    # Agents/ → langgraph-api + discord-bot + mail-bot
+    if echo "$changed" | grep -q "^Agents/"; then svcs="$svcs langgraph-api discord-bot mail-bot"; fi
+    # requirements.txt or Dockerfile* → all
+    if echo "$changed" | grep -qE "^(requirements\.txt|Dockerfile)"; then svcs="$svcs langgraph-admin langgraph-api discord-bot mail-bot hitl-console"; fi
+    # docker-compose.yml → all
+    if echo "$changed" | grep -q "^docker-compose.yml"; then svcs="$svcs langgraph-admin langgraph-api discord-bot mail-bot hitl-console"; fi
+    # scripts/ → need SQL apply but no specific service
+    # Deduplicate
+    svcs=$(echo "$svcs" | tr ' ' '\n' | sort -u | tr '\n' ' ' | xargs)
+    if [[ -z "$svcs" ]]; then
+        # Changed files don't map to any service (docs, config, etc.) — skip rebuild
+        log "No service-impacting changes detected. Skipping rebuild."
+        echo ""
+        return
+    fi
+    echo "$svcs"
+}
 
-    ssh $SSH_OPTS "${SSH_TARGET}" bash -s -- "${REMOTE_DIR}" <<'REMOTE_SCRIPT'
+do_rebuild() {
+    local services="${1:-}"
+    if [[ -z "$services" ]]; then
+        services=$(detect_services)
+    fi
+    if [[ -z "$services" ]]; then return; fi
+
+    log "Rebuilding: $services"
+
+    ssh $SSH_OPTS "${SSH_TARGET}" bash -s -- "${REMOTE_DIR}" "$services" <<'REMOTE_SCRIPT'
 set -euo pipefail
 cd "$1"
-
-SERVICES="langgraph-admin langgraph-api discord-bot mail-bot hitl-console"
+SERVICES="$2"
 
 echo "  Stopping services..."
 docker compose stop $SERVICES 2>/dev/null || true

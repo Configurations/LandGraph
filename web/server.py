@@ -957,6 +957,49 @@ async def put_templates_registry(directory: str, request: Request):
     return {"ok": True}
 
 
+# ── Phase file generation helper ──────────────────
+def _generate_phase_files(workflow_data: dict, workflow_filename: str, output_dir: Path, team_id: str):
+    """Generate one .md file per phase with the data blocks (phase_id, phase, global_rules, agents_summary)."""
+    phases = workflow_data.get("phases", {})
+    # Collect existing phase files for cleanup
+    prefix = f"{workflow_filename}.phase."
+    stale = {f.name: f for f in output_dir.glob(f"{prefix}*.md")}
+    if not phases:
+        for f in stale.values():
+            f.unlink(missing_ok=True)
+        return
+    rules = workflow_data.get("rules", {})
+    rules_json = json.dumps(rules, indent=2, ensure_ascii=False)
+    team_dir = SHARED_TEAMS_DIR / team_id
+    for phase_id, phase_data in phases.items():
+        phase_json = json.dumps(phase_data, indent=2, ensure_ascii=False)
+        agents_in_phase = phase_data.get("agents", {})
+        summary_parts = []
+        for agent_id in agents_in_phase:
+            orch_file = team_dir / f"orch_{agent_id}.md"
+            if orch_file.exists():
+                summary_parts.append(orch_file.read_text(encoding="utf-8"))
+            else:
+                summary_parts.append(
+                    f"### {agent_id}\n\n"
+                    f"(profil non disponible \u2014 construisez le prompt orchestrateur depuis Templates > Equipes)\n"
+                )
+        agents_summary = "\n\n".join(summary_parts)
+        content = (
+            f"<phase_id>{phase_id}</phase_id>\n\n"
+            f"<phase>\n{phase_json}\n</phase>\n\n"
+            f"<global_rules>\n{rules_json}\n</global_rules>\n\n"
+            f"<agents_summary>\n{agents_summary}\n</agents_summary>\n"
+        )
+        fname = f"{prefix}{phase_id}.md"
+        (output_dir / fname).write_text(content, encoding="utf-8")
+        stale.pop(fname, None)
+    # Remove phase files that no longer exist in the workflow
+    for f in stale.values():
+        f.unlink(missing_ok=True)
+    _log.info("Generated %d phase files in %s (removed %d stale)", len(phases), output_dir, len(stale))
+
+
 # ── API: Workflow (per team) ──────────────────────
 
 @app.get("/api/templates/workflow/{directory}")
@@ -974,6 +1017,7 @@ async def put_template_workflow(directory: str, request: Request):
     tdir = SHARED_TEAMS_DIR / directory
     tdir.mkdir(parents=True, exist_ok=True)
     _write_json(tdir / "Workflow.json", data)
+    _generate_phase_files(data, "Workflow", tdir, directory)
     return {"ok": True}
 
 
@@ -992,6 +1036,7 @@ async def put_workflow(directory: str, request: Request):
     tdir = TEAMS_DIR / directory
     tdir.mkdir(parents=True, exist_ok=True)
     _write_json(tdir / "Workflow.json", data)
+    _generate_phase_files(data, "Workflow", tdir, directory)
     return {"ok": True}
 
 
@@ -2275,13 +2320,36 @@ async def config_check():
     # 1. Check .env secrets referenced by LLM providers
     env_entries = {e["key"]: e["value"] for e in _parse_env(ENV_FILE) if e.get("key")}
     llm_data = _read_json(CONFIGS / "llm_providers.json") if (CONFIGS / "llm_providers.json").exists() else {}
+
+    # Collect LLM IDs actually used by agents or as default
+    used_llm_ids = set()
+    default_llm = llm_data.get("default", "")
+    if default_llm:
+        used_llm_ids.add(default_llm)
+    teams_list = _read_teams_list()
+    for tcfg in teams_list:
+        tid = tcfg.get("id", "")
+        directory = tcfg.get("directory", tid)
+        tdir = _team_dir(directory)
+        reg_path = tdir / "agents_registry.json"
+        if reg_path.exists():
+            reg = _read_json(reg_path)
+            for aid, aconf in reg.get("agents", {}).items():
+                agent_llm = aconf.get("llm", "")
+                if agent_llm:
+                    used_llm_ids.add(agent_llm)
+
     for pid, pconf in llm_data.get("providers", {}).items():
         env_key = pconf.get("env_key", "")
-        if env_key:
-            if env_key not in env_entries:
-                issues.append({"level": "error", "category": "secrets", "message": f"LLM provider '{pid}' reference la variable '{env_key}' — introuvable dans .env"})
-            elif not env_entries[env_key].strip():
-                issues.append({"level": "warning", "category": "secrets", "message": f"LLM provider '{pid}' : la variable '{env_key}' est vide dans .env"})
+        if not env_key:
+            continue
+        # Skip providers not used by any agent or as default
+        if pid not in used_llm_ids:
+            continue
+        if env_key not in env_entries:
+            issues.append({"level": "error", "category": "secrets", "message": f"LLM provider '{pid}' reference la variable '{env_key}' — introuvable dans .env"})
+        elif not env_entries[env_key].strip():
+            issues.append({"level": "warning", "category": "secrets", "message": f"LLM provider '{pid}' : la variable '{env_key}' est vide dans .env"})
 
     # 1b. Check .env secrets referenced by MCP servers
     mcp_data = _read_json(MCP_SERVERS_FILE) if MCP_SERVERS_FILE.exists() else {}
@@ -2301,7 +2369,7 @@ async def config_check():
             issues.append({"level": "warning", "category": "secrets", "message": f"Variable critique '{var}' vide dans .env"})
 
     # 3. Check teams and agents
-    teams = _read_teams_list()
+    teams = teams_list
     for tcfg in teams:
         tid = tcfg.get("id", "")
         directory = tcfg.get("directory", tid)
@@ -3169,6 +3237,8 @@ async def put_project_workflow_editor(project_id: str, wf_name: str, request: Re
     name = _wf_name_safe(wf_name)
     data = await request.json()
     _write_json(project_dir / f"{name}.wrk.json", data)
+    team_id = data.get("team", "")
+    _generate_phase_files(data, f"{name}.wrk", project_dir, team_id)
     return {"ok": True}
 
 
@@ -3232,6 +3302,56 @@ async def generate_mission(req: GenerateMissionRequest):
     ], use_admin_llm=True)
     result = await chat(chat_req)
     return {"instruction": result["content"]}
+
+
+class GenerateDescriptionRequest(BaseModel):
+    deliverable_key: str = ""
+    current_description: str = ""
+    agent_id: str = ""
+    agent_name: str = ""
+    deliverable_type: str = ""
+    phase_name: str = ""
+    project_description: str = ""
+    project_id: str = ""
+
+
+@app.post("/api/agents/generate-description")
+async def generate_description(req: GenerateDescriptionRequest):
+    """Use WriteDescription.md meta-prompt to help write a deliverable description."""
+    meta_path = PROMPTS_DIR / "WriteDescription.md"
+    if not meta_path.exists():
+        raise HTTPException(500, "Meta-prompt WriteDescription.md introuvable")
+    prompt_template = meta_path.read_text(encoding="utf-8")
+
+    # Replace template variables
+    prompt = prompt_template.replace("{deliverable_key}", req.deliverable_key)
+    prompt = prompt.replace("{current_description}", req.current_description)
+    prompt = prompt.replace("{agent_id}", req.agent_id)
+    prompt = prompt.replace("{agent_name}", req.agent_name)
+    prompt = prompt.replace("{deliverable_type}", req.deliverable_type)
+    prompt = prompt.replace("{phase_name}", req.phase_name)
+    prompt = prompt.replace("{project_description}", req.project_description)
+
+    # Trace: log to project chat directory
+    from datetime import datetime as _dt
+    chat_dir = None
+    if req.project_id:
+        chat_dir = SHARED_PROJECTS_DIR / req.project_id / "chat"
+        chat_dir.mkdir(parents=True, exist_ok=True)
+    ts = _dt.now().strftime("%y%m%d-%H%M%S")
+    if chat_dir:
+        (chat_dir / f"{ts}_writedesc_send.md").write_text(prompt, encoding="utf-8")
+
+    chat_req = ChatRequest(messages=[
+        {"role": "user", "content": prompt},
+    ], use_admin_llm=True)
+    result = await chat(chat_req)
+    raw = result.get("content", "")
+
+    if chat_dir:
+        (chat_dir / f"{ts}_writedesc_response.md").write_text(raw, encoding="utf-8")
+
+    return {"description": raw}
 
 
 class GeneratePromptRequest(BaseModel):
@@ -4159,6 +4279,11 @@ async def build_team_orchestrator_prompt(team_dir: str):
                 continue
 
         all_cards.append((agent_id, agent_name, card))
+
+        # Save individual agent orchestrator card (cleaned)
+        clean_card = re.sub(r"</?(?:orchestrator_card|card)[^>]*>", "", card).strip()
+        orch_agent_file = tdir / f"orch_{agent_id}.md"
+        orch_agent_file.write_text(f"### {agent_name} - id : {agent_id}\n{clean_card}\n", encoding="utf-8")
 
     # Assemble all cards, strip XML tags and add agent header
     stripped_cards = []

@@ -94,6 +94,7 @@ Pas de wrapper "workflow" autour.
       },
       "deliverables": {
         "agent_id:step_key": {
+          "name": "Nom affiche du livrable",
           "agent": "agent_id",
           "required": true,
           "type": "documentation|code|design|automation|tasklist|specs|contract",

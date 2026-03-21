@@ -4243,10 +4243,11 @@ function _getEnabledCultures() {
 // ── Template Projects (Shared/Projects/) ──────────
 
 let _tplProjects = [];
+let _projSelectedId = null;   // currently selected project ID
+let _projActiveWf = null;     // currently open workflow name
 
 async function loadTplProjects() {
   try {
-    // Ensure teams data is loaded (needed for team dropdown in project edit)
     if (!tplTeamsData.teams.length) {
       try {
         const teamsRes = await api('/api/templates/teams');
@@ -4256,55 +4257,119 @@ async function loadTplProjects() {
     }
     const data = await api('/api/templates/projects');
     _tplProjects = data.projects || [];
-    renderTplProjects();
+    _projRenderSelector();
+    if (_projSelectedId) _projSelectProject(_projSelectedId);
   } catch (e) { toast('Erreur chargement projets: ' + e.message, 'error'); }
 }
 
-function renderTplProjects() {
-  const container = document.getElementById('tpl-projects-table');
-  if (!container) return;
-  // Create filter input + content wrapper once, then only update content
-  let filterInput = document.getElementById('tpl-projects-filter');
-  if (!filterInput) {
-    const inputHtml = '<input type="text" class="form-control" id="tpl-projects-filter" placeholder="Filtrer par ID, nom, description, equipe..." oninput="renderTplProjects()" style="margin-bottom:0.75rem;padding:0.4rem 0.6rem;font-size:0.85rem;width:100%;box-sizing:border-box">';
-    let contentDiv = document.createElement('div');
-    contentDiv.id = 'tpl-projects-content';
-    container.innerHTML = inputHtml;
-    container.appendChild(contentDiv);
-    filterInput = document.getElementById('tpl-projects-filter');
-  }
-  const contentDiv = document.getElementById('tpl-projects-content');
-  const filter = (filterInput.value || '').toLowerCase();
-  const filtered = _tplProjects.filter(p =>
-    !filter || p.id.toLowerCase().includes(filter) || (p.name || '').toLowerCase().includes(filter) || (p.description || '').toLowerCase().includes(filter) || (p.team || '').toLowerCase().includes(filter)
-  );
-  let html = '';
-  if (!filtered.length) {
-    html = '<p style="color:var(--text-secondary);font-size:0.85rem;padding:0.5rem">' + (_tplProjects.length ? 'Aucun resultat' : 'Aucun type de projet') + '</p>';
-  } else {
-    html = '<table class="data-table"><thead><tr><th>ID</th><th>Nom</th><th>Description</th><th>Equipe</th><th>Workflows</th><th></th></tr></thead><tbody>' +
-      filtered.map(p => {
-        const wfs = (p.workflows || []);
-        const wfChips = wfs.map(w =>
-          '<span class="tag tag-blue" style="display:inline-flex;align-items:center;gap:0.25rem;margin:0.1rem">' +
-            '<span style="cursor:pointer" onclick="editProjectWorkflow(\'' + escHtml(p.id) + '\',\'' + escHtml(w) + '\')">' + escHtml(w) + '</span>' +
-            '<span style="cursor:pointer;opacity:0.6;font-size:0.7rem" onclick="deleteProjectWorkflow(\'' + escHtml(p.id) + '\',\'' + escHtml(w) + '\')" title="Supprimer">&times;</span>' +
-          '</span>'
-        ).join('');
-        const wfCell = '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:0.2rem">' + wfChips +
-          '<button class="btn-icon" onclick="addProjectWorkflow(\'' + escHtml(p.id) + '\')" title="Ajouter un workflow" style="font-size:0.85rem">+</button></div>';
-        return '<tr><td><code>' + escHtml(p.id) + '</code></td><td>' + escHtml(p.name || '') + '</td><td>' + escHtml(p.description || '') + '</td><td>' + escHtml(p.team || '') + '</td>' +
-          '<td>' + wfCell + '</td>' +
-          '<td style="white-space:nowrap">' +
-          '<button class="btn-icon" onclick="buildOrchestratorPrompt(\'' + escHtml(p.id) + '\')" title="Generer prompt orchestrateur">&#9881;</button>' +
-          '<button class="btn-icon" onclick="editTplProject(\'' + escHtml(p.id) + '\')" title="Editer">&#9998;</button>' +
-          '<button class="btn-icon" onclick="deleteTplProject(\'' + escHtml(p.id) + '\')" title="Supprimer">&times;</button></td></tr>';
-      }).join('') +
-      '</tbody></table>';
-  }
-  contentDiv.innerHTML = html;
+// ── Dropdown selector ──
+function _projRenderSelector() {
+  const dd = document.getElementById('proj-selector-dropdown');
+  if (!dd) return;
+  const sorted = _tplProjects.slice().sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id, 'fr'));
+  dd.innerHTML = sorted.map(p =>
+    '<div class="proj-selector-item' + (p.id === _projSelectedId ? ' active' : '') + '" data-id="' + escHtml(p.id) + '" onclick="_projPickItem(this)">' +
+      '<div class="proj-selector-item-name">' + escHtml(p.name || p.id) + '</div>' +
+      (p.description ? '<div class="proj-selector-item-desc">' + escHtml(p.description) + '</div>' : '') +
+      (p.team ? '<span class="proj-selector-item-team">' + escHtml(p.team) + '</span>' : '') +
+    '</div>'
+  ).join('');
 }
 
+function _projOpenDropdown() {
+  const dd = document.getElementById('proj-selector-dropdown');
+  if (dd) { dd.style.display = ''; _projFilterDropdown(); }
+}
+
+function _projFilterDropdown() {
+  const filter = (document.getElementById('proj-selector-input').value || '').toLowerCase();
+  const dd = document.getElementById('proj-selector-dropdown');
+  if (!dd) return;
+  dd.style.display = '';
+  dd.querySelectorAll('.proj-selector-item').forEach(item => {
+    const text = item.textContent.toLowerCase();
+    item.style.display = text.includes(filter) ? '' : 'none';
+  });
+}
+
+function _projPickItem(el) {
+  const id = el.dataset.id;
+  document.getElementById('proj-selector-dropdown').style.display = 'none';
+  _projSelectProject(id);
+}
+
+function _projSelectProject(id) {
+  const p = _tplProjects.find(x => x.id === id);
+  if (!p) {
+    _projSelectedId = null;
+    _projActiveWf = null;
+    document.getElementById('proj-selector-input').value = '';
+    document.getElementById('proj-content').style.display = 'none';
+    document.getElementById('proj-btn-edit').style.display = 'none';
+    document.getElementById('proj-btn-delete').style.display = 'none';
+    document.getElementById('proj-btn-add-wf').style.display = 'none';
+    document.getElementById('proj-btn-orch').style.display = 'none';
+    return;
+  }
+  _projSelectedId = id;
+  const input = document.getElementById('proj-selector-input');
+  input.value = p.name || p.id;
+  document.getElementById('proj-btn-edit').style.display = '';
+  document.getElementById('proj-btn-delete').style.display = '';
+  document.getElementById('proj-btn-add-wf').style.display = '';
+  document.getElementById('proj-btn-orch').style.display = '';
+  document.getElementById('proj-content').style.display = '';
+  _projRenderSelector();
+  _projRenderWorkflows();
+}
+
+// Close dropdown on outside click
+document.addEventListener('click', function(e) {
+  const dd = document.getElementById('proj-selector-dropdown');
+  const inp = document.getElementById('proj-selector-input');
+  if (dd && inp && !dd.contains(e.target) && e.target !== inp) dd.style.display = 'none';
+});
+
+// ── Workflow chips ──
+function _projRenderWorkflows() {
+  const p = _tplProjects.find(x => x.id === _projSelectedId);
+  if (!p) return;
+  const wfs = p.workflows || [];
+  const chipsDiv = document.getElementById('proj-wf-chips');
+  chipsDiv.innerHTML = wfs.map(w =>
+    '<span class="proj-wf-chip' + (w === _projActiveWf ? ' active' : '') + '" onclick="_projOpenWf(\'' + escHtml(w) + '\')">' +
+      escHtml(w) +
+      '<span class="proj-wf-chip-x" onclick="event.stopPropagation();_projDeleteWf(\'' + escHtml(w) + '\')" title="Supprimer">&times;</span>' +
+    '</span>'
+  ).join('');
+  // If active workflow was deleted, clear editor
+  if (_projActiveWf && !wfs.includes(_projActiveWf)) {
+    _projActiveWf = null;
+    document.getElementById('proj-wf-editor').innerHTML = '';
+  }
+}
+
+async function _projOpenWf(wfName) {
+  if (_projActiveWf === wfName) { _projCloseWf(); return; }
+  _projActiveWf = wfName;
+  _projRenderWorkflows();
+  const el = document.getElementById('proj-wf-editor');
+  el.classList.add('active');
+  const p = _tplProjects.find(x => x.id === _projSelectedId);
+  const teamDir = p && p.team ? p.team : '';
+  const apiBase = '/api/templates/project-workflow/' + encodeURIComponent(_projSelectedId);
+  await openWorkflowEditor(wfName, apiBase, 'Projects/' + _projSelectedId, teamDir, 'proj-wf-editor');
+}
+
+function _projCloseWf() {
+  _projActiveWf = null;
+  const el = document.getElementById('proj-wf-editor');
+  el.classList.remove('active');
+  el.innerHTML = '';
+  _projRenderWorkflows();
+}
+
+// ── Project CRUD (modals) ──
 function _projTeamOptions(selected) {
   const teams = (tplTeamsData.teams || []);
   return '<option value="">-- Aucune --</option>' +
@@ -4331,22 +4396,24 @@ async function createTplProject() {
     await api('/api/templates/projects', { method: 'POST', body: { id, name, description, team } });
     closeModal();
     toast('Projet cree', 'success');
+    _projSelectedId = id;
     loadTplProjects();
   } catch (e) { toast(e.message, 'error'); }
 }
 
-function editTplProject(id) {
-  const p = _tplProjects.find(x => x.id === id);
+function _projEditSelected() {
+  const p = _tplProjects.find(x => x.id === _projSelectedId);
   if (!p) return;
   showModal('<div class="modal-header"><h3>Editer le projet</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
     '<div class="form-group"><label>ID</label><input value="' + escHtml(p.id) + '" readonly style="background:var(--bg-secondary)" /></div>' +
     '<div class="form-group"><label>Nom</label><input id="proj-edit-name" value="' + escHtml(p.name || '') + '" /></div>' +
     '<div class="form-group"><label>Description</label><textarea id="proj-edit-desc" rows="3">' + escHtml(p.description || '') + '</textarea></div>' +
     '<div class="form-group"><label>Equipe</label><select id="proj-edit-team">' + _projTeamOptions(p.team || '') + '</select></div>' +
-    '<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="saveTplProject(\'' + escHtml(p.id) + '\')">Sauvegarder</button></div>');
+    '<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="_projSaveEdit()">Sauvegarder</button></div>');
 }
 
-async function saveTplProject(id) {
+async function _projSaveEdit() {
+  const id = _projSelectedId;
   const name = (document.getElementById('proj-edit-name').value || '').trim();
   const description = (document.getElementById('proj-edit-desc').value || '').trim();
   const team = (document.getElementById('proj-edit-team').value || '').trim();
@@ -4359,28 +4426,40 @@ async function saveTplProject(id) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-async function deleteTplProject(id) {
-  if (!(await confirmModal('Supprimer le type de projet "' + id + '" ?'))) return;
+async function _projDeleteSelected() {
+  if (!_projSelectedId) return;
+  if (!(await confirmModal('Supprimer le type de projet "' + _projSelectedId + '" ?'))) return;
   try {
-    await api('/api/templates/projects/' + encodeURIComponent(id), { method: 'DELETE' });
+    await api('/api/templates/projects/' + encodeURIComponent(_projSelectedId), { method: 'DELETE' });
     toast('Projet supprime', 'success');
+    _projSelectedId = null;
+    _projActiveWf = null;
     loadTplProjects();
+    document.getElementById('proj-content').style.display = 'none';
+    document.getElementById('proj-btn-edit').style.display = 'none';
+    document.getElementById('proj-btn-delete').style.display = 'none';
+    document.getElementById('proj-btn-add-wf').style.display = 'none';
+    document.getElementById('proj-btn-orch').style.display = 'none';
+    document.getElementById('proj-selector-input').value = '';
   } catch (e) { toast(e.message, 'error'); }
 }
 
-async function buildOrchestratorPrompt(projectId) {
+async function _projBuildOrchPrompt() {
+  if (!_projSelectedId) return;
   try {
-    const res = await api('/api/templates/projects/' + encodeURIComponent(projectId) + '/orchestrator/build', { method: 'POST' });
+    const res = await api('/api/templates/projects/' + encodeURIComponent(_projSelectedId) + '/orchestrator/build', { method: 'POST' });
     toast('Prompt orchestrateur genere', 'success');
-    showModal('<div class="modal-header"><h3>Prompt orchestrateur — ' + escHtml(projectId) + '</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
+    showModal('<div class="modal-header"><h3>Prompt orchestrateur — ' + escHtml(_projSelectedId) + '</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
       '<textarea readonly rows="20" style="width:100%;font-family:monospace;font-size:0.8rem;background:var(--bg-secondary);border:1px solid var(--border);padding:0.5rem;resize:vertical">' + escHtml(res.content || '') + '</textarea>' +
       '<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Fermer</button></div>', 'modal-wide');
   } catch (e) { toast(e.message, 'error'); }
 }
 
-function addProjectWorkflow(projectId) {
-  const pid = escHtml(projectId);
-  const p = _tplProjects.find(x => x.id === projectId);
+// ── Workflow CRUD ──
+function _projAddWorkflow() {
+  if (!_projSelectedId) return;
+  const pid = escHtml(_projSelectedId);
+  const p = _tplProjects.find(x => x.id === _projSelectedId);
   const defaultTeam = p && p.team ? p.team : '';
   showModal('<div class="modal-header"><h3>Nouveau workflow</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
     '<div class="form-group"><label>Nom du workflow (lettres, chiffres, _, -)</label><input id="proj-wf-new-name" placeholder="discovery" oninput="this.value=this.value.replace(/[^a-zA-Z0-9_\\-]/g,\'\')" /></div>' +
@@ -4405,7 +4484,6 @@ async function generateProjectWorkflow(projectId) {
   if (!name) { toast('Nom requis', 'error'); return; }
   if (!prompt) { toast('Decrivez le projet pour generer le workflow', 'error'); return; }
   if (!team) { toast('Equipe requise', 'error'); return; }
-  // Disable all action buttons
   const btns = document.querySelectorAll('#proj-wf-actions button');
   btns.forEach(b => { b.disabled = true; b.style.opacity = '0.5'; });
   const genBtn = document.getElementById('proj-wf-gen-btn');
@@ -4416,6 +4494,7 @@ async function generateProjectWorkflow(projectId) {
     });
     closeModal();
     toast('Workflow genere et sauvegarde', 'success');
+    _projActiveWf = name;
     loadTplProjects();
   } catch (e) {
     btns.forEach(b => { b.disabled = false; b.style.opacity = ''; });
@@ -4433,24 +4512,32 @@ async function createProjectWorkflow(projectId) {
     await api('/api/templates/projects/' + encodeURIComponent(projectId) + '/workflows', { method: 'POST', body: { name, team } });
     closeModal();
     toast('Workflow cree', 'success');
+    _projActiveWf = name;
     loadTplProjects();
   } catch (e) { toast(e.message, 'error'); }
 }
 
-function editProjectWorkflow(projectId, wfName) {
-  const p = _tplProjects.find(x => x.id === projectId);
-  const teamDir = p && p.team ? p.team : '';
-  openWorkflowEditor(wfName, '/api/templates/project-workflow/' + encodeURIComponent(projectId), 'Projects/' + projectId, teamDir);
-}
-
-async function deleteProjectWorkflow(projectId, wfName) {
+async function _projDeleteWf(wfName) {
   if (!(await confirmModal('Supprimer le workflow "' + wfName + '" ?'))) return;
   try {
-    await api('/api/templates/projects/' + encodeURIComponent(projectId) + '/workflows/' + encodeURIComponent(wfName), { method: 'DELETE' });
+    await api('/api/templates/projects/' + encodeURIComponent(_projSelectedId) + '/workflows/' + encodeURIComponent(wfName), { method: 'DELETE' });
     toast('Workflow supprime', 'success');
+    if (_projActiveWf === wfName) _projActiveWf = null;
     loadTplProjects();
   } catch (e) { toast(e.message, 'error'); }
 }
+
+// Legacy aliases for backward compat with other callers
+function editProjectWorkflow(projectId, wfName) {
+  _projSelectedId = projectId;
+  _projActiveWf = wfName;
+  _projOpenWf(wfName);
+}
+function deleteProjectWorkflow(projectId, wfName) { _projDeleteWf(wfName); }
+function buildOrchestratorPrompt(projectId) { _projSelectedId = projectId; _projBuildOrchPrompt(); }
+function editTplProject(id) { _projSelectedId = id; _projEditSelected(); }
+async function deleteTplProject(id) { _projSelectedId = id; await _projDeleteSelected(); }
+async function saveTplProject(id) { _projSelectedId = id; await _projSaveEdit(); }
 
 // ── Template Prompts (Shared/Prompts/<culture>/) ──────────
 
@@ -6832,7 +6919,7 @@ async function deleteTplTeam(idx) {
 
 let _wf = null; // current workflow editor state
 
-async function openWorkflowEditor(dir, apiBase, label, registryDir) {
+async function openWorkflowEditor(dir, apiBase, label, registryDir, inlineTargetId) {
   try {
     const raw = await api(`${apiBase}/${encodeURIComponent(dir)}`);
     const designBase = apiBase.includes('project-workflow')
@@ -6849,7 +6936,7 @@ async function openWorkflowEditor(dir, apiBase, label, registryDir) {
       (sa.agents || []).forEach(a => {
         agentCaps[a.id] = { documentation: !!a.delivers_docs, code: !!a.delivers_code, design: !!a.delivers_design, automation: !!a.delivers_automation, tasklist: !!a.delivers_tasklist, specs: !!a.delivers_specs, contract: !!a.delivers_contract };
         agentPipelines[a.id] = a.pipeline_steps || [];
-        agentProfiles[a.id] = { roles: a.role_names || [], missions: a.mission_names || [], skills: a.skill_names || [] };
+        agentProfiles[a.id] = { name: a.name || a.id, roles: a.role_names || [], missions: a.mission_names || [], skills: a.skill_names || [] };
       });
     } catch {}
     // Merge pipeline_steps from the registry in the SAME directory as the workflow
@@ -6889,24 +6976,58 @@ async function openWorkflowEditor(dir, apiBase, label, registryDir) {
       agentPipelines,
       agentProfiles,
       collapsed: new Set(),
+      inlineTargetId: inlineTargetId || null,
+      _savedSnapshot: JSON.stringify(data),
     };
     _wfCalcPositions();
     _wfOpenEditorUI();
   } catch (e) { toast(e.message, 'error'); }
 }
 
+function _wfIsDirty() {
+  if (!_wf || !_wf._savedSnapshot) return false;
+  return JSON.stringify(_wf.data) !== _wf._savedSnapshot;
+}
+
+async function _wfConfirmClose(closeFn) {
+  if (_wfIsDirty()) {
+    const ok = await confirmModal('Des modifications non sauvegardees seront perdues.\n\nQuitter quand meme ?');
+    if (!ok) return;
+  }
+  closeFn();
+}
+
+async function _wfBackToProjects() {
+  await _wfConfirmClose(_projCloseWf);
+}
+
+async function _wfCloseModalSafe() {
+  await _wfConfirmClose(closeModal);
+}
+
 function _wfOpenEditorUI() {
+  const isInline = !!_wf.inlineTargetId;
+  const backBtn = isInline
+    ? '<button class="btn-icon wf-back-btn" onclick="_wfBackToProjects()" title="Retour aux projets">&#10132;</button>'
+    : '';
+  const closeBtn = isInline
+    ? ''
+    : '<button class="btn-icon" onclick="_wfCloseModalSafe()">&times;</button>';
   const html = `
     <div class="wf-toolbar">
-      <h3>Workflow — ${escHtml(_wf.label)}/${escHtml(_wf.dir)}/</h3>
-      <div class="wf-toolbar-actions">
-        <button class="btn btn-outline btn-sm" onclick="wfShowJSON()">JSON</button>
+      <div class="wf-toolbar-left">
+        ${backBtn}
         <button class="btn btn-primary btn-sm" onclick="wfSave()">Sauvegarder</button>
-        <button class="btn-icon" onclick="closeModal()">&times;</button>
+        <button class="btn btn-outline btn-sm" onclick="wfShowJSON()">JSON</button>
+      </div>
+      <h3>Workflow — ${escHtml(_wf.dir)}</h3>
+      <div class="wf-toolbar-actions">
+        ${closeBtn}
       </div>
     </div>
     <div class="wf-body">
-      <div class="wf-workspace" id="wf-workspace" onmousedown="wfWorkspaceClick(event)">
+      <div class="wf-workspace" id="wf-workspace" onmousedown="wfWorkspaceClick(event)"
+           ondragover="_wfToolDragOver(event)" ondrop="_wfToolDrop(event)" ondragenter="_wfToolDragEnter(event)" ondragleave="_wfToolDragLeave(event)">
         <svg class="wf-arrows" id="wf-arrows">
           <defs>
             <marker id="wf-arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
@@ -6916,16 +7037,107 @@ function _wfOpenEditorUI() {
         </svg>
         <div class="wf-workspace-inner" id="wf-workspace-inner"></div>
       </div>
-      <div class="wf-sidebar">
+      <div class="wf-splitter" id="wf-splitter"></div>
+      <div class="wf-sidebar" id="wf-sidebar">
         <div class="wf-toolbox" id="wf-toolbox">
           <h4>Boite a outils</h4>
-          <button class="wf-toolbox-btn" onclick="wfAddPhase()">+ Ajouter une Phase</button>
+          <div class="wf-toolbox-item" draggable="true" ondragstart="_wfToolDragStart(event, 'phase')" title="Glisser-deposer sur le diagramme">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="14" y2="12"/></svg>
+            <span>Phase</span>
+          </div>
         </div>
         <div class="wf-props" id="wf-props"></div>
       </div>
     </div>
   `;
-  showModal(html, 'modal-workflow');
+  if (isInline) {
+    const target = document.getElementById(_wf.inlineTargetId);
+    if (target) { target.innerHTML = html; }
+  } else {
+    showModal(html, 'modal-workflow');
+  }
+  _wfInitSplitter();
+  wfRender();
+}
+
+function _wfInitSplitter() {
+  const splitter = document.getElementById('wf-splitter');
+  const sidebar = document.getElementById('wf-sidebar');
+  if (!splitter || !sidebar) return;
+  let startX, startW;
+  function onMouseDown(e) {
+    e.preventDefault();
+    startX = e.clientX;
+    startW = sidebar.offsetWidth;
+    splitter.classList.add('dragging');
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }
+  function onMouseMove(e) {
+    const dx = startX - e.clientX;
+    const newW = Math.max(200, Math.min(startW + dx, window.innerWidth * 0.6));
+    sidebar.style.width = newW + 'px';
+  }
+  function onMouseUp() {
+    splitter.classList.remove('dragging');
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  }
+  splitter.addEventListener('mousedown', onMouseDown);
+}
+
+// ── Toolbox drag & drop ──
+function _wfToolDragStart(e, type) {
+  e.dataTransfer.setData('wf-tool-type', type);
+  e.dataTransfer.effectAllowed = 'copy';
+}
+
+function _wfToolDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'copy';
+}
+
+function _wfToolDragEnter(e) {
+  e.preventDefault();
+  document.getElementById('wf-workspace').classList.add('wf-drop-target');
+}
+
+function _wfToolDragLeave(e) {
+  if (!e.currentTarget.contains(e.relatedTarget)) {
+    document.getElementById('wf-workspace').classList.remove('wf-drop-target');
+  }
+}
+
+function _wfToolDrop(e) {
+  e.preventDefault();
+  document.getElementById('wf-workspace').classList.remove('wf-drop-target');
+  const type = e.dataTransfer.getData('wf-tool-type');
+  if (type !== 'phase') return;
+  // Calculate drop position relative to workspace scroll
+  const ws = document.getElementById('wf-workspace');
+  const rect = ws.getBoundingClientRect();
+  const x = e.clientX - rect.left + ws.scrollLeft;
+  const y = e.clientY - rect.top + ws.scrollTop;
+  // Create phase at drop position
+  const phases = _wf.data.phases || {};
+  let num = Object.keys(phases).length + 1;
+  let id = 'phase_' + num;
+  while (phases[id]) { num++; id = 'phase_' + num; }
+  const maxOrder = Object.values(phases).reduce(function(m, p) { return Math.max(m, p.order || 0); }, 0);
+  _wf.data.phases[id] = {
+    name: 'Phase ' + num,
+    description: '',
+    order: maxOrder + 1,
+    agents: {},
+    deliverables: {},
+    exit_conditions: { human_gate: true }
+  };
+  _wf.positions[id] = { x: Math.max(20, x - 100), y: Math.max(20, y - 20) };
+  _wf.selected = id;
   wfRender();
 }
 
@@ -6948,35 +7160,22 @@ function wfRender() {
   // Render phase blocks
   const phases = Object.entries(_wf.data.phases || {});
   phases.sort((a, b) => (a[1].order || 0) - (b[1].order || 0));
-  // Auto-collapse: all phases except the last one start collapsed (unless user toggled)
-  if (!_wf._collapseInit) {
-    _wf._collapseInit = true;
-    if (phases.length > 1) {
-      for (let i = 0; i < phases.length - 1; i++) _wf.collapsed.add(phases[i][0]);
-    }
-  }
   let html = '';
   for (const [id, p] of phases) {
     const pos = _wf.positions[id] || { x: 100, y: 100 };
     const sel = _wf.selected === id ? ' wf-selected' : '';
-    const isCollapsed = _wf.collapsed.has(id);
-    const collCls = isCollapsed ? ' wf-collapsed' : '';
     const agentIds = Object.keys(p.agents || {});
     const delIds = Object.keys(p.deliverables || {});
-    const chevron = isCollapsed ? '&#9654;' : '&#9660;';
     html += `
-      <div class="wf-phase${sel}${collCls}" id="wf-p-${id}" data-id="${id}"
+      <div class="wf-phase${sel}" id="wf-p-${id}" data-id="${id}"
            style="left:${pos.x}px;top:${pos.y}px"
            onmousedown="wfPhaseMouseDown(event,'${id}')"
-           onclick="wfSelectPhase(event,'${id}')"
            oncontextmenu="event.preventDefault()">
         <div class="wf-phase-head">
-          <span class="wf-phase-toggle" onclick="wfToggleCollapse(event,'${id}')">${chevron}</span>
           <span>${escHtml(p.name || id)}</span>
-          <span class="wf-phase-head-summary">${isCollapsed ? agentIds.length + 'A / ' + delIds.length + 'L' : ''}</span>
           <span class="wf-phase-order">${p.order || '?'}</span>
         </div>
-        <div class="wf-phase-body"${isCollapsed ? ' style="display:none"' : ''}>
+        <div class="wf-phase-body">
           <div class="wf-mini-label">Agents (${agentIds.length})</div>
           ${(() => {
             const groups = {};
@@ -7003,7 +7202,8 @@ function wfRender() {
           <div class="wf-mini-list">${delIds.map(d => {
             const dd = p.deliverables[d]||{};
             const tc = {documentation:'#8b5cf6',code:'#3b82f6',design:'#ec4899',automation:'#f59e0b',tasklist:'#10b981',specs:'#06b6d4',contract:'#f97316'}[dd.type]||'';
-            return `<span class="wf-mini-chip${dd.required?' required':''}"${tc?` style="border-left:3px solid ${tc}"`:''} title="${escHtml(dd.type||'')}">${escHtml(d)}</span>`;
+            const dlabel = dd.name || d;
+            return `<span class="wf-mini-chip${dd.required?' required':''}"${tc?` style="border-left:3px solid ${tc}"`:''} title="${escHtml(d)}" onclick="event.stopPropagation();wfSelectDeliverable('${id}','${escHtml(d)}')">${escHtml(dlabel)}</span>`;
           }).join('')}</div>
         </div>
         <div class="wf-anchor wf-anchor-left" data-side="left" onmousedown="wfLinkStart(event,'${id}','left')"></div>
@@ -7018,14 +7218,18 @@ function wfRender() {
   wfRenderArrows();
   // Render property grid
   wfRenderProps();
+  // Scroll focused deliverable into view
+  if (_wf._focusDel) {
+    const safeId = 'wf-del-block-' + _wf._focusDel.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const focusEl = document.getElementById(safeId);
+    if (focusEl) {
+      setTimeout(function() { focusEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, 50);
+    }
+    _wf._focusDel = null;
+  }
 }
 
-function wfToggleCollapse(e, phaseId) {
-  e.stopPropagation();
-  if (_wf.collapsed.has(phaseId)) _wf.collapsed.delete(phaseId);
-  else _wf.collapsed.add(phaseId);
-  wfRender();
-}
+
 
 function _wfBezier(sx, sy, ex, ey, fromSide, toSide) {
   const dist = Math.max(60, Math.hypot(ex - sx, ey - sy) * 0.4);
@@ -7187,7 +7391,7 @@ async function _wfChangeTeam(teamDir) {
     _wf.agentProfiles = {};
     (sa.agents || []).forEach(a => {
       _wf.agentCaps[a.id] = { documentation: !!a.delivers_docs, code: !!a.delivers_code, design: !!a.delivers_design, automation: !!a.delivers_automation, tasklist: !!a.delivers_tasklist, specs: !!a.delivers_specs, contract: !!a.delivers_contract };
-      _wf.agentProfiles[a.id] = { roles: a.role_names || [], missions: a.mission_names || [], skills: a.skill_names || [] };
+      _wf.agentProfiles[a.id] = { name: a.name || a.id, roles: a.role_names || [], missions: a.mission_names || [], skills: a.skill_names || [] };
       if (a.pipeline_steps && a.pipeline_steps.length) _wf.agentPipelines[a.id] = a.pipeline_steps;
     });
   } catch {}
@@ -7281,7 +7485,8 @@ function _wfRenderPhaseProps(el, phaseId) {
     </div>`;
   }).join('');
 
-  // Deliverables — inline editable blocks
+  // Deliverables — inline editable blocks (collapsed by default)
+  if (!_wf._collapsed) _wf._collapsed = {};
   const agentIds = Object.keys(agents);
   const WF_ALL_DELIV_TYPES = [
     { value: 'documentation', label: 'Documentation', cap: 'documentation' },
@@ -7311,7 +7516,7 @@ function _wfRenderPhaseProps(el, phaseId) {
     const depsSet = new Set(d.depends_on || []);
     const otherDels = allDelKeys.filter(k => k !== id);
     const depsChecks = otherDels.length ? otherDels.map(k =>
-      `<label class="wf-inline-check"><input type="checkbox" ${depsSet.has(k)?'checked':''} onchange="_wfToggleDelDep('${phaseId}','${escHtml(id)}','${escHtml(k)}',this.checked)" />${escHtml(k)}</label>`
+      `<label class="wf-inline-check"><input type="checkbox" ${depsSet.has(k)?'checked':''} onchange="_wfToggleDelDep('${phaseId}','${escHtml(id)}','${escHtml(k)}',this.checked)" />${escHtml((deliverables[k] && deliverables[k].name) || k)}</label>`
     ).join('') : '<span style="font-size:0.65rem;color:var(--text-secondary)">--</span>';
     // Agent profile: roles, missions, skills
     const profile = (_wf.agentProfiles || {})[d.agent] || { roles: [], missions: [], skills: [] };
@@ -7328,16 +7533,22 @@ function _wfRenderPhaseProps(el, phaseId) {
       `<label class="wf-inline-check"><input type="checkbox" ${selSkills.has(s)?'checked':''} onchange="_wfToggleDelProfile('${phaseId}','${escHtml(id)}','skills','${escHtml(s)}',this.checked)" />${escHtml(s)}</label>`
     ).join('') : '<span style="font-size:0.65rem;color:var(--text-secondary)">--</span>';
     const colKey = `${phaseId}:del:${id}`;
-    const collapsed = _wf._collapsed && _wf._collapsed[colKey];
-    return `<div class="wf-inline-block${collapsed ? ' collapsed' : ''}">
+    const expanded = _wf._collapsed[colKey] === true;
+    const focused = _wf._focusDel === colKey ? ' wf-del-focus' : '';
+    const delDisplayName = d.name || computedId;
+    return `<div class="wf-inline-block${expanded ? '' : ' collapsed'}${focused}" id="wf-del-block-${colKey.replace(/[^a-zA-Z0-9_-]/g,'_')}">
       <div class="wf-inline-head" onclick="wfToggleCollapseKey('${colKey}',this)">
-        <span class="wf-collapse-arrow">${collapsed ? '\u25b6' : '\u25bc'}</span>
-        <span class="wf-inline-id">${escHtml(computedId)}</span>
+        <span class="wf-collapse-arrow">${expanded ? '\u25bc' : '\u25b6'}</span>
+        <span class="wf-inline-id">${escHtml(delDisplayName)}</span>
         <button class="btn-icon" title="SkillMatcher" onclick="event.stopPropagation();wfSkillMatch('${phaseId}','${escHtml(id)}')" style="font-size:0.85rem">&#10024;</button>
         <button class="btn-icon danger" onclick="event.stopPropagation();wfRemoveDeliverable('${phaseId}','${escHtml(id)}')">x</button>
       </div>
-      <div class="wf-inline-fields"${collapsed ? ' style="display:none"' : ''}>
-        <input placeholder="Description" value="${escHtml(d.description || '')}" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','description',this.value)" />
+      <div class="wf-inline-fields"${expanded ? '' : ' style="display:none"'}>
+        <input placeholder="Nom" value="${escHtml(d.name || '')}" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','name',this.value)" />
+        <div style="display:flex;gap:0.3rem;align-items:center">
+          <input style="flex:1" placeholder="Description" value="${escHtml(d.description || '')}" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','description',this.value)" />
+          <button class="btn-icon" title="Editer la description" onclick="event.stopPropagation();_wfEditDelDesc('${phaseId}','${escHtml(id)}')" style="font-size:0.85rem">&#9998;</button>
+        </div>
         <div style="display:flex;gap:0.3rem">
           <select style="flex:1" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','agent',this.value)">${agOpts}</select>
         </div>
@@ -7468,6 +7679,17 @@ function wfWorkspaceClick(e) {
 function wfSelectPhase(e, id) {
   e.stopPropagation();
   _wf.selected = id;
+  _wf._openSection = null;
+  _wf._focusDel = null;
+  wfRender();
+}
+
+function wfSelectDeliverable(phaseId, delId) {
+  _wf.selected = phaseId;
+  _wf._openSection = 'ph-dels';
+  if (!_wf._collapsed) _wf._collapsed = {};
+  _wf._collapsed[phaseId + ':del:' + delId] = true; // expanded
+  _wf._focusDel = phaseId + ':del:' + delId;
   wfRender();
 }
 
@@ -7533,8 +7755,11 @@ function wfCloseContextMenu() {
   if (m) m.remove();
 }
 
-function wfCtxDeletePhase(id) {
+async function wfCtxDeletePhase(id) {
   wfCloseContextMenu();
+  const phaseName = (_wf.data.phases[id] && _wf.data.phases[id].name) || id;
+  const ok = await confirmModal('Supprimer la phase "' + phaseName + '" ?\n\nCette action supprimera aussi ses transitions.');
+  if (!ok) return;
   delete _wf.data.phases[id];
   delete _wf.positions[id];
   _wf.data.transitions = (_wf.data.transitions || []).filter(t => t.from !== id && t.to !== id);
@@ -7545,9 +7770,11 @@ function wfCtxDeletePhase(id) {
 // ── Drag phases ──
 function wfPhaseMouseDown(e, id) {
   if (e.button !== 0) return;
+  if (e.target.closest('.wf-mini-chip')) return;
   const el = document.getElementById(`wf-p-${id}`);
   if (!el) return;
   _wf.dragging = id;
+  _wf._dragMoved = false;
   _wf.dragOffset = {
     x: e.clientX - (_wf.positions[id]?.x || 0),
     y: e.clientY - (_wf.positions[id]?.y || 0)
@@ -7567,6 +7794,7 @@ function wfPhaseMouseDown(e, id) {
 
 function _wfDragMove(e) {
   if (!_wf || !_wf.dragging) return;
+  _wf._dragMoved = true;
   const ws = document.getElementById('wf-workspace');
   const rect = ws.getBoundingClientRect();
   const x = Math.max(0, e.clientX - rect.left + ws.scrollLeft - _wf.dragOffset.x);
@@ -7577,10 +7805,23 @@ function _wfDragMove(e) {
   wfRenderArrows();
 }
 
-function _wfDragEnd() {
+function _wfDragEnd(e) {
   if (_wf) {
+    const draggedId = _wf.dragging;
+    const moved = _wf._dragMoved;
     _wf.dragging = null;
-    _wfSaveDesign();
+    _wf._dragMoved = false;
+    if (moved) {
+      _wfSaveDesign();
+    } else if (draggedId && e) {
+      // Click on a deliverable chip → let onclick handle it
+      if (e.target.closest('.wf-mini-chip')) return;
+      // Click without drag = select phase
+      _wf.selected = draggedId;
+      _wf._openSection = null;
+      _wf._focusDel = null;
+      wfRender();
+    }
   }
   document.removeEventListener('mousemove', _wfDragMove);
   document.removeEventListener('mouseup', _wfDragEnd);
@@ -7758,11 +7999,35 @@ function wfToggleCollapse(phaseId, agentId) {
 function wfToggleCollapseKey(key, headEl) {
   if (!_wf._collapsed) _wf._collapsed = {};
   _wf._collapsed[key] = !_wf._collapsed[key];
+  const isDel = key.includes(':del:');
+  // When expanding a deliverable, collapse all other deliverables in the same phase
+  if (isDel && _wf._collapsed[key]) {
+    const prefix = key.split(':del:')[0] + ':del:';
+    for (var k in _wf._collapsed) {
+      if (k !== key && k.startsWith(prefix)) {
+        _wf._collapsed[k] = false;
+      }
+    }
+    // Update DOM for all sibling blocks
+    var container = headEl.closest('#wf-props') || headEl.closest('.wf-section-body');
+    if (container) {
+      container.querySelectorAll('.wf-inline-block').forEach(function(blk) {
+        var blkHead = blk.querySelector('.wf-inline-head');
+        if (blk.contains(headEl)) return;
+        blk.classList.add('collapsed');
+        var f = blk.querySelector('.wf-inline-fields');
+        var a = blk.querySelector('.wf-collapse-arrow');
+        if (f) f.style.display = 'none';
+        if (a) a.textContent = '\u25b6';
+      });
+    }
+  }
   const block = headEl.closest('.wf-inline-block');
   if (!block) return;
   const fields = block.querySelector('.wf-inline-fields');
   const arrow = block.querySelector('.wf-collapse-arrow');
-  if (_wf._collapsed[key]) {
+  const isCollapsed = isDel ? !_wf._collapsed[key] : !!_wf._collapsed[key];
+  if (isCollapsed) {
     block.classList.add('collapsed');
     if (fields) fields.style.display = 'none';
     if (arrow) arrow.textContent = '\u25b6';
@@ -7935,6 +8200,69 @@ function wfRemoveDeliverable(phaseId, delId) {
     }
   }
   wfRender();
+}
+
+function _wfEditDelDesc(phaseId, delId) {
+  const d = _wf.data.phases[phaseId]?.deliverables?.[delId];
+  if (!d) return;
+  const delName = d.name || delId;
+  showModal('<div class="modal-header"><h3>Description — ' + escHtml(delName) + '</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
+    '<textarea id="wf-del-desc-edit" rows="12" style="width:100%;font-family:monospace;font-size:0.85rem;background:var(--bg-primary);border:1px solid var(--border);padding:0.5rem;resize:vertical;box-sizing:border-box">' + escHtml(d.description || '') + '</textarea>' +
+    '<div class="modal-actions">' +
+    '<button class="btn btn-outline" id="wf-del-desc-gen-btn" onclick="_wfGenDelDesc(\'' + escHtml(phaseId) + '\',\'' + escHtml(delId) + '\')" style="gap:0.3rem" title="Generer avec IA">&#10024; Generer</button>' +
+    '<span style="flex:1"></span>' +
+    '<button class="btn btn-outline" onclick="closeModal()">Annuler</button>' +
+    '<button class="btn btn-primary" onclick="_wfSaveDelDesc(\'' + escHtml(phaseId) + '\',\'' + escHtml(delId) + '\')">Sauvegarder</button></div>');
+}
+
+function _wfSaveDelDesc(phaseId, delId) {
+  const d = _wf.data.phases[phaseId]?.deliverables?.[delId];
+  if (!d) return;
+  d.description = (document.getElementById('wf-del-desc-edit').value || '').trim();
+  closeModal();
+  wfRenderProps();
+}
+
+async function _wfGenDelDesc(phaseId, delId) {
+  const d = _wf.data.phases[phaseId]?.deliverables?.[delId];
+  if (!d) return;
+  const phase = _wf.data.phases[phaseId] || {};
+  const btn = document.getElementById('wf-del-desc-gen-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Generation...'; }
+  // Resolve project description from _tplProjects if available
+  let projectDesc = '';
+  const projMatch = (_wf.apiBase || '').match(/project-workflow\/([^/]+)/);
+  if (projMatch && typeof _tplProjects !== 'undefined') {
+    const proj = _tplProjects.find(function(p) { return p.id === projMatch[1]; });
+    if (proj) projectDesc = proj.description || '';
+  }
+  // Resolve agent name from shared agents
+  const agentProfile = (_wf.agentProfiles || {})[d.agent] || {};
+  const agentName = agentProfile.name || d.agent || '';
+  try {
+    const currentDesc = (document.getElementById('wf-del-desc-edit').value || '').trim() || d.name || delId;
+    const res = await api('/api/agents/generate-description', {
+      method: 'POST',
+      body: {
+        deliverable_key: delId,
+        current_description: currentDesc,
+        agent_id: d.agent || '',
+        agent_name: agentName,
+        deliverable_type: d.type || '',
+        phase_name: phase.name || phaseId,
+        project_description: projectDesc,
+        project_id: projMatch ? projMatch[1] : ''
+      }
+    });
+    if (res.description) {
+      document.getElementById('wf-del-desc-edit').value = res.description;
+    }
+    toast('Description generee', 'success');
+  } catch (e) {
+    toast(e.message || 'Erreur generation', 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '&#10024; Generer'; }
+  }
 }
 
 function _wfToggleDelDep(phaseId, delId, depKey, checked) {
@@ -8771,6 +9099,7 @@ async function wfSave() {
       api(`${_wf.apiBase}/${encodeURIComponent(_wf.dir)}`, { method: 'PUT', body: _wf.data }),
       api(`${_wf.designBase}/${encodeURIComponent(_wf.dir)}`, { method: 'PUT', body: { positions: _wf.positions } })
     ]);
+    if (_wf) _wf._savedSnapshot = JSON.stringify(_wf.data);
     toast('Workflow sauvegarde', 'success');
   } catch (e) { toast(e.message, 'error'); }
 }
