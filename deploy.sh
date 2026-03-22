@@ -220,12 +220,14 @@ detect_services() {
     if echo "$changed" | grep -q "^web/"; then svcs="$svcs langgraph-admin"; fi
     # hitl/ → hitl-console only
     if echo "$changed" | grep -q "^hitl/"; then svcs="$svcs hitl-console"; fi
+    # dispatcher/ → langgraph-dispatcher only
+    if echo "$changed" | grep -q "^dispatcher/"; then svcs="$svcs langgraph-dispatcher"; fi
     # Agents/ → langgraph-api + discord-bot + mail-bot
     if echo "$changed" | grep -q "^Agents/"; then svcs="$svcs langgraph-api discord-bot mail-bot"; fi
     # requirements.txt or Dockerfile* → all
-    if echo "$changed" | grep -qE "^(requirements\.txt|Dockerfile)"; then svcs="$svcs langgraph-admin langgraph-api discord-bot mail-bot hitl-console"; fi
+    if echo "$changed" | grep -qE "^(requirements\.txt|Dockerfile)"; then svcs="$svcs langgraph-admin langgraph-api discord-bot mail-bot hitl-console langgraph-dispatcher"; fi
     # docker-compose.yml → all
-    if echo "$changed" | grep -q "^docker-compose.yml"; then svcs="$svcs langgraph-admin langgraph-api discord-bot mail-bot hitl-console"; fi
+    if echo "$changed" | grep -q "^docker-compose.yml"; then svcs="$svcs langgraph-admin langgraph-api discord-bot mail-bot hitl-console langgraph-dispatcher"; fi
     # scripts/ → need SQL apply but no specific service
     # Deduplicate
     svcs=$(echo "$svcs" | tr ' ' '\n' | sort -u | tr '\n' ' ' | xargs)

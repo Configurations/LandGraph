@@ -258,3 +258,95 @@ BEGIN
         CREATE INDEX idx_pm_issues_phase ON project.pm_issues(phase);
     END IF;
 END $$;
+
+-- ── Dispatcher tables ─────────────────────────────
+
+CREATE TABLE IF NOT EXISTS project.dispatcher_tasks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_id TEXT NOT NULL,
+    team_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
+    project_slug TEXT,
+    phase TEXT,
+    iteration INTEGER DEFAULT 1,
+    instruction TEXT NOT NULL,
+    context JSONB DEFAULT '{}',
+    previous_answers JSONB DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'running', 'waiting_hitl', 'success', 'failure', 'timeout', 'cancelled')),
+    container_id TEXT,
+    docker_image TEXT NOT NULL,
+    cost_usd NUMERIC(10, 4) DEFAULT 0,
+    timeout_seconds INTEGER DEFAULT 300,
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    error_message TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_disp_tasks_status ON project.dispatcher_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_disp_tasks_project ON project.dispatcher_tasks(project_slug, phase);
+CREATE INDEX IF NOT EXISTS idx_disp_tasks_agent ON project.dispatcher_tasks(agent_id, team_id);
+
+CREATE TABLE IF NOT EXISTS project.dispatcher_task_events (
+    id SERIAL PRIMARY KEY,
+    task_id UUID REFERENCES project.dispatcher_tasks(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL CHECK (event_type IN ('progress', 'artifact', 'question', 'result')),
+    data JSONB NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_disp_events_task ON project.dispatcher_task_events(task_id, created_at);
+
+CREATE TABLE IF NOT EXISTS project.dispatcher_task_artifacts (
+    id SERIAL PRIMARY KEY,
+    task_id UUID REFERENCES project.dispatcher_tasks(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    deliverable_type TEXT NOT NULL,
+    file_path TEXT,
+    git_branch TEXT,
+    category TEXT,
+    status TEXT DEFAULT 'pending'
+        CHECK (status IN ('pending', 'approved', 'rejected')),
+    reviewer TEXT,
+    reviewed_at TIMESTAMPTZ,
+    review_comment TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_disp_artifacts_task ON project.dispatcher_task_artifacts(task_id);
+CREATE INDEX IF NOT EXISTS idx_disp_artifacts_status ON project.dispatcher_task_artifacts(status);
+
+CREATE TABLE IF NOT EXISTS project.dispatcher_cost_summary (
+    id SERIAL PRIMARY KEY,
+    project_slug TEXT NOT NULL,
+    team_id TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    total_cost_usd NUMERIC(10, 4) DEFAULT 0,
+    task_count INTEGER DEFAULT 0,
+    avg_cost_per_task NUMERIC(10, 4) DEFAULT 0,
+    last_updated TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (project_slug, team_id, phase, agent_id)
+);
+
+-- Trigger: notify when HITL request is answered (for dispatcher listener)
+CREATE OR REPLACE FUNCTION notify_hitl_response()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF OLD.status = 'pending' AND NEW.status = 'answered' THEN
+        PERFORM pg_notify('hitl_response', json_build_object(
+            'request_id', NEW.id,
+            'response', LEFT(NEW.response, 4000),
+            'reviewer', NEW.reviewer
+        )::text);
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trigger_hitl_response ON project.hitl_requests;
+CREATE TRIGGER trigger_hitl_response
+    AFTER UPDATE ON project.hitl_requests
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_hitl_response();

@@ -300,3 +300,35 @@ services:
       start_period: 60s
     networks:
       - langgraph-net
+
+  langgraph-dispatcher:
+    build:
+      context: .
+      dockerfile: Dockerfile.dispatcher
+    container_name: langgraph-dispatcher
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8070:8070"
+    depends_on:
+      langgraph-postgres:
+        condition: service_healthy
+    volumes:
+      - ./config:/app/config:ro
+      - /root/ag.flow:/root/ag.flow
+      - /var/run/docker.sock:/var/run/docker.sock
+    env_file:
+      - .env
+    environment:
+      DISPATCHER_PORT: 8070
+      AGENT_DEFAULT_IMAGE: ${AGENT_DEFAULT_IMAGE:-agflow-claude-code:latest}
+      AGENT_MEM_LIMIT: ${AGENT_MEM_LIMIT:-2g}
+      AGENT_CPU_QUOTA: ${AGENT_CPU_QUOTA:-100000}
+      AG_FLOW_ROOT: ${AG_FLOW_ROOT:-/root/ag.flow}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8070/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - langgraph-net
