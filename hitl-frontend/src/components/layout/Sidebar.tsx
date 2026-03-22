@@ -95,6 +95,28 @@ export function Sidebar({ className = '' }: SidebarProps): JSX.Element {
           active={location.pathname.startsWith('/projects')}
         />
 
+        <SidebarItem
+          icon={
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+            </svg>
+          }
+          labelKey="nav.reviews"
+          to="/reviews"
+          active={location.pathname === '/reviews'}
+        />
+
+        <SidebarItem
+          icon={
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+          }
+          labelKey="nav.pulse"
+          to="/pulse"
+          active={location.pathname === '/pulse'}
+        />
+
         {teams.length > 0 && (
           <div className="mt-6">
             <p className="px-3 mb-2 text-[10px] font-semibold uppercase tracking-widest text-content-quaternary">

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PageContainer } from '../components/layout/PageContainer';
 import { OverviewCards } from '../components/features/dashboard/OverviewCards';
@@ -7,6 +7,7 @@ import { CostSummaryCard } from '../components/features/dashboard/CostSummaryCar
 import { CostByAgentChart } from '../components/features/dashboard/CostByAgentChart';
 import { IssueRow } from '../components/features/pm/IssueRow';
 import { ActivityTimeline } from '../components/features/pm/ActivityTimeline';
+import { WorkflowCard } from '../components/features/project/WorkflowCard';
 import { Spinner } from '../components/ui/Spinner';
 import { useTeamStore } from '../stores/teamStore';
 import { useProjectStore } from '../stores/projectStore';
@@ -14,7 +15,8 @@ import { useWsStore } from '../stores/wsStore';
 import * as dashboardApi from '../api/dashboard';
 import * as issuesApi from '../api/issues';
 import * as activityApi from '../api/activity';
-import type { ActiveTask, ActivityEntry, CostSummary, IssueResponse, OverviewData } from '../api/types';
+import * as workflowApi from '../api/workflow';
+import type { ActiveTask, ActivityEntry, CostSummary, IssueResponse, OverviewData, ProjectWorkflowResponse } from '../api/types';
 
 const RECENT_ISSUES_LIMIT = 5;
 const RECENT_ACTIVITY_LIMIT = 10;
@@ -30,6 +32,7 @@ export function DashboardPage(): JSX.Element {
   const [costs, setCosts] = useState<CostSummary[]>([]);
   const [recentIssues, setRecentIssues] = useState<IssueResponse[]>([]);
   const [activityEntries, setActivityEntries] = useState<ActivityEntry[]>([]);
+  const [activeWorkflows, setActiveWorkflows] = useState<ProjectWorkflowResponse[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -64,6 +67,12 @@ export function DashboardPage(): JSX.Element {
           } catch {
             // activity endpoint may not be available yet
           }
+          try {
+            const wfs = await workflowApi.listProjectWorkflows(activeSlug);
+            setActiveWorkflows(wfs.filter((w) => w.status === 'active'));
+          } catch {
+            // workflows endpoint may not be available yet
+          }
         }
       } catch {
         // handled by apiFetch
@@ -73,6 +82,17 @@ export function DashboardPage(): JSX.Element {
     };
     void load();
   }, [activeTeamId, activeSlug, lastEvent]);
+
+  const handleWorkflowAction = useCallback(
+    async (action: 'activate' | 'pause' | 'complete' | 'relaunch', id: string) => {
+      if (!activeSlug) return;
+      const fn = { activate: workflowApi.activateWorkflow, pause: workflowApi.pauseWorkflow, complete: workflowApi.completeWorkflow, relaunch: workflowApi.relaunchWorkflow }[action];
+      await fn(activeSlug, id);
+      const wfs = await workflowApi.listProjectWorkflows(activeSlug);
+      setActiveWorkflows(wfs.filter((w) => w.status === 'active'));
+    },
+    [activeSlug],
+  );
 
   if (loading) {
     return (
@@ -94,6 +114,24 @@ export function DashboardPage(): JSX.Element {
           <CostSummaryCard costs={costs} budget={0} />
           <CostByAgentChart costs={costs} />
         </div>
+
+        {activeWorkflows.length > 0 && (
+          <div className="rounded-xl border border-border bg-surface-secondary p-4">
+            <h3 className="text-sm font-semibold text-content-secondary mb-3">
+              {t('multi_workflow.active_workflows')}
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {activeWorkflows.map((wf) => (
+                <WorkflowCard
+                  key={wf.id}
+                  workflow={wf}
+                  onPause={(id) => void handleWorkflowAction('pause', id)}
+                  onComplete={(id) => void handleWorkflowAction('complete', id)}
+                />
+              ))}
+            </div>
+          </div>
+        )}
 
         {recentIssues.length > 0 && (
           <div className="rounded-xl border border-border bg-surface-secondary p-4">

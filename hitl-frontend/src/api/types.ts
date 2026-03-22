@@ -382,3 +382,208 @@ export interface ActivityEntry {
   created_at: string;
   source: ActivitySource;
 }
+
+/* ── Pull Requests ── */
+
+export type PRStatus = 'draft' | 'open' | 'approved' | 'changes_requested' | 'merged' | 'closed';
+
+export interface PRResponse {
+  id: string;
+  project_id: string;
+  title: string;
+  description: string;
+  branch: string;
+  target_branch: string;
+  status: PRStatus;
+  author: string;
+  issue_id: string | null;
+  files_changed: number;
+  additions: number;
+  deletions: number;
+  remote_url: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PRCreatePayload {
+  title: string;
+  description?: string;
+  branch: string;
+  target_branch?: string;
+  issue_id?: string;
+}
+
+export interface PRStatusUpdatePayload {
+  status: PRStatus;
+  comment?: string;
+}
+
+export interface PRListParams {
+  project_id?: string;
+  status?: PRStatus;
+}
+
+/* ── Pulse ── */
+
+export interface MetricValue {
+  label: string;
+  value: number;
+  unit: string;
+}
+
+export interface TeamMemberActivity {
+  name: string;
+  completed: number;
+  total: number;
+}
+
+export interface DependencyHealth {
+  blocked: number;
+  blocking: number;
+  chains: number;
+  bottlenecks: IssueResponse[];
+}
+
+export interface BurndownPoint {
+  date: string;
+  remaining: number;
+  completed: number;
+}
+
+export interface PulseResponse {
+  velocity: MetricValue;
+  throughput: MetricValue;
+  cycle_time: MetricValue;
+  burndown_total: MetricValue;
+  status_breakdown: Record<IssueStatus, number>;
+  team_activity: TeamMemberActivity[];
+  dependency_health: DependencyHealth;
+  burndown: BurndownPoint[];
+}
+
+/* ── Workflow ── */
+
+export type PhaseRunStatus = 'pending' | 'active' | 'completed' | 'skipped';
+export type AgentRunStatus = 'idle' | 'running' | 'completed' | 'error';
+export type DeliverableRunStatus = 'pending' | 'produced' | 'approved' | 'rejected';
+
+export interface PhaseAgent {
+  agent_id: string;
+  name: string;
+  status: AgentRunStatus;
+  task_id: string | null;
+}
+
+export interface PhaseDeliverable {
+  key: string;
+  deliverable_type: string;
+  status: DeliverableRunStatus;
+  agent_id: string;
+}
+
+export interface PhaseStatus {
+  id: string;
+  name: string;
+  status: PhaseRunStatus;
+  agents: PhaseAgent[];
+  deliverables: PhaseDeliverable[];
+}
+
+export interface WorkflowStatusResponse {
+  project_slug: string;
+  current_phase: string;
+  phases: PhaseStatus[];
+}
+
+/* ── Project Types ── */
+
+export interface WorkflowTemplate {
+  id: string;
+  name: string;
+  type: string;
+  mode: 'sequential' | 'parallel';
+}
+
+export interface ProjectTypeResponse {
+  id: string;
+  name: string;
+  description: string;
+  team_id: string;
+  workflows: WorkflowTemplate[];
+  created_at: string;
+}
+
+/* ── Project Workflows ── */
+
+export type ProjectWorkflowStatus = 'draft' | 'active' | 'paused' | 'completed';
+
+export interface ProjectWorkflowResponse {
+  id: string;
+  project_id: string;
+  workflow_template_id: string;
+  name: string;
+  type: string;
+  mode: 'sequential' | 'parallel';
+  status: ProjectWorkflowStatus;
+  progress: number;
+  depends_on: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectWorkflowCreatePayload {
+  workflow_template_id: string;
+  depends_on?: string[];
+}
+
+/* ── Automation ── */
+
+export interface AutomationRule {
+  id: string;
+  project_id: string;
+  workflow_type: string;
+  deliverable_type: string;
+  auto_approve: boolean;
+  confidence_threshold: number;
+  min_history: number;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AutomationRuleCreatePayload {
+  workflow_type: string;
+  deliverable_type: string;
+  auto_approve: boolean;
+  confidence_threshold: number;
+  min_history: number;
+}
+
+export interface AutomationStats {
+  total_decisions: number;
+  auto_approved: number;
+  manual_reviewed: number;
+  rejected: number;
+}
+
+export interface AgentConfidence {
+  agent_id: string;
+  confidence: number;
+  decisions_count: number;
+}
+
+/* ── Project Detail ── */
+
+export type ProjectHealth = 'on-track' | 'at-risk' | 'off-track';
+
+export interface ProjectOverviewData {
+  health: ProjectHealth;
+  lead: string;
+  start_date: string;
+  end_date: string | null;
+  members: string[];
+  total_cost: number;
+  issues_by_status: Record<IssueStatus, number>;
+  deliverables_count: number;
+  current_phase: string;
+}

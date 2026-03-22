@@ -9,11 +9,13 @@ import { InboxBadge } from '../components/features/pm/InboxBadge';
 import { Select } from '../components/ui/Select';
 import { Badge } from '../components/ui/Badge';
 import { useTeamStore } from '../stores/teamStore';
+import { useProjectStore } from '../stores/projectStore';
 import { useNotificationStore } from '../stores/notificationStore';
 import { useInboxStore } from '../stores/inboxStore';
 import { useWsStore } from '../stores/wsStore';
 import * as hitlApi from '../api/hitl';
-import type { QuestionResponse } from '../api/types';
+import * as workflowApi from '../api/workflow';
+import type { ProjectWorkflowResponse, QuestionResponse } from '../api/types';
 
 type InboxTab = 'questions' | 'notifications';
 
@@ -22,6 +24,7 @@ export function InboxPage(): JSX.Element {
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTeamId = useTeamStore((s) => s.activeTeamId);
   const teams = useTeamStore((s) => s.teams);
+  const activeSlug = useProjectStore((s) => s.activeSlug);
   const setPendingCount = useNotificationStore((s) => s.setPendingCount);
   const lastEvent = useWsStore((s) => s.lastEvent);
 
@@ -32,9 +35,11 @@ export function InboxPage(): JSX.Element {
   const [selected, setSelected] = useState<QuestionResponse | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<InboxTab>('questions');
+  const [projectWorkflows, setProjectWorkflows] = useState<ProjectWorkflowResponse[]>([]);
 
   const statusFilter = searchParams.get('status') ?? '';
   const teamFilter = searchParams.get('team') ?? '';
+  const workflowFilter = searchParams.get('workflow') ?? '';
 
   const loadQuestions = useCallback(async () => {
     if (!activeTeamId) return;
@@ -58,6 +63,13 @@ export function InboxPage(): JSX.Element {
     void loadQuestions();
     void loadNotifications();
   }, [loadQuestions, loadNotifications]);
+
+  useEffect(() => {
+    if (!activeSlug) { setProjectWorkflows([]); return; }
+    workflowApi.listProjectWorkflows(activeSlug)
+      .then(setProjectWorkflows)
+      .catch(() => setProjectWorkflows([]));
+  }, [activeSlug]);
 
   useEffect(() => {
     if (lastEvent?.type === 'new_question') {
@@ -146,6 +158,17 @@ export function InboxPage(): JSX.Element {
               onChange={(e) => updateFilter('team', e.target.value)}
               className="w-36"
             />
+            {projectWorkflows.length > 0 && (
+              <Select
+                options={[
+                  { value: '', label: t('multi_workflow.all_workflows') },
+                  ...projectWorkflows.map((w) => ({ value: w.id, label: w.name })),
+                ]}
+                value={workflowFilter}
+                onChange={(e) => updateFilter('workflow', e.target.value)}
+                className="w-44"
+              />
+            )}
           </div>
           <QuestionList
             questions={questions}

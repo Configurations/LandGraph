@@ -9,6 +9,7 @@ from uuid import UUID
 
 import asyncpg
 
+from core.channels import CH_TASK_ARTIFACT, CH_TASK_PROGRESS
 from core.config import settings
 from core.events import pg_notify
 from models.task import (
@@ -155,7 +156,7 @@ class TaskRunner:
         """Dispatch a single event."""
         if isinstance(event, ProgressEvent):
             await store_event(self._pool, task.task_id, "progress", event.data)
-            await pg_notify(self._pool, "task_progress", {
+            await pg_notify(self._pool, CH_TASK_PROGRESS, {
                 "task_id": str(task.task_id), "data": event.data[:500],
             })
         elif isinstance(event, ArtifactEvent):
@@ -163,7 +164,7 @@ class TaskRunner:
                 "key": event.key, "deliverable_type": event.deliverable_type,
             })
             await self._artifacts.persist(task, event)
-            await pg_notify(self._pool, "task_artifact", {
+            await pg_notify(self._pool, CH_TASK_ARTIFACT, {
                 "task_id": str(task.task_id), "key": event.key,
             })
         elif isinstance(event, QuestionEvent):

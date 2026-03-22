@@ -1,0 +1,198 @@
+import { useCallback, useEffect, useState } from 'react';
+import { useParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import { PageContainer } from '../components/layout/PageContainer';
+import { Spinner } from '../components/ui/Spinner';
+import { ProjectHeader } from '../components/features/project/ProjectHeader';
+import { ProjectTabs, type ProjectTab } from '../components/features/project/ProjectTabs';
+import { ProjectOverview } from '../components/features/project/ProjectOverview';
+import { ProjectTeamGrid } from '../components/features/project/ProjectTeamGrid';
+import { DependencyGraphSimple } from '../components/features/project/DependencyGraphSimple';
+import { WorkflowPhaseBar } from '../components/features/workflow/WorkflowPhaseBar';
+import { WorkflowPhaseDetail } from '../components/features/workflow/WorkflowPhaseDetail';
+import { WorkflowSelector } from '../components/features/project/WorkflowSelector';
+import { AutomationRuleList } from '../components/features/automation/AutomationRuleList';
+import { AutomationRuleForm } from '../components/features/automation/AutomationRuleForm';
+import { AutomationStats as AutomationStatsPanel } from '../components/features/automation/AutomationStats';
+import { IssueList } from '../components/features/pm/IssueList';
+import { useIssueStore } from '../stores/issueStore';
+import { useAuthStore } from '../stores/authStore';
+import { apiFetch } from '../api/client';
+import * as workflowApi from '../api/workflow';
+import * as automationApi from '../api/automation';
+import type {
+  AgentInfo,
+  AutomationRule,
+  AutomationRuleCreatePayload,
+  AutomationStats,
+  IssueResponse,
+  ProjectOverviewData,
+  ProjectWorkflowResponse,
+  RelationType,
+  WorkflowStatusResponse,
+} from '../api/types';
+
+interface SimpleRelation {
+  sourceId: string;
+  targetId: string;
+  type: RelationType;
+}
+
+export function ProjectDetailPage(): JSX.Element {
+  const { t } = useTranslation();
+  const { slug } = useParams<{ slug: string }>();
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
+  const [tab, setTab] = useState<ProjectTab>('issues');
+  const [overview, setOverview] = useState<ProjectOverviewData | null>(null);
+  const [workflow, setWorkflow] = useState<WorkflowStatusResponse | null>(null);
+  const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [relations, setRelations] = useState<SimpleRelation[]>([]);
+  const [selectedPhase, setSelectedPhase] = useState<string | null>(null);
+  const [projectWorkflows, setProjectWorkflows] = useState<ProjectWorkflowResponse[]>([]);
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
+  const [automationRules, setAutomationRules] = useState<AutomationRule[]>([]);
+  const [automationStats, setAutomationStats] = useState<AutomationStats | null>(null);
+  const [ruleFormOpen, setRuleFormOpen] = useState(false);
+  const [editingRule, setEditingRule] = useState<AutomationRule | null>(null);
+  const [loading, setLoading] = useState(true);
+  const { issues, loadIssues, setFilters, setSelected } = useIssueStore();
+
+  useEffect(() => {
+    if (!slug) return;
+    setLoading(true);
+    const encodedSlug = encodeURIComponent(slug);
+    Promise.all([
+      apiFetch<ProjectOverviewData>(`/api/projects/${encodedSlug}/overview`),
+      workflowApi.getWorkflowStatus(slug),
+      apiFetch<AgentInfo[]>(`/api/projects/${encodedSlug}/agents`),
+      apiFetch<SimpleRelation[]>(`/api/projects/${encodedSlug}/relations`),
+      workflowApi.listProjectWorkflows(slug).catch(() => [] as ProjectWorkflowResponse[]),
+    ])
+      .then(([ov, wf, ag, rels, pws]) => {
+        setOverview(ov);
+        setWorkflow(wf);
+        setAgents(ag);
+        setRelations(rels);
+        setProjectWorkflows(pws);
+        if (pws.length > 0) setSelectedWorkflowId(pws[0].id);
+        if (wf.phases.length > 0) setSelectedPhase(wf.current_phase);
+      })
+      .finally(() => setLoading(false));
+    setFilters({ projectId: slug });
+    void loadIssues();
+  }, [slug, loadIssues, setFilters]);
+
+  const loadAutomation = useCallback(async () => {
+    if (!slug) return;
+    const [rules, stats] = await Promise.all([
+      automationApi.listRules(slug).catch(() => [] as AutomationRule[]),
+      automationApi.getStats(slug).catch(() => ({ total_decisions: 0, auto_approved: 0, manual_reviewed: 0, rejected: 0 })),
+    ]);
+    setAutomationRules(rules);
+    setAutomationStats(stats);
+  }, [slug]);
+
+  useEffect(() => {
+    if (tab === 'automation') void loadAutomation();
+  }, [tab, loadAutomation]);
+
+  const handleToggleRule = useCallback(async (ruleId: string, enabled: boolean) => {
+    if (!slug) return;
+    await automationApi.updateRule(slug, ruleId, { enabled });
+    void loadAutomation();
+  }, [slug, loadAutomation]);
+
+  const handleDeleteRule = useCallback(async (ruleId: string) => {
+    if (!slug) return;
+    await automationApi.deleteRule(slug, ruleId);
+    void loadAutomation();
+  }, [slug, loadAutomation]);
+
+  const handleSubmitRule = useCallback(async (payload: AutomationRuleCreatePayload) => {
+    if (!slug) return;
+    if (editingRule) {
+      await automationApi.updateRule(slug, editingRule.id, payload);
+    } else {
+      await automationApi.createRule(slug, payload);
+    }
+    setRuleFormOpen(false);
+    setEditingRule(null);
+    void loadAutomation();
+  }, [slug, editingRule, loadAutomation]);
+
+  if (loading || !overview) {
+    return (
+      <PageContainer className="flex justify-center py-12">
+        <Spinner />
+      </PageContainer>
+    );
+  }
+
+  const activePhase = workflow?.phases.find((p) => p.id === selectedPhase) ?? null;
+  const blockedIssues: IssueResponse[] = issues.filter((i) => i.is_blocked);
+  const workflowTypes = [...new Set(projectWorkflows.map((w) => w.type))];
+  const deliverableTypes = [...new Set(automationRules.map((r) => r.deliverable_type))];
+
+  return (
+    <PageContainer>
+      <ProjectHeader projectName={slug ?? ''} slug={slug ?? ''} overview={overview} />
+      <ProjectOverview overview={overview} className="mt-4" />
+      <ProjectTabs activeTab={tab} onTabChange={setTab} showAutomation={isAdmin} className="mt-6" />
+
+      <div className="mt-4">
+        {tab === 'issues' && (
+          <IssueList issues={issues} loading={false} onSelect={setSelected} groupBy="status" />
+        )}
+        {tab === 'workflow' && workflow && (
+          <div className="flex flex-col gap-4">
+            {projectWorkflows.length > 1 && (
+              <WorkflowSelector
+                workflows={projectWorkflows}
+                selectedId={selectedWorkflowId}
+                onSelect={setSelectedWorkflowId}
+              />
+            )}
+            <WorkflowPhaseBar
+              phases={workflow.phases}
+              selectedPhaseId={selectedPhase}
+              onSelectPhase={setSelectedPhase}
+            />
+            {activePhase && <WorkflowPhaseDetail phase={activePhase} />}
+          </div>
+        )}
+        {tab === 'team' && (
+          <ProjectTeamGrid agents={agents} members={overview.members} />
+        )}
+        {tab === 'dependencies' && (
+          <DependencyGraphSimple issues={blockedIssues} relations={relations} />
+        )}
+        {tab === 'deliverables' && (
+          <p className="text-sm text-content-tertiary">{t('project_detail.see_deliverables')}</p>
+        )}
+        {tab === 'activity' && (
+          <p className="text-sm text-content-tertiary">{t('project_detail.see_activity')}</p>
+        )}
+        {tab === 'automation' && (
+          <div className="flex flex-col gap-4">
+            {automationStats && <AutomationStatsPanel stats={automationStats} />}
+            <AutomationRuleList
+              rules={automationRules}
+              onToggle={(id, en) => void handleToggleRule(id, en)}
+              onEdit={(rule) => { setEditingRule(rule); setRuleFormOpen(true); }}
+              onDelete={(id) => void handleDeleteRule(id)}
+              onAdd={() => { setEditingRule(null); setRuleFormOpen(true); }}
+            />
+            <AutomationRuleForm
+              open={ruleFormOpen}
+              initial={editingRule}
+              workflowTypes={workflowTypes.length > 0 ? workflowTypes : ['default']}
+              deliverableTypes={deliverableTypes.length > 0 ? deliverableTypes : ['document', 'code', 'design']}
+              onSubmit={(p) => void handleSubmitRule(p)}
+              onClose={() => { setRuleFormOpen(false); setEditingRule(null); }}
+            />
+          </div>
+        )}
+      </div>
+    </PageContainer>
+  );
+}

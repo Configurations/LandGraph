@@ -9,6 +9,7 @@ from typing import Optional
 import structlog
 from fastapi import FastAPI
 
+from core.channels import CH_HITL_RESPONSE
 from core.config import settings
 from core.database import init_pool, close_pool, get_pool
 from core.events import HitlResponseWaiter, PgNotifyListener
@@ -65,8 +66,8 @@ async def lifespan(app: FastAPI):
     # PG NOTIFY listener for HITL responses
     _hitl_waiter = HitlResponseWaiter()
     _notify_listener = PgNotifyListener()
-    _notify_listener.on("hitl_response", _hitl_waiter.handle_response)
-    await _notify_listener.start(["hitl_response"])
+    _notify_listener.on(CH_HITL_RESPONSE, _hitl_waiter.handle_response)
+    await _notify_listener.start([CH_HITL_RESPONSE])
 
     # Services
     hitl = HitlBridge(pool, _hitl_waiter)

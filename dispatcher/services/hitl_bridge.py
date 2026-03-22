@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 import asyncpg
 
 from core.config import settings
+from core.channels import CH_HITL_REQUEST
 from core.events import HitlResponseWaiter, pg_notify
 from models.task import QuestionEvent, Task
 
@@ -37,7 +38,7 @@ class HitlBridge:
 
         request_id = uuid4()
         await self._insert_request(request_id, task, question)
-        await pg_notify(self._pool, "hitl_request", {
+        await pg_notify(self._pool, CH_HITL_REQUEST, {
             "request_id": str(request_id),
             "thread_id": task.thread_id,
             "agent_id": task.agent_id,

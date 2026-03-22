@@ -14,8 +14,8 @@ class Settings(BaseSettings):
     """All env-based settings for the HITL console."""
 
     # Database
-    database_uri: str = ""
-    redis_uri: str = ""
+    database_uri: str  # Required — set DATABASE_URI env var
+    redis_uri: str = ""  # Optional — set REDIS_URI if using Redis
     db_pool_min: int = 2
     db_pool_max: int = 10
 
@@ -28,6 +28,7 @@ class Settings(BaseSettings):
 
     # URLs
     hitl_public_url: str = "http://localhost:8090"
+    hitl_internal_url: str = "http://langgraph-hitl:8090"  # Internal Docker network URL
     dispatcher_url: str = "http://langgraph-dispatcher:8070"
     langgraph_api_url: str = ""
     ag_flow_root: str = ""

@@ -9,6 +9,10 @@ from typing import Any, Optional
 import asyncpg
 import structlog
 
+from core.channels import (
+    ALL_CHANNELS, CH_HITL_CHAT, CH_HITL_REQUEST, CH_HITL_RESPONSE,
+    CH_PM_INBOX, CH_TASK_ARTIFACT, CH_TASK_PROGRESS,
+)
 from core.config import settings
 from core.websocket_manager import WebSocketManager
 
@@ -28,10 +32,7 @@ class PgNotifyListener:
         self._ws_manager = ws_manager
         self._conn = await asyncpg.connect(dsn=settings.database_uri)
 
-        channels = [
-            "hitl_request", "hitl_response", "task_progress",
-            "task_artifact", "hitl_chat", "pm_inbox",
-        ]
+        channels = ALL_CHANNELS
         for ch in channels:
             await self._conn.add_listener(ch, self._on_notify)
 
@@ -66,7 +67,7 @@ class PgNotifyListener:
             return
 
         # pm_inbox: targeted notification to a specific user
-        if channel == "pm_inbox":
+        if channel == CH_PM_INBOX:
             user_email = data.get("user_email", "")
             if user_email:
                 coro = self._ws_manager.broadcast_to_user(
@@ -83,15 +84,15 @@ class PgNotifyListener:
         if not team_id:
             return
 
-        if channel == "hitl_request":
+        if channel == CH_HITL_REQUEST:
             event_type = "new_question"
-        elif channel == "hitl_response":
+        elif channel == CH_HITL_RESPONSE:
             event_type = "question_answered"
-        elif channel == "task_progress":
+        elif channel == CH_TASK_PROGRESS:
             event_type = "task_progress"
-        elif channel == "task_artifact":
+        elif channel == CH_TASK_ARTIFACT:
             event_type = "task_artifact"
-        elif channel == "hitl_chat":
+        elif channel == CH_HITL_CHAT:
             event_type = "chat_message"
             agent_id = data.get("agent_id", "")
             coro = self._ws_manager.broadcast_watched(

@@ -14,13 +14,22 @@ from schemas.rag import ConversationMessage
 log = structlog.get_logger(__name__)
 
 
-async def start_analysis(project_slug: str, team_id: str) -> dict[str, Any]:
-    """Dispatch an analysis task to the dispatcher service."""
-    url = f"{settings.dispatcher_url}/api/tasks/run"
-    rag_endpoint = f"http://langgraph-hitl:8090/api/internal/rag/search"
+async def start_analysis(
+    project_slug: str,
+    team_id: str,
+    workflow_id: Optional[int] = None,
+    agent_id: str = "project_analyst",
+) -> dict[str, Any]:
+    """Dispatch an analysis task to the dispatcher service.
 
-    payload = {
-        "agent_id": "project_analyst",
+    Args:
+        agent_id: The agent to run. Caller should pass this from workflow/project config.
+    """
+    url = f"{settings.dispatcher_url}/api/tasks/run"
+    rag_endpoint = f"{settings.hitl_internal_url}/api/internal/rag/search"
+
+    payload: dict[str, Any] = {
+        "agent_id": agent_id,
         "team_id": team_id,
         "thread_id": f"analysis-{project_slug}",
         "project_slug": project_slug,
@@ -33,6 +42,8 @@ async def start_analysis(project_slug: str, team_id: str) -> dict[str, Any]:
             },
         },
     }
+    if workflow_id is not None:
+        payload["workflow_id"] = workflow_id
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:

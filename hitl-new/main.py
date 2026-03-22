@@ -138,7 +138,11 @@ async def _seed_admin() -> None:
         )
 
     if password == "admin":
-        log.warning("admin_default_password", email=email)
+        log.critical(
+            "SECURITY_RISK_admin_password_is_default",
+            msg="Set HITL_ADMIN_PASSWORD env var immediately — password 'admin' is insecure",
+            email=email,
+        )
     log.info("admin_seeded", email=email, teams=len(teams))
 
 
@@ -190,6 +194,13 @@ from routes.issues import router as issues_router
 from routes.relations import router as relations_router
 from routes.inbox import router as inbox_router
 from routes.activity import router as activity_router
+from routes.prs import router as prs_router
+from routes.pulse import router as pulse_router
+from routes.workflow import router as workflow_router
+from routes.workflows import router as workflows_router
+from routes.project_types import router as project_types_router
+from routes.automation import router as automation_router
+from routes.project_detail import router as project_detail_router
 
 app.include_router(health_router)
 app.include_router(auth_router)
@@ -207,6 +218,13 @@ app.include_router(issues_router)
 app.include_router(relations_router)
 app.include_router(inbox_router)
 app.include_router(activity_router)
+app.include_router(prs_router)
+app.include_router(pulse_router)
+app.include_router(workflow_router)
+app.include_router(workflows_router)
+app.include_router(project_types_router)
+app.include_router(automation_router)
+app.include_router(project_detail_router)
 
 # Serve static files if directory exists (Docker build)
 _static_dir = os.path.join(os.path.dirname(__file__), "static")

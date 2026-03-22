@@ -45,6 +45,7 @@ class Task:
     timeout_seconds: int = 300
     project_slug: Optional[str] = None
     docker_image: Optional[str] = None
+    workflow_id: Optional[int] = None
     container_id: Optional[str] = None
     status: TaskStatus = TaskStatus.PENDING
     cost_usd: float = 0.0

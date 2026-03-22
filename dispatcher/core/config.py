@@ -6,8 +6,8 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """All settings are read from environment variables."""
 
-    database_uri: str = "postgresql://langgraph:langgraph@langgraph-postgres:5432/langgraph"
-    redis_uri: str = "redis://:langgraph@langgraph-redis:6379/0"
+    database_uri: str  # Required — set DATABASE_URI env var
+    redis_uri: str  # Required — set REDIS_URI env var
     dispatcher_port: int = 8070
     agent_default_image: str = "agflow-claude-code:latest"
     agent_mem_limit: str = "2g"

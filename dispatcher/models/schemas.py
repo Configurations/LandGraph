@@ -28,6 +28,7 @@ class RunTaskRequest(BaseModel):
     payload: TaskPayloadSchema
     timeout_seconds: int = 300
     docker_image: Optional[str] = None
+    workflow_id: Optional[int] = None
 
 
 # ── Response schemas ────────────────────────────────

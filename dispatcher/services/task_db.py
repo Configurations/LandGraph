@@ -19,8 +19,9 @@ async def insert_task(pool: asyncpg.Pool, task: Task) -> None:
     await pool.execute(
         """INSERT INTO project.dispatcher_tasks
             (id, agent_id, team_id, thread_id, project_slug, phase, iteration,
-             instruction, context, previous_answers, docker_image, timeout_seconds)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)""",
+             instruction, context, previous_answers, docker_image, timeout_seconds,
+             workflow_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
         task.task_id,
         task.agent_id,
         task.team_id,
@@ -33,6 +34,7 @@ async def insert_task(pool: asyncpg.Pool, task: Task) -> None:
         json.dumps(task.payload.previous_answers, ensure_ascii=False, default=str),
         task.docker_image or settings.agent_default_image,
         task.timeout_seconds,
+        getattr(task, "workflow_id", None),
     )
 
 
@@ -87,6 +89,7 @@ async def fetch_task(pool: asyncpg.Pool, task_id: UUID) -> Optional[Task]:
         ),
         timeout_seconds=row["timeout_seconds"] or 300,
         docker_image=row["docker_image"],
+        workflow_id=row.get("workflow_id"),
     )
 
 
@@ -107,6 +110,7 @@ def build_task(req: RunTaskRequest) -> Task:
         ),
         timeout_seconds=req.timeout_seconds,
         docker_image=req.docker_image,
+        workflow_id=getattr(req, "workflow_id", None),
     )
 
 

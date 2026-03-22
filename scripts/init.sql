@@ -439,3 +439,80 @@ DROP TRIGGER IF EXISTS trigger_pm_inbox ON project.pm_inbox;
 CREATE TRIGGER trigger_pm_inbox
     AFTER INSERT ON project.pm_inbox
     FOR EACH ROW EXECUTE FUNCTION notify_pm_inbox();
+
+-- ── Phase 3b: PR enhancements ─────────────────────
+DO $$
+BEGIN
+    ALTER TABLE project.pm_pull_requests DROP CONSTRAINT IF EXISTS pm_pull_requests_status_check;
+    ALTER TABLE project.pm_pull_requests ADD CONSTRAINT pm_pull_requests_status_check
+        CHECK (status IN ('pending', 'approved', 'changes_requested', 'draft', 'merged'));
+EXCEPTION WHEN others THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='project' AND table_name='pm_pull_requests' AND column_name='branch') THEN
+        ALTER TABLE project.pm_pull_requests ADD COLUMN branch TEXT DEFAULT '';
+        ALTER TABLE project.pm_pull_requests ADD COLUMN remote_url TEXT DEFAULT '';
+        ALTER TABLE project.pm_pull_requests ADD COLUMN project_slug TEXT DEFAULT '';
+        ALTER TABLE project.pm_pull_requests ADD COLUMN merged_by TEXT;
+        ALTER TABLE project.pm_pull_requests ADD COLUMN merged_at TIMESTAMPTZ;
+    END IF;
+END $$;
+
+-- ── Phase 4: Multi-workflow + Automation ───────────
+
+CREATE TABLE IF NOT EXISTS project.project_workflows (
+    id SERIAL PRIMARY KEY,
+    project_slug TEXT NOT NULL,
+    workflow_name TEXT NOT NULL,
+    workflow_type TEXT NOT NULL DEFAULT 'custom'
+        CHECK (workflow_type IN ('onboarding', 'development', 'audit', 'evolution', 'custom')),
+    workflow_json_path TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'active', 'paused', 'completed', 'cancelled')),
+    mode TEXT NOT NULL DEFAULT 'sequential'
+        CHECK (mode IN ('sequential', 'parallel', 'recurring')),
+    priority INTEGER NOT NULL DEFAULT 50,
+    iteration INTEGER NOT NULL DEFAULT 1,
+    depends_on_workflow_id INTEGER REFERENCES project.project_workflows(id),
+    config JSONB DEFAULT '{}',
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (project_slug, workflow_name, iteration)
+);
+CREATE INDEX IF NOT EXISTS idx_proj_wf_slug ON project.project_workflows(project_slug, status);
+CREATE INDEX IF NOT EXISTS idx_proj_wf_type ON project.project_workflows(workflow_type);
+
+CREATE TABLE IF NOT EXISTS project.automation_rules (
+    id SERIAL PRIMARY KEY,
+    project_slug TEXT,
+    workflow_type TEXT,
+    deliverable_type TEXT,
+    auto_approve BOOLEAN DEFAULT FALSE,
+    confidence_threshold NUMERIC(3,2) DEFAULT 0.0,
+    min_approved_history INTEGER DEFAULT 5,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (project_slug, workflow_type, deliverable_type)
+);
+
+-- Link existing tables to workflows
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='project' AND table_name='dispatcher_tasks' AND column_name='workflow_id') THEN
+        ALTER TABLE project.dispatcher_tasks ADD COLUMN workflow_id INTEGER REFERENCES project.project_workflows(id);
+        CREATE INDEX idx_disp_tasks_wf ON project.dispatcher_tasks(workflow_id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='project' AND table_name='dispatcher_task_artifacts' AND column_name='workflow_id') THEN
+        ALTER TABLE project.dispatcher_task_artifacts ADD COLUMN workflow_id INTEGER REFERENCES project.project_workflows(id);
+        CREATE INDEX idx_disp_artifacts_wf ON project.dispatcher_task_artifacts(workflow_id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='project' AND table_name='pm_issues' AND column_name='workflow_id') THEN
+        ALTER TABLE project.pm_issues ADD COLUMN workflow_id INTEGER REFERENCES project.project_workflows(id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='project' AND table_name='hitl_requests' AND column_name='workflow_id') THEN
+        ALTER TABLE project.hitl_requests ADD COLUMN workflow_id INTEGER REFERENCES project.project_workflows(id);
+    END IF;
+END $$;

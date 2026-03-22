@@ -41,6 +41,36 @@ class TestBuildTask:
         t2 = build_task(req)
         assert t1.task_id != t2.task_id
 
+    def test_workflow_id_none_by_default(self):
+        req = RunTaskRequest(
+            agent_id="dev", team_id="t", thread_id="th", phase="build",
+            payload=TaskPayloadSchema(instruction="x"),
+        )
+        task = build_task(req)
+        assert task.workflow_id is None
+
+    def test_workflow_id_propagated(self):
+        req = RunTaskRequest(
+            agent_id="dev", team_id="t", thread_id="th", phase="build",
+            payload=TaskPayloadSchema(instruction="x"),
+            workflow_id=42,
+        )
+        task = build_task(req)
+        assert task.workflow_id == 42
+
+    @pytest.mark.asyncio
+    async def test_insert_task_includes_workflow_id(self, mock_pool):
+        from services.task_db import insert_task
+        task = Task(
+            task_id=uuid4(), agent_id="dev", team_id="t", thread_id="th",
+            phase="build", iteration=1, payload=TaskPayload(instruction="x"),
+            workflow_id=7,
+        )
+        await insert_task(mock_pool, task)
+        args = mock_pool.execute.call_args[0]
+        # 13th positional arg ($13) is workflow_id
+        assert args[13] == 7
+
 
 # ── build_env ───────────────────────────────────────
 

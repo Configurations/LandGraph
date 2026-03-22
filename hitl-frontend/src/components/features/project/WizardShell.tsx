@@ -6,10 +6,12 @@ import { Button } from '../../ui/Button';
 import { WizardStepSetup } from './WizardStepSetup';
 import { WizardStepGit } from './WizardStepGit';
 import { WizardStepCulture } from './WizardStepCulture';
+import { ProjectTypeSelector } from './ProjectTypeSelector';
 import { WizardStepDocuments } from './WizardStepDocuments';
 import { WizardStepAnalysis } from './WizardStepAnalysis';
 import { useProjectStore } from '../../../stores/projectStore';
 import * as projectsApi from '../../../api/projects';
+import * as projectTypesApi from '../../../api/projectTypes';
 
 interface WizardShellProps {
   className?: string;
@@ -19,11 +21,12 @@ const STEP_KEYS = [
   'wizard.step_setup',
   'wizard.step_git',
   'wizard.step_culture',
+  'wizard.step_project_type',
   'wizard.step_documents',
   'wizard.step_analysis',
 ] as const;
 
-const SKIPPABLE_STEPS = new Set([1, 3, 4]);
+const SKIPPABLE_STEPS = new Set([1, 3, 4, 5]);
 
 export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
   const { t } = useTranslation();
@@ -37,6 +40,7 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
   const [completed, setCompleted] = useState<Set<number>>(new Set());
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedTypeId, setSelectedTypeId] = useState<string | null>(null);
 
   const steps = useMemo(
     () => STEP_KEYS.map((key, idx) => ({ labelKey: key, completed: completed.has(idx) })),
@@ -75,6 +79,19 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
       setCreating(false);
     }
 
+    if (wizardStep === 3 && selectedTypeId) {
+      setCreating(true);
+      setError(null);
+      try {
+        await projectTypesApi.applyProjectType(wizardData.slug, selectedTypeId);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+        setCreating(false);
+        return;
+      }
+      setCreating(false);
+    }
+
     markComplete(wizardStep);
     if (wizardStep < STEP_KEYS.length - 1) {
       setWizardStep(wizardStep + 1);
@@ -82,7 +99,7 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
       resetWizard();
       navigate('/projects');
     }
-  }, [wizardStep, wizardData, completed, markComplete, setWizardStep, navigate, resetWizard, loadProjects]);
+  }, [wizardStep, wizardData, completed, selectedTypeId, markComplete, setWizardStep, navigate, resetWizard, loadProjects]);
 
   const handlePrevious = useCallback(() => {
     if (wizardStep > 0) setWizardStep(wizardStep - 1);
@@ -102,8 +119,15 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
         {wizardStep === 0 && <WizardStepSetup />}
         {wizardStep === 1 && <WizardStepGit />}
         {wizardStep === 2 && <WizardStepCulture />}
-        {wizardStep === 3 && <WizardStepDocuments />}
-        {wizardStep === 4 && <WizardStepAnalysis />}
+        {wizardStep === 3 && (
+          <ProjectTypeSelector
+            teamId={wizardData.teamId}
+            selectedTypeId={selectedTypeId}
+            onSelect={setSelectedTypeId}
+          />
+        )}
+        {wizardStep === 4 && <WizardStepDocuments />}
+        {wizardStep === 5 && <WizardStepAnalysis />}
       </div>
 
       {error && <p className="text-xs text-accent-red">{error}</p>}
