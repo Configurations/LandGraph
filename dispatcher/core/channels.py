@@ -1,6 +1,6 @@
 """PG NOTIFY channel constants.
 
-KEEP IN SYNC with hitl-new/core/channels.py
+KEEP IN SYNC with hitl/core/channels.py
 """
 
 # Dispatcher listens on these

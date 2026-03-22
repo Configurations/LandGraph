@@ -169,7 +169,7 @@ services:
       langgraph-postgres:
         condition: service_healthy
     volumes:
-      - ./config:/app/config
+      - ./config:/app/config:ro
       - /root/ag.flow:/root/ag.flow
       - /var/run/docker.sock:/var/run/docker.sock
     env_file:
@@ -177,7 +177,16 @@ services:
     environment:
       DATABASE_URI: ${DATABASE_URI}
       LANGGRAPH_API_URL: http://langgraph-api:8000
-      AG_FLOW_ROOT: /root/ag.flow
+      HITL_INTERNAL_URL: http://langgraph-hitl:8090
+      DISPATCHER_URL: http://langgraph-dispatcher:8070
+      AG_FLOW_ROOT: ${AG_FLOW_ROOT:-/root/ag.flow}
+      HITL_PUBLIC_URL: ${HITL_PUBLIC_URL:-http://localhost:8090}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8090/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     networks:
       - langgraph-net
 

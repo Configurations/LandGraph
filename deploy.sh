@@ -218,8 +218,8 @@ detect_services() {
     local svcs=""
     # web/ → langgraph-admin only
     if echo "$changed" | grep -q "^web/"; then svcs="$svcs langgraph-admin"; fi
-    # hitl/ → hitl-console only
-    if echo "$changed" | grep -q "^hitl/"; then svcs="$svcs hitl-console"; fi
+    # hitl/ or hitl-frontend/ → hitl-console
+    if echo "$changed" | grep -qE "^hitl/|^hitl-frontend/"; then svcs="$svcs hitl-console"; fi
     # dispatcher/ → langgraph-dispatcher only
     if echo "$changed" | grep -q "^dispatcher/"; then svcs="$svcs langgraph-dispatcher"; fi
     # Agents/ → langgraph-api + discord-bot + mail-bot
