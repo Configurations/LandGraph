@@ -188,7 +188,32 @@ Design :    A = [ux_designer, architect, planner]
 Build :     A = [lead_dev] → B = [dev_frontend, dev_backend, dev_mobile] → C = [qa_engineer]
 ```
 
-### Dispatch par livrables (nouveau)
+### Catégories de livrables
+
+Le Workflow.json supporte un champ `categories` à la racine qui définit une arborescence à 2 niveaux pour organiser les livrables.
+
+```json
+{
+  "categories": [
+    {
+      "id": "analysis", "name": "Analyse",
+      "children": [
+        { "id": "functional", "name": "Fonctionnel" },
+        { "id": "market", "name": "Marché" }
+      ]
+    },
+    { "id": "technical", "name": "Technique", "children": [...] }
+  ]
+}
+```
+
+Chaque livrable a un champ optionnel `"category"` : `"parentId/childId"` (sous-catégorie) ou `"parentId"` (catégorie racine). Absent ou `""` = non catégorisé.
+
+**Éditeur** : section "Catégories de livrables" dans la sidebar droite du workflow editor (quand aucune phase n'est sélectionnée). Clic crayon → popup CRUD (ajout/suppression catégories et sous-catégories). Les IDs sont stables après création (renommer ne casse pas les refs). La suppression d'une catégorie utilisée nettoie automatiquement les références orphelines.
+
+**Dropdown** : chaque livrable dans l'éditeur de phase a un `<select>` catégorie avec `<optgroup>` pour la hiérarchie.
+
+### Dispatch par livrables
 
 Chaque livrable dans `Workflow.json` a un `agent` + `pipeline_step`. Le dispatch se fait livrable par livrable :
 
@@ -643,6 +668,9 @@ Le script 02 télécharge tout depuis GitHub : Dockerfiles, code agents (`Agents
 34. Éditeur pipeline steps — split-panel (liste + éditeur), drag-drop, baguette magique (génération via Missions.md)
 35. Onglet Prompts dans Templates — CRUD prompts par culture, sélecteur de culture
 36. Onglet Autres dans Templates — gestion des cultures disponibles (grille avec filtre)
+
+### Workflow & Catégories (2026-03-22)
+37. Catégories de livrables — arborescence 2 niveaux dans Workflow.json, éditeur CRUD popup, dropdown par livrable, nettoyage refs orphelines
 
 ## À faire 🔧
 

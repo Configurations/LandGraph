@@ -2144,6 +2144,15 @@ tr:hover { background: rgba(255,255,255,0.02); }
   accent-color: var(--accent);
   cursor: pointer;
 }
+/* Category tree (sidebar) */
+.wf-cat-tree { font-size: 0.78rem; margin-top: 0.3rem; }
+.wf-cat-tree-item { padding: 0.15rem 0; color: var(--text-primary); font-weight: 600; }
+.wf-cat-tree-child { padding-left: 1rem; font-size: 0.72rem; color: var(--text-secondary); padding-top: 0.1rem; }
+/* Category CRUD popup */
+.wf-cat-row { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.4rem; }
+.wf-cat-row input { flex: 1; padding: 0.3rem 0.5rem; font-size: 0.8rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 4px; color: var(--text-primary); }
+.wf-cat-children { padding-left: 1.2rem; border-left: 2px solid var(--border); margin-left: 0.5rem; }
+
 .wf-add-select {
   width: 100%;
   margin-top: 0.3rem;

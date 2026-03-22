@@ -7422,6 +7422,7 @@ async function openWorkflowEditor(dir, apiBase, label, registryDir, inlineTarget
       wfTeams = (td.teams || []);
     } catch {}
     const data = (raw && Object.keys(raw).length) ? raw : { phases: {}, transitions: [], parallel_groups: { description: '', order: ['A','B','C'] }, rules: {} };
+    data.categories = data.categories || [];
     _wf = {
       dir, apiBase, designBase, label,
       registryDir: regDir,
@@ -7744,6 +7745,173 @@ function wfRenderProps() {
   }
 }
 
+/* ── Category helpers ── */
+
+function _wfBuildCategoryOptions(currentValue) {
+  const cats = (_wf && _wf.data && _wf.data.categories) || [];
+  let html = '<option value="">-- Categorie --</option>';
+  cats.forEach(c => {
+    if (c.children && c.children.length) {
+      html += `<optgroup label="${escHtml(c.name || c.id)}">`;
+      c.children.forEach(ch => {
+        const val = c.id + '/' + ch.id;
+        html += `<option value="${escHtml(val)}" ${val === (currentValue || '') ? 'selected' : ''}>${escHtml(ch.name || ch.id)}</option>`;
+      });
+      html += '</optgroup>';
+    } else {
+      html += `<option value="${escHtml(c.id)}" ${c.id === (currentValue || '') ? 'selected' : ''}>${escHtml(c.name || c.id)}</option>`;
+    }
+  });
+  return html;
+}
+
+function _wfCategoryLabel(catValue) {
+  if (!catValue) return '';
+  const cats = (_wf && _wf.data && _wf.data.categories) || [];
+  const parts = catValue.split('/');
+  const parent = cats.find(c => c.id === parts[0]);
+  if (!parent) return catValue;
+  if (parts.length > 1 && parent.children) {
+    const child = parent.children.find(ch => ch.id === parts[1]);
+    return (parent.name || parent.id) + ' / ' + (child ? (child.name || child.id) : parts[1]);
+  }
+  return parent.name || parent.id;
+}
+
+function _wfRenderCategoryTree() {
+  const cats = (_wf && _wf.data && _wf.data.categories) || [];
+  if (!cats.length) return '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucune categorie</div>';
+  return '<div class="wf-cat-tree">' + cats.map(c => {
+    const childrenHtml = (c.children || []).map(ch =>
+      `<div class="wf-cat-tree-child">${escHtml(ch.name || ch.id)}</div>`
+    ).join('');
+    return `<div class="wf-cat-tree-item">${escHtml(c.name || c.id)}</div>${childrenHtml}`;
+  }).join('') + '</div>';
+}
+
+/* ── Category CRUD popup ── */
+
+let _wfCatClone = [];
+let _wfCatCounter = 0;
+
+function wfOpenCategoriesEditor() {
+  _wfCatClone = JSON.parse(JSON.stringify((_wf.data.categories || [])));
+  _wfCatCounter = 0;
+  _wfCatClone.forEach(c => { _wfCatCounter++; (c.children || []).forEach(() => _wfCatCounter++); });
+  showModal(`
+    <div class="modal-header">
+      <h3>Categories de livrables</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <div style="padding:1rem;max-height:60vh;overflow-y:auto">
+      <div id="wf-cat-editor-body"></div>
+      <button class="btn btn-sm" onclick="_wfCatAdd()" style="margin-top:0.5rem">+ Ajouter une categorie</button>
+    </div>
+    <div style="display:flex;gap:0.5rem;justify-content:flex-end;padding:0.75rem 1rem;border-top:1px solid var(--border)">
+      <button class="btn btn-outline btn-sm" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary btn-sm" onclick="_wfCatApply()">Appliquer</button>
+    </div>
+  `, 'modal-confirm');
+  _wfCatRender();
+}
+
+function _wfCatRender() {
+  const el = document.getElementById('wf-cat-editor-body');
+  if (!el) return;
+  if (!_wfCatClone.length) {
+    el.innerHTML = '<div style="font-size:0.8rem;color:var(--text-secondary);padding:0.5rem 0">Aucune categorie</div>';
+    return;
+  }
+  el.innerHTML = _wfCatClone.map((c, ci) => {
+    const childrenHtml = (c.children || []).map((ch, chi) =>
+      `<div class="wf-cat-row wf-cat-children">
+        <input value="${escHtml(ch.name || '')}" placeholder="Sous-categorie" oninput="_wfCatSetChildName(${ci},${chi},this.value)" />
+        <button class="btn-icon danger" onclick="_wfCatRemoveChild(${ci},${chi})">x</button>
+      </div>`
+    ).join('');
+    return `<div style="margin-bottom:0.6rem">
+      <div class="wf-cat-row">
+        <input value="${escHtml(c.name || '')}" placeholder="Categorie" style="font-weight:600" oninput="_wfCatSetName(${ci},this.value)" />
+        <button class="btn-icon" onclick="_wfCatAddChild(${ci})" title="Ajouter sous-categorie">+</button>
+        <button class="btn-icon danger" onclick="_wfCatRemove(${ci})">x</button>
+      </div>
+      ${childrenHtml}
+    </div>`;
+  }).join('');
+}
+
+function _wfCatAdd() {
+  _wfCatCounter++;
+  _wfCatClone.push({ id: 'cat_' + _wfCatCounter, name: '', children: [] });
+  _wfCatRender();
+}
+
+function _wfCatRemove(idx) {
+  const cat = _wfCatClone[idx];
+  // Check if any deliverable references this category
+  const refs = _wfCountCategoryRefs(cat.id);
+  if (refs > 0 && !confirm(`${refs} livrable(s) utilisent cette categorie. Supprimer ?`)) return;
+  _wfCatClone.splice(idx, 1);
+  _wfCatRender();
+}
+
+function _wfCatAddChild(catIdx) {
+  _wfCatCounter++;
+  if (!_wfCatClone[catIdx].children) _wfCatClone[catIdx].children = [];
+  _wfCatClone[catIdx].children.push({ id: 'sub_' + _wfCatCounter, name: '' });
+  _wfCatRender();
+}
+
+function _wfCatRemoveChild(catIdx, childIdx) {
+  const cat = _wfCatClone[catIdx];
+  const child = cat.children[childIdx];
+  const refVal = cat.id + '/' + child.id;
+  const refs = _wfCountCategoryRefs(refVal);
+  if (refs > 0 && !confirm(`${refs} livrable(s) utilisent cette sous-categorie. Supprimer ?`)) return;
+  cat.children.splice(childIdx, 1);
+  _wfCatRender();
+}
+
+function _wfCatSetName(idx, name) { _wfCatClone[idx].name = name; }
+function _wfCatSetChildName(catIdx, childIdx, name) { _wfCatClone[catIdx].children[childIdx].name = name; }
+
+function _wfCountCategoryRefs(prefix) {
+  let count = 0;
+  const phases = (_wf && _wf.data && _wf.data.phases) || {};
+  Object.values(phases).forEach(p => {
+    Object.values(p.deliverables || {}).forEach(d => {
+      if (d.category && (d.category === prefix || d.category.startsWith(prefix + '/'))) count++;
+    });
+  });
+  return count;
+}
+
+function _wfCatApply() {
+  // Filter out empty names
+  _wfCatClone = _wfCatClone.filter(c => c.name && c.name.trim());
+  _wfCatClone.forEach(c => {
+    if (c.children) c.children = c.children.filter(ch => ch.name && ch.name.trim());
+  });
+  // Build set of valid category values
+  const validCats = new Set();
+  _wfCatClone.forEach(c => {
+    validCats.add(c.id);
+    (c.children || []).forEach(ch => validCats.add(c.id + '/' + ch.id));
+  });
+  // Clean orphaned refs
+  let cleaned = 0;
+  const phases = (_wf && _wf.data && _wf.data.phases) || {};
+  Object.values(phases).forEach(p => {
+    Object.values(p.deliverables || {}).forEach(d => {
+      if (d.category && !validCats.has(d.category)) { d.category = ''; cleaned++; }
+    });
+  });
+  _wf.data.categories = _wfCatClone;
+  closeModal();
+  wfRender();
+  if (cleaned > 0) toast(`${cleaned} livrable(s) avaient une categorie supprimee`, 'warning');
+}
+
 function _wfRenderWorkspaceProps(el) {
   const pg = _wf.data.parallel_groups || { description: '', order: ['A','B','C'] };
   const rules = _wf.data.rules || {};
@@ -7825,6 +7993,17 @@ function _wfRenderWorkspaceProps(el) {
       </div>
       <div class="wf-section-body" ${_wf._openSection === 'wk-rules' ? '' : 'style="display:none"'} data-section="wk-rules">
         ${rulesHtml}
+      </div>
+    </div>
+
+    <div class="wf-props-section">
+      <div class="wf-props-section-title" onclick="_wfToggleSection(this)">
+        <span class="wf-section-arrow">${_wf._openSection === 'wk-cats' ? '\u25bc' : '\u25b6'}</span>
+        Categories de livrables
+        <button class="btn-icon" style="font-size:0.75rem" onclick="event.stopPropagation();wfOpenCategoriesEditor()" title="Editer les categories">&#9998;</button>
+      </div>
+      <div class="wf-section-body" ${_wf._openSection === 'wk-cats' ? '' : 'style="display:none"'} data-section="wk-cats">
+        ${_wfRenderCategoryTree()}
       </div>
     </div>
   `;
@@ -8002,6 +8181,7 @@ function _wfRenderPhaseProps(el, phaseId) {
             <option value="true" ${d.required?'selected':''}>Requis</option><option value="false" ${!d.required?'selected':''}>Opt</option>
           </select>
         </div>
+        <select style="width:100%" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','category',this.value)">${_wfBuildCategoryOptions(d.category)}</select>
         <div class="wf-inline-label">Roles</div>
         <div class="wf-inline-checks">${rolesChecks}</div>
         <div class="wf-inline-label">Missions</div>

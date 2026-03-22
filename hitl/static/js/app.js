@@ -12,7 +12,7 @@ let ws = null;
 let selectedIssue = null;
 let selectedProject = null;
 let sidebarCollapsed = false;
-let createProjectState = { step: 1, name: '', team: '', language: '', startDate: '', targetDate: '', sourceMode: 'new', slug: '', projectUuid: '', repoUrl: '', repoCloned: false, uploadedDocs: [], analyzedUrls: [], importResult: null, aiIssues: [], aiRelations: [], aiDescription: '', chatMessages: [] };
+let createProjectState = { step: 1, name: '', team: '', _teamId: '', language: '', startDate: '', targetDate: '', sourceMode: 'new', slug: '', projectUuid: '', repoUrl: '', repoCloned: false, uploadedDocs: [], analyzedUrls: [], importResult: null, aiIssues: [], aiRelations: [], aiDescription: '', chatMessages: [] };
 
 let _viewRefreshId = null;
 function startViewRefresh(fn, intervalMs = 10000) {
@@ -2162,7 +2162,7 @@ async function resetPhase(projectId, teamId, phase) {
 // CREATE PROJECT FLOW
 // ══════════════════════════════════════════════════
 function startCreateProject() {
-  createProjectState = { step: 1, name: '', team: '', startDate: '', targetDate: '', sourceMode: 'new', slug: '', projectUuid: '', repoUrl: '', repoCloned: false, uploadedDocs: [], analyzedUrls: [], importResult: null, aiIssues: [], aiRelations: [], aiDescription: '', chatMessages: [] };
+  createProjectState = { step: 1, name: '', team: '', _teamId: '', startDate: '', targetDate: '', sourceMode: 'new', slug: '', projectUuid: '', repoUrl: '', repoCloned: false, uploadedDocs: [], analyzedUrls: [], importResult: null, aiIssues: [], aiRelations: [], aiDescription: '', chatMessages: [] };
   activeView = 'create-project';
   document.querySelectorAll('.sidebar-item').forEach(el => el.classList.toggle('active', el.dataset.view === 'pm-projects'));
   loadCreateProject();
@@ -2207,7 +2207,7 @@ function renderSetupStep(content) {
       <input class="form-input" id="cp-name" placeholder="e.g. API Microservices Migration" value="${esc(s.name)}" oninput="createProjectState.name=this.value;updateSetupBtn()" />
     </div>
     <div class="form-group">
-      <label class="form-label">Team <span class="required">*</span></label>
+      <label class="form-label">Type de projet <span class="required">*</span></label>
       <div class="team-cards" id="cp-teams"></div>
     </div>
     <div class="form-group">
@@ -2236,21 +2236,34 @@ function renderSetupStep(content) {
     <div style="text-align:center;margin-top:12px"><a style="font-size:12px;color:var(--accent-blue);cursor:pointer" onclick="skipToCreateProject()">Or skip and create empty project</a></div>
   </div>`;
 
-  // Render team cards
+  // Render project type cards from config/Projects/
   const teamsDiv = document.getElementById('cp-teams');
-  teamsDiv.innerHTML = teams.map(t => `<div class="team-card ${s.team === t.id ? 'selected' : ''}" style="${s.team === t.id ? `border-color:${t.color || '#6366f1'};background:${(t.color || '#6366f1')}0f` : ''}" onclick="selectProjectTeam('${esc(t.id)}')">
-    <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
-      <div style="width:10px;height:10px;border-radius:3px;background:${t.color || '#6366f1'}"></div>
-      <span style="font-size:13px;font-weight:600">${esc(t.name)}</span>
-    </div>
-    ${s.team === t.id ? `<div style="font-size:10px;color:${t.color || '#6366f1'}">&#x2713; Selected</div>` : ''}
-  </div>`).join('');
+  teamsDiv.innerHTML = '<div style="color:var(--text-tertiary);font-size:11px">Chargement...</div>';
+  api('/api/project-types').then(ptypes => {
+    teamsDiv.innerHTML = ptypes.map(pt => `<div class="team-card ${s.team === pt.id ? 'selected' : ''}" style="${s.team === pt.id ? 'border-color:#6366f1;background:#6366f10f' : ''}" onclick="selectProjectTeam('${esc(pt.id)}')">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+        <div style="width:10px;height:10px;border-radius:3px;background:#6366f1"></div>
+        <span style="font-size:13px;font-weight:600">${esc(pt.name)}</span>
+      </div>
+      <div style="font-size:10px;color:var(--text-tertiary)">${esc(pt.description || '').substring(0, 80)}</div>
+      ${pt.team ? `<div style="font-size:9px;color:var(--text-tertiary);margin-top:4px">Equipe: ${esc(pt.team)}</div>` : ''}
+      ${s.team === pt.id ? '<div style="font-size:10px;color:#6366f1;margin-top:4px">&#x2713; Selected</div>' : ''}
+    </div>`).join('') || '<div style="color:var(--text-tertiary);font-size:11px">Aucun type de projet configure dans Production</div>';
+    updateSetupBtn();
+  }).catch(() => {
+    teamsDiv.innerHTML = '<div style="color:var(--text-tertiary);font-size:11px">Erreur chargement types de projet</div>';
+  });
 
   updateSetupBtn();
 }
 
-function selectProjectTeam(teamId) {
-  createProjectState.team = teamId;
+function selectProjectTeam(projectTypeId) {
+  createProjectState.team = projectTypeId;
+  // Resolve team_id from project type's team field
+  api('/api/project-types').then(ptypes => {
+    const pt = ptypes.find(p => p.id === projectTypeId);
+    createProjectState._teamId = pt ? pt.team : projectTypeId;
+  }).catch(() => {});
   renderSetupStep(document.getElementById('pm-content'));
 }
 
@@ -2435,7 +2448,7 @@ async function analyzeUrl() {
 
   if (!s.slug) {
     try {
-      const res = await api('/api/pm/project-files/init', { method: 'POST', body: { name: s.name, team_id: s.team, language: s.language } });
+      const res = await api('/api/pm/project-files/init', { method: 'POST', body: { name: s.name, team_id: s._teamId || s.team, language: s.language } });
       s.slug = res.slug;
       s.projectUuid = res.uuid;
     } catch (e) { toast(e.message, 'error'); return; }
@@ -2468,7 +2481,7 @@ async function cloneRepo() {
 
   if (!s.slug) {
     try {
-      const res = await api('/api/pm/project-files/init', { method: 'POST', body: { name: s.name, team_id: s.team, language: s.language } });
+      const res = await api('/api/pm/project-files/init', { method: 'POST', body: { name: s.name, team_id: s._teamId || s.team, language: s.language } });
       s.slug = res.slug;
       s.projectUuid = res.uuid;
     } catch (e) { toast(e.message, 'error'); return; }
@@ -2532,7 +2545,7 @@ async function goToSources() {
       s.projectUuid = check.uuid;
     } else {
       // Create new project dir
-      const res = await api('/api/pm/project-files/init', { method: 'POST', body: { name: s.name, team_id: s.team, language: s.language } });
+      const res = await api('/api/pm/project-files/init', { method: 'POST', body: { name: s.name, team_id: s._teamId || s.team, language: s.language } });
       s.slug = res.slug;
       s.projectUuid = res.uuid;
     }
@@ -2697,7 +2710,7 @@ async function sendAIChatMessage() {
 
   try {
     const response = await api('/api/pm/ai/plan', { method: 'POST', body: {
-      project_name: s.name, team_id: s.team, description: msg,
+      project_name: s.name, team_id: s._teamId || s.team, description: msg,
       existing_issues: s.aiIssues, existing_relations: s.aiRelations,
     }});
 
@@ -2795,7 +2808,7 @@ async function doCreateProject(launchWorkflow = false) {
   const s = createProjectState;
   try {
     const project = await api('/api/pm/projects', { method: 'POST', body: {
-      name: s.name, slug: s.slug || '', team_id: s.team, lead: currentUser?.display_name || currentUser?.email || '',
+      name: s.name, slug: s.slug || '', team_id: s._teamId || s.team, lead: currentUser?.display_name || currentUser?.email || '',
       color: teams.find(t => t.id === s.team)?.color || '#6366f1',
       description: s.aiDescription, start_date: s.startDate || null, target_date: s.targetDate || null,
     }});
@@ -2803,7 +2816,7 @@ async function doCreateProject(launchWorkflow = false) {
     // Bulk create issues
     if (s.aiIssues.length > 0) {
       await api('/api/pm/issues/bulk', { method: 'POST', body: {
-        project_id: project.id, team_id: s.team,
+        project_id: project.id, team_id: s._teamId || s.team,
         issues: s.aiIssues.map(i => ({ title: i.title, description: i.description || '', priority: i.priority || 3, status: i.status || 'todo', phase: i.phase || '', tags: i.tags || [] })),
       }});
     }
@@ -2826,7 +2839,7 @@ async function doCreateProject(launchWorkflow = false) {
     // Launch workflow if requested
     if (launchWorkflow) {
       const wf = await api('/api/pm/projects/launch-workflow', { method: 'POST', body: {
-        project_id: project.id, team_id: s.team, slug: s.slug || '', phase: 'discovery',
+        project_id: project.id, team_id: s._teamId || s.team, slug: s.slug || '', phase: 'discovery',
       }});
       if (wf.ok) {
         toast('Projet cree — workflow lance !');
@@ -2937,7 +2950,7 @@ async function skipToCreateProject() {
   if (!s.name.trim() || !s.team) { toast('Name and team required', 'error'); return; }
   try {
     const project = await api('/api/pm/projects', { method: 'POST', body: {
-      name: s.name, team_id: s.team, lead: currentUser?.display_name || currentUser?.email || '',
+      name: s.name, team_id: s._teamId || s.team, lead: currentUser?.display_name || currentUser?.email || '',
       color: teams.find(t => t.id === s.team)?.color || '#6366f1',
       start_date: s.startDate || null, target_date: s.targetDate || null,
     }});

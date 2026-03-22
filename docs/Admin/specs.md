@@ -1,6 +1,6 @@
 # ag.flow Admin Dashboard -- Specifications fonctionnelles detaillees
 
-> **Version** : 2026-03-21
+> **Version** : 2026-03-22
 > **Scope** : `web/server.py` (backend FastAPI) + `web/static/` (frontend SPA)
 > **Port** : **8080**
 > **Container** : `langgraph-admin`
@@ -519,9 +519,10 @@ Structure :
 - **Contenu projet** : chips de workflows + editeur visuel de workflow
 - **Workflow visuel** : editeur graphique de phases, agents, livrables, transitions
   - Drag-and-drop des phases
-  - Configuration des livrables (agent, pipeline_step, type, description, depends_on)
+  - Configuration des livrables (agent, pipeline_step, type, categorie, description, depends_on)
   - Bouton baguette magique pour generer les descriptions via LLM
   - Bouton skill-match pour auto-selectionner roles/missions/skills par livrable
+  - **Categories de livrables** : systeme hierarchique a 2 niveaux pour organiser les livrables (voir 5.2.6.1)
 
 **APIs** :
 - `GET/POST /api/templates/projects` → lister/creer
@@ -533,6 +534,92 @@ Structure :
 - `GET/PUT /api/templates/project-workflow-design/{id}/{name}` → positions visuelles
 - `POST /api/templates/projects/{id}/deliverable-skillmatch` → skill-match LLM
 - `POST /api/templates/projects/{id}/orchestrator/build` → construire le prompt orchestrateur
+
+##### 5.2.6.1 Categories de livrables
+
+Systeme hierarchique a 2 niveaux (categorie / sous-categorie) pour organiser les livrables du workflow.
+
+**Modele de donnees** (`Workflow.json`) :
+```json
+{
+  "categories": [
+    {
+      "id": "analysis", "name": "Analyse",
+      "children": [
+        { "id": "functional", "name": "Fonctionnel" },
+        { "id": "market", "name": "Marche" }
+      ]
+    },
+    { "id": "technical", "name": "Technique", "children": [...] }
+  ]
+}
+```
+
+Chaque livrable a un champ optionnel `"category"` : `"parentId/childId"` (sous-categorie) ou `"parentId"` (categorie racine). Absent ou `""` = non categorise.
+
+**Affichage sidebar** (proprietes du workspace, quand aucune phase n'est selectionnee) :
+- Section repliable "Categories de livrables" avec section key `wk-cats`
+- Arbre en lecture seule : categories en gras + sous-categories indentees
+- Bouton crayon (✏) → ouvre la popup CRUD (`wfOpenCategoriesEditor()`)
+- Si aucune categorie definie : texte "Aucune categorie"
+
+**Popup CRUD** (`showModal`, classe `modal-confirm`) :
+- Header : "Categories de livrables"
+- Body : liste editable des categories
+  - Pour chaque categorie : input nom (gras) + bouton "+" (ajouter sous-cat) + bouton "x" (supprimer)
+  - Pour chaque sous-categorie : input nom indente + bouton "x"
+  - Bouton "+ Ajouter une categorie" en bas
+- Footer : Annuler / Appliquer
+- Travaille sur un deep clone — Annuler ne modifie rien
+
+**Gestion des IDs** :
+- A la creation : ID auto-genere `cat_N` / `sub_N` (compteur incremental)
+- L'ID ne change jamais apres creation → renommer ne casse pas les references
+- Suppression d'une categorie utilisee : confirmation si des livrables la referencent
+
+**Nettoyage des refs orphelines** (`_wfCatApply()`) :
+- Filtre les categories/sous-categories sans nom
+- Scan tous les livrables de toutes les phases
+- Si `category` pointe vers un ID supprime → vide a `""`
+- Toast warning : "N livrable(s) avaient une categorie supprimee"
+
+**Dropdown dans l'editeur de livrable** :
+- `<select>` pleine largeur insere apres le bloc type/required
+- Utilise `<optgroup>` pour les categories avec enfants
+- Categories sans enfants affichees comme `<option>` directe
+- `onchange` → `_wfSetDelField(phaseId, delId, 'category', value)` (generique, pas de modification necessaire)
+
+**Retrocompatibilite** :
+- `data.categories` initialise a `[]` si absent dans le JSON → aucun impact sur les workflows existants
+- Le backend (`workflow_engine.py`) ignore les cles racine inconnues
+
+**Fonctions JS** :
+
+| Fonction | Role |
+|---|---|
+| `_wfBuildCategoryOptions(currentValue)` | Genere HTML `<option>` + `<optgroup>` pour le dropdown |
+| `_wfCategoryLabel(catValue)` | Retourne le label lisible ("Analyse / Fonctionnel") |
+| `_wfRenderCategoryTree()` | Genere l'arbre HTML en lecture seule pour la sidebar |
+| `wfOpenCategoriesEditor()` | Ouvre la popup CRUD (deep clone + modal) |
+| `_wfCatRender()` | Re-render le body de la popup sans la fermer |
+| `_wfCatAdd()` | Ajoute une categorie vide |
+| `_wfCatRemove(idx)` | Supprime une categorie (avec confirm si referencee) |
+| `_wfCatAddChild(catIdx)` | Ajoute une sous-categorie |
+| `_wfCatRemoveChild(catIdx, childIdx)` | Supprime une sous-categorie |
+| `_wfCatSetName(idx, name)` | Modifie le nom d'une categorie |
+| `_wfCatSetChildName(catIdx, childIdx, name)` | Modifie le nom d'une sous-categorie |
+| `_wfCountCategoryRefs(prefix)` | Compte les livrables referencant un prefix |
+| `_wfCatApply()` | Ecrit le clone, nettoie les refs orphelines, ferme et re-render |
+
+**CSS** :
+
+| Classe | Usage |
+|---|---|
+| `.wf-cat-tree` | Container de l'arbre sidebar (font-size 0.78rem) |
+| `.wf-cat-tree-item` | Categorie dans l'arbre (gras, text-primary) |
+| `.wf-cat-tree-child` | Sous-categorie (indentee 1rem, text-secondary) |
+| `.wf-cat-row` | Ligne dans la popup CRUD (flex, gap 0.4rem) |
+| `.wf-cat-children` | Block sous-categories dans la popup (border-left, indent 1.2rem) |
 
 #### 5.2.7 Prompts (Configuration)
 
@@ -989,6 +1076,9 @@ Liste et execution de scripts shell.
 | PUT | `/api/agents/mcp-access/{dir}/{id}` | Oui | MCP access par agent |
 | GET | `/api/agents/registry/{dir}` | Oui | Lire registry brut |
 | PUT | `/api/agents/registry/{dir}` | Oui | Ecrire registry brut |
+| POST | `/api/prod-team-agents` | Oui | Ajouter agent au registry d'une equipe prod (body: id, team_id, type, delegates_to) |
+| PUT | `/api/prod-team-agents/{agent_id}` | Oui | Modifier agent dans le registry equipe prod |
+| DELETE | `/api/prod-team-agents/{agent_id}?team_id=` | Oui | Supprimer agent du registry prod (sauf orchestrator) |
 
 ### 13.10 Agents dans equipes (Configuration — Shared/Teams/)
 
@@ -1263,7 +1353,7 @@ Sessions expirent apres 30 minutes. Nettoyage automatique des dossiers orphelins
 | `git.json` | `config/git.json` | Config git (path, login, password) |
 | `agents_registry.json` | `config/Teams/{dir}/agents_registry.json` | Agents par equipe (ref vers Shared) |
 | `agent_mcp_access.json` | `config/Teams/{dir}/agent_mcp_access.json` | MCP par agent par equipe |
-| `Workflow.json` | `config/Teams/{dir}/Workflow.json` | Workflow par equipe |
+| `Workflow.json` | `config/Teams/{dir}/Workflow.json` | Workflow par equipe (phases, transitions, categories, rules) |
 | `*.md` | `config/Teams/{dir}/*.md` | Prompts agents (fallback) |
 | `agent.json` | `config/Agents/{id}/agent.json` | Config agent production |
 | `*.md` | `config/Agents/{id}/*.md` | Fichiers agent production |
@@ -1369,6 +1459,7 @@ Utilisee via `showModal(html, cssClass)` → injectee dans `#modal-container`.
 | (inline) | Editer projet | name, description, team | Sauvegarder → `PUT /api/templates/projects/{id}` |
 | (inline) | "+ Workflow" | name, mode (vide ou genere par LLM) | Creer → `POST .../workflows` ou `.../workflows/generate` |
 | `#modal-copy-projects` | "Copier depuis Configuration" | Checkboxes + alerte equipe manquante | Copier → `POST /api/prod-projects/copy-from-config` |
+| (inline, `modal-confirm`) | Crayon "Categories" dans sidebar workflow | Liste editable : input nom categorie + bouton "+" sous-cat + "x" supprimer ; sous-categories indentees avec border-left ; bouton "+ Ajouter une categorie" | Appliquer → ecrit dans `_wf.data.categories`, nettoie refs orphelines, re-render |
 
 ### 15.7 Modals Prompts et Models
 

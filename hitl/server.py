@@ -805,6 +805,31 @@ def list_teams(user: TokenData = Depends(get_current_user)):
     return result
 
 
+# ── Project types (from config/Projects/) ───────
+@app.get("/api/project-types")
+def list_project_types(user: TokenData = Depends(get_current_user)):
+    """List project types from config/Projects/."""
+    cfg_dir = _find_config_dir()
+    projects_dir = os.path.join(cfg_dir, "Projects")
+    result = []
+    if os.path.isdir(projects_dir):
+        for d in sorted(os.listdir(projects_dir)):
+            dpath = os.path.join(projects_dir, d)
+            if os.path.isdir(dpath):
+                cfg_file = os.path.join(dpath, "project.json")
+                cfg = {}
+                if os.path.isfile(cfg_file):
+                    with open(cfg_file) as f:
+                        cfg = json.load(f)
+                result.append({
+                    "id": d,
+                    "name": cfg.get("name", d),
+                    "description": cfg.get("description", ""),
+                    "team": cfg.get("team", ""),
+                })
+    return result
+
+
 # ── Questions (HITL requests) ───────────────────
 @app.get("/api/teams/{team_id}/questions")
 def list_questions(
