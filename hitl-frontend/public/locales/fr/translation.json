@@ -1,0 +1,85 @@
+{
+  "common": {
+    "save": "Enregistrer",
+    "cancel": "Annuler",
+    "delete": "Supprimer",
+    "confirm": "Confirmer",
+    "loading": "Chargement...",
+    "error": "Une erreur est survenue",
+    "success": "Operation reussie",
+    "search": "Rechercher",
+    "no_results": "Aucun resultat",
+    "back": "Retour",
+    "logout": "Se deconnecter"
+  },
+  "auth": {
+    "login": "Connexion",
+    "register": "Inscription",
+    "email": "Email",
+    "password": "Mot de passe",
+    "new_password": "Nouveau mot de passe",
+    "confirm_password": "Confirmer le mot de passe",
+    "forgot_password": "Mot de passe oublie",
+    "sign_in_google": "ou se connecter avec Google",
+    "invalid_credentials": "Email ou mot de passe incorrect",
+    "account_pending": "Votre compte est en attente de validation par un administrateur",
+    "account_disabled": "Ce compte a ete desactive",
+    "register_success": "Compte cree avec succes. Un email de reinitialisation vous sera envoye. Un administrateur doit valider votre compte.",
+    "reset_success": "Mot de passe reinitialise avec succes. Vous pouvez maintenant vous connecter.",
+    "culture": "Langue",
+    "password_min_length": "Le mot de passe doit contenir au moins 6 caracteres",
+    "passwords_dont_match": "Les mots de passe ne correspondent pas"
+  },
+  "nav": {
+    "inbox": "Boite de reception",
+    "teams": "Equipes",
+    "members": "Membres",
+    "agents": "Agents",
+    "activity": "Activite",
+    "settings": "Parametres",
+    "profile": "Profil"
+  },
+  "hitl": {
+    "questions": "Questions",
+    "pending": "En attente",
+    "answered": "Repondu",
+    "timeout": "Expire",
+    "cancelled": "Annule",
+    "approve": "Approuver",
+    "reject": "Rejeter",
+    "answer": "Repondre",
+    "answer_placeholder": "Saisissez votre reponse...",
+    "new_question_title": "Nouvelle question",
+    "new_question_body": "{{agent}} a besoin de votre avis",
+    "no_pending": "Aucune question en attente",
+    "stats": "Statistiques",
+    "all_channels": "Tous les statuts",
+    "filter_status": "Filtrer par statut",
+    "filter_team": "Toutes les equipes",
+    "filter_channel": "Tous les canaux"
+  },
+  "team": {
+    "members": "membres",
+    "invite": "Inviter",
+    "invite_email": "Email du membre",
+    "invite_role": "Role",
+    "remove": "Retirer",
+    "role_admin": "Administrateur",
+    "role_member": "Membre"
+  },
+  "notifications": {
+    "permission_denied": "Les notifications sont desactivees. Activez-les dans les parametres du navigateur.",
+    "new_question": "Nouvelle question de {{agent}}"
+  },
+  "time": {
+    "just_now": "A l'instant",
+    "minutes_ago": "Il y a {{count}} min",
+    "hours_ago": "Il y a {{count}} h",
+    "days_ago": "Il y a {{count}} j"
+  },
+  "errors": {
+    "not_found_title": "Page introuvable",
+    "not_found_description": "La page que vous recherchez n'existe pas ou a ete deplacee.",
+    "go_home": "Retour a l'accueil"
+  }
+}

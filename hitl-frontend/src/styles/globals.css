@@ -1,0 +1,11 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { @apply border-border; }
+  body { @apply bg-surface-primary text-content-primary; }
+  :focus-visible { @apply outline-2 outline-offset-2 outline-accent-blue; }
+  ::selection { @apply bg-accent-blue/30; }
+  input, textarea, select { @apply bg-surface-tertiary text-content-primary placeholder:text-content-quaternary; }
+}

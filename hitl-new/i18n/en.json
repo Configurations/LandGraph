@@ -1,0 +1,22 @@
+{
+  "auth.invalid_credentials": "Invalid email or password",
+  "auth.account_pending": "Your account is awaiting admin approval",
+  "auth.account_disabled": "Your account has been disabled",
+  "auth.email_exists": "An account with this email already exists",
+  "auth.google_not_configured": "Google OAuth is not configured",
+  "auth.google_invalid_token": "Invalid Google token",
+  "auth.google_domain_not_allowed": "Email domain not allowed",
+  "auth.password_mismatch": "Old password is incorrect",
+  "auth.weak_password": "Password must be at least 6 characters",
+  "auth.google_login_required": "This account uses Google. Sign in with Google.",
+  "auth.missing_token": "Authentication token missing",
+  "auth.invalid_token": "Authentication token invalid",
+  "team.not_found": "Team not found",
+  "team.access_denied": "Access denied to this team",
+  "team.member_exists": "This member is already in the team",
+  "hitl.question_not_found": "Question not found",
+  "hitl.already_answered": "This question has already been answered",
+  "common.not_found": "Resource not found",
+  "common.forbidden": "Action not allowed",
+  "common.server_error": "Internal server error"
+}

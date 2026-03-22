@@ -1,0 +1,85 @@
+{
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "confirm": "Confirm",
+    "loading": "Loading...",
+    "error": "An error occurred",
+    "success": "Operation successful",
+    "search": "Search",
+    "no_results": "No results",
+    "back": "Back",
+    "logout": "Log out"
+  },
+  "auth": {
+    "login": "Sign in",
+    "register": "Register",
+    "email": "Email",
+    "password": "Password",
+    "new_password": "New password",
+    "confirm_password": "Confirm password",
+    "forgot_password": "Forgot password",
+    "sign_in_google": "or sign in with Google",
+    "invalid_credentials": "Invalid email or password",
+    "account_pending": "Your account is pending administrator approval",
+    "account_disabled": "This account has been disabled",
+    "register_success": "Account created successfully. A reset email will be sent to you. An administrator must validate your account.",
+    "reset_success": "Password reset successfully. You can now sign in.",
+    "culture": "Language",
+    "password_min_length": "Password must be at least 6 characters",
+    "passwords_dont_match": "Passwords do not match"
+  },
+  "nav": {
+    "inbox": "Inbox",
+    "teams": "Teams",
+    "members": "Members",
+    "agents": "Agents",
+    "activity": "Activity",
+    "settings": "Settings",
+    "profile": "Profile"
+  },
+  "hitl": {
+    "questions": "Questions",
+    "pending": "Pending",
+    "answered": "Answered",
+    "timeout": "Timed out",
+    "cancelled": "Cancelled",
+    "approve": "Approve",
+    "reject": "Reject",
+    "answer": "Answer",
+    "answer_placeholder": "Type your answer...",
+    "new_question_title": "New question",
+    "new_question_body": "{{agent}} needs your input",
+    "no_pending": "No pending questions",
+    "stats": "Statistics",
+    "all_channels": "All statuses",
+    "filter_status": "Filter by status",
+    "filter_team": "All teams",
+    "filter_channel": "All channels"
+  },
+  "team": {
+    "members": "members",
+    "invite": "Invite",
+    "invite_email": "Member email",
+    "invite_role": "Role",
+    "remove": "Remove",
+    "role_admin": "Administrator",
+    "role_member": "Member"
+  },
+  "notifications": {
+    "permission_denied": "Notifications are disabled. Enable them in your browser settings.",
+    "new_question": "New question from {{agent}}"
+  },
+  "time": {
+    "just_now": "Just now",
+    "minutes_ago": "{{count}} min ago",
+    "hours_ago": "{{count}} h ago",
+    "days_ago": "{{count}} d ago"
+  },
+  "errors": {
+    "not_found_title": "Page not found",
+    "not_found_description": "The page you are looking for does not exist or has been moved.",
+    "go_home": "Back to home"
+  }
+}
