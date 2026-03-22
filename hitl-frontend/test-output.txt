@@ -1,0 +1,7 @@
+EXIT: null
+SIGNAL: SIGTERM
+ERROR: spawnSync C:\Windows\system32\cmd.exe ETIMEDOUT
+--- STDOUT ---
+(empty)
+--- STDERR ---
+(empty)

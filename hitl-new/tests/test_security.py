@@ -90,14 +90,14 @@ def test_password_truncation_72_bytes():
 # ── JWT secret hashing for short secrets ───────────────────────
 
 def test_short_secret_is_hashed():
-    with patch("core.config.settings") as mock_settings:
+    with patch("core.security.settings") as mock_settings:
         mock_settings.hitl_jwt_secret = "short"
         result = _get_jwt_secret()
         assert len(result) == 64  # sha256 hex
 
 
 def test_long_secret_used_as_is():
-    with patch("core.config.settings") as mock_settings:
+    with patch("core.security.settings") as mock_settings:
         mock_settings.hitl_jwt_secret = "a" * 40
         result = _get_jwt_secret()
         assert result == "a" * 40

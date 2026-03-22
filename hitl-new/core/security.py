@@ -8,10 +8,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from uuid import UUID
 
+import bcrypt as _bcrypt
 import structlog
 from fastapi import HTTPException, Request
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from core.config import settings
 
@@ -19,8 +19,6 @@ log = structlog.get_logger(__name__)
 
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = 24
-
-pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def _get_jwt_secret() -> str:
@@ -69,14 +67,18 @@ def decode_token(token: str) -> dict[str, Any]:
 
 def hash_password(password: str) -> str:
     """Hash a password with bcrypt. Truncates to 72 bytes (bcrypt limit)."""
-    truncated = password.encode("utf-8")[:72].decode("utf-8", errors="ignore")
-    return pwd_ctx.hash(truncated)
+    truncated = password.encode("utf-8")[:72]
+    salt = _bcrypt.gensalt()
+    return _bcrypt.hashpw(truncated, salt).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
     """Verify a password against a bcrypt hash."""
-    truncated = plain.encode("utf-8")[:72].decode("utf-8", errors="ignore")
-    return pwd_ctx.verify(truncated, hashed)
+    truncated = plain.encode("utf-8")[:72]
+    try:
+        return _bcrypt.checkpw(truncated, hashed.encode("utf-8"))
+    except (ValueError, TypeError):
+        return False
 
 
 async def get_current_user(request: Request) -> TokenData:

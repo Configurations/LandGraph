@@ -100,9 +100,6 @@ async def app_client(mock_pool: AsyncMock) -> AsyncGenerator[AsyncClient, None]:
         patch("core.database.get_pool", return_value=mock_pool),
         patch("core.database.init_pool", new_callable=AsyncMock, return_value=mock_pool),
         patch("core.database.close_pool", new_callable=AsyncMock),
-        patch("core.database.execute", mock_pool.execute),
-        patch("core.database.fetch_one", mock_pool.fetchrow),
-        patch("core.database.fetch_all", mock_pool.fetch),
         patch("core.pg_notify.pg_listener.start", new_callable=AsyncMock),
         patch("core.pg_notify.pg_listener.stop", new_callable=AsyncMock),
     ):

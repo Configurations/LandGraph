@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { Sidebar } from '../../../src/components/layout/Sidebar';
 import { useAuthStore } from '../../../src/stores/authStore';
 import { useTeamStore } from '../../../src/stores/teamStore';
@@ -40,43 +41,43 @@ function setupStores(overrides: {
 describe('Sidebar', () => {
   it('renders inbox navigation item', () => {
     setupStores();
-    render(<Sidebar />);
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
     expect(screen.getByText('nav.inbox')).toBeInTheDocument();
   });
 
   it('renders team group', () => {
     setupStores();
-    render(<Sidebar />);
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
     expect(screen.getByText('Team Alpha')).toBeInTheDocument();
   });
 
   it('shows badge count when pendingCount > 0', () => {
     setupStores({ pendingCount: 5 });
-    render(<Sidebar />);
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
     expect(screen.getByText('5')).toBeInTheDocument();
   });
 
   it('does not show badge when pendingCount is 0', () => {
     setupStores({ pendingCount: 0 });
-    render(<Sidebar />);
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
     expect(screen.queryByText('0')).toBeNull();
   });
 
   it('shows user display name', () => {
     setupStores();
-    render(<Sidebar />);
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
     expect(screen.getByText('Alice')).toBeInTheDocument();
   });
 
   it('shows user email', () => {
     setupStores();
-    render(<Sidebar />);
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
     expect(screen.getByText('alice@test.com')).toBeInTheDocument();
   });
 
   it('caps badge at 99+', () => {
     setupStores({ pendingCount: 150 });
-    render(<Sidebar />);
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
     expect(screen.getByText('99+')).toBeInTheDocument();
   });
 });

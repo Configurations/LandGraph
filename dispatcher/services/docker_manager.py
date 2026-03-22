@@ -38,12 +38,17 @@ class DockerManager:
         mem_limit: str = "",
         cpu_quota: int = 0,
         name: Optional[str] = None,
+        network: Optional[str] = None,
     ) -> str:
-        """Create a container and return its ID."""
+        """Create a container and return its ID.
+
+        Args:
+            network: Docker network to connect to. None = isolated (no network).
+        """
         docker = await self._get_client()
         host_config: dict[str, Any] = {
             "Binds": volumes,
-            "NetworkMode": "none",
+            "NetworkMode": network if network else "none",
         }
         if mem_limit:
             host_config["Memory"] = _parse_mem_limit(mem_limit)
@@ -141,6 +146,7 @@ class DockerManager:
         mem_limit: str = "",
         cpu_quota: int = 0,
         name: Optional[str] = None,
+        network: Optional[str] = None,
     ) -> AsyncIterator[str]:
         """Context manager that guarantees cleanup."""
         container_id = await self.create_container(
@@ -150,6 +156,7 @@ class DockerManager:
             mem_limit=mem_limit,
             cpu_quota=cpu_quota,
             name=name,
+            network=network,
         )
         try:
             yield container_id

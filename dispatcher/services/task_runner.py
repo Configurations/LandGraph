@@ -109,11 +109,17 @@ class TaskRunner:
         env = build_env(task)
         volumes = build_volumes(task)
 
+        # Connect to Docker network if the task needs RAG access
+        network = None
+        if task.payload.context.get("rag_endpoint"):
+            network = "langgraph-net"
+
         async with self._docker.managed_container(
             image=image, env=env, volumes=volumes,
             mem_limit=settings.agent_mem_limit,
             cpu_quota=settings.agent_cpu_quota,
             name=f"agent-{task.agent_id}-{str(task.task_id)[:8]}",
+            network=network,
         ) as container_id:
             task.container_id = container_id
             await self._pool.execute(

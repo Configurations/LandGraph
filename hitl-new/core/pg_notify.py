@@ -28,7 +28,10 @@ class PgNotifyListener:
         self._ws_manager = ws_manager
         self._conn = await asyncpg.connect(dsn=settings.database_uri)
 
-        channels = ["hitl_request", "hitl_response"]
+        channels = [
+            "hitl_request", "hitl_response", "task_progress",
+            "task_artifact", "hitl_chat", "pm_inbox",
+        ]
         for ch in channels:
             await self._conn.add_listener(ch, self._on_notify)
 
@@ -62,6 +65,20 @@ class PgNotifyListener:
         if self._ws_manager is None:
             return
 
+        # pm_inbox: targeted notification to a specific user
+        if channel == "pm_inbox":
+            user_email = data.get("user_email", "")
+            if user_email:
+                coro = self._ws_manager.broadcast_to_user(
+                    user_email, "pm_inbox", data,
+                )
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(coro)
+                except RuntimeError:
+                    pass
+            return
+
         team_id = data.get("team_id", "")
         if not team_id:
             return
@@ -70,6 +87,22 @@ class PgNotifyListener:
             event_type = "new_question"
         elif channel == "hitl_response":
             event_type = "question_answered"
+        elif channel == "task_progress":
+            event_type = "task_progress"
+        elif channel == "task_artifact":
+            event_type = "task_artifact"
+        elif channel == "hitl_chat":
+            event_type = "chat_message"
+            agent_id = data.get("agent_id", "")
+            coro = self._ws_manager.broadcast_watched(
+                team_id, agent_id, event_type, data,
+            )
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(coro)
+            except RuntimeError:
+                pass
+            return
         else:
             event_type = channel
 

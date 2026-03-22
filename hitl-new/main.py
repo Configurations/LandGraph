@@ -174,17 +174,39 @@ app.add_middleware(
 )
 
 # Mount routers
+from routes.agents import router as agents_router
 from routes.auth import router as auth_router
+from routes.chat import router as chat_router
+from routes.dashboard import router as dashboard_router
+from routes.deliverables import router as deliverables_router
 from routes.health import router as health_router
 from routes.hitl import router as hitl_router
+from routes.internal import router as internal_router
+from routes.projects import router as projects_router
+from routes.rag import router as rag_router
 from routes.teams import router as teams_router
 from routes.ws import router as ws_router
+from routes.issues import router as issues_router
+from routes.relations import router as relations_router
+from routes.inbox import router as inbox_router
+from routes.activity import router as activity_router
 
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(teams_router)
 app.include_router(hitl_router)
+app.include_router(projects_router)
+app.include_router(rag_router)
+app.include_router(internal_router)
+app.include_router(deliverables_router)
+app.include_router(chat_router)
+app.include_router(agents_router)
+app.include_router(dashboard_router)
 app.include_router(ws_router)
+app.include_router(issues_router)
+app.include_router(relations_router)
+app.include_router(inbox_router)
+app.include_router(activity_router)
 
 # Serve static files if directory exists (Docker build)
 _static_dir = os.path.join(os.path.dirname(__file__), "static")

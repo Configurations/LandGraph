@@ -1,0 +1,120 @@
+"""Project routes — CRUD, git operations."""
+
+from __future__ import annotations
+
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException
+
+from core.security import TokenData, get_current_user
+from schemas.project import (
+    GitConfig,
+    GitStatusResponse,
+    GitTestResponse,
+    ProjectCreate,
+    ProjectResponse,
+    SlugCheckResponse,
+)
+from services import git_service, project_service
+
+router = APIRouter(prefix="/api/projects", tags=["projects"])
+
+
+def _check_team_access(user: TokenData, team_id: str) -> None:
+    """Raise 403 if user has no access to the team."""
+    if user.role == "admin":
+        return
+    if team_id not in user.teams:
+        raise HTTPException(status_code=403, detail="team.access_denied")
+
+
+@router.post("/", response_model=ProjectResponse)
+async def create_project(
+    data: ProjectCreate,
+    user: TokenData = Depends(get_current_user),
+) -> ProjectResponse:
+    """Create a new project."""
+    _check_team_access(user, data.team_id)
+    existing = await project_service.check_slug_exists(data.slug)
+    if existing.exists:
+        raise HTTPException(status_code=409, detail="project.slug_exists")
+    return await project_service.create_project(data)
+
+
+@router.get("/", response_model=list[ProjectResponse])
+async def list_projects(
+    team_id: Optional[str] = None,
+    user: TokenData = Depends(get_current_user),
+) -> list[ProjectResponse]:
+    """List projects visible to the current user."""
+    return await project_service.list_projects(
+        team_id=team_id,
+        user_teams=user.teams,
+        role=user.role,
+    )
+
+
+@router.get("/{slug}", response_model=ProjectResponse)
+async def get_project(
+    slug: str,
+    user: TokenData = Depends(get_current_user),
+) -> ProjectResponse:
+    """Get a single project by slug."""
+    project = await project_service.get_project(slug)
+    if not project:
+        raise HTTPException(status_code=404, detail="project.not_found")
+    _check_team_access(user, project.team_id)
+    return project
+
+
+@router.post("/check-slug", response_model=SlugCheckResponse)
+async def check_slug(
+    slug: str,
+    user: TokenData = Depends(get_current_user),
+) -> SlugCheckResponse:
+    """Check if a project slug already exists."""
+    return await project_service.check_slug_exists(slug)
+
+
+@router.post("/{slug}/git/test", response_model=GitTestResponse)
+async def test_git(
+    slug: str,
+    config: GitConfig,
+    user: TokenData = Depends(get_current_user),
+) -> GitTestResponse:
+    """Test git connection for a project."""
+    project = await project_service.get_project(slug)
+    if not project:
+        raise HTTPException(status_code=404, detail="project.not_found")
+    _check_team_access(user, project.team_id)
+    return await git_service.test_git_connection(config)
+
+
+@router.post("/{slug}/git/init", response_model=dict)
+async def init_git(
+    slug: str,
+    config: GitConfig,
+    user: TokenData = Depends(get_current_user),
+) -> dict:
+    """Initialize or clone a git repo for a project."""
+    project = await project_service.get_project(slug)
+    if not project:
+        raise HTTPException(status_code=404, detail="project.not_found")
+    _check_team_access(user, project.team_id)
+    success = await git_service.init_or_clone(slug, config)
+    if not success:
+        raise HTTPException(status_code=500, detail="git.init_failed")
+    return {"ok": True}
+
+
+@router.get("/{slug}/git/status", response_model=GitStatusResponse)
+async def git_status(
+    slug: str,
+    user: TokenData = Depends(get_current_user),
+) -> GitStatusResponse:
+    """Get git status for a project repo."""
+    project = await project_service.get_project(slug)
+    if not project:
+        raise HTTPException(status_code=404, detail="project.not_found")
+    _check_team_access(user, project.team_id)
+    return await git_service.get_status(slug)

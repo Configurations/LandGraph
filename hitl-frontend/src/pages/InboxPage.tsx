@@ -2,17 +2,20 @@ import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { PageContainer } from '../components/layout/PageContainer';
-import { DetailPanel } from '../components/layout/DetailPanel';
 import { QuestionList } from '../components/features/hitl/QuestionList';
 import { AnswerModal } from '../components/features/hitl/AnswerModal';
+import { InboxList } from '../components/features/pm/InboxList';
+import { InboxBadge } from '../components/features/pm/InboxBadge';
 import { Select } from '../components/ui/Select';
 import { Badge } from '../components/ui/Badge';
-import { Button } from '../components/ui/Button';
 import { useTeamStore } from '../stores/teamStore';
 import { useNotificationStore } from '../stores/notificationStore';
+import { useInboxStore } from '../stores/inboxStore';
 import { useWsStore } from '../stores/wsStore';
 import * as hitlApi from '../api/hitl';
 import type { QuestionResponse } from '../api/types';
+
+type InboxTab = 'questions' | 'notifications';
 
 export function InboxPage(): JSX.Element {
   const { t } = useTranslation();
@@ -22,10 +25,13 @@ export function InboxPage(): JSX.Element {
   const setPendingCount = useNotificationStore((s) => s.setPendingCount);
   const lastEvent = useWsStore((s) => s.lastEvent);
 
+  const { notifications, unreadCount, loadNotifications, markAsRead, markAllAsRead } = useInboxStore();
+
   const [questions, setQuestions] = useState<QuestionResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<QuestionResponse | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<InboxTab>('questions');
 
   const statusFilter = searchParams.get('status') ?? '';
   const teamFilter = searchParams.get('team') ?? '';
@@ -50,7 +56,8 @@ export function InboxPage(): JSX.Element {
 
   useEffect(() => {
     void loadQuestions();
-  }, [loadQuestions]);
+    void loadNotifications();
+  }, [loadQuestions, loadNotifications]);
 
   useEffect(() => {
     if (lastEvent?.type === 'new_question') {
@@ -88,52 +95,87 @@ export function InboxPage(): JSX.Element {
   };
 
   const pendingCount = questions.filter((q) => q.status === 'pending').length;
+  const combinedBadge = pendingCount + unreadCount;
 
   return (
     <PageContainer>
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <h2 className="text-xl font-semibold">{t('hitl.questions')}</h2>
-          {pendingCount > 0 && (
-            <Badge color="red" variant="count">{pendingCount}</Badge>
-          )}
-        </div>
-        <div className="flex gap-2">
-          <Select
-            options={statusOptions}
-            value={statusFilter}
-            onChange={(e) => updateFilter('status', e.target.value)}
-            className="w-36"
-          />
-          <Select
-            options={teamOptions}
-            value={teamFilter}
-            onChange={(e) => updateFilter('team', e.target.value)}
-            className="w-36"
-          />
-        </div>
+      <div className="flex items-center gap-3 mb-6">
+        <h2 className="text-xl font-semibold">{t('nav.inbox')}</h2>
+        {combinedBadge > 0 && <Badge color="red" variant="count">{combinedBadge}</Badge>}
       </div>
 
-      <QuestionList
-        questions={questions}
-        loading={loading}
-        onQuestionClick={(q) => {
-          setSelected(q);
-          setModalOpen(true);
-        }}
-        onApprove={(q) => handleAnswer(q.id, '', 'approve')}
-        onReject={(q) => handleAnswer(q.id, '', 'reject')}
-      />
+      <div className="flex items-center gap-1 border-b border-border mb-4">
+        <button
+          onClick={() => setActiveTab('questions')}
+          className={[
+            'px-4 py-2 text-sm font-medium border-b-2 transition-colors',
+            activeTab === 'questions'
+              ? 'border-accent-blue text-accent-blue'
+              : 'border-transparent text-content-tertiary hover:text-content-primary',
+          ].join(' ')}
+        >
+          {t('hitl.questions')}
+          {pendingCount > 0 && <Badge color="red" variant="count" size="sm" className="ml-2">{pendingCount}</Badge>}
+        </button>
+        <button
+          onClick={() => setActiveTab('notifications')}
+          className={[
+            'flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors',
+            activeTab === 'notifications'
+              ? 'border-accent-blue text-accent-blue'
+              : 'border-transparent text-content-tertiary hover:text-content-primary',
+          ].join(' ')}
+        >
+          {t('inbox.notifications')}
+          <InboxBadge count={unreadCount} />
+        </button>
+      </div>
 
-      <AnswerModal
-        question={selected}
-        open={modalOpen}
-        onClose={() => {
-          setModalOpen(false);
-          setSelected(null);
-        }}
-        onSubmit={handleAnswer}
-      />
+      {activeTab === 'questions' && (
+        <>
+          <div className="flex gap-2 mb-4">
+            <Select
+              options={statusOptions}
+              value={statusFilter}
+              onChange={(e) => updateFilter('status', e.target.value)}
+              className="w-36"
+            />
+            <Select
+              options={teamOptions}
+              value={teamFilter}
+              onChange={(e) => updateFilter('team', e.target.value)}
+              className="w-36"
+            />
+          </div>
+          <QuestionList
+            questions={questions}
+            loading={loading}
+            onQuestionClick={(q) => {
+              setSelected(q);
+              setModalOpen(true);
+            }}
+            onApprove={(q) => handleAnswer(q.id, '', 'approve')}
+            onReject={(q) => handleAnswer(q.id, '', 'reject')}
+          />
+          <AnswerModal
+            question={selected}
+            open={modalOpen}
+            onClose={() => {
+              setModalOpen(false);
+              setSelected(null);
+            }}
+            onSubmit={handleAnswer}
+          />
+        </>
+      )}
+
+      {activeTab === 'notifications' && (
+        <InboxList
+          notifications={notifications}
+          onMarkRead={markAsRead}
+          onMarkAllRead={markAllAsRead}
+        />
+      )}
     </PageContainer>
   );
 }

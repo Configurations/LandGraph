@@ -1,5 +1,6 @@
 import '@testing-library/jest-dom';
 import { vi } from 'vitest';
+import React from 'react';
 import type { ReactNode } from 'react';
 
 // Mock react-i18next
@@ -19,8 +20,7 @@ vi.mock('react-router-dom', async () => {
     useLocation: () => ({ pathname: '/inbox', search: '', hash: '', state: null }),
     useSearchParams: () => [new URLSearchParams(), vi.fn()],
     useNavigate: () => vi.fn(),
-    Link: ({ children, to, ...props }: { children: ReactNode; to: string }) =>
-      // eslint-disable-next-line
-      ({ children, ...props }),
+    Link: ({ children, to, ...props }: { children: ReactNode; to: string; [key: string]: unknown }) =>
+      React.createElement('a', { ...props, href: to }, children),
   };
 });

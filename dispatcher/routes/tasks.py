@@ -34,6 +34,36 @@ async def run_task(req: RunTaskRequest, bg: BackgroundTasks) -> dict:
     return {"task_id": str(task_id), "status": "pending"}
 
 
+@router.get("/active")
+async def get_active_tasks() -> list[TaskResponse]:
+    """Get currently running or waiting tasks."""
+    pool = get_pool()
+    rows = await pool.fetch(
+        """SELECT id, status, agent_id, team_id, project_slug, phase,
+                  cost_usd, created_at, started_at, completed_at, error_message
+           FROM project.dispatcher_tasks
+           WHERE status IN ('running', 'waiting_hitl', 'pending')
+           ORDER BY created_at DESC
+           LIMIT 50"""
+    )
+    return [
+        TaskResponse(
+            task_id=r["id"],
+            status=r["status"],
+            agent_id=r["agent_id"],
+            team_id=r["team_id"],
+            project_slug=r["project_slug"],
+            phase=r["phase"],
+            cost_usd=float(r["cost_usd"] or 0),
+            created_at=r["created_at"],
+            started_at=r["started_at"],
+            completed_at=r["completed_at"],
+            error_message=r["error_message"],
+        )
+        for r in rows
+    ]
+
+
 @router.get("/{task_id}")
 async def get_task(task_id: UUID) -> TaskDetailResponse:
     """Get task detail with events and artifacts."""

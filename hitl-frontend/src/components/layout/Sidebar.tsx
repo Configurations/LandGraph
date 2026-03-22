@@ -55,11 +55,44 @@ export function Sidebar({ className = '' }: SidebarProps): JSX.Element {
 
       <nav className="flex-1 overflow-y-auto px-3 py-4">
         <SidebarItem
+          icon={
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+            </svg>
+          }
+          labelKey="nav.dashboard"
+          to="/dashboard"
+          active={location.pathname === '/dashboard'}
+        />
+
+        <SidebarItem
+          icon={
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+            </svg>
+          }
+          labelKey="nav.issues"
+          to="/issues"
+          active={location.pathname === '/issues'}
+        />
+
+        <SidebarItem
           icon={inboxIcon}
           labelKey="nav.inbox"
           to="/inbox"
           badge={pendingCount}
           active={location.pathname === '/inbox'}
+        />
+
+        <SidebarItem
+          icon={
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+            </svg>
+          }
+          labelKey="project.projects"
+          to="/projects"
+          active={location.pathname.startsWith('/projects')}
         />
 
         {teams.length > 0 && (
@@ -79,6 +112,16 @@ export function Sidebar({ className = '' }: SidebarProps): JSX.Element {
                   labelKey="nav.members"
                   to={`/teams/${team.id}/members`}
                   active={location.pathname === `/teams/${team.id}/members`}
+                />
+                <SidebarItem
+                  icon={
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                    </svg>
+                  }
+                  labelKey="nav.agents"
+                  to={`/teams/${team.id}/agents`}
+                  active={location.pathname.startsWith(`/teams/${team.id}/agents`)}
                 />
               </SidebarTeamGroup>
             ))}

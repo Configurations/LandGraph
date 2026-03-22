@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import structlog
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
@@ -14,6 +15,22 @@ from core.websocket_manager import ws_manager
 log = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["ws"])
+
+
+def _handle_ws_message(websocket: WebSocket, raw: str) -> None:
+    """Process incoming WS messages for watch/unwatch commands."""
+    try:
+        msg = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return
+
+    msg_type = msg.get("type", "")
+    if msg_type == "watch_chat":
+        agent_id = msg.get("agent_id", "")
+        if agent_id:
+            ws_manager.watch_chat(websocket, agent_id)
+    elif msg_type == "unwatch_chat":
+        ws_manager.unwatch_chat(websocket)
 
 
 @router.websocket("/api/teams/{team_id}/ws")
@@ -40,14 +57,17 @@ async def team_websocket(
         return
 
     await websocket.accept()
-    await ws_manager.connect(team_id, websocket)
+    await ws_manager.connect(team_id, websocket, user_email=email)
     log.info("ws_connected", team_id=team_id, email=email)
 
     try:
         while True:
-            # Ping loop — keep connection alive
+            # Receive loop — handle watch/unwatch + keep alive
             try:
-                await asyncio.wait_for(websocket.receive_text(), timeout=45.0)
+                raw = await asyncio.wait_for(
+                    websocket.receive_text(), timeout=45.0,
+                )
+                _handle_ws_message(websocket, raw)
             except asyncio.TimeoutError:
                 # Send ping to keep alive
                 try:

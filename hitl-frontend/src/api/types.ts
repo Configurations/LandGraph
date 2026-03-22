@@ -89,3 +89,296 @@ export interface WebSocketEvent {
   data: Record<string, unknown>;
   timestamp?: string;
 }
+
+/* ── Projects ── */
+
+export interface CreateProjectPayload {
+  name: string;
+  slug: string;
+  language: string;
+  team_id: string;
+  git_config?: GitTestPayload;
+}
+
+export interface ProjectResponse {
+  id: string;
+  name: string;
+  slug: string;
+  team_id: string;
+  language: string;
+  git_connected: boolean;
+  git_repo_exists: boolean;
+  created_at: string;
+}
+
+export interface SlugCheckResponse {
+  available: boolean;
+}
+
+export interface GitTestPayload {
+  service: string;
+  url: string;
+  login: string;
+  token: string;
+  repo_name: string;
+}
+
+export interface GitTestResponse {
+  connected: boolean;
+  repo_exists: boolean;
+  error?: string;
+}
+
+export interface GitStatusResponse {
+  connected: boolean;
+  repo_exists: boolean;
+  branch?: string;
+  last_commit?: string;
+}
+
+/* ── RAG / Documents ── */
+
+export interface UploadResponse {
+  filename: string;
+  size: number;
+  content_type: string;
+  chunks: number;
+}
+
+export interface UploadedFile {
+  name: string;
+  size: number;
+  content_type: string;
+}
+
+export interface RagSearchResult {
+  content: string;
+  score: number;
+  source: string;
+}
+
+export interface AnalysisStartResponse {
+  task_id: string;
+}
+
+export interface AnalysisStatusResponse {
+  status: 'starting' | 'running' | 'complete' | 'error';
+  messages: ConversationMessage[];
+}
+
+export interface ConversationMessage {
+  role: 'agent' | 'user';
+  content: string;
+  timestamp: string;
+}
+
+/* ── Deliverables ── */
+
+export type DeliverableStatus = 'pending' | 'approved' | 'rejected';
+
+export interface DeliverableResponse {
+  id: string;
+  task_id: string;
+  key: string;
+  deliverable_type: string;
+  file_path: string;
+  git_branch: string;
+  category: string;
+  status: DeliverableStatus;
+  reviewer: string | null;
+  review_comment: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+  agent_id: string;
+  phase: string;
+  project_slug: string;
+}
+
+export interface DeliverableDetail extends DeliverableResponse {
+  content: string;
+  cost_usd: number;
+}
+
+export interface RemarkResponse {
+  id: string;
+  artifact_id: string;
+  reviewer: string;
+  comment: string;
+  created_at: string;
+}
+
+export interface BranchInfo {
+  name: string;
+  ahead: number;
+  behind: number;
+  last_commit: string;
+}
+
+export interface BranchDiffFile {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+}
+
+export interface DeliverableListParams {
+  phase?: string;
+  status?: string;
+  agent_id?: string;
+}
+
+/* ── Chat ── */
+
+export interface ChatMessage {
+  id: string;
+  team_id: string;
+  agent_id: string;
+  thread_id: string;
+  sender: string;
+  content: string;
+  created_at: string;
+}
+
+/* ── Agents ── */
+
+export interface AgentInfo {
+  id: string;
+  name: string;
+  llm: string;
+  type: string;
+  pending_questions: number;
+}
+
+/* ── Dashboard ── */
+
+export interface ActiveTask {
+  task_id: string;
+  agent_id: string;
+  team_id: string;
+  project_slug: string;
+  phase: string;
+  status: string;
+  cost_usd: number;
+  started_at: string;
+}
+
+export interface CostSummary {
+  project_slug: string;
+  team_id: string;
+  phase: string;
+  agent_id: string;
+  total_cost_usd: number;
+  task_count: number;
+  avg_cost_per_task: number;
+}
+
+export interface OverviewData {
+  pending_questions: number;
+  active_tasks: number;
+  total_cost: number;
+}
+
+/* ── Issues (PM) ── */
+
+export type IssueStatus = 'backlog' | 'todo' | 'in-progress' | 'in-review' | 'done';
+export type IssuePriority = 1 | 2 | 3 | 4;
+export type IssueGroupBy = 'status' | 'team' | 'assignee' | 'dependency';
+
+export interface IssueResponse {
+  id: string;
+  project_id: string;
+  title: string;
+  description: string;
+  status: IssueStatus;
+  priority: IssuePriority;
+  assignee: string;
+  team_id: string;
+  tags: string[];
+  phase: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  is_blocked: boolean;
+  blocking_count: number;
+  blocked_by_count: number;
+}
+
+export interface IssueDetail extends IssueResponse {
+  relations: RelationResponse[];
+  project_name: string;
+}
+
+export interface IssueCreatePayload {
+  title: string;
+  description?: string;
+  priority?: IssuePriority;
+  status?: IssueStatus;
+  assignee?: string;
+  tags?: string[];
+  project_id?: string;
+  phase?: string;
+}
+
+export type IssueUpdatePayload = Partial<IssueCreatePayload>;
+
+export interface IssueListParams {
+  team_id?: string;
+  project_id?: string;
+  status?: IssueStatus;
+  assignee?: string;
+}
+
+/* ── Relations ── */
+
+export type RelationType = 'blocks' | 'relates_to' | 'parent_of' | 'duplicates';
+
+export interface RelationResponse {
+  id: string;
+  type: RelationType;
+  direction: 'outgoing' | 'incoming';
+  display_type: string;
+  issue_id: string;
+  issue_title: string;
+  issue_status: IssueStatus;
+  reason: string;
+  created_by: string;
+  created_at: string;
+}
+
+export interface RelationCreatePayload {
+  type: RelationType;
+  target_issue_id: string;
+  reason?: string;
+}
+
+/* ── PM Notifications ── */
+
+export type PMNotificationType = 'assigned' | 'status_changed' | 'blocked' | 'mentioned' | 'comment';
+
+export interface PMNotification {
+  id: string;
+  user_email: string;
+  type: PMNotificationType;
+  text: string;
+  issue_id: string;
+  related_issue_id: string;
+  relation_type: string;
+  avatar: string;
+  read: boolean;
+  created_at: string;
+}
+
+/* ── Activity ── */
+
+export type ActivitySource = 'pm' | 'agent';
+
+export interface ActivityEntry {
+  id: string;
+  project_id: string;
+  user_name: string;
+  action: string;
+  issue_id: string;
+  detail: string;
+  created_at: string;
+  source: ActivitySource;
+}

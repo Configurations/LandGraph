@@ -350,3 +350,92 @@ CREATE TRIGGER trigger_hitl_response
     AFTER UPDATE ON project.hitl_requests
     FOR EACH ROW
     EXECUTE FUNCTION notify_hitl_response();
+
+-- ── Phase 2a: Project + RAG tables ────────────────
+
+-- Extend pm_projects with new columns
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='project' AND table_name='pm_projects' AND column_name='slug') THEN
+        ALTER TABLE project.pm_projects ADD COLUMN slug TEXT DEFAULT '';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='project' AND table_name='pm_projects' AND column_name='git_service') THEN
+        ALTER TABLE project.pm_projects ADD COLUMN git_service TEXT DEFAULT 'other';
+        ALTER TABLE project.pm_projects ADD COLUMN git_url TEXT DEFAULT '';
+        ALTER TABLE project.pm_projects ADD COLUMN git_login TEXT DEFAULT '';
+        ALTER TABLE project.pm_projects ADD COLUMN git_token_env TEXT DEFAULT '';
+        ALTER TABLE project.pm_projects ADD COLUMN git_repo_name TEXT DEFAULT '';
+        ALTER TABLE project.pm_projects ADD COLUMN language TEXT DEFAULT 'fr';
+        ALTER TABLE project.pm_projects ADD COLUMN rag_collection TEXT DEFAULT '';
+    END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS project.rag_documents (
+    id SERIAL PRIMARY KEY,
+    project_slug TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL DEFAULT 0,
+    content TEXT NOT NULL,
+    embedding vector(1536),
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_rag_docs_project ON project.rag_documents(project_slug);
+
+-- IVFFlat index for cosine similarity (needs rows first, created conditionally)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'idx_rag_docs_embedding') THEN
+        BEGIN
+            CREATE INDEX idx_rag_docs_embedding ON project.rag_documents
+                USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+        EXCEPTION WHEN others THEN
+            RAISE NOTICE 'IVFFlat index skipped (needs data first): %', SQLERRM;
+        END;
+    END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS project.rag_conversations (
+    id SERIAL PRIMARY KEY,
+    project_slug TEXT NOT NULL,
+    task_id UUID,
+    sender TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_rag_conv_project ON project.rag_conversations(project_slug, created_at);
+
+-- ── Phase 2b: Deliverable remarks + budget ────────
+CREATE TABLE IF NOT EXISTS project.deliverable_remarks (
+    id SERIAL PRIMARY KEY,
+    artifact_id INTEGER REFERENCES project.dispatcher_task_artifacts(id) ON DELETE CASCADE,
+    reviewer TEXT NOT NULL,
+    comment TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_remarks_artifact ON project.deliverable_remarks(artifact_id, created_at);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='project' AND table_name='pm_projects' AND column_name='budget') THEN
+        ALTER TABLE project.pm_projects ADD COLUMN budget NUMERIC(10,2) DEFAULT 0;
+    END IF;
+END $$;
+
+-- ── Phase 3a: PM inbox notification trigger ───────
+CREATE OR REPLACE FUNCTION notify_pm_inbox() RETURNS TRIGGER AS $$
+BEGIN
+    PERFORM pg_notify('pm_inbox', json_build_object(
+        'user_email', NEW.user_email,
+        'type', NEW.type,
+        'issue_id', COALESCE(NEW.issue_id, '')
+    )::text);
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trigger_pm_inbox ON project.pm_inbox;
+CREATE TRIGGER trigger_pm_inbox
+    AFTER INSERT ON project.pm_inbox
+    FOR EACH ROW EXECUTE FUNCTION notify_pm_inbox();

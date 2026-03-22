@@ -95,7 +95,8 @@ describe('InboxPage', () => {
     render(<InboxPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('2')).toBeInTheDocument();
+      const badges = screen.getAllByText('2');
+      expect(badges.length).toBeGreaterThanOrEqual(1);
     });
   });
 });
