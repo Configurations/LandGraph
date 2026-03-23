@@ -28,7 +28,7 @@ def _check_team_access(user: TokenData, team_id: str) -> None:
         raise HTTPException(status_code=403, detail="team.access_denied")
 
 
-@router.post("/", response_model=ProjectResponse)
+@router.post("", response_model=ProjectResponse)
 async def create_project(
     data: ProjectCreate,
     user: TokenData = Depends(get_current_user),
@@ -41,7 +41,7 @@ async def create_project(
     return await project_service.create_project(data)
 
 
-@router.get("/", response_model=list[ProjectResponse])
+@router.get("", response_model=list[ProjectResponse])
 async def list_projects(
     team_id: Optional[str] = None,
     user: TokenData = Depends(get_current_user),
@@ -76,13 +76,32 @@ async def check_slug(
     return await project_service.check_slug_exists(slug)
 
 
+@router.post("/git/test", response_model=GitTestResponse)
+async def test_git_standalone(
+    config: GitConfig,
+    user: TokenData = Depends(get_current_user),
+) -> GitTestResponse:
+    """Test git connection (no project required — used during wizard)."""
+    return await git_service.test_git_connection(config)
+
+
+@router.post("/git/branches")
+async def list_remote_branches(
+    config: GitConfig,
+    user: TokenData = Depends(get_current_user),
+) -> dict:
+    """List branches on a remote repo (no project required — used during wizard)."""
+    branches = await git_service.list_remote_branches(config)
+    return {"branches": branches}
+
+
 @router.post("/{slug}/git/test", response_model=GitTestResponse)
 async def test_git(
     slug: str,
     config: GitConfig,
     user: TokenData = Depends(get_current_user),
 ) -> GitTestResponse:
-    """Test git connection for a project."""
+    """Test git connection for an existing project."""
     project = await project_service.get_project(slug)
     if not project:
         raise HTTPException(status_code=404, detail="project.not_found")

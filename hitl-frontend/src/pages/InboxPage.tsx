@@ -25,10 +25,11 @@ export function InboxPage(): JSX.Element {
   const activeTeamId = useTeamStore((s) => s.activeTeamId);
   const teams = useTeamStore((s) => s.teams);
   const activeSlug = useProjectStore((s) => s.activeSlug);
-  const setPendingCount = useNotificationStore((s) => s.setPendingCount);
+  // setPendingCount called via getState() to avoid re-render loops
   const lastEvent = useWsStore((s) => s.lastEvent);
 
-  const { notifications, unreadCount, loadNotifications, markAsRead, markAllAsRead } = useInboxStore();
+  const notifications = useInboxStore((s) => s.notifications);
+  const unreadCount = useInboxStore((s) => s.unreadCount);
 
   const [questions, setQuestions] = useState<QuestionResponse[]>([]);
   const [loading, setLoading] = useState(true);
@@ -51,18 +52,18 @@ export function InboxPage(): JSX.Element {
       });
       setQuestions(data);
       const pending = data.filter((q) => q.status === 'pending').length;
-      setPendingCount(pending);
+      useNotificationStore.getState().setPendingCount(pending);
     } catch {
       // handled by apiFetch
     } finally {
       setLoading(false);
     }
-  }, [activeTeamId, statusFilter, teamFilter, setPendingCount]);
+  }, [activeTeamId, statusFilter, teamFilter]);
 
   useEffect(() => {
     void loadQuestions();
-    void loadNotifications();
-  }, [loadQuestions, loadNotifications]);
+    useInboxStore.getState().loadNotifications();
+  }, [loadQuestions]);
 
   useEffect(() => {
     if (!activeSlug) { setProjectWorkflows([]); return; }
@@ -195,8 +196,8 @@ export function InboxPage(): JSX.Element {
       {activeTab === 'notifications' && (
         <InboxList
           notifications={notifications}
-          onMarkRead={markAsRead}
-          onMarkAllRead={markAllAsRead}
+          onMarkRead={(id) => useInboxStore.getState().markAsRead(id)}
+          onMarkAllRead={() => useInboxStore.getState().markAllAsRead()}
         />
       )}
     </PageContainer>

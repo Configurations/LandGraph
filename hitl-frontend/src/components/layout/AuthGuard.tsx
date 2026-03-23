@@ -1,6 +1,6 @@
-import { type ReactNode, useEffect } from 'react';
+import { type ReactNode, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../../hooks/useAuth';
+import { useAuthStore } from '../../stores/authStore';
 import { Spinner } from '../ui/Spinner';
 
 interface AuthGuardProps {
@@ -8,8 +8,18 @@ interface AuthGuardProps {
 }
 
 export function AuthGuard({ children }: AuthGuardProps): JSX.Element {
-  const { isAuthenticated, loading } = useAuth();
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const user = useAuthStore((s) => s.user);
+  const loading = useAuthStore((s) => s.loading);
   const navigate = useNavigate();
+  const didInit = useRef(false);
+
+  useEffect(() => {
+    if (!didInit.current && isAuthenticated && !user && !loading) {
+      didInit.current = true;
+      useAuthStore.getState().loadUser();
+    }
+  }, [isAuthenticated, user, loading]);
 
   useEffect(() => {
     if (!loading && !isAuthenticated) {
@@ -17,7 +27,7 @@ export function AuthGuard({ children }: AuthGuardProps): JSX.Element {
     }
   }, [isAuthenticated, loading, navigate]);
 
-  if (loading) {
+  if (loading || (isAuthenticated && !user)) {
     return (
       <div className="flex h-screen items-center justify-center bg-surface-primary">
         <Spinner size="lg" />

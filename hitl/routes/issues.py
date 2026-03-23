@@ -89,15 +89,16 @@ async def update_issue(
     return result
 
 
-@router.delete("/issues/{issue_id}", status_code=204)
+@router.delete("/issues/{issue_id}")
 async def delete_issue(
     issue_id: str,
     user: TokenData = Depends(get_current_user),
-) -> None:
+) -> dict:
     """Delete an issue."""
     ok = await issue_service.delete_issue(issue_id, user.email)
     if not ok:
         raise HTTPException(status_code=404, detail="issue.not_found")
+    return {"ok": True}
 
 
 @router.post("/issues/bulk", response_model=list[IssueResponse], status_code=201)

@@ -48,7 +48,7 @@ export const useInboxStore = create<InboxState>((set) => ({
 
   loadUnreadCount: async () => {
     try {
-      const { count } = await inboxApi.getUnreadCount();
+      const count = await inboxApi.getUnreadCount();
       set({ unreadCount: count });
     } catch {
       // silent

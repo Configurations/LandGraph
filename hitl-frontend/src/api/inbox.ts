@@ -1,23 +1,32 @@
 import { apiFetch } from './client';
 import type { PMNotification } from './types';
 
-export function listNotifications(): Promise<PMNotification[]> {
-  return apiFetch<PMNotification[]>('/api/pm/notifications');
+export async function listNotifications(): Promise<PMNotification[]> {
+  try {
+    return await apiFetch<PMNotification[]>('/api/pm/inbox');
+  } catch {
+    return [];
+  }
 }
 
 export function markRead(id: string): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(
-    `/api/pm/notifications/${encodeURIComponent(id)}/read`,
-    { method: 'POST' },
+    `/api/pm/inbox/${encodeURIComponent(id)}/read`,
+    { method: 'PUT' },
   );
 }
 
 export function markAllRead(): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>('/api/pm/notifications/read-all', {
-    method: 'POST',
+  return apiFetch<{ ok: boolean }>('/api/pm/inbox/read-all', {
+    method: 'PUT',
   });
 }
 
-export function getUnreadCount(): Promise<{ count: number }> {
-  return apiFetch<{ count: number }>('/api/pm/notifications/unread-count');
+export async function getUnreadCount(): Promise<number> {
+  try {
+    const data = await apiFetch<{ count: number }>('/api/pm/inbox/count');
+    return data.count ?? 0;
+  } catch {
+    return 0;
+  }
 }

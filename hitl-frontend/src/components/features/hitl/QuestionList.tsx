@@ -1,4 +1,3 @@
-import { useTranslation } from 'react-i18next';
 import { QuestionCard } from './QuestionCard';
 import { EmptyState } from '../../ui/EmptyState';
 import { Spinner } from '../../ui/Spinner';
@@ -23,8 +22,6 @@ export function QuestionList({
   onReject,
   className = '',
 }: QuestionListProps): JSX.Element {
-  const { t } = useTranslation();
-
   if (loading) {
     return (
       <div className="flex justify-center py-12">

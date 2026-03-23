@@ -10,6 +10,7 @@ import { ProjectTypeSelector } from './ProjectTypeSelector';
 import { WizardStepDocuments } from './WizardStepDocuments';
 import { WizardStepAnalysis } from './WizardStepAnalysis';
 import { useProjectStore } from '../../../stores/projectStore';
+import { useTeamStore } from '../../../stores/teamStore';
 import * as projectsApi from '../../../api/projects';
 import * as projectTypesApi from '../../../api/projectTypes';
 
@@ -36,6 +37,8 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
   const wizardData = useProjectStore((s) => s.wizardData);
   const resetWizard = useProjectStore((s) => s.resetWizard);
   const loadProjects = useProjectStore((s) => s.loadProjects);
+  const teams = useTeamStore((s) => s.teams);
+  const activeTeamId = useTeamStore((s) => s.activeTeamId);
 
   const [completed, setCompleted] = useState<Set<number>>(new Set());
   const [creating, setCreating] = useState(false);
@@ -66,7 +69,7 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
           name: wizardData.name,
           slug: wizardData.slug,
           language: wizardData.language,
-          team_id: wizardData.teamId,
+          team_id: wizardData.teamId || activeTeamId || teams[0]?.id || '',
           git_config: wizardData.gitConfig ?? undefined,
         });
         markComplete(2);

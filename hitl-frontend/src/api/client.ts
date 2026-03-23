@@ -46,7 +46,6 @@ export async function apiFetch<T>(path: string, options: FetchOptions = {}): Pro
 
   if (response.status === 401) {
     clearToken();
-    window.location.href = '/login';
     throw new ApiError(401, 'Unauthorized');
   }
 

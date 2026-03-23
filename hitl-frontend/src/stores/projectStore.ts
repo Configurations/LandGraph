@@ -8,6 +8,7 @@ interface WizardData {
   language: string;
   teamId: string;
   gitConfig: GitTestPayload | null;
+  gitBranch: string;
 }
 
 const defaultWizardData: WizardData = {
@@ -16,6 +17,7 @@ const defaultWizardData: WizardData = {
   language: 'fr',
   teamId: '',
   gitConfig: null,
+  gitBranch: '',
 };
 
 interface ProjectState {

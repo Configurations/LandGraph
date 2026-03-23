@@ -44,12 +44,11 @@ export interface MemberResponse {
 export interface QuestionResponse {
   id: string;
   thread_id: string;
-  agent_name: string;
   agent_id: string;
   team_id: string;
-  question_type: 'approval' | 'question';
+  request_type: 'approval' | 'question';
   prompt: string;
-  context: string;
+  context: Record<string, unknown> | null;
   status: 'pending' | 'answered' | 'timeout' | 'cancelled';
   response: string | null;
   reviewer: string | null;
@@ -112,7 +111,8 @@ export interface ProjectResponse {
 }
 
 export interface SlugCheckResponse {
-  available: boolean;
+  exists: boolean;
+  path: string;
 }
 
 export interface GitTestPayload {
@@ -126,7 +126,7 @@ export interface GitTestPayload {
 export interface GitTestResponse {
   connected: boolean;
   repo_exists: boolean;
-  error?: string;
+  message: string;
 }
 
 export interface GitStatusResponse {
@@ -162,14 +162,17 @@ export interface AnalysisStartResponse {
 }
 
 export interface AnalysisStatusResponse {
-  status: 'starting' | 'running' | 'complete' | 'error';
-  messages: ConversationMessage[];
+  status: string;
+  events?: Array<{ event_type: string; data: unknown; created_at: string }>;
 }
 
 export interface ConversationMessage {
-  role: 'agent' | 'user';
+  id: number;
+  project_slug: string;
+  task_id: string | null;
+  sender: string;
   content: string;
-  timestamp: string;
+  created_at: string;
 }
 
 /* ── Deliverables ── */
@@ -426,9 +429,8 @@ export interface PRListParams {
 /* ── Pulse ── */
 
 export interface MetricValue {
-  label: string;
-  value: number;
-  unit: string;
+  value: string;
+  sub: string;
 }
 
 export interface TeamMemberActivity {
@@ -454,8 +456,7 @@ export interface PulseResponse {
   velocity: MetricValue;
   throughput: MetricValue;
   cycle_time: MetricValue;
-  burndown_total: MetricValue;
-  status_breakdown: Record<IssueStatus, number>;
+  status_distribution: Record<string, number>;
   team_activity: TeamMemberActivity[];
   dependency_health: DependencyHealth;
   burndown: BurndownPoint[];
@@ -508,9 +509,8 @@ export interface ProjectTypeResponse {
   id: string;
   name: string;
   description: string;
-  team_id: string;
+  team: string;
   workflows: WorkflowTemplate[];
-  created_at: string;
 }
 
 /* ── Project Workflows ── */

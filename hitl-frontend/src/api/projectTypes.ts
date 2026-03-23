@@ -1,10 +1,12 @@
 import { apiFetch } from './client';
 import type { ProjectTypeResponse } from './types';
 
-export function listProjectTypes(teamId: string): Promise<ProjectTypeResponse[]> {
-  return apiFetch<ProjectTypeResponse[]>(
-    `/api/teams/${encodeURIComponent(teamId)}/project-types`,
-  );
+export async function listProjectTypes(_teamId?: string): Promise<ProjectTypeResponse[]> {
+  try {
+    return await apiFetch<ProjectTypeResponse[]>('/api/project-types');
+  } catch {
+    return [];
+  }
 }
 
 export function getProjectType(typeId: string): Promise<ProjectTypeResponse> {

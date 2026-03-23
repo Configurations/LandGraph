@@ -17,8 +17,16 @@ log = structlog.get_logger(__name__)
 
 
 def _shared_projects_dir() -> str:
-    """Return the path to Shared/Projects/."""
+    """Return the path to project type templates.
+
+    Searches: config/Projects/, then Shared/Projects/ relative to config dir.
+    """
     config_dir = _find_config_dir()
+    # First try config/Projects/ (available in Docker via volume mount)
+    candidate = os.path.join(config_dir, "Projects")
+    if os.path.isdir(candidate):
+        return candidate
+    # Fallback: Shared/Projects/ (local dev)
     return os.path.join(config_dir, "..", "Shared", "Projects")
 
 

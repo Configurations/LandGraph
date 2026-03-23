@@ -33,17 +33,25 @@ async def _run_git(cwd: str, *args: str) -> tuple[int, str, str]:
     return rc, stdout_bytes.decode("utf-8", errors="replace"), stderr_bytes.decode("utf-8", errors="replace")
 
 
+def _full_repo_name(config: GitConfig) -> str:
+    """Ensure repo_name includes owner/ prefix."""
+    if "/" in config.repo_name:
+        return config.repo_name
+    return f"{config.login}/{config.repo_name}"
+
+
 def _build_clone_url(config: GitConfig) -> str:
     """Build a clone URL with embedded credentials."""
+    repo = _full_repo_name(config)
     if config.service == "github":
-        return f"https://{config.login}:{config.token}@github.com/{config.repo_name}.git"
+        return f"https://{config.login}:{config.token}@github.com/{repo}.git"
     if config.service == "gitlab":
-        return f"https://oauth2:{config.token}@gitlab.com/{config.repo_name}.git"
+        return f"https://oauth2:{config.token}@gitlab.com/{repo}.git"
     if config.service in ("gitea", "forgejo"):
         host = config.url.replace("https://", "").replace("http://", "").rstrip("/")
-        return f"https://{config.login}:{config.token}@{host}/{config.repo_name}.git"
+        return f"https://{config.login}:{config.token}@{host}/{repo}.git"
     if config.service == "bitbucket":
-        return f"https://{config.login}:{config.token}@bitbucket.org/{config.repo_name}.git"
+        return f"https://{config.login}:{config.token}@bitbucket.org/{repo}.git"
     # Fallback: use git_url directly
     return config.url
 
@@ -51,6 +59,27 @@ def _build_clone_url(config: GitConfig) -> str:
 async def test_git_connection(config: GitConfig) -> GitTestResponse:
     """Proxy to git_providers.test_connection."""
     return await test_connection(config)
+
+
+async def list_remote_branches(config: GitConfig) -> list[str]:
+    """List branches on a remote repo via git ls-remote (no clone needed)."""
+    clone_url = _build_clone_url(config)
+    proc = await asyncio.create_subprocess_exec(
+        "git", "ls-remote", "--heads", clone_url,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        log.warning("git_ls_remote_failed", error=stderr.decode()[:200])
+        return []
+    branches = []
+    for line in stdout.decode().strip().splitlines():
+        # Format: <hash>\trefs/heads/<branch>
+        parts = line.split("\t")
+        if len(parts) == 2 and parts[1].startswith("refs/heads/"):
+            branches.append(parts[1].removeprefix("refs/heads/"))
+    return sorted(branches)
 
 
 async def clone_repo(slug: str, config: GitConfig) -> bool:

@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from core.config import load_teams, settings
-from core.database import close_pool, execute, fetch_one, init_pool
+from core.database import close_pool, execute, fetch_all, fetch_one, init_pool
 from core.pg_notify import pg_listener
 from core.security import hash_password
 from core.websocket_manager import ws_manager
@@ -146,6 +146,26 @@ async def _seed_admin() -> None:
     log.info("admin_seeded", email=email, teams=len(teams))
 
 
+async def _ensure_admin_teams() -> None:
+    """Ensure all admin users are members of all teams."""
+    teams = load_teams()
+    if not teams:
+        return
+    admins = await fetch_all(
+        "SELECT id FROM project.hitl_users WHERE role = 'admin'"
+    )
+    for admin in admins:
+        for t in teams:
+            await execute(
+                """INSERT INTO project.hitl_team_members (user_id, team_id, role)
+                   VALUES ($1, $2, 'admin')
+                   ON CONFLICT DO NOTHING""",
+                admin["id"], t["id"],
+            )
+    if admins:
+        log.info("admin_teams_ensured", admins=len(admins), teams=len(teams))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Startup and shutdown lifecycle."""
@@ -153,6 +173,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await init_pool()
     await _ensure_schema()
     await _seed_admin()
+    await _ensure_admin_teams()
     await pg_listener.start(ws_manager)
     log.info("hitl_console_started")
     yield
@@ -229,4 +250,39 @@ app.include_router(project_detail_router)
 # Serve static files if directory exists (Docker build)
 _static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.isdir(_static_dir):
-    app.mount("/", StaticFiles(directory=_static_dir, html=True), name="static")
+    _index_html = os.path.join(_static_dir, "index.html")
+
+    # Mount static assets (JS, CSS, images, locales)
+    app.mount("/assets", StaticFiles(directory=os.path.join(_static_dir, "assets")), name="assets")
+    app.mount("/locales", StaticFiles(directory=os.path.join(_static_dir, "locales")), name="locales")
+
+    # Serve sw.js at root
+    _sw_path = os.path.join(_static_dir, "sw.js")
+    if os.path.isfile(_sw_path):
+        @app.get("/sw.js")
+        async def service_worker():
+            from fastapi.responses import FileResponse
+            return FileResponse(_sw_path, media_type="application/javascript")
+
+    # SPA catch-all: serve index.html for non-API, non-static routes
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.responses import FileResponse as StarletteFileResponse
+
+    class SPAFallbackMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            response = await call_next(request)
+            path = request.url.path
+            # If 404 and not an API/static path, serve index.html
+            if (
+                response.status_code == 404
+                and not path.startswith(("/api/", "/health", "/assets/", "/locales/", "/sw.js"))
+                and request.method == "GET"
+            ):
+                return StarletteFileResponse(
+                    _index_html,
+                    media_type="text/html",
+                    headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+                )
+            return response
+
+    app.add_middleware(SPAFallbackMiddleware)

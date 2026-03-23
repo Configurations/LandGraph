@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../ui/Button';
 import { GitStatusBadge } from './GitStatusBadge';
@@ -28,14 +28,29 @@ export function WizardStepGit({ className = '' }: WizardStepGitProps): JSX.Eleme
   const wizardData = useProjectStore((s) => s.wizardData);
   const updateWizardData = useProjectStore((s) => s.updateWizardData);
 
-  const [service, setService] = useState<ServiceType>('other');
-  const [url, setUrl] = useState('');
-  const [login, setLogin] = useState('');
-  const [token, setToken] = useState('');
-  const [repoName, setRepoName] = useState(wizardData.slug || '');
+  const saved = wizardData.gitConfig as GitTestPayload | undefined;
+  const [service, setService] = useState<ServiceType>((saved?.service as ServiceType) || 'other');
+  const [url, setUrl] = useState(saved?.url || '');
+  const [login, setLogin] = useState(saved?.login || '');
+  const [token, setToken] = useState(saved?.token || '');
+  const [repoName, setRepoName] = useState(saved?.repo_name || wizardData.slug || '');
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ connected: boolean; repoExists: boolean } | null>(null);
+  const [testResult, setTestResult] = useState<{ connected: boolean; repoExists: boolean } | null>(
+    saved ? { connected: true, repoExists: !!wizardData.gitBranch } : null,
+  );
   const [error, setError] = useState<string | null>(null);
+  const [branches, setBranches] = useState<string[]>([]);
+  const [selectedBranch, setSelectedBranch] = useState<string>(wizardData.gitBranch || '');
+
+  // Reload branches on mount if git was already validated
+  useEffect(() => {
+    if (saved && wizardData.gitBranch && branches.length === 0) {
+      projectsApi.listRemoteBranches(saved).then((b) => {
+        if (b.length > 0) setBranches(b);
+      }).catch(() => {});
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleServiceChange = useCallback((value: ServiceType) => {
     setService(value);
@@ -43,6 +58,7 @@ export function WizardStepGit({ className = '' }: WizardStepGitProps): JSX.Eleme
     if (defaultUrl) setUrl(defaultUrl);
     setTestResult(null);
     setError(null);
+    setBranches([]);
   }, []);
 
   const buildConfig = useCallback((): GitTestPayload => ({
@@ -57,20 +73,35 @@ export function WizardStepGit({ className = '' }: WizardStepGitProps): JSX.Eleme
     setTesting(true);
     setError(null);
     setTestResult(null);
+    setBranches([]);
     try {
-      const slug = wizardData.slug || 'temp';
-      const result = await projectsApi.testGitConnection(slug, buildConfig());
+      const config = buildConfig();
+      const result = await projectsApi.testGitStandalone(config);
       setTestResult({ connected: result.connected, repoExists: result.repo_exists });
       if (result.connected) {
-        updateWizardData({ gitConfig: buildConfig() });
+        updateWizardData({ gitConfig: config });
+        // If repo exists, fetch branches
+        if (result.repo_exists) {
+          const remoteBranches = await projectsApi.listRemoteBranches(config);
+          setBranches(remoteBranches);
+          if (remoteBranches.length > 0) {
+            const defaultBranch = remoteBranches.includes('main') ? 'main'
+              : remoteBranches.includes('dev') ? 'dev'
+              : remoteBranches[0];
+            setSelectedBranch(defaultBranch);
+            updateWizardData({ gitConfig: config, gitBranch: defaultBranch } );
+          }
+        }
       }
-      if (result.error) setError(result.error);
+      if (!result.connected) {
+        setError(result.message || t('git.connection_error'));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setTesting(false);
     }
-  }, [wizardData.slug, buildConfig, updateWizardData]);
+  }, [buildConfig, updateWizardData, t]);
 
   const serviceLabel = (s: ServiceType): string =>
     s === 'other' ? t('git.other') : s.charAt(0).toUpperCase() + s.slice(1);
@@ -122,6 +153,24 @@ export function WizardStepGit({ className = '' }: WizardStepGitProps): JSX.Eleme
       </div>
 
       {error && <p className="text-xs text-accent-red">{error}</p>}
+
+      {branches.length > 0 && (
+        <label className="flex flex-col gap-1">
+          <span className="text-sm font-medium text-content-secondary">{t('git.branch')}</span>
+          <select
+            value={selectedBranch}
+            onChange={(e) => {
+              setSelectedBranch(e.target.value);
+              updateWizardData({ gitBranch: e.target.value } );
+            }}
+            className="rounded-lg border border-border bg-surface-primary px-3 py-2 text-sm text-content-primary focus:border-accent-blue focus:outline-none"
+          >
+            {branches.map((b) => (
+              <option key={b} value={b}>{b}</option>
+            ))}
+          </select>
+        </label>
+      )}
     </div>
   );
 }

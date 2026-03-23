@@ -24,9 +24,28 @@ export function getProject(slug: string): Promise<ProjectResponse> {
 }
 
 export function checkSlug(slug: string): Promise<SlugCheckResponse> {
-  return apiFetch<SlugCheckResponse>(`/api/projects/${encodeURIComponent(slug)}/check-slug`, {
+  return apiFetch<SlugCheckResponse>(`/api/projects/check-slug?slug=${encodeURIComponent(slug)}`, {
     method: 'POST',
   });
+}
+
+export function testGitStandalone(config: GitTestPayload): Promise<GitTestResponse> {
+  return apiFetch<GitTestResponse>('/api/projects/git/test', {
+    method: 'POST',
+    body: JSON.stringify(config),
+  });
+}
+
+export async function listRemoteBranches(config: GitTestPayload): Promise<string[]> {
+  try {
+    const data = await apiFetch<{ branches: string[] }>('/api/projects/git/branches', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
+    return data.branches ?? [];
+  } catch {
+    return [];
+  }
 }
 
 export function testGitConnection(slug: string, config: GitTestPayload): Promise<GitTestResponse> {

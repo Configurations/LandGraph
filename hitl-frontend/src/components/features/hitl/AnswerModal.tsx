@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal } from '../../ui/Modal';
 import { Button } from '../../ui/Button';
@@ -27,7 +27,7 @@ export function AnswerModal({
 
   if (!question) return null;
 
-  const isApproval = question.question_type === 'approval';
+  const isApproval = question.request_type === 'approval';
   const isPending = question.status === 'pending';
 
   const handleAction = async (action: 'approve' | 'reject' | 'answer') => {
@@ -72,9 +72,9 @@ export function AnswerModal({
       className={className}
     >
       <div className="flex items-center gap-3 mb-4">
-        <Avatar name={question.agent_name} />
+        <Avatar name={question.agent_id} />
         <div>
-          <p className="font-medium text-sm">{question.agent_name}</p>
+          <p className="font-medium text-sm">{question.agent_id}</p>
           <Badge color="purple" size="sm">{question.team_id}</Badge>
         </div>
       </div>
@@ -89,7 +89,7 @@ export function AnswerModal({
             Context
           </summary>
           <pre className="mt-2 rounded-lg bg-surface-primary p-3 text-xs text-content-secondary font-mono overflow-x-auto">
-            {question.context}
+            {JSON.stringify(question.context, null, 2)}
           </pre>
         </details>
       )}

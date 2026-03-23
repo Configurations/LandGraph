@@ -41,15 +41,16 @@ async def create_relation(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
-@router.delete("/relations/{relation_id}", status_code=204)
+@router.delete("/relations/{relation_id}")
 async def delete_relation(
     relation_id: int,
     user: TokenData = Depends(get_current_user),
-) -> None:
+) -> dict:
     """Delete a relation."""
     ok = await relation_service.delete_relation(relation_id, user.email)
     if not ok:
         raise HTTPException(status_code=404, detail="relation.not_found")
+    return {"ok": True}
 
 
 @router.post(

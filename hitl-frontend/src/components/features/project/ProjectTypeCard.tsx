@@ -40,7 +40,7 @@ export function ProjectTypeCard({
           {t('project_type.workflows_count', { count: projectType.workflows.length })}
         </Badge>
         <Badge color="blue" size="sm">
-          {projectType.team_id}
+          {projectType.team}
         </Badge>
       </div>
     </button>

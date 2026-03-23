@@ -29,9 +29,11 @@ export function ProjectsPage(): JSX.Element {
     <PageContainer>
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
         <h2 className="text-xl font-semibold">{t('project.projects')}</h2>
-        <Button size="sm" onClick={() => navigate('/projects/new')}>
-          + {t('project.new_project')}
-        </Button>
+        {!loading && filtered.length > 0 && (
+          <Button size="sm" onClick={() => navigate('/projects/new')}>
+            + {t('project.new_project')}
+          </Button>
+        )}
       </div>
 
       {loading ? (

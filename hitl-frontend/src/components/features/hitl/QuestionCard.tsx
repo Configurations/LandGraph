@@ -45,7 +45,7 @@ export function QuestionCard({
   const { t } = useTranslation();
   const relativeTime = useRelativeTime(question.created_at);
   const isPending = question.status === 'pending';
-  const isApproval = question.question_type === 'approval';
+  const isApproval = question.request_type === 'approval';
   const statusColor = statusColorMap[question.status] ?? 'blue';
 
   return (
@@ -55,10 +55,10 @@ export function QuestionCard({
       className={`${isPending ? 'border-l-2 border-l-accent-orange' : ''} ${className}`}
     >
       <div className="flex items-start gap-3">
-        <Avatar name={question.agent_name} size="md" />
+        <Avatar name={question.agent_id} size="md" />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-medium text-sm">{question.agent_name}</span>
+            <span className="font-medium text-sm">{question.agent_id}</span>
             <Badge color={statusColor} size="sm">
               {t(`hitl.${question.status}`)}
             </Badge>

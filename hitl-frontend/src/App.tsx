@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Outlet } from 'react-router-dom';
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
@@ -6,19 +6,19 @@ import { MobileNav } from './components/layout/MobileNav';
 import { ToastContainer } from './components/ui/Toast';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useTeamStore } from './stores/teamStore';
-import { useAuthStore } from './stores/authStore';
 
 export function App(): JSX.Element {
   const activeTeamId = useTeamStore((s) => s.activeTeamId);
-  const loadTeams = useTeamStore((s) => s.loadTeams);
-  const loadUser = useAuthStore((s) => s.loadUser);
+  const didLoadTeams = useRef(false);
 
   useWebSocket(activeTeamId);
 
   useEffect(() => {
-    void loadUser();
-    void loadTeams();
-  }, [loadUser, loadTeams]);
+    if (!didLoadTeams.current) {
+      didLoadTeams.current = true;
+      useTeamStore.getState().loadTeams();
+    }
+  }, []);
 
   return (
     <div className="flex h-screen overflow-hidden">

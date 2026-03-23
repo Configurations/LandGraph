@@ -27,7 +27,7 @@ export function GitStatusBadge({ connected, repoExists, className = '' }: GitSta
 
   return (
     <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold bg-accent-green/20 text-accent-green ${className}`}>
-      {t('git.connected')}
+      {t('git.repo_not_found')}
     </span>
   );
 }

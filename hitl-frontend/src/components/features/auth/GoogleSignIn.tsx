@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getGoogleClientId } from '../../../api/auth';
 import { useAuthStore } from '../../../stores/authStore';
-import { Button } from '../../ui/Button';
 
 interface GoogleSignInProps {
   className?: string;

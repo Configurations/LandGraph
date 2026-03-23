@@ -45,7 +45,7 @@ export function WizardStepSetup({ className = '' }: WizardStepSetupProps): JSX.E
     setSlugStatus('checking');
     try {
       const result = await projectsApi.checkSlug(wizardData.slug);
-      setSlugStatus(result.available ? 'available' : 'exists');
+      setSlugStatus(result.exists ? 'exists' : 'available');
     } catch {
       setSlugStatus('exists');
     }

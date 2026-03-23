@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next';
 import type { IssueStatus } from '../../../api/types';
 
 interface PulseStatusBarProps {
-  breakdown: Record<IssueStatus, number>;
+  distribution: Record<string, number>;
   className?: string;
 }
 
@@ -16,9 +16,9 @@ const statusColors: Record<IssueStatus, string> = {
 
 const STATUS_ORDER: IssueStatus[] = ['backlog', 'todo', 'in-progress', 'in-review', 'done'];
 
-export function PulseStatusBar({ breakdown, className = '' }: PulseStatusBarProps): JSX.Element {
+export function PulseStatusBar({ distribution, className = '' }: PulseStatusBarProps): JSX.Element {
   const { t } = useTranslation();
-  const total = STATUS_ORDER.reduce((sum, s) => sum + (breakdown[s] ?? 0), 0);
+  const total = STATUS_ORDER.reduce((sum, s) => sum + (distribution[s] ?? 0), 0);
 
   if (total === 0) {
     return (
@@ -30,7 +30,7 @@ export function PulseStatusBar({ breakdown, className = '' }: PulseStatusBarProp
     <div className={`flex flex-col gap-2 ${className}`}>
       <div className="flex h-6 rounded-full overflow-hidden">
         {STATUS_ORDER.map((status) => {
-          const count = breakdown[status] ?? 0;
+          const count = distribution[status] ?? 0;
           if (count === 0) return null;
           const pct = (count / total) * 100;
           return (
@@ -45,7 +45,7 @@ export function PulseStatusBar({ breakdown, className = '' }: PulseStatusBarProp
       </div>
       <div className="flex gap-3 flex-wrap">
         {STATUS_ORDER.map((status) => {
-          const count = breakdown[status] ?? 0;
+          const count = distribution[status] ?? 0;
           if (count === 0) return null;
           return (
             <div key={status} className="flex items-center gap-1.5">

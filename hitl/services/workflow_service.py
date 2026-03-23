@@ -213,19 +213,29 @@ async def get_workflow_status(
         return WorkflowStatusResponse(phases=[], total_phases=0, completed_phases=0)
 
     registry = _read_registry_json(team_id)
-    phases_config = wf.get("phases", [])
+    raw_phases = wf.get("phases", {})
+    # Support both dict (real Workflow.json) and list (test fixtures)
+    if isinstance(raw_phases, dict):
+        phases_items = [(pid, pcfg) for pid, pcfg in raw_phases.items()]
+    else:
+        phases_items = [(p.get("id", ""), p) for p in raw_phases]
+
     phases: list[PhaseStatus] = []
     current_phase: Optional[str] = None
     completed_count = 0
 
-    for phase_cfg in phases_config:
-        phase_id = phase_cfg.get("id", "")
+    for phase_id, phase_cfg in phases_items:
         phase_name = phase_cfg.get("name", phase_id)
 
         # Resolve agents
         agents: list[PhaseAgent] = []
         agent_ids_seen: set[str] = set()
-        deliverables_cfg = phase_cfg.get("deliverables", [])
+        raw_deliverables = phase_cfg.get("deliverables", {})
+        # Support both dict and list
+        if isinstance(raw_deliverables, dict):
+            deliverables_cfg = [{"key": k, **v} for k, v in raw_deliverables.items()]
+        else:
+            deliverables_cfg = raw_deliverables
 
         for deliv in deliverables_cfg:
             aid = deliv.get("agent", "")

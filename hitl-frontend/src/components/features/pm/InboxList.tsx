@@ -25,12 +25,13 @@ export function InboxList({
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
 
+  const items = notifications ?? [];
   const filtered =
     activeTab === 'all'
-      ? notifications
-      : notifications.filter((n) => n.type === activeTab);
+      ? items
+      : items.filter((n) => n.type === activeTab);
 
-  const unreadCount = notifications.filter((n) => !n.read).length;
+  const unreadCount = items.filter((n) => !n.read).length;
 
   return (
     <div className={`flex flex-col gap-3 ${className}`}>

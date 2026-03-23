@@ -37,7 +37,7 @@ export function PulseDependencyHealth({
         <StatCard labelKey="pulse.blocking" value={health.blocking} color="text-accent-orange" />
         <StatCard labelKey="pulse.chains" value={health.chains} color="text-accent-purple" />
       </div>
-      {health.bottlenecks.length > 0 && (
+      {(health.bottlenecks?.length ?? 0) > 0 && (
         <div className="flex flex-col gap-1">
           <p className="text-xs font-medium text-content-secondary mb-1">
             {t('pulse.bottlenecks')}

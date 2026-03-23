@@ -24,7 +24,10 @@ export function ProjectTypeSelector({
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!teamId) return;
+    if (!teamId) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     projectTypesApi
       .listProjectTypes(teamId)

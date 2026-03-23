@@ -1,4 +1,3 @@
-import { useCallback, useEffect, useState } from 'react';
 import { useAuthStore } from '../stores/authStore';
 import type { UserResponse } from '../api/types';
 
@@ -11,27 +10,11 @@ interface UseAuthReturn {
 }
 
 export function useAuth(): UseAuthReturn {
-  const store = useAuthStore();
-  const [initialLoad, setInitialLoad] = useState(!store.user && store.isAuthenticated);
+  const user = useAuthStore((s) => s.user);
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const loading = useAuthStore((s) => s.loading);
+  const login = useAuthStore((s) => s.login);
+  const logout = useAuthStore((s) => s.logout);
 
-  useEffect(() => {
-    if (initialLoad) {
-      store.loadUser().finally(() => setInitialLoad(false));
-    }
-  }, [initialLoad, store]);
-
-  const login = useCallback(
-    async (email: string, password: string) => {
-      await store.login(email, password);
-    },
-    [store],
-  );
-
-  return {
-    user: store.user,
-    isAuthenticated: store.isAuthenticated,
-    loading: store.loading || initialLoad,
-    login,
-    logout: store.logout,
-  };
+  return { user, isAuthenticated, loading, login, logout };
 }

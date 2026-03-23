@@ -45,12 +45,11 @@ export function PulsePage(): JSX.Element {
     <PageContainer>
       <h2 className="text-xl font-semibold mb-6">{t('pulse.title')}</h2>
       <div className="flex flex-col gap-6">
-        <PulseStatusBar breakdown={data.status_breakdown} />
+        <PulseStatusBar distribution={data.status_distribution ?? {}} />
         <PulseMetricCards
           velocity={data.velocity}
           throughput={data.throughput}
           cycleTime={data.cycle_time}
-          burndownTotal={data.burndown_total}
         />
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <PulseTeamActivity members={data.team_activity} />

@@ -114,7 +114,8 @@
     "creating_repo": "Creation du depot...",
     "cloning_repo": "Clonage en cours...",
     "other": "Autre",
-    "status": "Statut du depot"
+    "status": "Statut du depot",
+    "branch": "Branche de travail"
   },
   "documents": {
     "upload": "Documents",
