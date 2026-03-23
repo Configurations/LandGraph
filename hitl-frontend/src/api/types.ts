@@ -55,6 +55,7 @@ export interface QuestionResponse {
   channel: string;
   created_at: string;
   answered_at: string | null;
+  agent_avatar_url: string | null;
 }
 
 export interface QuestionStatsResponse {
@@ -260,6 +261,7 @@ export interface AgentInfo {
   llm: string;
   type: string;
   pending_questions: number;
+  avatar_url: string | null;
 }
 
 /* ── Dashboard ── */

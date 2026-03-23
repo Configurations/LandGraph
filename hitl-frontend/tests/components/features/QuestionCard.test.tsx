@@ -19,6 +19,7 @@ function makeQuestion(overrides: Partial<QuestionResponse> = {}): QuestionRespon
     channel: 'discord',
     created_at: new Date().toISOString(),
     answered_at: null,
+    agent_avatar_url: null,
     ...overrides,
   };
 }

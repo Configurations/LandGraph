@@ -12,6 +12,7 @@ from core.config import _find_config_dir, load_teams
 from core.database import fetch_one
 from core.security import TokenData, get_current_user
 from schemas.chat import AgentResponse
+from services.avatar_resolver import resolve_agent_avatar
 
 log = structlog.get_logger(__name__)
 
@@ -79,6 +80,7 @@ async def list_agents(
             llm=agent_cfg.get("llm", ""),
             type=agent_cfg.get("type", "single"),
             pending_questions=pending,
+            avatar_url=resolve_agent_avatar(team_id, agent_id),
         ))
 
     return result

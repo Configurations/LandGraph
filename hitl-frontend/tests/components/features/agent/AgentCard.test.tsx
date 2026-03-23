@@ -6,7 +6,7 @@ import type { AgentInfo } from '../../../../src/api/types';
 function makeAgent(overrides: Partial<AgentInfo> = {}): AgentInfo {
   return {
     id: 'lead_dev', name: 'Lead Dev', llm: 'claude-sonnet',
-    type: 'lead', pending_questions: 0,
+    type: 'lead', pending_questions: 0, avatar_url: null,
     ...overrides,
   };
 }

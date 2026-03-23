@@ -12,6 +12,7 @@ import structlog
 from core.database import execute, fetch_all, fetch_one
 from schemas.common import SuccessResponse
 from schemas.hitl import QuestionResponse, StatsResponse
+from services.avatar_resolver import resolve_agent_avatar
 
 log = structlog.get_logger(__name__)
 
@@ -38,6 +39,7 @@ def _row_to_question(row: dict) -> QuestionResponse:
         reviewer=row.get("reviewer"),
         created_at=row["created_at"],
         answered_at=row.get("answered_at"),
+        agent_avatar_url=resolve_agent_avatar(row["team_id"], row["agent_id"]),
     )
 
 

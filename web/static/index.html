@@ -6,7 +6,7 @@
   <title>ag.flow Admin</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/style.css?v=20260322a">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260323p">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/codemirror.min.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/theme/material-darker.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/codemirror.min.js"></script>
@@ -146,6 +146,7 @@
           <div class="prompt-tab" data-cfg-tab="cfg-prod-projects" onclick="showConfigTab('cfg-prod-projects')">Types de projet</div>
           <div class="prompt-tab" data-cfg-tab="cfg-models" onclick="showConfigTab('cfg-models')">Models</div>
           <div class="prompt-tab" data-cfg-tab="cfg-prompts" onclick="showConfigTab('cfg-prompts')">Prompts</div>
+          <div class="prompt-tab" data-cfg-tab="cfg-avatars" onclick="showConfigTab('cfg-avatars')">Avatars</div>
           <div class="prompt-tab" data-cfg-tab="cfg-git" onclick="showConfigTab('cfg-git')">Enregistrement</div>
           <div id="cfg-tab-save-btn" style="margin-left:auto;display:none">
             <button class="btn btn-primary btn-sm" id="cfg-tab-save-action">Sauvegarder</button>
@@ -448,6 +449,25 @@
           </div>
         </div>
 
+        <!-- Sub-tab: Avatars (Production) -->
+        <div class="cfg-tab-content" id="cfg-tab-cfg-avatars">
+          <div style="display:flex;gap:1rem;height:calc(100vh - 220px)">
+            <div id="prod-avatar-themes-panel" style="width:260px;flex-shrink:0;overflow-y:auto;border-right:1px solid var(--border);padding-right:1rem">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
+                <h4 style="margin:0">Themes</h4>
+                <div style="display:flex;gap:0.35rem">
+                  <button class="btn btn-outline btn-sm" onclick="showImportAvatarsModal()" title="Importer depuis Configuration">Importer</button>
+                  <button class="btn btn-primary btn-sm" onclick="showCreateProdThemeModal()">+ Nouveau</button>
+                </div>
+              </div>
+              <div id="prod-avatar-themes-list"></div>
+            </div>
+            <div id="prod-avatar-detail-panel" style="flex:1;overflow-y:auto;padding-left:0.5rem">
+              <p style="color:var(--text-secondary)">Selectionnez un theme</p>
+            </div>
+          </div>
+        </div>
+
         <!-- Sub-tab: Git (Enregistrement) -->
         <div class="cfg-tab-content" id="cfg-tab-cfg-git">
           <!-- ── Service Git (Config) ── -->
@@ -560,6 +580,7 @@
           <div class="prompt-tab" data-tpl-tab="tpl-mail" onclick="showTemplateTab('tpl-mail')">Mail</div>
           <div class="prompt-tab" data-tpl-tab="tpl-security" onclick="showTemplateTab('tpl-security')">Securite</div>
           <div class="prompt-tab" data-tpl-tab="tpl-misc" onclick="showTemplateTab('tpl-misc')">Divers</div>
+          <div class="prompt-tab" data-tpl-tab="tpl-avatars" onclick="showTemplateTab('tpl-avatars')">Avatars</div>
           <div class="prompt-tab" data-tpl-tab="tpl-git" onclick="showTemplateTab('tpl-git')">Enregistrement</div>
         </div>
 
@@ -1262,6 +1283,23 @@
             </div>
           </div>
         </div>
+
+        <!-- Sub-tab: Avatars -->
+        <div class="tpl-tab-content" id="tpl-tab-tpl-avatars">
+          <div style="display:flex;gap:1rem;height:calc(100vh - 220px)">
+            <div id="avatar-themes-panel" style="width:260px;min-width:260px;overflow-y:auto;border-right:1px solid var(--border);padding-right:0.5rem">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
+                <h4 style="margin:0;font-size:0.85rem;color:var(--text)">Themes</h4>
+                <button class="btn btn-sm btn-primary" onclick="showCreateThemeModal()">+ Nouveau</button>
+              </div>
+              <div id="avatar-themes-list"></div>
+            </div>
+            <div id="avatar-detail-panel" style="flex:1;overflow-y:auto;padding:0 0.5rem">
+              <p style="padding:2rem;text-align:center;color:var(--text-muted);font-size:0.85rem">Selectionnez un theme</p>
+            </div>
+          </div>
+        </div>
+
       </div>
 
       <!-- CHANNELS SECTION -->
@@ -1607,6 +1645,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="/static/js/app.js?v=20260322a"></script>
+  <script src="/static/js/app.js?v=20260323p"></script>
 </body>
 </html>

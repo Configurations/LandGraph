@@ -29,7 +29,7 @@ for _vp in ["/project/.version", str(Path(__file__).resolve().parent.parent / ".
         _version = open(_vp).read().strip()
         break
 _log.info("ag.flow version: %s", _version)
-from fastapi import Body, FastAPI, HTTPException, Request, UploadFile
+from fastapi import Body, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel
@@ -255,8 +255,8 @@ async def auth_middleware(request: Request, call_next):
     creds = _get_auth_credentials()
     if creds is not None:
         path = request.url.path
-        # Allow login routes and static assets for login page (fonts)
-        if path in ("/auth/login", "/auth/logout", "/api/version"):
+        # Allow login routes, static assets, and avatar images
+        if path in ("/auth/login", "/auth/logout", "/api/version") or path.startswith("/static/") or path.startswith("/avatars/"):
             return await call_next(request)
         token = request.cookies.get("lg_session", "")
         if not _verify_session_token(token):
@@ -809,6 +809,7 @@ class AgentConfig(BaseModel):
     delivers_tasklist: bool | None = None
     delivers_specs: bool | None = None
     delivers_contract: bool | None = None
+    avatar: str = ""
 
 
 @app.post("/api/agents")
@@ -1314,6 +1315,7 @@ class SharedAgentEntry(BaseModel):
     delivers_tasklist: bool | None = None
     delivers_specs: bool | None = None
     delivers_contract: bool | None = None
+    avatar: str | None = None
 
 
 def _list_shared_agents() -> list[dict]:
@@ -1449,7 +1451,8 @@ def _update_agent(base_dir: Path, agent_id: str, entry):
     cfg = json.loads(cfg_file.read_text(encoding="utf-8")) if cfg_file.exists() else {}
     for field in ["name", "description", "type", "llm", "temperature", "max_tokens", "mcp_access",
                    "docker_mode", "docker_image", "delivers_docs", "delivers_code", "delivers_design",
-                   "delivers_automation", "delivers_tasklist", "delivers_specs", "delivers_contract"]:
+                   "delivers_automation", "delivers_tasklist", "delivers_specs", "delivers_contract",
+                   "avatar"]:
         val = getattr(entry, field, None)
         if val is not None:
             if field == "name":
@@ -3500,6 +3503,10 @@ async def delete_project_workflow(project_id: str, wf_name: str):
     if not wf.exists():
         raise HTTPException(404, f"Workflow '{name}' introuvable")
     wf.unlink()
+    # Also delete associated design file
+    design = project_dir / f"{name}.wrk.design.json"
+    if design.exists():
+        design.unlink()
     return {"ok": True}
 
 
@@ -3515,15 +3522,74 @@ async def get_project_workflow_editor(project_id: str, wf_name: str):
     return _read_json(wf) if wf.exists() else {}
 
 
+def _check_external_cycles(project_dir: Path, workflow_name: str, visited: set = None) -> list:
+    """Detect cycles in external phase references."""
+    if visited is None:
+        visited = set()
+    if workflow_name in visited:
+        return [f"Cycle detecte: {' -> '.join(visited)} -> {workflow_name}"]
+    visited = visited | {workflow_name}
+    wf_path = project_dir / workflow_name
+    if not wf_path.exists():
+        return [f"Workflow '{workflow_name}' introuvable"]
+    data = _read_json(wf_path)
+    phases = data.get("phases", {})
+    phase_list = list(phases.values()) if isinstance(phases, dict) else (phases if isinstance(phases, list) else [])
+    errors = []
+    for phase in phase_list:
+        if phase.get("type") == "external":
+            ext_wf = phase.get("external_workflow", "")
+            if ext_wf:
+                errors.extend(_check_external_cycles(project_dir, ext_wf, visited))
+    return errors
+
+
 @app.put("/api/templates/project-workflow/{project_id}/{wf_name}")
 async def put_project_workflow_editor(project_id: str, wf_name: str, request: Request):
     project_dir = _project_dir_or_404(project_id)
     name = _wf_name_safe(wf_name)
     data = await request.json()
-    _write_json(project_dir / f"{name}.wrk.json", data)
+    # Validate external phases
+    current_file = f"{name}.wrk.json"
+    phases = data.get("phases", {})
+    phase_list = list(phases.values()) if isinstance(phases, dict) else (phases if isinstance(phases, list) else [])
+    for phase in phase_list:
+        if phase.get("type") == "external":
+            ext_wf = phase.get("external_workflow", "")
+            if ext_wf:
+                if ext_wf == current_file:
+                    raise HTTPException(400, f"Phase '{phase.get('name', '?')}' reference le workflow courant")
+                if not (project_dir / ext_wf).exists():
+                    raise HTTPException(400, f"Workflow externe introuvable: {ext_wf}")
+                cycle_errors = _check_external_cycles(project_dir, ext_wf, {current_file})
+                if cycle_errors:
+                    raise HTTPException(400, cycle_errors[0])
+    _write_json(project_dir / current_file, data)
     team_id = data.get("team", "")
     _generate_phase_files(data, f"{name}.wrk", project_dir, team_id)
     return {"ok": True}
+
+
+@app.get("/api/templates/projects/{project_id}/available-workflows")
+async def list_available_workflows(project_id: str):
+    """List *.wrk.json files in a project directory."""
+    project_dir = _project_dir_or_404(project_id)
+    results = []
+    for f in sorted(project_dir.iterdir()):
+        if f.suffix == ".json" and f.stem.endswith(".wrk"):
+            data = _read_json(f)
+            name = data.get("name", "")
+            if not name:
+                phases = data.get("phases", {})
+                if isinstance(phases, dict) and phases:
+                    first = next(iter(phases.values()))
+                    name = first.get("name", f.stem)
+                elif isinstance(phases, list) and phases:
+                    name = phases[0].get("name", f.stem)
+                else:
+                    name = f.stem.replace(".wrk", "")
+            results.append({"filename": f.name, "name": name})
+    return results
 
 
 @app.get("/api/templates/project-workflow-design/{project_id}/{wf_name}")
@@ -3675,6 +3741,10 @@ async def delete_prod_project_workflow(project_id: str, wf_name: str):
     if not wf.exists():
         raise HTTPException(404, f"Workflow '{name}' introuvable")
     wf.unlink()
+    # Also delete associated design file
+    design = project_dir / f"{name}.wrk.design.json"
+    if design.exists():
+        design.unlink()
     return {"ok": True}
 
 
@@ -3706,10 +3776,47 @@ async def put_prod_project_workflow_editor(project_id: str, wf_name: str, reques
     project_dir = _cfg_project_dir_or_404(project_id)
     name = _wf_name_safe(wf_name)
     data = await request.json()
-    _write_json(project_dir / f"{name}.wrk.json", data)
+    # Validate external phases
+    current_file = f"{name}.wrk.json"
+    phases = data.get("phases", {})
+    phase_list = list(phases.values()) if isinstance(phases, dict) else (phases if isinstance(phases, list) else [])
+    for phase in phase_list:
+        if phase.get("type") == "external":
+            ext_wf = phase.get("external_workflow", "")
+            if ext_wf:
+                if ext_wf == current_file:
+                    raise HTTPException(400, f"Phase '{phase.get('name', '?')}' reference le workflow courant")
+                if not (project_dir / ext_wf).exists():
+                    raise HTTPException(400, f"Workflow externe introuvable: {ext_wf}")
+                cycle_errors = _check_external_cycles(project_dir, ext_wf, {current_file})
+                if cycle_errors:
+                    raise HTTPException(400, cycle_errors[0])
+    _write_json(project_dir / current_file, data)
     team_id = data.get("team", "")
     _generate_phase_files(data, f"{name}.wrk", project_dir, team_id)
     return {"ok": True}
+
+
+@app.get("/api/prod-projects/{project_id}/available-workflows")
+async def list_prod_available_workflows(project_id: str):
+    """List *.wrk.json files in a production project directory."""
+    project_dir = _cfg_project_dir_or_404(project_id)
+    results = []
+    for f in sorted(project_dir.iterdir()):
+        if f.suffix == ".json" and f.stem.endswith(".wrk"):
+            data = _read_json(f)
+            name = data.get("name", "")
+            if not name:
+                phases = data.get("phases", {})
+                if isinstance(phases, dict) and phases:
+                    first = next(iter(phases.values()))
+                    name = first.get("name", f.stem)
+                elif isinstance(phases, list) and phases:
+                    name = phases[0].get("name", f.stem)
+                else:
+                    name = f.stem.replace(".wrk", "")
+            results.append({"filename": f.name, "name": name})
+    return results
 
 
 @app.get("/api/prod-project-workflow-design/{project_id}/{wf_name}")
@@ -4350,13 +4457,15 @@ async def list_templates():
                 agents_raw = reg.get("agents", {})
                 agents_detail = {}
                 for aid, acfg in agents_raw.items():
-                    # Merge: shared agent properties + team overrides (type)
+                    # Merge: shared agent properties + team overrides (type, delegates_to, avatar)
                     shared = shared_agents_map.get(aid, {})
                     merged = {**shared}
                     if acfg.get("type"):
                         merged["type"] = acfg["type"]
                     if acfg.get("delegates_to"):
                         merged["delegates_to"] = acfg["delegates_to"]
+                    if acfg.get("avatar"):
+                        merged["avatar"] = acfg["avatar"]
                     if "id" not in merged:
                         merged["id"] = aid
                     # Fallback: if shared agent not found, try config/Agents catalog
@@ -4450,7 +4559,7 @@ async def list_prod_teams_detail():
                 for aid, acfg in agents_raw.items():
                     shared = agents_map.get(aid, {})
                     merged = {**shared}
-                    for k in ("type", "delegates_to"):
+                    for k in ("type", "delegates_to", "avatar"):
                         if acfg.get(k):
                             merged[k] = acfg[k]
                     if "id" not in merged:
@@ -4489,6 +4598,7 @@ async def copy_prod_teams_from_config(request: Request):
     dst_teams = _read_json(TEAMS_FILE) if TEAMS_FILE.exists() else {"teams": [], "channel_mapping": {}}
     dst_ids = {t["id"] for t in dst_teams.get("teams", [])}
     copied = 0
+    avatars_copied = 0
     for tid in team_ids:
         src_team = next((t for t in src_list if t.get("id") == tid), None)
         if not src_team:
@@ -4503,13 +4613,40 @@ async def copy_prod_teams_from_config(request: Request):
         if dst_dir.exists():
             shutil.rmtree(dst_dir)
         shutil.copytree(src_dir, dst_dir)
+        # Copy avatar images referenced by agents
+        avatar_theme = src_team.get("avatar_theme", "")
+        if avatar_theme:
+            src_avatar_dir = AVATARS_DIR / avatar_theme
+            dst_avatar_dir = CONFIGS / "Avatars" / avatar_theme
+            if src_avatar_dir.exists():
+                dst_avatar_dir.mkdir(parents=True, exist_ok=True)
+                # Copy referenced images only
+                registry_path = src_dir / "agents_registry.json"
+                referenced_files = set()
+                if registry_path.exists():
+                    reg = _read_json(registry_path)
+                    for agent_cfg in reg.get("agents", {}).values():
+                        avatar_file = agent_cfg.get("avatar", "")
+                        if avatar_file:
+                            referenced_files.add(avatar_file)
+                for fname in referenced_files:
+                    src_file = src_avatar_dir / fname
+                    if src_file.exists():
+                        shutil.copy2(src_file, dst_avatar_dir / fname)
+                        avatars_copied += 1
         # Add to teams.json if not already there
         if tid not in dst_ids:
             dst_teams["teams"].append(src_team)
             dst_ids.add(tid)
+        else:
+            # Update existing team entry (avatar_theme may have changed)
+            for i, dt in enumerate(dst_teams["teams"]):
+                if dt.get("id") == tid:
+                    dst_teams["teams"][i] = src_team
+                    break
         copied += 1
     _write_json(TEAMS_FILE, dst_teams)
-    return {"ok": True, "copied": copied}
+    return {"ok": True, "copied": copied, "avatars_copied": avatars_copied}
 
 
 @app.get("/api/templates/llm")
@@ -4716,6 +4853,11 @@ async def update_template_agent(agent_id: str, cfg: AgentConfig):
         existing["delegates_to"] = cfg.delegates_to
     elif "delegates_to" in existing:
         del existing["delegates_to"]
+    # Avatar field
+    if cfg.avatar:
+        existing["avatar"] = cfg.avatar
+    elif "avatar" in existing and not cfg.avatar:
+        del existing["avatar"]
     data["agents"][agent_id] = existing
     _write_json(registry_path, data)
     # Only invalidate orchestrator prompt if delegates_to changed
@@ -4788,6 +4930,11 @@ async def update_prod_team_agent(agent_id: str, cfg: AgentConfig):
         existing["delegates_to"] = cfg.delegates_to
     elif "delegates_to" in existing:
         del existing["delegates_to"]
+    # Avatar field
+    if cfg.avatar:
+        existing["avatar"] = cfg.avatar
+    elif "avatar" in existing and not cfg.avatar:
+        del existing["avatar"]
     data["agents"][agent_id] = existing
     _write_json(registry_path, data)
     return {"ok": True}
@@ -6590,6 +6737,588 @@ def hitl_delete_user(user_id: str):
         return {"ok": True}
     finally:
         conn.close()
+
+
+# ── Avatar Management ───────────────────────────────────────────
+AVATARS_DIR = SHARED_DIR / "Avatars"
+
+DEFAULT_AVATAR_PROMPT = """# Avatar Generator
+
+Generate a portrait avatar for the character **{character}**.
+
+Style: {theme_description}
+
+Requirements:
+- Square format (1024x1024)
+- Face/bust portrait
+- Professional quality
+- Consistent style within the theme
+- No text in the image
+
+Character description: Create a unique visual identity for {character} that reflects their role and personality. The avatar should be immediately recognizable and work well at small sizes (48px).
+"""
+
+
+def _avatar_slug(name: str) -> str:
+    """Slugify a name for avatar theme/character directory names."""
+    return re.sub(r'[^a-z0-9-]', '', name.lower().replace(' ', '-').replace('_', '-'))
+
+
+async def _call_admin_llm(prompt: str) -> str:
+    """Call the admin LLM provider to generate text."""
+    # Configuration scope: Shared/ first, then config/
+    data = _read_json(SHARED_LLM_FILE)
+    if not data.get("providers"):
+        data = _read_json(LLM_PROVIDERS_FILE)
+    if not data.get("providers"):
+        raise HTTPException(500, "No LLM providers configured")
+
+    providers = data["providers"]
+    admin_id = data.get("admin_llm") or data.get("default", "")
+    if not admin_id or admin_id not in providers:
+        # Fallback: pick the first provider
+        admin_id = next(iter(providers))
+    provider = providers[admin_id]
+
+    ptype = provider.get("type", "openai")
+    model = provider.get("model", "")
+    env_key = provider.get("env_key", "")
+    api_key = os.environ.get(env_key, "") if env_key else ""
+    temperature = provider.get("temperature", 0.7)
+    max_tokens = provider.get("max_tokens", 4096)
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        if ptype == "anthropic":
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+            resp.raise_for_status()
+            content_blocks = resp.json().get("content", [])
+            return "".join(b.get("text", "") for b in content_blocks)
+
+        elif ptype == "google":
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+            resp = await client.post(
+                url,
+                headers={"content-type": "application/json"},
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"temperature": temperature, "maxOutputTokens": max_tokens},
+                },
+            )
+            resp.raise_for_status()
+            candidates = resp.json().get("candidates", [])
+            if candidates:
+                parts = candidates[0].get("content", {}).get("parts", [])
+                return "".join(p.get("text", "") for p in parts)
+            return ""
+
+        elif ptype == "ollama":
+            base_url = provider.get("base_url", "http://localhost:11434")
+            resp = await client.post(
+                f"{base_url}/api/chat",
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                    "options": {"temperature": temperature},
+                },
+            )
+            resp.raise_for_status()
+            return resp.json().get("message", {}).get("content", "")
+
+        else:
+            # OpenAI-compatible (openai, azure, deepseek, moonshot, groq, mistral)
+            if ptype == "azure":
+                endpoint = provider.get("azure_endpoint", "").rstrip("/")
+                deployment = provider.get("azure_deployment", model)
+                api_ver = provider.get("api_version", "2024-12-01-preview")
+                url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_ver}"
+                headers = {"api-key": api_key, "content-type": "application/json"}
+            elif ptype == "deepseek":
+                url = "https://api.deepseek.com/v1/chat/completions"
+                headers = {"Authorization": f"Bearer {api_key}", "content-type": "application/json"}
+            elif ptype == "moonshot":
+                url = "https://api.moonshot.cn/v1/chat/completions"
+                headers = {"Authorization": f"Bearer {api_key}", "content-type": "application/json"}
+            elif ptype == "groq":
+                url = "https://api.groq.com/openai/v1/chat/completions"
+                headers = {"Authorization": f"Bearer {api_key}", "content-type": "application/json"}
+            elif ptype == "mistral":
+                url = "https://api.mistral.ai/v1/chat/completions"
+                headers = {"Authorization": f"Bearer {api_key}", "content-type": "application/json"}
+            else:
+                url = "https://api.openai.com/v1/chat/completions"
+                headers = {"Authorization": f"Bearer {api_key}", "content-type": "application/json"}
+
+            resp = await client.post(
+                url,
+                headers=headers,
+                json={
+                    "model": model,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+            resp.raise_for_status()
+            choices = resp.json().get("choices", [])
+            if choices:
+                return choices[0].get("message", {}).get("content", "")
+            return ""
+
+
+# ── Avatar helpers (shared logic for Configuration + Production) ──
+
+def _avatar_list_themes(base_dir: Path, url_prefix: str):
+    base_dir.mkdir(parents=True, exist_ok=True)
+    themes = []
+    for d in sorted(base_dir.iterdir()):
+        if not d.is_dir():
+            continue
+        characters = [f.stem for f in d.iterdir() if f.suffix == ".md" and f.name != "prompt.md"]
+        image_count = sum(1 for f in d.rglob("*.png"))
+        entry = {"slug": d.name, "name": d.name, "description": "", "character_count": len(characters), "image_count": image_count}
+        prompt_file = d / "prompt.md"
+        if prompt_file.exists():
+            for line in prompt_file.read_text(encoding="utf-8").strip().splitlines():
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#"):
+                    entry["description"] = stripped
+                    break
+        themes.append(entry)
+    return themes
+
+def _avatar_create_theme(base_dir: Path, body: dict):
+    name = body.get("name", "").strip()
+    if not name:
+        raise HTTPException(400, "name is required")
+    slug = _avatar_slug(name)
+    if not slug:
+        raise HTTPException(400, "Invalid theme name")
+    theme_dir = base_dir / slug
+    if theme_dir.exists():
+        return {"slug": slug, "name": name, "exists": True}
+    theme_dir.mkdir(parents=True, exist_ok=True)
+    description = body.get("description", "").strip()
+    prompt_content = DEFAULT_AVATAR_PROMPT.replace("{theme_description}", description or name)
+    (theme_dir / "prompt.md").write_text(prompt_content, encoding="utf-8")
+    return {"slug": slug, "name": name}
+
+def _avatar_get_theme(base_dir: Path, url_prefix: str, theme: str):
+    theme_dir = base_dir / theme
+    if not theme_dir.exists() or not theme_dir.is_dir():
+        raise HTTPException(404, f"Theme '{theme}' not found")
+    prompt_file = theme_dir / "prompt.md"
+    prompt_template = prompt_file.read_text(encoding="utf-8") if prompt_file.exists() else ""
+    characters = []
+    for f in sorted(theme_dir.glob("*.md")):
+        if f.name == "prompt.md":
+            continue
+        char_name = f.stem
+        images = sorted([
+            {"filename": img.name, "url": f"{url_prefix}/{theme}/{img.name}"}
+            for img in theme_dir.iterdir()
+            if img.is_file() and img.name.startswith(char_name + ".") and img.suffix.lower() in (".png", ".jpg", ".webp")
+        ])
+        prompt_content = f.read_text(encoding="utf-8") if f.exists() else ""
+        characters.append({"name": char_name, "images": images, "prompt": prompt_content})
+    return {"name": theme, "prompt_template": prompt_template, "characters": characters}
+
+def _avatar_delete_theme(base_dir: Path, theme: str):
+    theme_dir = base_dir / theme
+    if not theme_dir.exists() or not theme_dir.is_dir():
+        raise HTTPException(404, f"Theme '{theme}' not found")
+    shutil.rmtree(theme_dir)
+    return {"ok": True}
+
+def _avatar_get_prompt(base_dir: Path, theme: str):
+    prompt_file = base_dir / theme / "prompt.md"
+    if not prompt_file.exists():
+        raise HTTPException(404, f"Theme '{theme}' or prompt.md not found")
+    return {"content": prompt_file.read_text(encoding="utf-8")}
+
+def _avatar_put_prompt(base_dir: Path, theme: str, body: dict):
+    theme_dir = base_dir / theme
+    if not theme_dir.exists():
+        raise HTTPException(404, f"Theme '{theme}' not found")
+    (theme_dir / "prompt.md").write_text(body.get("content", ""), encoding="utf-8")
+    return {"ok": True}
+
+def _avatar_list_characters(base_dir: Path, url_prefix: str, theme: str):
+    theme_dir = base_dir / theme
+    if not theme_dir.exists():
+        raise HTTPException(404, f"Theme '{theme}' not found")
+    characters = []
+    for f in sorted(theme_dir.iterdir()):
+        if f.suffix != ".md" or f.name == "prompt.md":
+            continue
+        slug = f.stem
+        images = sorted([img.name for img in theme_dir.iterdir() if img.suffix == ".png" and img.name.startswith(slug + ".")])
+        characters.append({"slug": slug, "name": slug, "images": images, "image_urls": [f"{url_prefix}/{theme}/{img}" for img in images]})
+    return {"characters": characters}
+
+async def _avatar_create_character(base_dir: Path, theme: str, body: dict):
+    theme_dir = base_dir / theme
+    if not theme_dir.exists():
+        raise HTTPException(404, f"Theme '{theme}' not found")
+    character = body.get("character", "").strip()
+    if not character:
+        raise HTTPException(400, "character is required")
+    slug = _avatar_slug(character)
+    if not slug:
+        raise HTTPException(400, "Invalid character name")
+    char_file = theme_dir / f"{slug}.md"
+    if char_file.exists():
+        raise HTTPException(409, f"Character '{slug}' already exists in theme '{theme}'")
+    prompt_file = theme_dir / "prompt.md"
+    template = prompt_file.read_text(encoding="utf-8") if prompt_file.exists() else DEFAULT_AVATAR_PROMPT
+    gen_prompt = (
+        f"Based on this avatar theme template:\n\n{template}\n\n"
+        f"Generate a detailed, specific image generation prompt for the character: {character}\n\n"
+        f"The prompt should describe the visual appearance, style, colors, and mood "
+        f"for generating a portrait avatar of this character. "
+        f"Output ONLY the image generation prompt text, nothing else."
+    )
+    try:
+        result = await _call_admin_llm(gen_prompt)
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(502, f"LLM call failed: {exc.response.status_code}")
+    except Exception as exc:
+        raise HTTPException(502, f"LLM call failed: {exc}")
+    char_file.write_text(result.strip(), encoding="utf-8")
+    return {"slug": slug, "name": character, "content": result.strip()}
+
+def _avatar_get_character(base_dir: Path, theme: str, character: str):
+    char_file = base_dir / theme / f"{character}.md"
+    if not char_file.exists():
+        raise HTTPException(404, f"Character '{character}' not found in theme '{theme}'")
+    return {"slug": character, "content": char_file.read_text(encoding="utf-8")}
+
+def _avatar_put_character(base_dir: Path, theme: str, character: str, body: dict):
+    char_file = base_dir / theme / f"{character}.md"
+    if not char_file.exists():
+        raise HTTPException(404, f"Character '{character}' not found in theme '{theme}'")
+    char_file.write_text(body.get("content") or body.get("prompt") or "", encoding="utf-8")
+    return {"ok": True}
+
+def _avatar_delete_character(base_dir: Path, theme: str, character: str):
+    theme_dir = base_dir / theme
+    if not theme_dir.exists():
+        raise HTTPException(404, f"Theme '{theme}' not found")
+    char_file = theme_dir / f"{character}.md"
+    deleted_files = []
+    if char_file.exists():
+        char_file.unlink()
+        deleted_files.append(char_file.name)
+    for img in list(theme_dir.iterdir()):
+        if img.suffix == ".png" and img.name.startswith(character + "."):
+            img.unlink()
+            deleted_files.append(img.name)
+    if not deleted_files:
+        raise HTTPException(404, f"Character '{character}' not found in theme '{theme}'")
+    return {"ok": True, "deleted": deleted_files}
+
+async def _avatar_generate_image(base_dir: Path, url_prefix: str, theme: str, character: str):
+    import base64 as b64
+    theme_dir = base_dir / theme
+    char_file = theme_dir / f"{character}.md"
+    if not char_file.exists():
+        raise HTTPException(404, f"Character '{character}' not found in theme '{theme}'")
+    char_prompt = char_file.read_text(encoding="utf-8").strip()
+    if not char_prompt:
+        raise HTTPException(400, "Le prompt du personnage est vide — editez-le avant de generer une image")
+    data = _read_json(SHARED_LLM_FILE)
+    if not data.get("providers"):
+        data = _read_json(LLM_PROVIDERS_FILE)
+    providers = data.get("providers", {})
+    dalle_provider = None
+    for pid, prov in providers.items():
+        model_name = prov.get("model", "").lower()
+        prov_type = prov.get("type", "").lower()
+        if "dall-e" in model_name or "dalle" in model_name or prov_type == "dall-e":
+            dalle_provider = prov
+            break
+    if not dalle_provider:
+        openai_key = os.environ.get("OPENAI_API_KEY", "")
+        if not openai_key:
+            raise HTTPException(400, "No DALL-E provider configured and no OPENAI_API_KEY found")
+        dalle_provider = {"type": "openai", "model": "dall-e-3", "env_key": "OPENAI_API_KEY"}
+    env_key = dalle_provider.get("env_key", "OPENAI_API_KEY")
+    api_key = os.environ.get(env_key, "")
+    if not api_key:
+        raise HTTPException(400, f"API key not set: {env_key}")
+    model = dalle_provider.get("model", "dall-e-3")
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post("https://api.openai.com/v1/images/generations", headers={"Authorization": f"Bearer {api_key}", "content-type": "application/json"}, json={"model": model, "prompt": char_prompt[:4000], "n": 1, "size": "1024x1024", "response_format": "b64_json"})
+        if resp.status_code != 200:
+            raise HTTPException(502, f"DALL-E API error ({resp.status_code}): {resp.text[:500]}")
+        result = resp.json()
+    b64_data = result.get("data", [{}])[0].get("b64_json", "")
+    if not b64_data:
+        raise HTTPException(502, "No image data returned from DALL-E")
+    image_bytes = b64.b64decode(b64_data)
+    existing = [f.name for f in theme_dir.iterdir() if f.suffix == ".png" and f.name.startswith(character + ".")]
+    next_num = len(existing) + 1
+    filename = f"{character}.{next_num}.png"
+    (theme_dir / filename).write_bytes(image_bytes)
+    return {"filename": filename, "url": f"{url_prefix}/{theme}/{filename}"}
+
+def _avatar_list_all_images(base_dir: Path, url_prefix: str, theme: str):
+    theme_dir = base_dir / theme
+    if not theme_dir.exists():
+        raise HTTPException(404, f"Theme '{theme}' not found")
+    results = []
+    for f in sorted(theme_dir.iterdir()):
+        if not f.is_file() or f.suffix.lower() not in (".png", ".jpg", ".webp"):
+            continue
+        parts = f.stem.split(".")
+        char_name = parts[0] if parts else f.stem
+        results.append({"filename": f.name, "url": f"{url_prefix}/{theme}/{f.name}", "character": char_name})
+    return results
+
+def _avatar_list_char_images(base_dir: Path, url_prefix: str, theme: str, character: str):
+    theme_dir = base_dir / theme
+    if not theme_dir.exists():
+        raise HTTPException(404, f"Theme '{theme}' not found")
+    images = sorted([f.name for f in theme_dir.iterdir() if f.suffix == ".png" and f.name.startswith(character + ".")])
+    return {"images": images, "urls": [f"{url_prefix}/{theme}/{img}" for img in images]}
+
+async def _avatar_upload_image(base_dir: Path, url_prefix: str, theme: str, character: str, file: UploadFile):
+    theme_dir = base_dir / theme
+    slug = _avatar_slug(character)
+    if not theme_dir.exists():
+        raise HTTPException(404, f"Theme '{theme}' not found")
+    content = await file.read()
+    ext = os.path.splitext(file.filename or "img.png")[1].lower()
+    if ext not in (".png", ".jpg", ".jpeg", ".webp"):
+        raise HTTPException(400, "Format image non supporte (png, jpg, webp)")
+    existing = sorted(theme_dir.glob(f"{slug}.*.png")) + sorted(theme_dir.glob(f"{slug}.*.jpg")) + sorted(theme_dir.glob(f"{slug}.*.webp"))
+    next_num = len(existing) + 1
+    filename = f"{slug}.{next_num}{ext}"
+    (theme_dir / filename).write_bytes(content)
+    return {"filename": filename, "url": f"{url_prefix}/{theme}/{filename}"}
+
+def _avatar_delete_image(base_dir: Path, theme: str, character: str, filename: str):
+    filepath = base_dir / theme / filename
+    if not filepath.exists():
+        raise HTTPException(404, f"Image '{filename}' not found")
+    if not filename.startswith(character + "."):
+        raise HTTPException(400, f"Image '{filename}' does not belong to character '{character}'")
+    filepath.unlink()
+    return {"ok": True}
+
+
+# ── Configuration avatar endpoints (Shared/Avatars) ─────────────
+
+@app.get("/api/avatars/themes")
+async def list_avatar_themes():
+    return _avatar_list_themes(AVATARS_DIR, "/avatars")
+
+@app.post("/api/avatars/themes")
+async def create_avatar_theme(body: dict = Body(...)):
+    return _avatar_create_theme(AVATARS_DIR, body)
+
+@app.get("/api/avatars/themes/{theme}")
+async def get_avatar_theme(theme: str):
+    return _avatar_get_theme(AVATARS_DIR, "/avatars", theme)
+
+@app.delete("/api/avatars/themes/{theme}")
+async def delete_avatar_theme(theme: str):
+    return _avatar_delete_theme(AVATARS_DIR, theme)
+
+@app.get("/api/avatars/themes/{theme}/prompt")
+async def get_avatar_theme_prompt(theme: str):
+    return _avatar_get_prompt(AVATARS_DIR, theme)
+
+@app.put("/api/avatars/themes/{theme}/prompt")
+async def update_avatar_theme_prompt(theme: str, body: dict = Body(...)):
+    return _avatar_put_prompt(AVATARS_DIR, theme, body)
+
+@app.get("/api/avatars/themes/{theme}/characters")
+async def list_avatar_characters(theme: str):
+    return _avatar_list_characters(AVATARS_DIR, "/avatars", theme)
+
+@app.post("/api/avatars/themes/{theme}/characters")
+async def create_avatar_character(theme: str, body: dict = Body(...)):
+    return await _avatar_create_character(AVATARS_DIR, theme, body)
+
+@app.get("/api/avatars/themes/{theme}/characters/{character}")
+async def get_avatar_character(theme: str, character: str):
+    return _avatar_get_character(AVATARS_DIR, theme, character)
+
+@app.put("/api/avatars/themes/{theme}/characters/{character}")
+async def update_avatar_character(theme: str, character: str, body: dict = Body(...)):
+    return _avatar_put_character(AVATARS_DIR, theme, character, body)
+
+@app.delete("/api/avatars/themes/{theme}/characters/{character}")
+async def delete_avatar_character(theme: str, character: str):
+    return _avatar_delete_character(AVATARS_DIR, theme, character)
+
+@app.post("/api/avatars/themes/{theme}/characters/{character}/generate")
+async def generate_avatar_image(theme: str, character: str):
+    return await _avatar_generate_image(AVATARS_DIR, "/avatars", theme, character)
+
+@app.get("/api/avatars/themes/{theme}/all-images")
+async def list_all_theme_images(theme: str):
+    return _avatar_list_all_images(AVATARS_DIR, "/avatars", theme)
+
+@app.get("/api/avatars/themes/{theme}/characters/{character}/images")
+async def list_avatar_images(theme: str, character: str):
+    return _avatar_list_char_images(AVATARS_DIR, "/avatars", theme, character)
+
+@app.post("/api/avatars/themes/{theme}/characters/{character}/upload")
+async def upload_avatar_image(theme: str, character: str, file: UploadFile = File(...)):
+    return await _avatar_upload_image(AVATARS_DIR, "/avatars", theme, character, file)
+
+@app.delete("/api/avatars/themes/{theme}/characters/{character}/images/{filename}")
+async def delete_avatar_image(theme: str, character: str, filename: str):
+    return _avatar_delete_image(AVATARS_DIR, theme, character, filename)
+
+
+# Mount avatar images as static files
+AVATARS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/avatars", StaticFiles(directory=str(AVATARS_DIR)), name="avatars")
+
+
+# ── Production avatar endpoints (config/Avatars) ────────────────
+
+PROD_AVATARS_DIR = CONFIGS / "Avatars"
+PROD_AVATARS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/prod-avatars", StaticFiles(directory=str(PROD_AVATARS_DIR)), name="prod-avatars")
+
+@app.get("/api/prod-avatars/themes")
+async def list_prod_avatar_themes():
+    return _avatar_list_themes(PROD_AVATARS_DIR, "/prod-avatars")
+
+@app.post("/api/prod-avatars/themes")
+async def create_prod_avatar_theme(body: dict = Body(...)):
+    return _avatar_create_theme(PROD_AVATARS_DIR, body)
+
+@app.get("/api/prod-avatars/themes/{theme}")
+async def get_prod_avatar_theme(theme: str):
+    return _avatar_get_theme(PROD_AVATARS_DIR, "/prod-avatars", theme)
+
+@app.delete("/api/prod-avatars/themes/{theme}")
+async def delete_prod_avatar_theme(theme: str):
+    return _avatar_delete_theme(PROD_AVATARS_DIR, theme)
+
+@app.get("/api/prod-avatars/themes/{theme}/prompt")
+async def get_prod_avatar_theme_prompt(theme: str):
+    return _avatar_get_prompt(PROD_AVATARS_DIR, theme)
+
+@app.put("/api/prod-avatars/themes/{theme}/prompt")
+async def update_prod_avatar_theme_prompt(theme: str, body: dict = Body(...)):
+    return _avatar_put_prompt(PROD_AVATARS_DIR, theme, body)
+
+@app.get("/api/prod-avatars/themes/{theme}/characters")
+async def list_prod_avatar_characters(theme: str):
+    return _avatar_list_characters(PROD_AVATARS_DIR, "/prod-avatars", theme)
+
+@app.post("/api/prod-avatars/themes/{theme}/characters")
+async def create_prod_avatar_character(theme: str, body: dict = Body(...)):
+    return await _avatar_create_character(PROD_AVATARS_DIR, theme, body)
+
+@app.get("/api/prod-avatars/themes/{theme}/characters/{character}")
+async def get_prod_avatar_character(theme: str, character: str):
+    return _avatar_get_character(PROD_AVATARS_DIR, theme, character)
+
+@app.put("/api/prod-avatars/themes/{theme}/characters/{character}")
+async def update_prod_avatar_character(theme: str, character: str, body: dict = Body(...)):
+    return _avatar_put_character(PROD_AVATARS_DIR, theme, character, body)
+
+@app.delete("/api/prod-avatars/themes/{theme}/characters/{character}")
+async def delete_prod_avatar_character(theme: str, character: str):
+    return _avatar_delete_character(PROD_AVATARS_DIR, theme, character)
+
+@app.post("/api/prod-avatars/themes/{theme}/characters/{character}/generate")
+async def generate_prod_avatar_image(theme: str, character: str):
+    return await _avatar_generate_image(PROD_AVATARS_DIR, "/prod-avatars", theme, character)
+
+@app.get("/api/prod-avatars/themes/{theme}/all-images")
+async def list_all_prod_theme_images(theme: str):
+    return _avatar_list_all_images(PROD_AVATARS_DIR, "/prod-avatars", theme)
+
+@app.get("/api/prod-avatars/themes/{theme}/characters/{character}/images")
+async def list_prod_avatar_char_images(theme: str, character: str):
+    return _avatar_list_char_images(PROD_AVATARS_DIR, "/prod-avatars", theme, character)
+
+@app.post("/api/prod-avatars/themes/{theme}/characters/{character}/upload")
+async def upload_prod_avatar_image(theme: str, character: str, file: UploadFile = File(...)):
+    return await _avatar_upload_image(PROD_AVATARS_DIR, "/prod-avatars", theme, character, file)
+
+@app.delete("/api/prod-avatars/themes/{theme}/characters/{character}/images/{filename}")
+async def delete_prod_avatar_image(theme: str, character: str, filename: str):
+    return _avatar_delete_image(PROD_AVATARS_DIR, theme, character, filename)
+
+
+@app.post("/api/prod-avatars/import-from-config")
+async def import_avatars_from_config(body: dict = Body(...)):
+    """Import avatar themes/images from Shared/Avatars to config/Avatars.
+
+    Body: { "themes": ["theme1"], "characters": {"theme1": ["char1", "char2"]} }
+    If characters is empty for a theme, copies the entire theme.
+    Returns info about what was overwritten.
+    """
+    theme_names = body.get("themes", [])
+    char_filter = body.get("characters", {})  # theme -> [characters] or empty=all
+    if not theme_names:
+        raise HTTPException(400, "Aucun theme selectionne")
+
+    imported = []
+    overwritten = []
+    for tname in theme_names:
+        src_dir = AVATARS_DIR / tname
+        if not src_dir.exists():
+            continue
+        dst_dir = PROD_AVATARS_DIR / tname
+        chars_to_copy = char_filter.get(tname, [])
+
+        if not chars_to_copy:
+            # Copy entire theme
+            existed = dst_dir.exists()
+            if existed:
+                overwritten.append(tname)
+                shutil.rmtree(dst_dir)
+            shutil.copytree(src_dir, dst_dir)
+            imported.append({"theme": tname, "mode": "full", "overwritten": existed})
+        else:
+            # Copy only selected characters + their images
+            dst_dir.mkdir(parents=True, exist_ok=True)
+            # Always copy prompt.md
+            src_prompt = src_dir / "prompt.md"
+            if src_prompt.exists():
+                shutil.copy2(src_prompt, dst_dir / "prompt.md")
+            for char_name in chars_to_copy:
+                # Copy .md file
+                src_md = src_dir / f"{char_name}.md"
+                if src_md.exists():
+                    dst_md = dst_dir / f"{char_name}.md"
+                    char_existed = dst_md.exists()
+                    shutil.copy2(src_md, dst_md)
+                # Copy all images for this character
+                imgs_copied = 0
+                for f in src_dir.iterdir():
+                    if f.is_file() and f.name.startswith(char_name + ".") and f.suffix.lower() in (".png", ".jpg", ".webp"):
+                        dst_img = dst_dir / f.name
+                        if dst_img.exists():
+                            overwritten.append(f"{tname}/{f.name}")
+                        shutil.copy2(f, dst_img)
+                        imgs_copied += 1
+                imported.append({"theme": tname, "character": char_name, "images": imgs_copied})
+
+    return {"ok": True, "imported": imported, "overwritten": overwritten}
 
 
 if __name__ == "__main__":

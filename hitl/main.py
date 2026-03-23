@@ -247,6 +247,11 @@ app.include_router(project_types_router)
 app.include_router(automation_router)
 app.include_router(project_detail_router)
 
+# Serve avatar images if directory exists (Docker volume mount)
+_avatars_dir = os.environ.get("AVATARS_DIR", "/app/avatars")
+if os.path.isdir(_avatars_dir):
+    app.mount("/avatars", StaticFiles(directory=_avatars_dir), name="avatars")
+
 # Serve static files if directory exists (Docker build)
 _static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.isdir(_static_dir):

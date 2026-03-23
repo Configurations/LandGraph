@@ -25,6 +25,7 @@ class QuestionResponse(BaseModel):
     reviewer: Optional[str] = None
     created_at: datetime
     answered_at: Optional[datetime] = None
+    agent_avatar_url: Optional[str] = None
 
 
 class AnswerRequest(BaseModel):

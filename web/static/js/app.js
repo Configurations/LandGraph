@@ -3120,6 +3120,7 @@ function showConfigTab(tabId) {
   else if (tabId === 'cfg-models') loadCfgModels();
   else if (tabId === 'cfg-prompts') loadCfgPrompts();
   else if (tabId === 'cfg-dockerfiles') loadCfgDockerfiles();
+  else if (tabId === 'cfg-avatars') loadProdAvatars();
   else if (tabId === 'cfg-git') loadCfgGit();
 }
 
@@ -4037,6 +4038,7 @@ function showTemplateTab(tabId) {
   else if (tabId === 'tpl-security') { loadApiKeys(); loadAuthConfig(); }
   else if (tabId === 'tpl-misc') { loadCfgMisc(); loadTplOthers(); }
   else if (tabId === 'tpl-git') loadTplGit();
+  else if (tabId === 'tpl-avatars') loadTplAvatars();
 }
 
 async function loadTemplates() {
@@ -4505,7 +4507,7 @@ async function _projSaveEdit() {
 
 async function _projDeleteSelected() {
   if (!_projSelectedId) return;
-  if (!(await confirmModal('Supprimer le type de projet "' + _projSelectedId + '" ?'))) return;
+  if (!confirm('Supprimer le type de projet "' + _projSelectedId + '" ?')) return;
   try {
     await api(_projApiBase + '/' + encodeURIComponent(_projSelectedId), { method: 'DELETE' });
     toast('Projet supprime', 'success');
@@ -4595,7 +4597,7 @@ async function createProjectWorkflow(projectId) {
 }
 
 async function _projDeleteWf(wfName) {
-  if (!(await confirmModal('Supprimer le workflow "' + wfName + '" ?'))) return;
+  if (!confirm('Supprimer le workflow "' + wfName + '" ?')) return;
   try {
     await api(_projApiBase + '/' + encodeURIComponent(_projSelectedId) + '/workflows/' + encodeURIComponent(wfName), { method: 'DELETE' });
     toast('Workflow supprime', 'success');
@@ -5348,6 +5350,7 @@ function _renderSaRight() {
   if (sec === 'info') {
     right.innerHTML = _renderSaInfo(agent, id);
     _saBindInfoDirty();
+    _loadSaAvatarGrid(agent.avatar || '');
     return;
   }
   if (sec === 'identity') {
@@ -5556,7 +5559,49 @@ function _renderSaInfo(agent, id) {
     '</select></div>' +
     '</div>' +
     '<div class="form-group"><label>Services MCP</label><div class="mcp-check-tags" id="sa-mcp-tags">' + mcpTags + '</div></div>' +
-    '<div class="form-group"><label>Type de services</label><div style="display:flex;flex-wrap:wrap;gap:1.5rem;margin-top:0.25rem">' + deliverHtml + '</div></div>';
+    '<div class="form-group"><label>Type de services</label><div style="display:flex;flex-wrap:wrap;gap:1.5rem;margin-top:0.25rem">' + deliverHtml + '</div></div>' +
+    '<div class="form-group"><label>Avatar</label><input type="hidden" id="sa-avatar" value="' + escHtml(agent.avatar || '') + '" />' +
+    '<div id="sa-avatar-grid" style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-top:0.25rem"><span style="color:var(--text-secondary);font-size:0.8rem">Chargement...</span></div></div>';
+}
+
+async function _loadSaAvatarGrid(currentAvatar) {
+  const grid = document.getElementById('sa-avatar-grid');
+  if (!grid) return;
+  // Find team's avatar_theme — check tplTeamsData
+  let theme = '';
+  if (tplTeamsData && tplTeamsData.teams) {
+    for (const t of tplTeamsData.teams) {
+      if (t.avatar_theme) { theme = t.avatar_theme; break; }
+    }
+  }
+  if (!theme) {
+    grid.innerHTML = '<span style="color:var(--text-secondary);font-size:0.8rem">Aucun theme d\'avatars configure dans l\'equipe</span>';
+    return;
+  }
+  try {
+    const images = await api('/api/avatars/themes/' + encodeURIComponent(theme) + '/all-images');
+    if (!images.length) {
+      grid.innerHTML = '<span style="color:var(--text-secondary);font-size:0.8rem">Aucune image dans le theme</span>';
+      return;
+    }
+    grid.innerHTML = images.map(img => {
+      const sel = img.filename === currentAvatar;
+      return '<img src="' + escHtml(img.url) + '" data-filename="' + escHtml(img.filename) + '" ' +
+        'style="width:56px;height:56px;border-radius:6px;object-fit:cover;cursor:pointer;border:3px solid ' + (sel ? 'var(--accent)' : 'transparent') + ';opacity:' + (sel ? '1' : '0.7') + '" ' +
+        'title="' + escHtml(img.character + ' — ' + img.filename) + '" ' +
+        'onclick="_selectSaAvatar(this,\'' + escHtml(img.filename) + '\')" />';
+    }).join('') + (currentAvatar ? ' <button class="btn btn-sm" style="align-self:center;font-size:0.7rem;color:var(--text-muted);background:none;border:none" onclick="_selectSaAvatar(null,\'\')">Retirer</button>' : '');
+  } catch {
+    grid.innerHTML = '<span style="color:var(--text-secondary);font-size:0.8rem">Erreur chargement avatars</span>';
+  }
+}
+
+function _selectSaAvatar(el, filename) {
+  document.getElementById('sa-avatar').value = filename;
+  document.querySelectorAll('#sa-avatar-grid img').forEach(img => {
+    img.style.border = img.dataset.filename === filename ? '3px solid var(--accent)' : '3px solid transparent';
+    img.style.opacity = img.dataset.filename === filename ? '1' : '0.7';
+  });
 }
 
 function _saTypeChanged(newType) {
@@ -5720,10 +5765,11 @@ async function saveSharedAgent(id) {
   const delivers_tasklist = document.getElementById('sa-delivers_tasklist')?.checked || false;
   const delivers_specs = document.getElementById('sa-delivers_specs')?.checked || false;
   const delivers_contract = document.getElementById('sa-delivers_contract')?.checked || false;
+  const avatar = document.getElementById('sa-avatar')?.value || '';
   if (!name) { toast('Nom requis', 'error'); return; }
   try {
     await api(_saApiBase + '/' + encodeURIComponent(id), { method: 'PUT', body: {
-      id, name, description, type, llm, temperature, max_tokens, docker_mode, docker_image, mcp_access, delivers_docs, delivers_code, delivers_design, delivers_automation, delivers_tasklist, delivers_specs, delivers_contract
+      id, name, description, type, llm, temperature, max_tokens, docker_mode, docker_image, mcp_access, delivers_docs, delivers_code, delivers_design, delivers_automation, delivers_tasklist, delivers_specs, delivers_contract, avatar
     }});
     toast('Agent sauvegarde', 'success');
     const ag = sharedAgentsData.find(a => a.id === id);
@@ -5854,14 +5900,19 @@ function _renderProdTeams() {
     const mcpAccess = tpl ? (tpl.mcp_access || {}) : {};
     const orchId = t.orchestrator || agentEntries.find(([, a]) => a.type === 'orchestrator')?.[0] || '';
 
+    const prodAvatarTheme = t.avatar_theme || '';
     const agentCards = agentEntries.map(([aid, a]) => {
       const mcpList = mcpAccess[aid] || [];
       const isOrch = aid === orchId || a.type === 'orchestrator';
+      const prodAvatarImg = (prodAvatarTheme && a.avatar) ? '<img src="/prod-avatars/' + encodeURIComponent(prodAvatarTheme) + '/' + encodeURIComponent(a.avatar) + '" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0" onerror="this.style.display=\'none\'" />' : '';
       return '<div class="agent-card' + (isOrch ? ' agent-orchestrator' : '') + '" style="cursor:pointer">' +
         '<div class="agent-card-header">' +
-          '<div onclick="editProdAgent(\'' + escHtml(dir) + '\',\'' + escHtml(aid) + '\')" style="flex:1;cursor:pointer">' +
-            '<h4>' + (isOrch ? '<span class="orch-badge" title="Orchestrateur">&#9733;</span> ' : '') + escHtml(a.name || aid) + '</h4>' +
-            '<code style="font-size:0.75rem;color:var(--text-secondary)">' + escHtml(aid) + '</code>' +
+          '<div onclick="editProdAgent(\'' + escHtml(dir) + '\',\'' + escHtml(aid) + '\')" style="flex:1;cursor:pointer;display:flex;align-items:center;gap:0.5rem">' +
+            prodAvatarImg +
+            '<div>' +
+              '<h4>' + (isOrch ? '<span class="orch-badge" title="Orchestrateur">&#9733;</span> ' : '') + escHtml(a.name || aid) + '</h4>' +
+              '<code style="font-size:0.75rem;color:var(--text-secondary)">' + escHtml(aid) + '</code>' +
+            '</div>' +
           '</div>' +
           (isOrch ? '' : '<button class="btn-icon danger" onclick="event.stopPropagation();deleteProdTeamAgent(\'' + escHtml(dir) + '\',\'' + escHtml(aid) + '\')" title="Supprimer">' +
             '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
@@ -5888,7 +5939,7 @@ function _renderProdTeams() {
           '<span class="tag tag-blue" style="margin-left:0.5rem">' + agentEntries.length + ' agent' + (agentEntries.length > 1 ? 's' : '') + '</span>' +
         '</div>' +
         '<div style="display:flex;gap:0.5rem;align-items:center">' +
-          '<button class="btn-icon" onclick="event.stopPropagation();editProdTeamQuick(' + i + ')" title="Modifier l\'equipe" style="opacity:0.5">' +
+          '<button class="btn-icon" onclick="event.stopPropagation();editProdTeam(' + i + ')" title="Modifier l\'equipe" style="opacity:0.5">' +
             '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>' +
           '</button>' +
           '<button class="btn btn-primary btn-sm" onclick="_teamEditScope=\'cfg\';showAddTplAgentModal(\'' + escHtml(dir) + '\')">+ Agent</button>' +
@@ -6103,11 +6154,12 @@ async function copyProdProjectsFromConfig() {
     for (const p of srcProjects) {
       const exists = dstIds.has(p.id);
       const teamMissing = p.team && !cfgTeamDirs.has(p.team);
-      const blocked = exists || teamMissing;
+      const blocked = teamMissing; // Only block if team missing — existing projects can be overwritten
+
       if (blocked) hasBlocked = true;
 
       const status = exists
-        ? '<span class="tag" style="font-size:0.7rem;background:var(--warning);color:#000">ID existante</span>'
+        ? '<span class="tag" style="font-size:0.7rem;background:var(--warning);color:#000">ecrasera l\'existant</span>'
         : teamMissing
           ? '<span class="tag" style="font-size:0.7rem;background:#ef4444;color:#fff">equipe manquante</span>'
           : '<span class="tag tag-blue" style="font-size:0.7rem">nouveau</span>';
@@ -6132,7 +6184,7 @@ async function copyProdProjectsFromConfig() {
 
     const helpEl = document.getElementById('modal-copy-projects-help');
     helpEl.innerHTML = hasBlocked
-      ? '<span style="color:var(--warning)">Les projets avec une ID existante ou une equipe manquante dans Production / Equipes ne peuvent pas etre copies. Copiez d\'abord les equipes manquantes.</span>'
+      ? '<span style="color:var(--warning)">Les projets avec une equipe manquante dans Production / Equipes ne peuvent pas etre copies. Copiez d\'abord les equipes.</span>'
       : '';
 
     document.getElementById('modal-copy-projects').style.display = 'flex';
@@ -6802,15 +6854,20 @@ function renderTplTeams() {
     const reportExists = tpl ? !!tpl.report_exists : false;
 
     const orchId = t.orchestrator || agentEntries.find(([, a]) => a.type === 'orchestrator')?.[0] || '';
+    const teamAvatarTheme = t.avatar_theme || '';
     const agentCards = agentEntries.map(([aid, a]) => {
       const mcpList = mcpAccess[aid] || [];
       const isOrch = aid === orchId || a.type === 'orchestrator';
       const orchBorder = isOrch ? (orchPromptOk ? 'box-shadow:0 0 0 2px rgba(212,175,55,0.5)' : 'box-shadow:0 0 0 2px rgba(220,80,80,0.45)') : '';
+      const avatarImg = (teamAvatarTheme && a.avatar) ? '<img src="/avatars/' + encodeURIComponent(teamAvatarTheme) + '/' + encodeURIComponent(a.avatar) + '" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0" onerror="this.style.display=\'none\'" />' : '';
       return `<div class="agent-card${isOrch ? ' agent-orchestrator' : ''}" style="cursor:pointer;${orchBorder}">
         <div class="agent-card-header">
-          <div onclick="editTplAgent('${escHtml(dir)}','${escHtml(aid)}')" style="flex:1;cursor:pointer">
-            <h4>${isOrch ? '<span class="orch-badge" title="Orchestrateur">&#9733;</span> ' : ''}${escHtml(a.name || a.id || '')}${a.docker_mode ? ' <svg title="Docker" width="18" height="13" viewBox="0 0 256 185" style="vertical-align:middle;margin-left:4px"><path fill="#0db7ed" d="M250 87c-3-2-10-4-18-3-2-13-10-24-19-31l-4-2-2 4c-3 5-5 12-4 18 0 4 1 8 3 12-5 2-13 4-24 4H1l-1 4c-1 12 2 27 9 38 8 12 20 18 36 18 34 0 60-16 72-49 5 0 15 0 20-10l1-2-3-1zM28 81H8v20h20V81zm26 0H34v20h20V81zm26 0H60v20h20V81zm26 0H86v20h20V81zm-78-24H8v20h20V57zm26 0H34v20h20V57zm26 0H60v20h20V57zm26 0H86v20h20V57zm0-24H86v20h20V33z"/></svg>' : ''}</h4>
-            <code style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(aid)}</code>
+          <div onclick="editTplAgent('${escHtml(dir)}','${escHtml(aid)}')" style="flex:1;cursor:pointer;display:flex;align-items:center;gap:0.5rem">
+            ${avatarImg}
+            <div>
+              <h4>${isOrch ? '<span class="orch-badge" title="Orchestrateur">&#9733;</span> ' : ''}${escHtml(a.name || a.id || '')}${a.docker_mode ? ' <svg title="Docker" width="18" height="13" viewBox="0 0 256 185" style="vertical-align:middle;margin-left:4px"><path fill="#0db7ed" d="M250 87c-3-2-10-4-18-3-2-13-10-24-19-31l-4-2-2 4c-3 5-5 12-4 18 0 4 1 8 3 12-5 2-13 4-24 4H1l-1 4c-1 12 2 27 9 38 8 12 20 18 36 18 34 0 60-16 72-49 5 0 15 0 20-10l1-2-3-1zM28 81H8v20h20V81zm26 0H34v20h20V81zm26 0H60v20h20V81zm26 0H86v20h20V81zm-78-24H8v20h20V57zm26 0H34v20h20V57zm26 0H60v20h20V57zm26 0H86v20h20V57zm0-24H86v20h20V33z"/></svg>' : ''}</h4>
+              <code style="font-size:0.75rem;color:var(--text-secondary)">${escHtml(aid)}</code>
+            </div>
           </div>
           ${isOrch ? '' : `<button class="btn-icon danger" onclick="event.stopPropagation();deleteTplAgent('${escHtml(dir)}','${escHtml(aid)}')" title="Supprimer">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
@@ -6843,7 +6900,7 @@ function renderTplTeams() {
           ${reportExists ? `<button class="btn-icon" onclick="event.stopPropagation();showTplTeamReport('${escHtml(dir)}')" title="Voir le rapport de coherence" style="opacity:0.7;color:var(--accent)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
           </button>` : ''}
-          <button class="btn-icon" onclick="event.stopPropagation();editTplTeamQuick(${i})" title="Modifier l'equipe" style="opacity:0.5">
+          <button class="btn-icon" onclick="event.stopPropagation();editTplTeam(${i})" title="Modifier l'equipe" style="opacity:0.5">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
           </button>
           <button class="btn btn-primary btn-sm" onclick="showAddTplAgentModal('${escHtml(dir)}')">+ Agent</button>
@@ -7021,6 +7078,25 @@ async function editTplAgent(dir, agentId) {
   const curType = isOrchestrator ? 'orchestrator' : (hasPipeline ? 'pipeline' : 'single');
   const hasOtherOrch = Object.entries(tpl.agents || {}).some(([aid, ag]) => aid !== agentId && ag.type === 'orchestrator');
 
+  // Resolve avatar theme for this team
+  const teamsSource = _teamEditScope === 'cfg' ? _prodTeamsData : tplTeamsData;
+  const teamMeta = (teamsSource?.teams || []).find(t => t.directory === dir || t.id === dir);
+  const avatarTheme = teamMeta?.avatar_theme || '';
+  const _avatarApiBase = _teamEditScope === 'cfg' ? '/api/prod-avatars' : '/api/avatars';
+  const _avatarUrlPrefix = _teamEditScope === 'cfg' ? '/prod-avatars' : '/avatars';
+  let avatarImages = [];
+  if (avatarTheme) {
+    try { avatarImages = await api(_avatarApiBase + '/themes/' + encodeURIComponent(avatarTheme) + '/all-images'); } catch {}
+  }
+  const curAvatar = a.avatar || '';
+  const avatarOpts = !avatarTheme
+    ? '<option value="">-- Configurez un theme d\'avatars dans l\'equipe --</option>'
+    : '<option value="">-- Aucun --</option>' + avatarImages.map(img => {
+        const fname = typeof img === 'string' ? img : (img.filename || img.name || '');
+        return '<option value="' + escHtml(fname) + '"' + (curAvatar === fname ? ' selected' : '') + '>' + escHtml(fname) + '</option>';
+      }).join('');
+  const avatarPreviewUrl = (avatarTheme && curAvatar) ? _avatarUrlPrefix + '/' + encodeURIComponent(avatarTheme) + '/' + encodeURIComponent(curAvatar) : '';
+
   showModal(`
     <div class="modal-header">
       <h3>Agent: ${escHtml(a.name || agentId)} <span style="color:var(--text-secondary);font-weight:normal;font-size:0.85rem">(${escHtml(agentId)})</span></h3>
@@ -7059,6 +7135,13 @@ async function editTplAgent(dir, agentId) {
           <option value="pipeline" ${curType==='pipeline'?'selected':''}>Manager</option>
           <option value="orchestrator" ${curType==='orchestrator'?'selected':''} ${hasOtherOrch && curType!=='orchestrator'?'disabled':''}>Orchestrator</option>
         </select>
+      </div>
+      <div class="form-group">
+        <label>Avatar</label>
+        <div style="display:flex;align-items:center;gap:0.75rem">
+          <select id="tpl-agent-edit-avatar" onchange="_onTplAvatarChange('${escHtml(avatarTheme)}')" ${!avatarTheme ? 'disabled' : ''}>${avatarOpts}</select>
+          <div id="tpl-agent-avatar-preview" style="flex-shrink:0">${avatarPreviewUrl ? '<img src="' + escHtml(avatarPreviewUrl) + '" style="width:40px;height:40px;border-radius:50%;object-fit:cover;border:2px solid var(--border)" />' : '<div style="width:40px;height:40px;border-radius:50%;background:var(--bg-secondary);border:2px solid var(--border)"></div>'}</div>
+        </div>
       </div>
       <div class="form-group">
         <label>Serveurs MCP autorises</label>
@@ -7144,6 +7227,19 @@ function _onTplTypeChange(val) {
   // Type change handler (no-op)
 }
 
+function _onTplAvatarChange(theme) {
+  const sel = document.getElementById('tpl-agent-edit-avatar');
+  const preview = document.getElementById('tpl-agent-avatar-preview');
+  if (!sel || !preview) return;
+  const fname = sel.value;
+  const urlBase = _teamEditScope === 'cfg' ? '/prod-avatars' : '/avatars';
+  if (fname && theme) {
+    preview.innerHTML = '<img src="' + urlBase + '/' + encodeURIComponent(theme) + '/' + encodeURIComponent(fname) + '" style="width:40px;height:40px;border-radius:50%;object-fit:cover;border:2px solid var(--border)" onerror="this.parentElement.innerHTML=\'<div style=\\\'width:40px;height:40px;border-radius:50%;background:var(--bg-secondary);border:2px solid var(--border)\\\'></div>\'" />';
+  } else {
+    preview.innerHTML = '<div style="width:40px;height:40px;border-radius:50%;background:var(--bg-secondary);border:2px solid var(--border)"></div>';
+  }
+}
+
 async function saveTplAgent(dir, agentId) {
   const agentType = document.getElementById('tpl-agent-edit-type').value;
   const tpl = _getTeamEditData().find(tp => tp.id === dir);
@@ -7151,14 +7247,18 @@ async function saveTplAgent(dir, agentId) {
     toast('Un orchestrator existe deja dans cette equipe', 'error'); return;
   }
   const delegates_to = Array.from(document.querySelectorAll('.tpl-delegate-cb:checked')).map(cb => cb.value);
+  const avatarEl = document.getElementById('tpl-agent-edit-avatar');
+  const avatar = avatarEl ? avatarEl.value : '';
   const agentsApi = _getTeamEditAgentsApi();
   try {
-    await api(`${agentsApi}/${encodeURIComponent(agentId)}`, { method: 'PUT', body: {
+    const body = {
       id: agentId, name: agentId,
       type: agentType,
       delegates_to,
       team_id: dir,
-    }});
+    };
+    if (avatar) body.avatar = avatar;
+    await api(`${agentsApi}/${encodeURIComponent(agentId)}`, { method: 'PUT', body });
     toast('Agent sauvegarde', 'success');
     closeModal();
     _getTeamEditReload()();
@@ -7301,12 +7401,17 @@ async function addTplTeam() {
   }
 }
 
-function editTplTeam(idx) {
+async function editTplTeam(idx) {
   const t = tplTeamsData.teams[idx];
   const tpl = tplTemplatesData.find(tp => tp.id === t.directory) || null;
   const agentIds = tpl ? Object.keys(tpl.agents || {}) : [];
   const orchOpts = `<option value="">-- Aucun --</option>` +
     agentIds.map(aid => `<option value="${escHtml(aid)}" ${(t.orchestrator || '') === aid ? 'selected' : ''}>${escHtml((tpl.agents[aid] || {}).name || aid)} (${escHtml(aid)})</option>`).join('');
+  // Load avatar themes for dropdown
+  let avatarThemes = [];
+  try { avatarThemes = await api('/api/avatars/themes'); } catch {}
+  const avatarOpts = `<option value="">-- Aucun --</option>` +
+    avatarThemes.map(th => `<option value="${escHtml(th.name)}" ${(t.avatar_theme || '') === th.name ? 'selected' : ''}>${escHtml(th.name)} (${th.character_count || 0} perso.)</option>`).join('');
   showModal(`
     <div class="modal-header">
       <h3>Modifier equipe (template)</h3>
@@ -7320,6 +7425,7 @@ function editTplTeam(idx) {
       <input id="m-tpl-team-dir" class="form-control" value="${escHtml(t.directory || '')}" readonly style="opacity:0.6" />
     </div>
     <div class="form-group"><label>Orchestrateur</label><select id="m-tpl-team-orchestrator" class="form-control">${orchOpts}</select></div>
+    <div class="form-group"><label>Theme d'avatars</label><select id="m-tpl-team-avatar-theme" class="form-control">${avatarOpts}</select></div>
     <div class="form-group"><label>Channels Discord (virgule)</label><input id="m-tpl-team-channels" class="form-control" value="${(t.discord_channels || []).join(', ')}"></div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
@@ -7366,6 +7472,7 @@ async function saveTplTeamQuick(idx) {
 async function saveTplTeam(idx) {
   const channels = document.getElementById('m-tpl-team-channels').value.trim();
   const orchestrator = (document.getElementById('m-tpl-team-orchestrator') || {}).value || '';
+  const avatarTheme = (document.getElementById('m-tpl-team-avatar-theme') || {}).value || '';
   const updated = {
     ...tplTeamsData.teams[idx],
     name: document.getElementById('m-tpl-team-name').value.trim(),
@@ -7374,6 +7481,8 @@ async function saveTplTeam(idx) {
   };
   if (orchestrator) updated.orchestrator = orchestrator;
   else delete updated.orchestrator;
+  if (avatarTheme) updated.avatar_theme = avatarTheme;
+  else delete updated.avatar_theme;
   tplTeamsData.teams[idx] = updated;
   await _saveTplTeams();
   closeModal();
@@ -7507,6 +7616,10 @@ function _wfOpenEditorUI() {
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="14" y2="12"/></svg>
             <span>Phase</span>
           </div>
+          <div class="wf-toolbox-item" draggable="true" ondragstart="_wfToolDragStart(event, 'external')" title="Phase executant un autre workflow" style="border-left:3px solid #8b5cf6">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3" stroke-dasharray="4 2"/><path d="M12 8l4 4-4 4M8 12h8"/></svg>
+            <span>Phase externe</span>
+          </div>
         </div>
         <div class="wf-props" id="wf-props"></div>
       </div>
@@ -7578,7 +7691,7 @@ function _wfToolDrop(e) {
   e.preventDefault();
   document.getElementById('wf-workspace').classList.remove('wf-drop-target');
   const type = e.dataTransfer.getData('wf-tool-type');
-  if (type !== 'phase') return;
+  if (type !== 'phase' && type !== 'external') return;
   // Calculate drop position relative to workspace scroll
   const ws = document.getElementById('wf-workspace');
   const rect = ws.getBoundingClientRect();
@@ -7590,14 +7703,19 @@ function _wfToolDrop(e) {
   let id = 'phase_' + num;
   while (phases[id]) { num++; id = 'phase_' + num; }
   const maxOrder = Object.values(phases).reduce(function(m, p) { return Math.max(m, p.order || 0); }, 0);
-  _wf.data.phases[id] = {
-    name: 'Phase ' + num,
+  const phaseData = {
+    name: type === 'external' ? 'Phase externe ' + num : 'Phase ' + num,
     description: '',
     order: maxOrder + 1,
     agents: {},
     deliverables: {},
     exit_conditions: { human_gate: true }
   };
+  if (type === 'external') {
+    phaseData.type = 'external';
+    phaseData.external_workflow = '';
+  }
+  _wf.data.phases[id] = phaseData;
   _wf.positions[id] = { x: Math.max(20, x - 100), y: Math.max(20, y - 20) };
   _wf.selected = id;
   wfRender();
@@ -7626,17 +7744,25 @@ function wfRender() {
   for (const [id, p] of phases) {
     const pos = _wf.positions[id] || { x: 100, y: 100 };
     const sel = _wf.selected === id ? ' wf-selected' : '';
+    const isExternal = p.type === 'external';
+    const extClass = isExternal ? ' wf-external' : '';
     const agentIds = Object.keys(p.agents || {});
     const delIds = Object.keys(p.deliverables || {});
     html += `
-      <div class="wf-phase${sel}" id="wf-p-${id}" data-id="${id}"
+      <div class="wf-phase${sel}${extClass}" id="wf-p-${id}" data-id="${id}"
            style="left:${pos.x}px;top:${pos.y}px"
            onmousedown="wfPhaseMouseDown(event,'${id}')"
-           oncontextmenu="event.preventDefault()">
+           oncontextmenu="wfPhaseContextMenu(event,'${id}')">
         <div class="wf-phase-head">
           <span>${escHtml(p.name || id)}</span>
           <span class="wf-phase-order">${p.order || '?'}</span>
         </div>
+        ${isExternal ? `
+        <div class="wf-phase-body" style="text-align:center;padding:0.5rem">
+          <div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:0.25rem">&#8599; Workflow externe</div>
+          <div style="font-size:0.8rem;font-weight:500">${p.external_workflow ? escHtml(p.external_workflow.replace('.wrk.json', '')) : '<span style="color:var(--warning)">Non configure</span>'}</div>
+        </div>
+        ` : `
         <div class="wf-phase-body">
           <div class="wf-mini-label">Agents (${agentIds.length})</div>
           ${(() => {
@@ -7668,6 +7794,7 @@ function wfRender() {
             return `<span class="wf-mini-chip${dd.required?' required':''}"${tc?` style="border-left:3px solid ${tc}"`:''} title="${escHtml(d)}" onclick="event.stopPropagation();wfSelectDeliverable('${id}','${escHtml(d)}')">${escHtml(dlabel)}</span>`;
           }).join('')}</div>
         </div>
+        `}
         <div class="wf-anchor wf-anchor-left" data-side="left" onmousedown="wfLinkStart(event,'${id}','left')"></div>
         <div class="wf-anchor wf-anchor-top" data-side="top" onmousedown="wfLinkStart(event,'${id}','top')"></div>
         <div class="wf-anchor wf-anchor-right" data-side="right" onmousedown="wfLinkStart(event,'${id}','right')"></div>
@@ -8078,6 +8205,102 @@ function _wfRenderPhaseProps(el, phaseId) {
   const exitConds = p.exit_conditions || {};
   const pgOrder = (_wf.data.parallel_groups && _wf.data.parallel_groups.order) || ['A'];
 
+  // ── External phase: different panel ──
+  if (p.type === 'external') {
+    const transitions = _wf.data.transitions || [];
+    const outgoing = transitions.map(function(t, i) { return { t: t, i: i }; }).filter(function(o) { return o.t.from === phaseId; });
+    const transHtml = outgoing.length === 0
+      ? '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucune transition</div>'
+      : outgoing.map(function(o) {
+          var toName = (_wf.data.phases[o.t.to] && _wf.data.phases[o.t.to].name) || o.t.to;
+          return '<div class="wf-transition-item" style="cursor:pointer" onclick="wfSelectTransition(event,' + o.i + ')">' +
+            '<span>Vers ' + escHtml(toName) + '</span>' +
+            (o.t.human_gate ? '<span class="tag tag-yellow" style="font-size:0.6rem;padding:0.05rem 0.3rem">HG</span>' : '') +
+            '<button class="btn-icon danger" style="margin-left:auto" onclick="event.stopPropagation();wfDeleteTransition(' + o.i + ')">x</button>' +
+            '</div>';
+        }).join('');
+
+    el.innerHTML = `
+      <h4>
+        Phase externe : ${escHtml(p.name || phaseId)}
+        <button class="btn-icon danger" onclick="wfDeletePhase('${phaseId}')" title="Supprimer la phase">&#128465;</button>
+      </h4>
+
+      <div class="wf-props-section">
+        <div class="wf-props-section-title" onclick="_wfToggleSection(this)">
+          <span class="wf-section-arrow">${_wf._openSection === 'ph-info' ? '\u25bc' : '\u25b6'}</span>
+          Informations
+        </div>
+        <div class="wf-section-body" ${_wf._openSection === 'ph-info' ? '' : 'style="display:none"'} data-section="ph-info">
+          <div class="form-group">
+            <label>ID</label>
+            <input value="${escHtml(phaseId)}" onchange="wfRenamePhase('${phaseId}',this.value)" />
+          </div>
+          <div class="form-group">
+            <label>Nom</label>
+            <input value="${escHtml(p.name || '')}" onchange="wfSetPhaseField('${phaseId}','name',this.value)" />
+          </div>
+          <div class="form-group">
+            <label>Description</label>
+            <textarea rows="2" onchange="wfSetPhaseField('${phaseId}','description',this.value)">${escHtml(p.description || '')}</textarea>
+          </div>
+          <div class="form-group">
+            <label>Ordre</label>
+            <input type="number" value="${p.order || 1}" min="1" onchange="wfSetPhaseField('${phaseId}','order',parseInt(this.value))" />
+          </div>
+        </div>
+      </div>
+
+      <div class="wf-props-section">
+        <div class="wf-props-section-title" onclick="_wfToggleSection(this)">
+          <span class="wf-section-arrow">${_wf._openSection === 'ph-ext-wf' ? '\u25bc' : '\u25b6'}</span>
+          Workflow externe
+        </div>
+        <div class="wf-section-body" ${_wf._openSection === 'ph-ext-wf' ? '' : 'style="display:none"'} data-section="ph-ext-wf">
+          <div class="form-group">
+            <label>Workflow</label>
+            <select id="wf-ext-workflow-select" onchange="_wfSetExternalWorkflow('${phaseId}',this.value)">
+              <option value="">Chargement...</option>
+            </select>
+          </div>
+          <div id="wf-ext-apercu"></div>
+          ${p.external_workflow ? '<button class="btn btn-sm" style="margin-top:0.5rem;width:100%" onclick="_wfOpenExternalWorkflow(\'' + escHtml(p.external_workflow) + '\')">Ouvrir le workflow &#8594;</button>' : ''}
+        </div>
+      </div>
+
+      <div class="wf-props-section">
+        <div class="wf-props-section-title" onclick="_wfToggleSection(this)">
+          <span class="wf-section-arrow">${_wf._openSection === 'ph-trans' ? '\u25bc' : '\u25b6'}</span>
+          Transitions sortantes
+        </div>
+        <div class="wf-section-body" ${_wf._openSection === 'ph-trans' ? '' : 'style="display:none"'} data-section="ph-trans">
+          ${transHtml}
+        </div>
+      </div>
+    `;
+
+    // Populate workflow select asynchronously
+    _wfLoadExternalWorkflows().then(function(workflows) {
+      var sel = document.getElementById('wf-ext-workflow-select');
+      if (!sel) return;
+      var currentFile = _wf.dir + '.wrk.json';
+      sel.innerHTML = '<option value="">-- Selectionner --</option>' +
+        workflows.filter(function(w) { return w.filename !== currentFile; }).map(function(w) {
+          return '<option value="' + escHtml(w.filename) + '"' + (p.external_workflow === w.filename ? ' selected' : '') + '>' + escHtml(w.name) + ' (' + escHtml(w.filename) + ')</option>';
+        }).join('');
+    });
+
+    // Load apercu if workflow is set
+    if (p.external_workflow) {
+      _wfLoadExternalApercu(p.external_workflow).then(function(html) {
+        var ap = document.getElementById('wf-ext-apercu');
+        if (ap) ap.innerHTML = html;
+      });
+    }
+
+    return;
+  }
+
   // Agents — inline editable blocks
   const allAgentIds = Object.keys(agents);
   let agentsHtml = Object.entries(agents).map(([id, a]) => {
@@ -8322,19 +8545,17 @@ function wfPhaseContextMenu(e, id) {
   e.preventDefault();
   e.stopPropagation();
   wfCloseContextMenu();
-  const ws = document.getElementById('wf-workspace');
-  const rect = ws.getBoundingClientRect();
-  const x = e.clientX - rect.left + ws.scrollLeft;
-  const y = e.clientY - rect.top + ws.scrollTop;
   const menu = document.createElement('div');
   menu.className = 'wf-ctx-menu';
   menu.id = 'wf-ctx-menu';
-  menu.style.left = x + 'px';
-  menu.style.top = y + 'px';
+  menu.style.position = 'fixed';
+  menu.style.left = e.clientX + 'px';
+  menu.style.top = e.clientY + 'px';
+  menu.style.zIndex = '99999';
   menu.innerHTML = `
-    <div class="wf-ctx-item wf-ctx-danger" onclick="wfCtxDeletePhase('${id}')">Supprimer la phase</div>
+    <div class="wf-ctx-item wf-ctx-danger" onmousedown="event.stopPropagation();wfCtxDeletePhase('${id}')">Supprimer la phase</div>
   `;
-  document.getElementById('wf-workspace-inner').appendChild(menu);
+  document.body.appendChild(menu);
   setTimeout(() => document.addEventListener('mousedown', _wfCloseCtxOnClick, { once: true }), 0);
 }
 
@@ -8342,22 +8563,20 @@ function wfArrowContextMenu(e, idx) {
   e.preventDefault();
   e.stopPropagation();
   wfCloseContextMenu();
-  const ws = document.getElementById('wf-workspace');
-  const rect = ws.getBoundingClientRect();
-  const x = e.clientX - rect.left + ws.scrollLeft;
-  const y = e.clientY - rect.top + ws.scrollTop;
   const t = (_wf.data.transitions || [])[idx];
   if (!t) return;
   const menu = document.createElement('div');
   menu.className = 'wf-ctx-menu';
   menu.id = 'wf-ctx-menu';
-  menu.style.left = x + 'px';
-  menu.style.top = y + 'px';
+  menu.style.position = 'fixed';
+  menu.style.left = e.clientX + 'px';
+  menu.style.top = e.clientY + 'px';
+  menu.style.zIndex = '99999';
   menu.innerHTML = `
     <div class="wf-ctx-item" style="font-size:0.7rem;color:var(--text-secondary);cursor:default">${escHtml(t.from)} → ${escHtml(t.to)}</div>
-    <div class="wf-ctx-item wf-ctx-danger" onclick="wfCtxDeleteTransition(${idx})">Supprimer la transition</div>
+    <div class="wf-ctx-item wf-ctx-danger" onmousedown="event.stopPropagation();wfCtxDeleteTransition(${idx})">Supprimer la transition</div>
   `;
-  document.getElementById('wf-workspace-inner').appendChild(menu);
+  document.body.appendChild(menu);
   setTimeout(() => document.addEventListener('mousedown', _wfCloseCtxOnClick, { once: true }), 0);
 }
 
@@ -8379,16 +8598,9 @@ function wfCloseContextMenu() {
   if (m) m.remove();
 }
 
-async function wfCtxDeletePhase(id) {
+function wfCtxDeletePhase(id) {
   wfCloseContextMenu();
-  const phaseName = (_wf.data.phases[id] && _wf.data.phases[id].name) || id;
-  const ok = await confirmModal('Supprimer la phase "' + phaseName + '" ?\n\nCette action supprimera aussi ses transitions.');
-  if (!ok) return;
-  delete _wf.data.phases[id];
-  delete _wf.positions[id];
-  _wf.data.transitions = (_wf.data.transitions || []).filter(t => t.from !== id && t.to !== id);
-  _wf.selected = null;
-  wfRender();
+  wfDeletePhase(id);
 }
 
 // ── Drag phases ──
@@ -8538,6 +8750,64 @@ function wfAddPhase() {
   _wfCalcPositions();
   _wf.selected = id;
   wfRender();
+}
+
+function wfAddExternalPhase() {
+  const phases = _wf.data.phases || {};
+  let num = Object.keys(phases).length + 1;
+  let id = 'phase_' + num;
+  while (phases[id]) { num++; id = 'phase_' + num; }
+  const maxOrder = Object.values(phases).reduce((m, p) => Math.max(m, p.order || 0), 0);
+  _wf.data.phases[id] = {
+    name: 'Phase externe ' + num,
+    description: '',
+    order: maxOrder + 1,
+    type: 'external',
+    external_workflow: '',
+    agents: {},
+    deliverables: {},
+    exit_conditions: { human_gate: true }
+  };
+  _wfCalcPositions();
+  _wf.selected = id;
+  wfRender();
+}
+
+async function _wfLoadExternalWorkflows() {
+  var parts = _wf.apiBase.split('/');
+  var projectId = parts[parts.length - 1];
+  var base = _wf.apiBase.includes('prod-') ? '/api/prod-projects' : '/api/templates/projects';
+  try {
+    return await api(base + '/' + encodeURIComponent(projectId) + '/available-workflows');
+  } catch (e) { return []; }
+}
+
+async function _wfSetExternalWorkflow(phaseId, filename) {
+  _wf.data.phases[phaseId].external_workflow = filename;
+  wfRender();
+}
+
+function _wfOpenExternalWorkflow(filename) {
+  if (!filename) return;
+  var wfName = filename.replace('.wrk.json', '');
+  openWorkflowEditor(wfName, _wf.apiBase, _wf.label, _wf.registryDir, _wf.inlineTargetId);
+}
+
+async function _wfLoadExternalApercu(filename) {
+  if (!filename) return '';
+  var wfName = filename.replace('.wrk.json', '');
+  try {
+    var data = await api(_wf.apiBase + '/' + encodeURIComponent(wfName));
+    var phases = data.phases || {};
+    var phaseList = typeof phases === 'object' && !Array.isArray(phases) ? Object.values(phases) : (Array.isArray(phases) ? phases : []);
+    var phaseCount = phaseList.length;
+    var agentCount = phaseList.reduce(function(sum, p) { return sum + Object.keys(p.agents || {}).length; }, 0);
+    var phaseNames = phaseList.map(function(p) { return p.name || '?'; }).join(', ');
+    return '<div style="background:var(--bg-secondary);border-radius:6px;padding:0.5rem;font-size:0.8rem;margin-top:0.5rem">' +
+      '<div><strong>' + phaseCount + '</strong> phase(s) &bull; <strong>' + agentCount + '</strong> agent(s)</div>' +
+      '<div style="color:var(--text-secondary);margin-top:0.25rem">' + escHtml(phaseNames) + '</div>' +
+      '</div>';
+  } catch (e) { return '<div style="color:var(--error);font-size:0.8rem">Erreur chargement apercu</div>'; }
 }
 
 function wfDeletePhase(id) {
@@ -9606,6 +9876,12 @@ async function _wfValidate() {
 
   // 2. Validate all agent references in the workflow
   for (const [phaseId, phase] of Object.entries(phases)) {
+    if (phase.type === 'external') {
+      if (!phase.external_workflow) {
+        warnings.push('Phase "' + (phase.name || phaseId) + '" : aucun workflow externe configure');
+      }
+      continue;
+    }
     const phaseName = phase.name || phaseId;
     const phaseAgents = new Set(Object.keys(phase.agents || {}));
 
@@ -9673,6 +9949,7 @@ async function _wfValidate() {
 
   // 4. Check phases have at least one agent
   for (const [phaseId, phase] of Object.entries(phases)) {
+    if (phase.type === 'external') continue;
     if (!phase.agents || Object.keys(phase.agents).length === 0) {
       warnings.push(`Phase "${phase.name || phaseId}" : aucun agent assigne`);
     }
@@ -10341,6 +10618,649 @@ async function deleteUser(uid, email) {
     await api(`/api/hitl/users/${uid}`, { method: 'DELETE' });
     toast('Utilisateur supprime', 'success');
     loadUsers();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════
+// AVATARS
+// ═══════════════════════════════════════════════════
+
+let _currentAvatarTheme = null;
+
+async function loadTplAvatars() {
+  const list = document.getElementById('avatar-themes-list');
+  list.innerHTML = '<p style="color:var(--text-muted);font-size:0.8rem">Chargement...</p>';
+  try {
+    const themes = await api('/api/avatars/themes');
+    if (!themes.length) {
+      list.innerHTML = '<p style="color:var(--text-muted);font-size:0.8rem">Aucun theme. Cliquez "+ Nouveau" pour commencer.</p>';
+      document.getElementById('avatar-detail-panel').innerHTML = '<p style="padding:2rem;text-align:center;color:var(--text-muted);font-size:0.85rem">Selectionnez un theme</p>';
+      return;
+    }
+    list.innerHTML = themes.map(t => {
+      const sel = t.name === _currentAvatarTheme;
+      return `<div class="avatar-theme-card" style="padding:0.6rem 0.75rem;margin-bottom:0.4rem;border-radius:8px;cursor:pointer;border:1px solid var(--border);background:${sel ? 'var(--accent)' : 'var(--surface)'};color:${sel ? 'white' : 'var(--text)'}" onclick="selectAvatarTheme('${escHtml(t.name)}')">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="font-weight:600;font-size:0.85rem">${escHtml(t.name)}</span>
+          <button class="btn btn-sm" style="padding:2px 6px;font-size:0.7rem;color:${sel ? 'white' : 'var(--text-muted)'};background:none;border:none" onclick="event.stopPropagation();deleteAvatarTheme('${escHtml(t.name)}')" title="Supprimer">&times;</button>
+        </div>
+        <div style="font-size:0.75rem;color:${sel ? 'rgba(255,255,255,0.8)' : 'var(--text-muted)'};margin-top:0.2rem">${t.character_count || 0} personnage(s) &middot; ${t.image_count || 0} image(s)</div>
+      </div>`;
+    }).join('');
+    // Auto-select first if none selected or selected no longer exists
+    if (!_currentAvatarTheme || !themes.find(t => t.name === _currentAvatarTheme)) {
+      selectAvatarTheme(themes[0].name);
+    } else {
+      selectAvatarTheme(_currentAvatarTheme);
+    }
+  } catch (e) {
+    list.innerHTML = `<p style="color:var(--text-muted);font-size:0.8rem">Erreur: ${escHtml(e.message)}</p>`;
+  }
+}
+
+async function selectAvatarTheme(name) {
+  _currentAvatarTheme = name;
+  // Update theme list highlighting
+  document.querySelectorAll('.avatar-theme-card').forEach(c => {
+    const isSelected = c.querySelector('span').textContent === name;
+    c.style.background = isSelected ? 'var(--accent)' : 'var(--surface)';
+    c.style.color = isSelected ? 'white' : 'var(--text)';
+  });
+
+  const panel = document.getElementById('avatar-detail-panel');
+  panel.innerHTML = '<p style="padding:2rem;text-align:center;color:var(--text-muted)"><span class="spinner"></span> Chargement...</p>';
+
+  try {
+    const theme = await api(`/api/avatars/themes/${encodeURIComponent(name)}`);
+    let html = '';
+
+    // Theme header
+    html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+      <h3 style="margin:0;font-size:1rem;color:var(--text)">${escHtml(theme.name)}</h3>
+    </div>`;
+
+    // Prompt template (collapsible)
+    html += `<div class="card collapsible collapsed" style="margin-bottom:1rem">
+      <div class="card-header" onclick="this.parentElement.classList.toggle('collapsed')" style="cursor:pointer">
+        <h3 style="font-size:0.85rem">Prompt template</h3>
+        <svg class="card-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+      </div>
+      <div class="card-body">
+        <textarea id="avatar-prompt-tpl" rows="6" style="width:100%;font-family:monospace;font-size:0.8rem;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.5rem;resize:vertical">${escHtml(theme.prompt_template || '')}</textarea>
+        <button class="btn btn-primary btn-sm" style="margin-top:0.5rem" onclick="saveAvatarPrompt('${escHtml(name)}')">Enregistrer le prompt</button>
+      </div>
+    </div>`;
+
+    // Characters section
+    html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
+      <h4 style="margin:0;font-size:0.85rem;color:var(--text)">Personnages</h4>
+      <button class="btn btn-sm btn-primary" onclick="showCreateCharacterModal('${escHtml(name)}')">+ Nouveau personnage</button>
+    </div>`;
+
+    // Character cards
+    const characters = theme.characters || [];
+    if (!characters.length) {
+      html += '<p style="color:var(--text-muted);font-size:0.8rem">Aucun personnage. Cliquez "+ Nouveau personnage" pour commencer.</p>';
+    } else {
+      html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:0.75rem">';
+      for (const ch of characters) {
+        const images = ch.images || [];
+        const maxShow = 4;
+        const shown = images.slice(0, maxShow);
+        const extra = images.length - maxShow;
+
+        html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:0.75rem">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
+            <span style="font-weight:600;font-size:0.85rem;color:var(--text)">${escHtml(ch.name)}</span>
+            <button class="btn btn-sm" style="padding:2px 6px;font-size:0.7rem;color:var(--text-muted);background:none;border:none" onclick="deleteAvatarCharacter('${escHtml(name)}','${escHtml(ch.name)}')" title="Supprimer">&times;</button>
+          </div>`;
+
+        // Image thumbnails
+        if (images.length) {
+          html += '<div style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-bottom:0.5rem">';
+          for (const img of shown) {
+            const imgUrl = typeof img === 'string' ? `/avatars/${encodeURIComponent(name)}/${encodeURIComponent(img)}` : img.url;
+            const imgFile = typeof img === 'string' ? img : img.filename;
+            html += `<div style="position:relative">
+              <img src="${escHtml(imgUrl)}" style="width:80px;height:80px;border-radius:6px;object-fit:cover;cursor:pointer" onclick="window.open(this.src,'_blank')" />
+              <button style="position:absolute;top:2px;right:2px;background:rgba(0,0,0,0.6);color:white;border:none;border-radius:50%;width:18px;height:18px;font-size:12px;cursor:pointer;line-height:16px;padding:0" onclick="deleteAvatarImage('${escHtml(name)}','${escHtml(ch.name)}','${escHtml(imgFile)}')">&times;</button>
+            </div>`;
+          }
+          if (extra > 0) {
+            html += `<div style="width:80px;height:80px;border-radius:6px;background:var(--bg);display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:0.8rem;border:1px solid var(--border)">+${extra}</div>`;
+          }
+          html += '</div>';
+        }
+
+        // Action buttons
+        html += `<div style="display:flex;gap:0.4rem;flex-wrap:wrap">
+          <button class="btn btn-sm btn-primary" id="gen-img-${escHtml(ch.name)}" onclick="generateAvatarImage('${escHtml(name)}','${escHtml(ch.name)}')">Generer image</button>
+          <label class="btn btn-sm btn-outline" style="cursor:pointer;margin:0">Upload <input type="file" accept="image/*" style="display:none" onchange="uploadAvatarImage('${escHtml(name)}','${escHtml(ch.name)}',this.files[0])"></label>
+          <button class="btn btn-sm btn-outline" onclick="showCharacterPrompt('${escHtml(name)}','${escHtml(ch.name)}')">Voir prompt</button>
+        </div>`;
+
+        // Prompt textarea (hidden by default)
+        html += `<div id="char-prompt-${escHtml(ch.name)}" style="display:none;margin-top:0.5rem">
+          <textarea id="char-prompt-text-${escHtml(ch.name)}" rows="4" style="width:100%;font-family:monospace;font-size:0.75rem;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.5rem;resize:vertical">${escHtml(ch.prompt || '')}</textarea>
+          <button class="btn btn-sm btn-primary" style="margin-top:0.3rem" onclick="saveCharacterPrompt('${escHtml(name)}','${escHtml(ch.name)}')">Enregistrer</button>
+        </div>`;
+
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+
+    panel.innerHTML = html;
+  } catch (e) {
+    panel.innerHTML = `<p style="padding:2rem;text-align:center;color:var(--text-muted)">Erreur: ${escHtml(e.message)}</p>`;
+  }
+}
+
+function showCreateThemeModal() {
+  showModal(`
+    <div class="modal-header">
+      <h3>Nouveau theme d'avatars</h3>
+      <button class="btn-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>Nom du theme</label>
+        <input id="new-theme-name" placeholder="cyberpunk, medieval..." />
+      </div>
+      <div class="form-group">
+        <label>Description du style</label>
+        <textarea id="new-theme-desc" rows="3" placeholder="Style visuel pour les avatars..."></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="createAvatarTheme()">Creer</button>
+    </div>
+  `);
+}
+
+async function createAvatarTheme() {
+  const name = document.getElementById('new-theme-name').value.trim();
+  const description = document.getElementById('new-theme-desc').value.trim();
+  if (!name) { toast('Le nom est requis', 'error'); return; }
+  try {
+    const result = await api('/api/avatars/themes', { method: 'POST', body: { name, description } });
+    toast('Theme cree', 'success');
+    closeModal();
+    _currentAvatarTheme = result.slug || result.name || name;
+    loadTplAvatars();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteAvatarTheme(name) {
+  if (!await confirmModal(`Supprimer le theme "${name}" et tous ses personnages / images ?`)) return;
+  try {
+    await api(`/api/avatars/themes/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    toast('Theme supprime', 'success');
+    if (_currentAvatarTheme === name) _currentAvatarTheme = null;
+    loadTplAvatars();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function saveAvatarPrompt(theme) {
+  const prompt = document.getElementById('avatar-prompt-tpl').value;
+  try {
+    await api(`/api/avatars/themes/${encodeURIComponent(theme)}`, { method: 'PUT', body: { prompt_template: prompt } });
+    toast('Prompt enregistre', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function showCreateCharacterModal(theme) {
+  showModal(`
+    <div class="modal-header">
+      <h3>Nouveau personnage</h3>
+      <button class="btn-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>Nom du personnage (= role de l'agent)</label>
+        <input id="new-char-name" placeholder="lead_dev, architect..." />
+      </div>
+      <div class="form-group">
+        <label>Description (optionnel, aide a la generation du prompt)</label>
+        <textarea id="new-char-desc" rows="3" placeholder="Personnalite, traits visuels..."></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" id="create-char-btn" onclick="createAvatarCharacter('${escHtml(theme)}')">Creer</button>
+    </div>
+  `);
+}
+
+async function createAvatarCharacter(theme) {
+  const name = document.getElementById('new-char-name').value.trim();
+  const description = document.getElementById('new-char-desc').value.trim();
+  if (!name) { toast('Le nom est requis', 'error'); return; }
+  const btn = document.getElementById('create-char-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Generation...';
+  try {
+    await api(`/api/avatars/themes/${encodeURIComponent(theme)}/characters`, { method: 'POST', body: { character: name, description } });
+    toast('Personnage cree', 'success');
+    closeModal();
+    selectAvatarTheme(theme);
+  } catch (e) {
+    toast(e.message, 'error');
+    btn.disabled = false;
+    btn.textContent = 'Creer';
+  }
+}
+
+async function generateAvatarImage(theme, character) {
+  const btn = document.getElementById('gen-img-' + character);
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Generation...'; }
+  try {
+    await api(`/api/avatars/themes/${encodeURIComponent(theme)}/characters/${encodeURIComponent(character)}/generate`, { method: 'POST' });
+    toast('Image generee', 'success');
+    selectAvatarTheme(theme);
+  } catch (e) {
+    toast(e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Generer image'; }
+  }
+}
+
+async function uploadAvatarImage(theme, character, file) {
+  if (!file) return;
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    const res = await fetch(`/api/avatars/themes/${encodeURIComponent(theme)}/characters/${encodeURIComponent(character)}/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || 'Erreur upload');
+    }
+    toast('Image uploadee', 'success');
+    selectAvatarTheme(theme);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function showCharacterPrompt(theme, character) {
+  const el = document.getElementById('char-prompt-' + character);
+  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+async function saveCharacterPrompt(theme, character) {
+  const prompt = document.getElementById('char-prompt-text-' + character).value;
+  try {
+    await api(`/api/avatars/themes/${encodeURIComponent(theme)}/characters/${encodeURIComponent(character)}`, { method: 'PUT', body: { prompt } });
+    toast('Prompt personnage enregistre', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteAvatarCharacter(theme, character) {
+  if (!await confirmModal(`Supprimer le personnage "${character}" et toutes ses images ?`)) return;
+  try {
+    await api(`/api/avatars/themes/${encodeURIComponent(theme)}/characters/${encodeURIComponent(character)}`, { method: 'DELETE' });
+    toast('Personnage supprime', 'success');
+    selectAvatarTheme(theme);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteAvatarImage(theme, character, filename) {
+  if (!await confirmModal('Supprimer cette image ?')) return;
+  try {
+    await api(`/api/avatars/themes/${encodeURIComponent(theme)}/characters/${encodeURIComponent(character)}/images/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+    toast('Image supprimee', 'success');
+    selectAvatarTheme(theme);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════
+// PRODUCTION AVATARS (config/Avatars/)
+// ═══════════════════════════════════════════════════
+
+let _currentProdAvatarTheme = null;
+
+async function loadProdAvatars() {
+  const list = document.getElementById('prod-avatar-themes-list');
+  if (!list) return;
+  try {
+    const themes = await api('/api/prod-avatars/themes');
+    list.innerHTML = themes.length ? themes.map(t => `
+      <div class="avatar-theme-card${_currentProdAvatarTheme === t.name ? ' active' : ''}" onclick="selectProdAvatarTheme('${escHtml(t.name)}')" style="padding:0.5rem;border:1px solid var(--border);border-radius:6px;margin-bottom:0.5rem;cursor:pointer${_currentProdAvatarTheme === t.name ? ';background:var(--bg-secondary);border-color:var(--accent)' : ''}">
+        <div style="font-weight:500">${escHtml(t.name)}</div>
+        <div style="font-size:0.8rem;color:var(--text-secondary)">${t.character_count} personnage(s) &bull; ${t.image_count} image(s)</div>
+      </div>`).join('') : '<p style="color:var(--text-secondary);font-size:0.85rem">Aucun theme. Creez-en un ou copiez depuis Configuration.</p>';
+    if (_currentProdAvatarTheme) selectProdAvatarTheme(_currentProdAvatarTheme);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function selectProdAvatarTheme(name) {
+  _currentProdAvatarTheme = name;
+  const panel = document.getElementById('prod-avatar-detail-panel');
+  if (!panel) return;
+  try {
+    const theme = await api('/api/prod-avatars/themes/' + encodeURIComponent(name));
+    const chars = theme.characters || [];
+    panel.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
+        <h3 style="margin:0">${escHtml(name)}</h3>
+        <div style="display:flex;gap:0.5rem">
+          <button class="btn btn-outline btn-sm" onclick="toggleProdAvatarPrompt()">Prompt template</button>
+          <button class="btn btn-outline btn-sm" style="color:var(--error)" onclick="deleteProdAvatarTheme('${escHtml(name)}')">Supprimer</button>
+        </div>
+      </div>
+      <div id="prod-avatar-prompt-section" style="display:none;margin-bottom:1rem">
+        <textarea id="prod-avatar-prompt-text" style="width:100%;min-height:120px;font-family:monospace;font-size:0.8rem">${escHtml(theme.prompt_template || '')}</textarea>
+        <button class="btn btn-primary btn-sm" style="margin-top:0.35rem" onclick="saveProdAvatarPrompt('${escHtml(name)}')">Sauvegarder prompt</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.75rem">
+        <h4 style="margin:0">Personnages</h4>
+        <input id="prod-avatar-new-char" placeholder="Nom du personnage..." style="flex:1;max-width:200px" />
+        <button class="btn btn-primary btn-sm" onclick="createProdAvatarCharacter('${escHtml(name)}')">Generer</button>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:1rem">
+        ${chars.map(c => {
+          const imgs = c.images || [];
+          const shown = imgs.slice(0, 4);
+          const extra = imgs.length - 4;
+          return `<div style="border:1px solid var(--border);border-radius:8px;padding:0.75rem;width:260px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
+              <strong>${escHtml(c.name)}</strong>
+              <div style="display:flex;gap:0.25rem">
+                <button class="btn-icon" onclick="generateProdAvatarImage('${escHtml(name)}','${escHtml(c.name)}')" title="Generer image">&#127912;</button>
+                <button class="btn-icon" onclick="toggleProdCharPrompt('${escHtml(c.name)}')" title="Voir prompt">&#128221;</button>
+                <button class="btn-icon danger" onclick="deleteProdAvatarCharacter('${escHtml(name)}','${escHtml(c.name)}')" title="Supprimer">&#128465;</button>
+              </div>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:0.35rem">
+              ${shown.map(img => `<div style="position:relative"><img src="${escHtml(img.url)}" style="width:56px;height:56px;border-radius:6px;object-fit:cover;cursor:pointer" onclick="window.open('${escHtml(img.url)}','_blank')" /><button class="btn-icon danger" style="position:absolute;top:-4px;right:-4px;width:16px;height:16px;font-size:8px;padding:0;background:var(--bg-primary);border-radius:50%" onclick="event.stopPropagation();deleteProdAvatarImage('${escHtml(name)}','${escHtml(c.name)}','${escHtml(img.filename)}')">&times;</button></div>`).join('')}
+              ${extra > 0 ? `<span style="font-size:0.75rem;color:var(--text-secondary);align-self:center">+${extra}</span>` : ''}
+            </div>
+            <div id="prod-char-prompt-${escHtml(c.name)}" style="display:none;margin-top:0.5rem">
+              <textarea id="prod-char-prompt-text-${escHtml(c.name)}" style="width:100%;min-height:80px;font-size:0.75rem">${escHtml(c.prompt || '')}</textarea>
+              <button class="btn btn-primary btn-sm" style="margin-top:0.25rem" onclick="saveProdCharacterPrompt('${escHtml(name)}','${escHtml(c.name)}')">Sauvegarder</button>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`;
+    // Refresh theme list highlight
+    document.querySelectorAll('#prod-avatar-themes-list .avatar-theme-card').forEach(el => {
+      el.style.background = '';
+      el.style.borderColor = 'var(--border)';
+    });
+    const activeCard = document.querySelector(`#prod-avatar-themes-list .avatar-theme-card[onclick*="${name}"]`);
+    if (activeCard) { activeCard.style.background = 'var(--bg-secondary)'; activeCard.style.borderColor = 'var(--accent)'; }
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function toggleProdAvatarPrompt() {
+  const s = document.getElementById('prod-avatar-prompt-section');
+  if (s) s.style.display = s.style.display === 'none' ? '' : 'none';
+}
+function toggleProdCharPrompt(charName) {
+  const s = document.getElementById('prod-char-prompt-' + charName);
+  if (s) s.style.display = s.style.display === 'none' ? '' : 'none';
+}
+
+function showCreateProdThemeModal() {
+  showModal(`
+    <div class="modal-header"><h3>Nouveau theme (Production)</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>
+    <div class="form-group"><label>Nom du theme</label><input id="prod-avatar-new-theme-name" placeholder="cyberpunk, medieval..." /></div>
+    <div class="form-group"><label>Description (optionnel)</label><input id="prod-avatar-new-theme-desc" /></div>
+    <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="createProdAvatarTheme()">Creer</button></div>
+  `);
+}
+
+async function createProdAvatarTheme() {
+  const name = (document.getElementById('prod-avatar-new-theme-name')?.value || '').trim();
+  if (!name) { toast('Nom requis', 'error'); return; }
+  try {
+    await api('/api/prod-avatars/themes', { method: 'POST', body: { name, description: (document.getElementById('prod-avatar-new-theme-desc')?.value || '').trim() } });
+    toast('Theme cree', 'success');
+    closeModal();
+    _currentProdAvatarTheme = name.toLowerCase().replace(/[^a-z0-9-]/g, '').replace(/ /g, '-');
+    loadProdAvatars();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteProdAvatarTheme(name) {
+  if (!await confirmModal('Supprimer le theme "' + name + '" et tout son contenu ?')) return;
+  try {
+    await api('/api/prod-avatars/themes/' + encodeURIComponent(name), { method: 'DELETE' });
+    toast('Theme supprime', 'success');
+    _currentProdAvatarTheme = null;
+    loadProdAvatars();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function saveProdAvatarPrompt(theme) {
+  const content = document.getElementById('prod-avatar-prompt-text')?.value || '';
+  try {
+    await api('/api/prod-avatars/themes/' + encodeURIComponent(theme) + '/prompt', { method: 'PUT', body: { content } });
+    toast('Prompt sauvegarde', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function createProdAvatarCharacter(theme) {
+  const el = document.getElementById('prod-avatar-new-char');
+  const character = (el?.value || '').trim();
+  if (!character) { toast('Nom du personnage requis', 'error'); return; }
+  if (el) { el.disabled = true; el.value = 'Generation...'; }
+  try {
+    await api('/api/prod-avatars/themes/' + encodeURIComponent(theme) + '/characters', { method: 'POST', body: { character } });
+    toast('Personnage genere', 'success');
+    selectProdAvatarTheme(theme);
+  } catch (e) { toast(e.message, 'error'); }
+  if (el) { el.disabled = false; el.value = ''; }
+}
+
+async function generateProdAvatarImage(theme, character) {
+  toast('Generation DALL-E en cours...', 'info');
+  try {
+    const res = await api('/api/prod-avatars/themes/' + encodeURIComponent(theme) + '/characters/' + encodeURIComponent(character) + '/generate', { method: 'POST' });
+    toast('Image generee: ' + res.filename, 'success');
+    selectProdAvatarTheme(theme);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function saveProdCharacterPrompt(theme, character) {
+  const content = document.getElementById('prod-char-prompt-text-' + character)?.value || '';
+  try {
+    await api('/api/prod-avatars/themes/' + encodeURIComponent(theme) + '/characters/' + encodeURIComponent(character), { method: 'PUT', body: { content } });
+    toast('Prompt sauvegarde', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteProdAvatarCharacter(theme, character) {
+  if (!await confirmModal('Supprimer "' + character + '" et ses images ?')) return;
+  try {
+    await api('/api/prod-avatars/themes/' + encodeURIComponent(theme) + '/characters/' + encodeURIComponent(character), { method: 'DELETE' });
+    toast('Personnage supprime', 'success');
+    selectProdAvatarTheme(theme);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteProdAvatarImage(theme, character, filename) {
+  if (!await confirmModal('Supprimer cette image ?')) return;
+  try {
+    await api('/api/prod-avatars/themes/' + encodeURIComponent(theme) + '/characters/' + encodeURIComponent(character) + '/images/' + encodeURIComponent(filename), { method: 'DELETE' });
+    toast('Image supprimee', 'success');
+    selectProdAvatarTheme(theme);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ── Import avatars from Configuration ──
+
+async function showImportAvatarsModal() {
+  let tplThemes = [];
+  let prodThemes = [];
+  try { tplThemes = await api('/api/avatars/themes'); } catch {}
+  try { prodThemes = await api('/api/prod-avatars/themes'); } catch {}
+  if (!tplThemes.length) { toast('Aucun theme en Configuration', 'error'); return; }
+  const prodThemeNames = new Set(prodThemes.map(t => t.name));
+
+  showModal(`
+    <div class="modal-header">
+      <h3>Importer depuis Configuration</h3>
+      <button class="btn-icon" onclick="closeModal()">&times;</button>
+    </div>
+    <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:0.75rem">
+      Selectionnez les themes et personnages a importer dans <code>config/Avatars/</code>.
+      Les elements existants seront ecrases.
+    </p>
+    <div id="import-avatar-themes-list" style="max-height:400px;overflow-y:auto">
+      ${tplThemes.map(t => {
+        const exists = prodThemeNames.has(t.name);
+        return `<div style="border:1px solid var(--border);border-radius:6px;padding:0.75rem;margin-bottom:0.5rem">
+          <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;font-weight:500">
+            <input type="checkbox" class="import-theme-cb" value="${escHtml(t.name)}" onchange="_onImportThemeToggle('${escHtml(t.name)}', this.checked)" />
+            ${escHtml(t.name)}
+            <span style="font-size:0.8rem;color:var(--text-secondary)">(${t.character_count} perso., ${t.image_count} img)</span>
+            ${exists ? '<span class="tag tag-yellow" style="font-size:0.7rem">existe en prod</span>' : ''}
+          </label>
+          <div id="import-theme-chars-${escHtml(t.name)}" style="display:none;margin-top:0.5rem;padding-left:1.5rem"></div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" id="btn-import-avatars" onclick="executeImportAvatars()">Importer</button>
+    </div>
+  `, 'modal-wide');
+}
+
+async function _onImportThemeToggle(themeName, checked) {
+  const container = document.getElementById('import-theme-chars-' + themeName);
+  if (!container) return;
+  if (!checked) {
+    container.style.display = 'none';
+    container.innerHTML = '';
+    return;
+  }
+  // Load characters for this theme
+  container.style.display = '';
+  container.innerHTML = '<span style="color:var(--text-secondary);font-size:0.8rem">Chargement...</span>';
+  try {
+    const theme = await api('/api/avatars/themes/' + encodeURIComponent(themeName));
+    const chars = theme.characters || [];
+    // Check which exist in prod
+    let prodChars = [];
+    try {
+      const prodTheme = await api('/api/prod-avatars/themes/' + encodeURIComponent(themeName));
+      prodChars = (prodTheme.characters || []).map(c => c.name);
+    } catch {}
+    const prodCharSet = new Set(prodChars);
+
+    container.innerHTML = `
+      <label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.35rem;cursor:pointer;font-size:0.85rem">
+        <input type="checkbox" class="import-all-chars-${escHtml(themeName)}" onchange="_toggleAllImportChars('${escHtml(themeName)}', this.checked)" checked />
+        <strong>Tout le theme</strong> (prompt + tous les personnages + images)
+      </label>
+      <div style="border-top:1px solid var(--border);padding-top:0.35rem;margin-top:0.25rem">
+        ${chars.map(c => {
+          const exists = prodCharSet.has(c.name);
+          const imgCount = (c.images || []).length;
+          return `<label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.25rem;cursor:pointer;font-size:0.85rem">
+            <input type="checkbox" class="import-char-cb-${escHtml(themeName)}" value="${escHtml(c.name)}" checked />
+            ${escHtml(c.name)} <span style="color:var(--text-secondary)">(${imgCount} img)</span>
+            ${exists ? '<span style="color:var(--warning);font-size:0.75rem">ecrasera l\'existant</span>' : ''}
+          </label>`;
+        }).join('')}
+      </div>`;
+  } catch (e) {
+    container.innerHTML = '<span style="color:var(--error);font-size:0.8rem">Erreur: ' + escHtml(e.message) + '</span>';
+  }
+}
+
+function _toggleAllImportChars(themeName, checked) {
+  document.querySelectorAll('.import-char-cb-' + themeName).forEach(cb => { cb.checked = checked; });
+}
+
+async function executeImportAvatars() {
+  const btn = document.getElementById('btn-import-avatars');
+  if (btn) { btn.disabled = true; btn.textContent = 'Import en cours...'; }
+
+  const themes = [];
+  const characters = {};
+
+  document.querySelectorAll('.import-theme-cb:checked').forEach(cb => {
+    const themeName = cb.value;
+    themes.push(themeName);
+    // Check if "all" is checked
+    const allCb = document.querySelector('.import-all-chars-' + themeName);
+    if (allCb && allCb.checked) {
+      characters[themeName] = []; // empty = copy all
+    } else {
+      // Collect selected characters
+      const selected = [];
+      document.querySelectorAll('.import-char-cb-' + themeName + ':checked').forEach(ccb => {
+        selected.push(ccb.value);
+      });
+      characters[themeName] = selected;
+    }
+  });
+
+  if (!themes.length) { toast('Selectionnez au moins un theme', 'error'); if (btn) { btn.disabled = false; btn.textContent = 'Importer'; } return; }
+
+  try {
+    const res = await api('/api/prod-avatars/import-from-config', { method: 'POST', body: { themes, characters } });
+    const overwritten = res.overwritten || [];
+    if (overwritten.length) {
+      toast('Import termine — ' + overwritten.length + ' element(s) ecrase(s)', 'success');
+    } else {
+      toast('Import termine', 'success');
+    }
+    closeModal();
+    loadProdAvatars();
+  } catch (e) { toast(e.message, 'error'); }
+  if (btn) { btn.disabled = false; btn.textContent = 'Importer'; }
+}
+
+// ── Production team full edit (with avatar_theme) ──
+
+async function editProdTeam(idx) {
+  const t = _prodTeamsData.teams[idx];
+  const tpl = _prodTeamsDetail.find(d => d.id === (t.directory || '')) || null;
+  const agentIds = tpl ? Object.keys(tpl.agents || {}) : [];
+  const orchOpts = '<option value="">-- Aucun --</option>' +
+    agentIds.map(aid => '<option value="' + escHtml(aid) + '"' + ((t.orchestrator || '') === aid ? ' selected' : '') + '>' + escHtml((tpl.agents[aid] || {}).name || aid) + ' (' + escHtml(aid) + ')</option>').join('');
+  let avatarThemes = [];
+  try { avatarThemes = await api('/api/prod-avatars/themes'); } catch {}
+  const avatarOpts = '<option value="">-- Aucun --</option>' +
+    avatarThemes.map(th => '<option value="' + escHtml(th.name) + '"' + ((t.avatar_theme || '') === th.name ? ' selected' : '') + '>' + escHtml(th.name) + ' (' + (th.character_count || 0) + ' perso.)</option>').join('');
+  showModal(
+    '<div class="modal-header"><h3>Modifier equipe (Production)</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
+    '<div class="form-group"><label>ID</label><input value="' + escHtml(t.id) + '" disabled></div>' +
+    '<div class="form-group"><label>Nom</label><input id="m-prod-team-name" value="' + escHtml(t.name) + '"></div>' +
+    '<div class="form-group"><label>Description</label><input id="m-prod-team-desc" value="' + escHtml(t.description || '') + '"></div>' +
+    '<div class="form-group"><label>Repertoire</label><input value="' + escHtml(t.directory || '') + '" readonly style="opacity:0.6"></div>' +
+    '<div class="form-group"><label>Orchestrateur</label><select id="m-prod-team-orchestrator">' + orchOpts + '</select></div>' +
+    '<div class="form-group"><label>Theme d\'avatars</label><select id="m-prod-team-avatar-theme">' + avatarOpts + '</select></div>' +
+    '<div class="form-group"><label>Channels Discord (virgule)</label><input id="m-prod-team-channels" value="' + escHtml((t.discord_channels || []).join(', ')) + '"></div>' +
+    '<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="saveProdTeamFull(' + idx + ')">Sauvegarder</button></div>'
+  );
+}
+
+async function saveProdTeamFull(idx) {
+  const name = (document.getElementById('m-prod-team-name')?.value || '').trim();
+  if (!name) { toast('Nom requis', 'error'); return; }
+  const channels = (document.getElementById('m-prod-team-channels')?.value || '').trim();
+  const orchestrator = (document.getElementById('m-prod-team-orchestrator')?.value || '');
+  const avatarTheme = (document.getElementById('m-prod-team-avatar-theme')?.value || '');
+  const updated = {
+    ..._prodTeamsData.teams[idx],
+    name,
+    description: (document.getElementById('m-prod-team-desc')?.value || '').trim(),
+    discord_channels: channels ? channels.split(',').map(s => s.trim()) : [],
+  };
+  if (orchestrator) updated.orchestrator = orchestrator; else delete updated.orchestrator;
+  if (avatarTheme) updated.avatar_theme = avatarTheme; else delete updated.avatar_theme;
+  _prodTeamsData.teams[idx] = updated;
+  try {
+    await api('/api/prod-teams', { method: 'PUT', body: _prodTeamsData });
+    toast('Equipe sauvegardee', 'success');
+    closeModal();
+    loadProdTeams();
   } catch (e) { toast(e.message, 'error'); }
 }
 

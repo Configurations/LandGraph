@@ -55,7 +55,7 @@ export function QuestionCard({
       className={`${isPending ? 'border-l-2 border-l-accent-orange' : ''} ${className}`}
     >
       <div className="flex items-start gap-3">
-        <Avatar name={question.agent_id} size="md" />
+        <Avatar name={question.agent_id} imageUrl={question.agent_avatar_url} size="md" />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium text-sm">{question.agent_id}</span>

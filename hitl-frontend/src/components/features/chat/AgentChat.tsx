@@ -8,6 +8,8 @@ import { useChatStore } from '../../../stores/chatStore';
 import { useWsStore } from '../../../stores/wsStore';
 import { useAuthStore } from '../../../stores/authStore';
 import * as chatApi from '../../../api/chat';
+import * as agentsApi from '../../../api/agents';
+import type { AgentInfo } from '../../../api/types';
 
 interface AgentChatProps {
   teamId: string;
@@ -30,10 +32,16 @@ export function AgentChat({
 
   const [sending, setSending] = useState(false);
   const [typing, setTyping] = useState(false);
+  const [agentInfo, setAgentInfo] = useState<AgentInfo | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     void loadHistory(teamId, agentId);
+    // Fetch agent info for avatar
+    agentsApi.listAgents(teamId).then((agents) => {
+      const found = agents.find((a) => a.id === agentId);
+      if (found) setAgentInfo(found);
+    }).catch(() => {/* ignore */});
   }, [teamId, agentId, loadHistory]);
 
   useEffect(() => {
@@ -90,9 +98,11 @@ export function AgentChat({
             key={msg.id}
             message={msg}
             isUser={msg.sender === userEmail}
+            agentName={agentInfo?.name}
+            agentAvatarUrl={agentInfo?.avatar_url}
           />
         ))}
-        {typing && <ChatTypingIndicator agentName={agentId} />}
+        {typing && <ChatTypingIndicator agentName={agentInfo?.name || agentId} />}
         <div ref={bottomRef} />
       </div>
       <ChatInput onSend={handleSend} loading={sending} />

@@ -1690,6 +1690,20 @@ tr:hover { background: rgba(255,255,255,0.02); }
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(59,130,246,0.3);
 }
+.wf-phase.wf-external {
+  border: 2px dashed #8b5cf6;
+  background: rgba(139, 92, 246, 0.05);
+}
+.wf-phase.wf-external .wf-phase-head {
+  background: rgba(139, 92, 246, 0.15);
+  color: #8b5cf6;
+}
+.wf-phase.wf-external .wf-phase-order {
+  background: #8b5cf6;
+}
+.wf-phase.wf-external.wf-selected {
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.3);
+}
 .wf-phase-head {
   padding: 0.5rem 0.75rem;
   background: rgba(59,130,246,0.12);

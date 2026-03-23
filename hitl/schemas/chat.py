@@ -33,3 +33,4 @@ class AgentResponse(BaseModel):
     llm: str = ""
     type: str = "single"
     pending_questions: int = 0
+    avatar_url: str | None = None

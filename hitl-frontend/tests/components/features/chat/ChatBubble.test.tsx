@@ -36,4 +36,31 @@ describe('ChatBubble', () => {
     );
     expect(container.textContent).toContain('Test message');
   });
+
+  it('shows avatar for agent messages', () => {
+    const { container } = render(
+      <ChatBubble
+        message={makeMessage({ sender: 'lead_dev' })}
+        isUser={false}
+        agentName="Lead Dev"
+        agentAvatarUrl="/avatars/cyberpunk/lead_dev.1.png"
+      />,
+    );
+    const img = container.querySelector('img');
+    expect(img).toBeTruthy();
+    expect(img?.getAttribute('src')).toBe('/avatars/cyberpunk/lead_dev.1.png');
+  });
+
+  it('does not show avatar for user messages', () => {
+    const { container } = render(
+      <ChatBubble
+        message={makeMessage()}
+        isUser={true}
+        agentName="Lead Dev"
+        agentAvatarUrl="/avatars/cyberpunk/lead_dev.1.png"
+      />,
+    );
+    const img = container.querySelector('img');
+    expect(img).toBeNull();
+  });
 });

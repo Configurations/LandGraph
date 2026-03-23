@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 const AVATAR_COLORS = [
   'bg-accent-blue',
   'bg-accent-green',
@@ -11,6 +13,7 @@ type AvatarSize = 'sm' | 'md' | 'lg';
 
 interface AvatarProps {
   name: string;
+  imageUrl?: string | null;
   size?: AvatarSize;
   className?: string;
 }
@@ -37,10 +40,27 @@ function getInitials(name: string): string {
   return name.slice(0, 2).toUpperCase();
 }
 
-export function Avatar({ name, size = 'md', className = '' }: AvatarProps): JSX.Element {
+export function Avatar({ name, imageUrl, size = 'md', className = '' }: AvatarProps): JSX.Element {
+  const [imgError, setImgError] = useState(false);
   const colorIndex = hashName(name) % AVATAR_COLORS.length;
   const bgColor = AVATAR_COLORS[colorIndex];
   const initials = getInitials(name);
+
+  if (imageUrl && !imgError) {
+    return (
+      <img
+        src={imageUrl}
+        alt={name}
+        title={name}
+        onError={() => setImgError(true)}
+        className={[
+          'inline-flex rounded-full object-cover',
+          sizeStyles[size],
+          className,
+        ].join(' ')}
+      />
+    );
+  }
 
   return (
     <div

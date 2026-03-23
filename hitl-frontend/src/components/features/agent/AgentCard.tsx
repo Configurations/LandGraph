@@ -41,7 +41,7 @@ export function AgentCard({
     >
       <div className="flex items-center gap-3 w-full">
         <div className="relative">
-          <Avatar name={agent.name} size="md" />
+          <Avatar name={agent.name} imageUrl={agent.avatar_url} size="md" />
           <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-accent-green border-2 border-surface-secondary" />
         </div>
         <div className="flex-1 min-w-0">
