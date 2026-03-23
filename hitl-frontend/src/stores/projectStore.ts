@@ -27,6 +27,7 @@ interface ProjectState {
   wizardData: WizardData;
   loading: boolean;
   loadProjects: () => Promise<void>;
+  deleteProject: (slug: string) => Promise<void>;
   setActiveSlug: (slug: string | null) => void;
   setWizardStep: (step: number) => void;
   updateWizardData: (partial: Partial<WizardData>) => void;
@@ -48,6 +49,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     } catch {
       set({ loading: false });
     }
+  },
+
+  deleteProject: async (slug: string) => {
+    await projectsApi.deleteProject(slug);
+    const projects = get().projects.filter((p) => p.slug !== slug);
+    set({ projects });
   },
 
   setActiveSlug: (slug) => set({ activeSlug: slug }),

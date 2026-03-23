@@ -142,3 +142,74 @@ async def test_get_project_not_found():
         from services.project_service import get_project
         result = await get_project("ghost")
     assert result is None
+
+
+# ── delete_project ──────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_delete_project_removes_db_and_disk():
+    """delete_project deletes DB row and removes disk directory."""
+    with (
+        patch("services.project_service.execute", new_callable=AsyncMock) as mock_exec,
+        patch("services.project_service.os.path.isdir", return_value=True),
+        patch("services.project_service.shutil.rmtree") as mock_rm,
+    ):
+        from services.project_service import delete_project
+        result = await delete_project("old-test")
+
+    assert result is True
+    mock_exec.assert_called_once()
+    mock_rm.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_project_no_disk_dir():
+    """delete_project works even if disk directory doesn't exist."""
+    with (
+        patch("services.project_service.execute", new_callable=AsyncMock),
+        patch("services.project_service.os.path.isdir", return_value=False),
+        patch("services.project_service.shutil.rmtree") as mock_rm,
+    ):
+        from services.project_service import delete_project
+        result = await delete_project("no-dir")
+
+    assert result is True
+    mock_rm.assert_not_called()
+
+
+# ── ProjectCreate git_config flattening ─────────────────────
+
+def test_project_create_flattens_git_config():
+    """ProjectCreate flattens nested git_config to top-level fields."""
+    from schemas.project import ProjectCreate
+    data = ProjectCreate(
+        name="Test", slug="test", team_id="team1",
+        git_config={"service": "github", "url": "https://github.com",
+                     "login": "user", "token": "tok", "repo_name": "user/repo"},
+    )
+    assert data.git_service == "github"
+    assert data.git_url == "https://github.com"
+    assert data.git_login == "user"
+    assert data.git_token == "tok"
+    assert data.git_repo_name == "user/repo"
+
+
+# ── ProjectResponse git_connected / git_repo_exists ─────────
+
+def test_row_to_response_git_fields():
+    """_row_to_response computes git_connected and git_repo_exists."""
+    from services.project_service import _row_to_response
+    row = _project_row(git_url="https://github.com", git_repo_name="user/repo")
+    resp = _row_to_response(row)
+    assert resp.git_connected is True
+    assert resp.git_repo_exists is True
+    assert resp.id == "1"  # str conversion
+
+
+def test_row_to_response_no_git():
+    """_row_to_response returns False for empty git fields."""
+    from services.project_service import _row_to_response
+    row = _project_row(git_url="", git_repo_name="")
+    resp = _row_to_response(row)
+    assert resp.git_connected is False
+    assert resp.git_repo_exists is False

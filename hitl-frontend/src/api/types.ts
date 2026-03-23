@@ -105,9 +105,16 @@ export interface ProjectResponse {
   slug: string;
   team_id: string;
   language: string;
+  git_service: string;
+  git_url: string;
+  git_login: string;
+  git_repo_name: string;
   git_connected: boolean;
   git_repo_exists: boolean;
+  status: string;
+  color: string;
   created_at: string;
+  updated_at: string;
 }
 
 export interface SlugCheckResponse {
@@ -142,13 +149,16 @@ export interface UploadResponse {
   filename: string;
   size: number;
   content_type: string;
-  chunks: number;
+  chunks_indexed: number;
+  files_extracted: number;
 }
 
 export interface UploadedFile {
   name: string;
   size: number;
   content_type: string;
+  type?: 'file' | 'directory';
+  file_count?: number;
 }
 
 export interface RagSearchResult {

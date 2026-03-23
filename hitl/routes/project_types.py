@@ -18,8 +18,11 @@ router = APIRouter(tags=["project-types"])
 async def list_project_types(
     user: TokenData = Depends(get_current_user),
 ) -> list[ProjectTypeResponse]:
-    """List all available project type templates."""
-    return await project_type_service.list_project_types()
+    """List project type templates accessible to the current user."""
+    return await project_type_service.list_project_types(
+        user_teams=user.teams,
+        role=user.role,
+    )
 
 
 @router.get("/api/project-types/{type_id}", response_model=ProjectTypeResponse)

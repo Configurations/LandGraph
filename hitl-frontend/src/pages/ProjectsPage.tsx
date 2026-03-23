@@ -14,6 +14,7 @@ export function ProjectsPage(): JSX.Element {
   const projects = useProjectStore((s) => s.projects);
   const loading = useProjectStore((s) => s.loading);
   const loadProjects = useProjectStore((s) => s.loadProjects);
+  const deleteProject = useProjectStore((s) => s.deleteProject);
   const activeTeamId = useTeamStore((s) => s.activeTeamId);
 
   useEffect(() => {
@@ -49,7 +50,7 @@ export function ProjectsPage(): JSX.Element {
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map((project) => (
-            <ProjectCard key={project.id} project={project} />
+            <ProjectCard key={project.id} project={project} onDelete={deleteProject} />
           ))}
         </div>
       )}

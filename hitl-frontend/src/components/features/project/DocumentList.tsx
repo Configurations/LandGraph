@@ -14,10 +14,16 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function fileIcon(contentType: string): string {
-  if (contentType.startsWith('image/')) return '\uD83D\uDDBC';
-  if (contentType === 'application/pdf') return '\uD83D\uDCC4';
+function fileIcon(file: UploadedFile): string {
+  if (file.type === 'directory') return '\uD83D\uDCC1';
+  if (file.content_type.startsWith('image/')) return '\uD83D\uDDBC';
+  if (file.content_type === 'application/pdf') return '\uD83D\uDCC4';
   return '\uD83D\uDCC3';
+}
+
+function fileDetail(file: UploadedFile, t: (k: string, o?: Record<string, unknown>) => string): string {
+  if (file.type === 'directory') return `${file.file_count ?? 0} ${t('documents.files')}`;
+  return formatSize(file.size);
 }
 
 export function DocumentList({ files, onDelete, className = '' }: DocumentListProps): JSX.Element {
@@ -29,10 +35,10 @@ export function DocumentList({ files, onDelete, className = '' }: DocumentListPr
     <ul className={`divide-y divide-border rounded-lg border border-border ${className}`}>
       {files.map((file) => (
         <li key={file.name} className="flex items-center gap-3 px-3 py-2">
-          <span className="text-lg">{fileIcon(file.content_type)}</span>
+          <span className="text-lg">{fileIcon(file)}</span>
           <div className="flex-1 min-w-0">
             <p className="truncate text-sm font-medium text-content-primary">{file.name}</p>
-            <p className="text-xs text-content-tertiary">{formatSize(file.size)}</p>
+            <p className="text-xs text-content-tertiary">{fileDetail(file, t)}</p>
           </div>
           {onDelete && (
             <Button

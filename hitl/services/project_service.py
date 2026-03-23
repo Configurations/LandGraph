@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
@@ -28,16 +29,20 @@ def _project_dir(slug: str) -> str:
 
 def _row_to_response(row: dict) -> ProjectResponse:
     """Convert a DB row to ProjectResponse."""
+    git_url = row.get("git_url", "")
+    git_repo_name = row.get("git_repo_name", "")
     return ProjectResponse(
-        id=row["id"],
+        id=str(row["id"]),
         name=row["name"],
         slug=row.get("slug", ""),
         team_id=row["team_id"],
         language=row.get("language", "fr"),
         git_service=row.get("git_service", "other"),
-        git_url=row.get("git_url", ""),
+        git_url=git_url,
         git_login=row.get("git_login", ""),
-        git_repo_name=row.get("git_repo_name", ""),
+        git_repo_name=git_repo_name,
+        git_connected=bool(git_url),
+        git_repo_exists=bool(git_repo_name),
         status=row.get("status", "on-track"),
         color=row.get("color", "#6366f1"),
         created_at=row["created_at"],
@@ -87,9 +92,15 @@ async def create_project(data: ProjectCreate) -> ProjectResponse:
 
 
 async def check_slug_exists(slug: str) -> SlugCheckResponse:
-    """Check if a project slug already exists on disk."""
+    """Check if a project slug already exists (disk or database)."""
     path = _project_dir(slug)
-    return SlugCheckResponse(exists=os.path.isdir(path), path=path)
+    on_disk = os.path.isdir(path)
+    if on_disk:
+        return SlugCheckResponse(exists=True, path=path)
+    row = await fetch_one(
+        "SELECT 1 FROM project.pm_projects WHERE slug = $1", slug,
+    )
+    return SlugCheckResponse(exists=row is not None, path=path)
 
 
 async def get_project(slug: str) -> Optional[ProjectResponse]:
@@ -134,3 +145,17 @@ async def list_projects(
                 user_teams,
             )
     return [_row_to_response(r) for r in rows]
+
+
+async def delete_project(slug: str) -> bool:
+    """Delete a project from the database and remove its directory from disk."""
+    result = await execute(
+        "DELETE FROM project.pm_projects WHERE slug = $1", slug,
+    )
+    # Remove disk directory
+    path = _project_dir(slug)
+    if os.path.isdir(path):
+        shutil.rmtree(path, ignore_errors=True)
+
+    log.info("project_deleted", slug=slug)
+    return True

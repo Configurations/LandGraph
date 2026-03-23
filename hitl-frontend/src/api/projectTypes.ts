@@ -20,7 +20,7 @@ export function applyProjectType(
   typeId: string,
 ): Promise<{ applied: boolean }> {
   return apiFetch<{ applied: boolean }>(
-    `/api/projects/${encodeURIComponent(slug)}/apply-type`,
-    { method: 'POST', body: JSON.stringify({ type_id: typeId }) },
+    `/api/projects/${encodeURIComponent(slug)}/apply-type/${encodeURIComponent(typeId)}`,
+    { method: 'POST' },
   );
 }

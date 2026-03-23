@@ -51,3 +51,23 @@ class UploadResponse(BaseModel):
     size: int
     content_type: str
     chunks_indexed: int
+    files_extracted: int = 0
+
+
+class GitCloneRequest(BaseModel):
+    """Request to clone a git repo into project uploads."""
+
+    repo_name: str
+    service: str = ""
+    url: str = ""
+    login: str = ""
+    token: str = ""
+    use_project_creds: bool = True
+
+
+class GitCloneResponse(BaseModel):
+    """Response after cloning a git repo."""
+
+    directory: str
+    files_count: int
+    chunks_indexed: int

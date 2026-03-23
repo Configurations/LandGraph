@@ -1,3 +1,4 @@
+import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { GitStatusBadge } from './GitStatusBadge';
@@ -5,6 +6,7 @@ import type { ProjectResponse } from '../../../api/types';
 
 interface ProjectCardProps {
   project: ProjectResponse;
+  onDelete?: (slug: string) => Promise<void>;
   className?: string;
 }
 
@@ -19,9 +21,22 @@ function relativeTime(iso: string, t: (key: string, opts?: Record<string, unknow
   return t('time.days_ago', { count: days });
 }
 
-export function ProjectCard({ project, className = '' }: ProjectCardProps): JSX.Element {
+export function ProjectCard({ project, onDelete, className = '' }: ProjectCardProps): JSX.Element {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!onDelete) return;
+    if (!window.confirm(t('project.confirm_delete'))) return;
+    setDeleting(true);
+    try {
+      await onDelete(project.slug);
+    } catch {
+      setDeleting(false);
+    }
+  }, [onDelete, project.slug, t]);
 
   return (
     <button
@@ -50,9 +65,27 @@ export function ProjectCard({ project, className = '' }: ProjectCardProps): JSX.
         </span>
       </div>
 
-      <p className="text-[10px] text-content-quaternary">
-        {relativeTime(project.created_at, t)}
-      </p>
+      <div className="flex items-center justify-between">
+        <p className="text-[10px] text-content-quaternary">
+          {relativeTime(project.created_at, t)}
+        </p>
+        {onDelete && (
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={(e) => void handleDelete(e)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void handleDelete(e as unknown as React.MouseEvent); }}
+            className={[
+              'text-[10px] font-medium px-1.5 py-0.5 rounded transition-colors',
+              deleting
+                ? 'text-content-quaternary cursor-wait'
+                : 'text-accent-red hover:bg-accent-red/10 cursor-pointer',
+            ].join(' ')}
+          >
+            {deleting ? '...' : t('common.delete')}
+          </span>
+        )}
+      </div>
     </button>
   );
 }

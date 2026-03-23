@@ -7,14 +7,12 @@ import * as projectTypesApi from '../../../api/projectTypes';
 import type { ProjectTypeResponse } from '../../../api/types';
 
 interface ProjectTypeSelectorProps {
-  teamId: string;
   selectedTypeId: string | null;
   onSelect: (typeId: string | null) => void;
   className?: string;
 }
 
 export function ProjectTypeSelector({
-  teamId,
   selectedTypeId,
   onSelect,
   className = '',
@@ -24,17 +22,13 @@ export function ProjectTypeSelector({
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!teamId) {
-      setLoading(false);
-      return;
-    }
     setLoading(true);
     projectTypesApi
-      .listProjectTypes(teamId)
+      .listProjectTypes()
       .then(setTypes)
       .catch(() => setTypes([]))
       .finally(() => setLoading(false));
-  }, [teamId]);
+  }, []);
 
   if (loading) {
     return (

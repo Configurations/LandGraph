@@ -72,6 +72,10 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
           team_id: wizardData.teamId || activeTeamId || teams[0]?.id || '',
           git_config: wizardData.gitConfig ?? undefined,
         });
+        // Initialize git repo (clone existing or create new)
+        if (wizardData.gitConfig) {
+          await projectsApi.initGit(wizardData.slug, wizardData.gitConfig);
+        }
         markComplete(2);
         await loadProjects();
       } catch (err) {
@@ -124,7 +128,6 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
         {wizardStep === 2 && <WizardStepCulture />}
         {wizardStep === 3 && (
           <ProjectTypeSelector
-            teamId={wizardData.teamId}
             selectedTypeId={selectedTypeId}
             onSelect={setSelectedTypeId}
           />

@@ -98,7 +98,10 @@
     "create": "Creer le projet",
     "created_success": "Projet cree avec succes",
     "no_projects": "Aucun projet",
-    "no_projects_desc": "Creez votre premier projet pour commencer"
+    "no_projects_desc": "Creez votre premier projet pour commencer",
+    "delete_project": "Supprimer le projet",
+    "confirm_delete": "Etes-vous sur de vouloir supprimer ce projet ? Cette action est irreversible.",
+    "deleted_success": "Projet supprime"
   },
   "git": {
     "service": "Service de controle de source",
@@ -120,10 +123,15 @@
   "documents": {
     "upload": "Documents",
     "dropzone": "Glissez vos fichiers ici ou cliquez pour selectionner",
-    "accepted_formats": "Markdown, PDF, images, fichiers texte",
+    "accepted_formats": "Markdown, PDF, images, fichiers texte, ZIP, TAR",
     "uploading": "Upload en cours...",
     "vectorizing": "Indexation en cours...",
-    "delete_confirm": "Supprimer ce document ?"
+    "delete_confirm": "Supprimer ce document ?",
+    "clone_git": "Cloner un repo Git",
+    "git_repo_name": "Nom du repo (owner/repo)",
+    "use_project_creds": "Utiliser les credentials du projet",
+    "clone": "Cloner",
+    "files": "fichiers"
   },
   "analysis": {
     "title": "Analyse du projet",

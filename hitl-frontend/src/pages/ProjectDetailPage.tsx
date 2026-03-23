@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { PageContainer } from '../components/layout/PageContainer';
 import { Spinner } from '../components/ui/Spinner';
@@ -15,8 +15,10 @@ import { AutomationRuleList } from '../components/features/automation/Automation
 import { AutomationRuleForm } from '../components/features/automation/AutomationRuleForm';
 import { AutomationStats as AutomationStatsPanel } from '../components/features/automation/AutomationStats';
 import { IssueList } from '../components/features/pm/IssueList';
+import { Button } from '../components/ui/Button';
 import { useIssueStore } from '../stores/issueStore';
 import { useAuthStore } from '../stores/authStore';
+import { useProjectStore } from '../stores/projectStore';
 import { apiFetch } from '../api/client';
 import * as workflowApi from '../api/workflow';
 import * as automationApi from '../api/automation';
@@ -40,8 +42,11 @@ interface SimpleRelation {
 
 export function ProjectDetailPage(): JSX.Element {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const { slug } = useParams<{ slug: string }>();
   const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
+  const storeDeleteProject = useProjectStore((s) => s.deleteProject);
+  const [deleting, setDeleting] = useState(false);
   const [tab, setTab] = useState<ProjectTab>('issues');
   const [overview, setOverview] = useState<ProjectOverviewData | null>(null);
   const [workflow, setWorkflow] = useState<WorkflowStatusResponse | null>(null);
@@ -120,6 +125,18 @@ export function ProjectDetailPage(): JSX.Element {
     void loadAutomation();
   }, [slug, editingRule, loadAutomation]);
 
+  const handleDeleteProject = useCallback(async () => {
+    if (!slug) return;
+    if (!window.confirm(t('project.confirm_delete'))) return;
+    setDeleting(true);
+    try {
+      await storeDeleteProject(slug);
+      navigate('/projects');
+    } catch {
+      setDeleting(false);
+    }
+  }, [slug, storeDeleteProject, navigate, t]);
+
   if (loading || !overview) {
     return (
       <PageContainer className="flex justify-center py-12">
@@ -135,7 +152,18 @@ export function ProjectDetailPage(): JSX.Element {
 
   return (
     <PageContainer>
-      <ProjectHeader projectName={slug ?? ''} slug={slug ?? ''} overview={overview} />
+      <div className="flex items-start justify-between gap-4">
+        <ProjectHeader projectName={slug ?? ''} slug={slug ?? ''} overview={overview} className="flex-1" />
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void handleDeleteProject()}
+          loading={deleting}
+          className="text-accent-red hover:bg-accent-red/10 shrink-0 mt-6"
+        >
+          {t('project.delete_project')}
+        </Button>
+      </div>
       <ProjectOverview overview={overview} className="mt-4" />
       <ProjectTabs activeTab={tab} onTabChange={setTab} showAutomation={isAdmin} className="mt-6" />
 

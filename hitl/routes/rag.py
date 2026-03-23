@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import mimetypes
+import os
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
@@ -10,6 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from core.security import TokenData, get_current_user
 from schemas.rag import (
     ConversationMessage,
+    GitCloneRequest,
+    GitCloneResponse,
     RagSearchRequest,
     RagSearchResponse,
     UploadResponse,
@@ -41,26 +44,96 @@ async def upload_file(
     file: UploadFile,
     user: TokenData = Depends(get_current_user),
 ) -> UploadResponse:
-    """Upload a file, extract text, and index in RAG."""
+    """Upload a file, extract text, and index in RAG.
+
+    Archives (ZIP, TAR) are auto-extracted into a subdirectory and each
+    extracted file is individually indexed.
+    """
     await _require_project(slug, user)
 
     content_bytes = await file.read()
     filename = file.filename or "untitled"
-    filepath, size = await upload_service.save_file(slug, filename, content_bytes)
+    filepath_or_dir, size, extracted_files = await upload_service.save_file(
+        slug, filename, content_bytes,
+    )
 
-    text = upload_service.extract_text(filepath)
     chunks_indexed = 0
-    if text.strip():
-        ct, _ = mimetypes.guess_type(filename)
-        content_type = ct or "text/plain"
-        chunks_indexed = await rag_service.index_document(
-            slug, filename, text, content_type,
-        )
+
+    if extracted_files:
+        # Archive was extracted — index each file
+        for fpath in extracted_files:
+            text = upload_service.extract_text(fpath)
+            if text.strip():
+                rel_name = os.path.relpath(fpath, os.path.dirname(filepath_or_dir))
+                ct, _ = mimetypes.guess_type(fpath)
+                chunks_indexed += await rag_service.index_document(
+                    slug, rel_name, text, ct or "text/plain",
+                )
+    else:
+        # Single file
+        text = upload_service.extract_text(filepath_or_dir)
+        if text.strip():
+            ct, _ = mimetypes.guess_type(filename)
+            chunks_indexed = await rag_service.index_document(
+                slug, filename, text, ct or "text/plain",
+            )
 
     return UploadResponse(
         filename=filename,
         size=size,
         content_type=file.content_type or "application/octet-stream",
+        chunks_indexed=chunks_indexed,
+        files_extracted=len(extracted_files),
+    )
+
+
+@router.post("/{slug}/upload-git", response_model=GitCloneResponse)
+async def upload_git(
+    slug: str,
+    req: GitCloneRequest,
+    user: TokenData = Depends(get_current_user),
+) -> GitCloneResponse:
+    """Clone a git repo into the project uploads directory and index files."""
+    project = await project_service.get_project(slug)
+    if not project:
+        raise HTTPException(status_code=404, detail="project.not_found")
+    _check_project_access(user, project.team_id)
+
+    # Resolve credentials
+    service = req.service or (project.git_service if req.use_project_creds else "other")
+    url = req.url or (project.git_url if req.use_project_creds else "")
+    login = req.login or (project.git_login if req.use_project_creds else "")
+    token = req.token
+    if not token and req.use_project_creds:
+        # Read token from DB (git_token_env stores the actual token at creation)
+        from core.database import fetch_one
+        row = await fetch_one(
+            "SELECT git_token_env FROM project.pm_projects WHERE slug = $1", slug,
+        )
+        token = row["git_token_env"] if row else ""
+
+    try:
+        dest_dir, files = await upload_service.clone_git_to_uploads(
+            slug, req.repo_name, service, url, login, token,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    # Index extracted files
+    chunks_indexed = 0
+    for fpath in files:
+        text = upload_service.extract_text(fpath)
+        if text.strip():
+            rel_name = os.path.relpath(fpath, os.path.dirname(dest_dir))
+            ct, _ = mimetypes.guess_type(fpath)
+            chunks_indexed += await rag_service.index_document(
+                slug, rel_name, text, ct or "text/plain",
+            )
+
+    short_name = os.path.basename(dest_dir)
+    return GitCloneResponse(
+        directory=short_name,
+        files_count=len(files),
         chunks_indexed=chunks_indexed,
     )
 

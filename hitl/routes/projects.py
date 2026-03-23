@@ -54,20 +54,9 @@ async def list_projects(
     )
 
 
-@router.get("/{slug}", response_model=ProjectResponse)
-async def get_project(
-    slug: str,
-    user: TokenData = Depends(get_current_user),
-) -> ProjectResponse:
-    """Get a single project by slug."""
-    project = await project_service.get_project(slug)
-    if not project:
-        raise HTTPException(status_code=404, detail="project.not_found")
-    _check_team_access(user, project.team_id)
-    return project
+# ── Static paths BEFORE /{slug} to avoid route conflicts ────
 
-
-@router.post("/check-slug", response_model=SlugCheckResponse)
+@router.get("/check-slug", response_model=SlugCheckResponse)
 async def check_slug(
     slug: str,
     user: TokenData = Depends(get_current_user),
@@ -93,6 +82,34 @@ async def list_remote_branches(
     """List branches on a remote repo (no project required — used during wizard)."""
     branches = await git_service.list_remote_branches(config)
     return {"branches": branches}
+
+
+# ── Dynamic /{slug} paths ───────────────────────────────────
+
+@router.get("/{slug}", response_model=ProjectResponse)
+async def get_project(
+    slug: str,
+    user: TokenData = Depends(get_current_user),
+) -> ProjectResponse:
+    """Get a single project by slug."""
+    project = await project_service.get_project(slug)
+    if not project:
+        raise HTTPException(status_code=404, detail="project.not_found")
+    _check_team_access(user, project.team_id)
+    return project
+
+
+@router.delete("/{slug}")
+async def delete_project(
+    slug: str,
+    user: TokenData = Depends(get_current_user),
+) -> dict:
+    """Delete a project. Removes DB record and disk directory."""
+    project = await project_service.get_project(slug)
+    if not project:
+        raise HTTPException(status_code=404, detail="project.not_found")
+    await project_service.delete_project(slug)
+    return {"ok": True}
 
 
 @router.post("/{slug}/git/test", response_model=GitTestResponse)

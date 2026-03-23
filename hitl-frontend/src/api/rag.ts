@@ -43,6 +43,28 @@ export function deleteUpload(slug: string, filename: string): Promise<void> {
   );
 }
 
+export interface GitClonePayload {
+  repo_name: string;
+  service?: string;
+  url?: string;
+  login?: string;
+  token?: string;
+  use_project_creds: boolean;
+}
+
+export interface GitCloneResult {
+  directory: string;
+  files_count: number;
+  chunks_indexed: number;
+}
+
+export function cloneGitToUploads(slug: string, payload: GitClonePayload): Promise<GitCloneResult> {
+  return apiFetch<GitCloneResult>(
+    `/api/projects/${encodeURIComponent(slug)}/upload-git`,
+    { method: 'POST', body: JSON.stringify(payload) },
+  );
+}
+
 export function searchRag(slug: string, query: string, topK?: number): Promise<RagSearchResult[]> {
   const params: Record<string, string> = { query };
   if (topK !== undefined) params.top_k = String(topK);

@@ -9,6 +9,7 @@ from typing import Any, Optional
 import structlog
 
 from core.config import _find_config_dir
+from core.database import execute
 from schemas.project_type import ProjectTypeResponse, WorkflowTemplate
 from schemas.workflow import ProjectWorkflowCreate
 from services.multi_workflow_service import create_workflow
@@ -74,11 +75,22 @@ def _build_project_type(
     )
 
 
-async def list_project_types() -> list[ProjectTypeResponse]:
-    """List all available project types from Shared/Projects/."""
+async def list_project_types(
+    user_teams: Optional[list[str]] = None,
+    role: Optional[str] = None,
+) -> list[ProjectTypeResponse]:
+    """List project types, filtered by user's accessible teams.
+
+    Admins see all types. Members only see types whose ``team`` field
+    matches one of their teams (case-insensitive).
+    Types with no team field are visible to everyone.
+    """
     base = _shared_projects_dir()
     if not os.path.isdir(base):
         return []
+
+    # Normalise team names for case-insensitive comparison
+    allowed = {t.lower() for t in (user_teams or [])} if role != "admin" else None
 
     results: list[ProjectTypeResponse] = []
     for entry in sorted(os.listdir(base)):
@@ -87,6 +99,10 @@ async def list_project_types() -> list[ProjectTypeResponse]:
             continue
         data = _read_project_json(type_dir)
         if data is None:
+            continue
+        # Filter by team access
+        pt_team = data.get("team", "")
+        if allowed is not None and pt_team and pt_team.lower() not in allowed:
             continue
         results.append(_build_project_type(entry, data, type_dir))
     return results
@@ -126,6 +142,12 @@ async def apply_project_type(
     pt = await get_project_type(type_id)
     if pt is None:
         return []
+
+    # Remove existing workflows for this project (idempotent re-apply)
+    await execute(
+        "DELETE FROM project.project_workflows WHERE project_slug = $1",
+        project_slug,
+    )
 
     base = _shared_projects_dir()
     type_dir = os.path.join(base, type_id)

@@ -24,8 +24,12 @@ export function getProject(slug: string): Promise<ProjectResponse> {
 }
 
 export function checkSlug(slug: string): Promise<SlugCheckResponse> {
-  return apiFetch<SlugCheckResponse>(`/api/projects/check-slug?slug=${encodeURIComponent(slug)}`, {
-    method: 'POST',
+  return apiFetch<SlugCheckResponse>(`/api/projects/check-slug?slug=${encodeURIComponent(slug)}`);
+}
+
+export function deleteProject(slug: string): Promise<void> {
+  return apiFetch<void>(`/api/projects/${encodeURIComponent(slug)}`, {
+    method: 'DELETE',
   });
 }
 
