@@ -3514,13 +3514,7 @@ async def delete_project_workflow(project_id: str, wf_name: str):
 # These follow the same pattern as /api/templates/workflow/{dir}
 # Used by openWorkflowEditor(wfName, '/api/templates/project-workflow/{project_id}', ...)
 
-@app.get("/api/templates/project-workflow/{project_id}/{wf_name}")
-async def get_project_workflow_editor(project_id: str, wf_name: str):
-    project_dir = _project_dir_or_404(project_id)
-    name = _wf_name_safe(wf_name)
-    wf = project_dir / f"{name}.wrk.json"
-    return _read_json(wf) if wf.exists() else {}
-
+# ── Factored workflow helpers (shared by template + prod) ──────
 
 def _check_external_cycles(project_dir: Path, workflow_name: str, visited: set = None) -> list:
     """Detect cycles in external phase references."""
@@ -3544,15 +3538,21 @@ def _check_external_cycles(project_dir: Path, workflow_name: str, visited: set =
     return errors
 
 
-@app.put("/api/templates/project-workflow/{project_id}/{wf_name}")
-async def put_project_workflow_editor(project_id: str, wf_name: str, request: Request):
-    project_dir = _project_dir_or_404(project_id)
+def _wf_get(project_dir: Path, wf_name: str):
+    """Read a {name}.wrk.json workflow file."""
+    name = _wf_name_safe(wf_name)
+    wf = project_dir / f"{name}.wrk.json"
+    return _read_json(wf) if wf.exists() else {}
+
+
+async def _wf_put(project_dir: Path, wf_name: str, request: Request):
+    """Write a {name}.wrk.json workflow file with validation."""
     name = _wf_name_safe(wf_name)
     data = await request.json()
-    # Guard: strip positions from workflow data (should be in design file only)
+    # Strip positions — they belong in the design file
     data.pop("positions", None)
-    # Validate external phases
     current_file = f"{name}.wrk.json"
+    # Validate external phases
     phases = data.get("phases", {})
     phase_list = list(phases.values()) if isinstance(phases, dict) else (phases if isinstance(phases, list) else [])
     for phase in phase_list:
@@ -3572,10 +3572,23 @@ async def put_project_workflow_editor(project_id: str, wf_name: str, request: Re
     return {"ok": True}
 
 
-@app.get("/api/templates/projects/{project_id}/available-workflows")
-async def list_available_workflows(project_id: str):
+def _wf_get_design(project_dir: Path, wf_name: str):
+    """Read a {name}.wrk.design.json layout file."""
+    name = _wf_name_safe(wf_name)
+    path = project_dir / f"{name}.wrk.design.json"
+    return _read_json(path) if path.exists() else {}
+
+
+async def _wf_put_design(project_dir: Path, wf_name: str, request: Request):
+    """Write a {name}.wrk.design.json layout file."""
+    name = _wf_name_safe(wf_name)
+    data = await request.json()
+    _write_json(project_dir / f"{name}.wrk.design.json", data)
+    return {"ok": True}
+
+
+def _wf_list_available(project_dir: Path):
     """List *.wrk.json files in a project directory."""
-    project_dir = _project_dir_or_404(project_id)
     results = []
     for f in sorted(project_dir.iterdir()):
         if f.suffix == ".json" and f.stem.endswith(".wrk"):
@@ -3594,21 +3607,27 @@ async def list_available_workflows(project_id: str):
     return results
 
 
+# ── Template project workflow endpoints (Shared/Projects) ─────
+
+@app.get("/api/templates/project-workflow/{project_id}/{wf_name}")
+async def get_project_workflow_editor(project_id: str, wf_name: str):
+    return _wf_get(_project_dir_or_404(project_id), wf_name)
+
+@app.put("/api/templates/project-workflow/{project_id}/{wf_name}")
+async def put_project_workflow_editor(project_id: str, wf_name: str, request: Request):
+    return await _wf_put(_project_dir_or_404(project_id), wf_name, request)
+
+@app.get("/api/templates/projects/{project_id}/available-workflows")
+async def list_available_workflows(project_id: str):
+    return _wf_list_available(_project_dir_or_404(project_id))
+
 @app.get("/api/templates/project-workflow-design/{project_id}/{wf_name}")
 async def get_project_workflow_design(project_id: str, wf_name: str):
-    project_dir = _project_dir_or_404(project_id)
-    name = _wf_name_safe(wf_name)
-    path = project_dir / f"{name}.wrk.design.json"
-    return _read_json(path) if path.exists() else {}
-
+    return _wf_get_design(_project_dir_or_404(project_id), wf_name)
 
 @app.put("/api/templates/project-workflow-design/{project_id}/{wf_name}")
 async def put_project_workflow_design(project_id: str, wf_name: str, request: Request):
-    project_dir = _project_dir_or_404(project_id)
-    name = _wf_name_safe(wf_name)
-    data = await request.json()
-    _write_json(project_dir / f"{name}.wrk.design.json", data)
-    return {"ok": True}
+    return await _wf_put_design(_project_dir_or_404(project_id), wf_name, request)
 
 
 # ── API: Production Project Workflows ──────────────────────────
@@ -3764,80 +3783,27 @@ async def build_prod_orchestrator_prompt_endpoint(project_id: str):
     return await build_team_orchestrator_prompt(team)
 
 
-# Production project workflow — visual editor endpoints
+# Production project workflow — visual editor endpoints (same logic, config/ dir)
+
 @app.get("/api/prod-project-workflow/{project_id}/{wf_name}")
 async def get_prod_project_workflow_editor(project_id: str, wf_name: str):
-    project_dir = _cfg_project_dir_or_404(project_id)
-    name = _wf_name_safe(wf_name)
-    wf = project_dir / f"{name}.wrk.json"
-    return _read_json(wf) if wf.exists() else {}
-
+    return _wf_get(_cfg_project_dir_or_404(project_id), wf_name)
 
 @app.put("/api/prod-project-workflow/{project_id}/{wf_name}")
 async def put_prod_project_workflow_editor(project_id: str, wf_name: str, request: Request):
-    project_dir = _cfg_project_dir_or_404(project_id)
-    name = _wf_name_safe(wf_name)
-    data = await request.json()
-    # Guard: strip positions from workflow data (should be in design file only)
-    data.pop("positions", None)
-    # Validate external phases
-    current_file = f"{name}.wrk.json"
-    phases = data.get("phases", {})
-    phase_list = list(phases.values()) if isinstance(phases, dict) else (phases if isinstance(phases, list) else [])
-    for phase in phase_list:
-        if phase.get("type") == "external":
-            ext_wf = phase.get("external_workflow", "")
-            if ext_wf:
-                if ext_wf == current_file:
-                    raise HTTPException(400, f"Phase '{phase.get('name', '?')}' reference le workflow courant")
-                if not (project_dir / ext_wf).exists():
-                    raise HTTPException(400, f"Workflow externe introuvable: {ext_wf}")
-                cycle_errors = _check_external_cycles(project_dir, ext_wf, {current_file})
-                if cycle_errors:
-                    raise HTTPException(400, cycle_errors[0])
-    _write_json(project_dir / current_file, data)
-    team_id = data.get("team", "")
-    _generate_phase_files(data, f"{name}.wrk", project_dir, team_id)
-    return {"ok": True}
-
+    return await _wf_put(_cfg_project_dir_or_404(project_id), wf_name, request)
 
 @app.get("/api/prod-projects/{project_id}/available-workflows")
 async def list_prod_available_workflows(project_id: str):
-    """List *.wrk.json files in a production project directory."""
-    project_dir = _cfg_project_dir_or_404(project_id)
-    results = []
-    for f in sorted(project_dir.iterdir()):
-        if f.suffix == ".json" and f.stem.endswith(".wrk"):
-            data = _read_json(f)
-            name = data.get("name", "")
-            if not name:
-                phases = data.get("phases", {})
-                if isinstance(phases, dict) and phases:
-                    first = next(iter(phases.values()))
-                    name = first.get("name", f.stem)
-                elif isinstance(phases, list) and phases:
-                    name = phases[0].get("name", f.stem)
-                else:
-                    name = f.stem.replace(".wrk", "")
-            results.append({"filename": f.name, "name": name})
-    return results
-
+    return _wf_list_available(_cfg_project_dir_or_404(project_id))
 
 @app.get("/api/prod-project-workflow-design/{project_id}/{wf_name}")
 async def get_prod_project_workflow_design(project_id: str, wf_name: str):
-    project_dir = _cfg_project_dir_or_404(project_id)
-    name = _wf_name_safe(wf_name)
-    path = project_dir / f"{name}.wrk.design.json"
-    return _read_json(path) if path.exists() else {}
-
+    return _wf_get_design(_cfg_project_dir_or_404(project_id), wf_name)
 
 @app.put("/api/prod-project-workflow-design/{project_id}/{wf_name}")
 async def put_prod_project_workflow_design(project_id: str, wf_name: str, request: Request):
-    project_dir = _cfg_project_dir_or_404(project_id)
-    name = _wf_name_safe(wf_name)
-    data = await request.json()
-    _write_json(project_dir / f"{name}.wrk.design.json", data)
-    return {"ok": True}
+    return await _wf_put_design(_cfg_project_dir_or_404(project_id), wf_name, request)
 
 
 @app.get("/api/prompts/templates/{name}")
