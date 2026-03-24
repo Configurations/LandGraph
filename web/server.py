@@ -3549,6 +3549,8 @@ async def put_project_workflow_editor(project_id: str, wf_name: str, request: Re
     project_dir = _project_dir_or_404(project_id)
     name = _wf_name_safe(wf_name)
     data = await request.json()
+    # Guard: strip positions from workflow data (should be in design file only)
+    data.pop("positions", None)
     # Validate external phases
     current_file = f"{name}.wrk.json"
     phases = data.get("phases", {})
@@ -3776,6 +3778,8 @@ async def put_prod_project_workflow_editor(project_id: str, wf_name: str, reques
     project_dir = _cfg_project_dir_or_404(project_id)
     name = _wf_name_safe(wf_name)
     data = await request.json()
+    # Guard: strip positions from workflow data (should be in design file only)
+    data.pop("positions", None)
     # Validate external phases
     current_file = f"{name}.wrk.json"
     phases = data.get("phases", {})

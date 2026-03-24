@@ -7530,7 +7530,19 @@ async function openWorkflowEditor(dir, apiBase, label, registryDir, inlineTarget
       const td = await api('/api/templates/teams');
       wfTeams = (td.teams || []);
     } catch {}
-    const data = (raw && Object.keys(raw).length) ? raw : { phases: {}, transitions: [], parallel_groups: { description: '', order: ['A','B','C'] }, rules: {} };
+    console.log('[wfInit] apiBase:', apiBase, 'dir:', dir);
+    console.log('[wfInit] raw keys:', raw ? Object.keys(raw) : 'null');
+    console.log('[wfInit] design keys:', design ? Object.keys(design) : 'null');
+    // If raw contains positions (from a previously corrupted file), extract them as design data
+    if (raw && raw.positions && !design.positions) {
+      design = { positions: raw.positions };
+      delete raw.positions;
+    }
+    const isValidWf = raw && raw.phases && Object.keys(raw).length;
+    console.log('[wfInit] isValidWf:', isValidWf);
+    const data = isValidWf ? raw : { phases: {}, transitions: [], parallel_groups: { description: '', order: ['A','B','C'] }, rules: {} };
+    // Safety: never keep positions in workflow data
+    delete data.positions;
     data.categories = data.categories || [];
     _wf = {
       dir, apiBase, designBase, label,
@@ -9988,11 +10000,16 @@ async function wfSave() {
       return;
     }
     if (warnings.length > 0) {
-      const ok = await confirmModal('Avertissements :\n\n' + warnings.map(w => '- ' + w).join('\n') + '\n\nSauvegarder quand meme ?');
-      if (!ok) return;
+      if (!confirm('Avertissements :\n\n' + warnings.map(w => '- ' + w).join('\n') + '\n\nSauvegarder quand meme ?')) return;
     }
+    // Clean: ensure positions never leak into workflow data
+    const saveData = JSON.parse(JSON.stringify(_wf.data));
+    delete saveData.positions;
+    console.log('[wfSave] apiBase:', _wf.apiBase, '→', `${_wf.apiBase}/${_wf.dir}`);
+    console.log('[wfSave] designBase:', _wf.designBase, '→', `${_wf.designBase}/${_wf.dir}`);
+    console.log('[wfSave] data keys:', Object.keys(saveData));
     await Promise.all([
-      api(`${_wf.apiBase}/${encodeURIComponent(_wf.dir)}`, { method: 'PUT', body: _wf.data }),
+      api(`${_wf.apiBase}/${encodeURIComponent(_wf.dir)}`, { method: 'PUT', body: saveData }),
       api(`${_wf.designBase}/${encodeURIComponent(_wf.dir)}`, { method: 'PUT', body: { positions: _wf.positions } })
     ]);
     if (_wf) _wf._savedSnapshot = JSON.stringify(_wf.data);
