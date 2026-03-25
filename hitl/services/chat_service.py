@@ -104,10 +104,10 @@ async def _invoke_agent(
 
     invoke_url = f"{url.rstrip('/')}/invoke"
     payload = {
-        "agent_id": agent_id,
+        "messages": [{"role": "user", "content": message}],
         "team_id": team_id,
         "thread_id": thread_id,
-        "message": message,
+        "direct_agent": agent_id,
     }
 
     try:
@@ -115,7 +115,7 @@ async def _invoke_agent(
             resp = await client.post(invoke_url, json=payload)
             resp.raise_for_status()
             data = resp.json()
-            return data.get("response", data.get("content", str(data)))
+            return data.get("output", data.get("response", data.get("content", "")))
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code
         log.error("chat_invoke_http_error", status=status, agent_id=agent_id)

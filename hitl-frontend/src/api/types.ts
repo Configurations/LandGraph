@@ -168,13 +168,30 @@ export interface RagSearchResult {
   source: string;
 }
 
+export type AnalysisStatus = 'not_started' | 'in_progress' | 'waiting_input' | 'completed' | 'failed';
+
 export interface AnalysisStartResponse {
   task_id: string;
+  agent_id: string;
+  status: string;
 }
 
 export interface AnalysisStatusResponse {
-  status: string;
-  events?: Array<{ event_type: string; data: unknown; created_at: string }>;
+  status: AnalysisStatus;
+  task_id: string | null;
+  has_pending_question: boolean;
+  pending_request_id: string | null;
+}
+
+export interface AnalysisMessage {
+  id: string;
+  sender: 'agent' | 'user' | 'system';
+  type: 'progress' | 'question' | 'reply' | 'artifact' | 'result' | 'system';
+  content: string;
+  request_id?: string;
+  status?: string;
+  artifact_key?: string;
+  created_at: string;
 }
 
 export interface ConversationMessage {
@@ -599,3 +616,4 @@ export interface ProjectOverviewData {
   deliverables_count: number;
   current_phase: string;
 }
+

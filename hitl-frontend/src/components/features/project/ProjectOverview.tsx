@@ -11,8 +11,9 @@ const STATUS_ORDER: IssueStatus[] = ['backlog', 'todo', 'in-progress', 'in-revie
 
 export function ProjectOverview({ overview, className = '' }: ProjectOverviewProps): JSX.Element {
   const { t } = useTranslation();
+  const byStatus = overview.issues_by_status ?? {};
   const totalIssues = STATUS_ORDER.reduce(
-    (sum, s) => sum + (overview.issues_by_status[s] ?? 0),
+    (sum, s) => sum + (byStatus[s] ?? 0),
     0,
   );
 
@@ -23,7 +24,7 @@ export function ProjectOverview({ overview, className = '' }: ProjectOverviewPro
         <p className="text-2xl font-bold text-content-primary mt-1">{totalIssues}</p>
         <div className="flex gap-1 mt-2 flex-wrap">
           {STATUS_ORDER.map((s) => {
-            const count = overview.issues_by_status[s] ?? 0;
+            const count = byStatus[s] ?? 0;
             if (count === 0) return null;
             return (
               <span key={s} className="text-[10px] text-content-tertiary">

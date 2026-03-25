@@ -6194,11 +6194,19 @@ async function copyProdProjectsFromConfig() {
 async function _execCopyProjects() {
   const selected = [...document.querySelectorAll('.copy-proj-cb:checked:not(:disabled)')].map(c => c.value);
   if (selected.length === 0) { toast('Aucune selection', 'info'); return; }
+  const prevSelected = _projSelectedId;
   try {
     await api('/api/prod-projects/copy-from-config', { method: 'POST', body: { project_ids: selected } });
     closeModal('modal-copy-projects');
     toast(selected.length + ' type(s) de projet copie(s)', 'success');
-    loadProdProjects();
+    // Reload without losing current selection
+    _projApiBase = '/api/prod-projects'; _projPrefix = 'ppj';
+    const data = await api('/api/prod-projects');
+    _tplProjects = data.projects || [];
+    _projRenderSelector();
+    if (prevSelected && _tplProjects.find(p => p.id === prevSelected)) {
+      _projSelectProject(prevSelected);
+    }
   } catch (e) { toast(e.message, 'error'); }
 }
 

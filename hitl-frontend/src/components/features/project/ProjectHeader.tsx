@@ -63,11 +63,11 @@ export function ProjectHeader({
         )}
         <span>{formatDate(overview.start_date)}{overview.end_date ? ` - ${formatDate(overview.end_date)}` : ''}</span>
         <div className="flex items-center gap-1">
-          {overview.members.slice(0, 5).map((m) => (
+          {(overview.members ?? []).slice(0, 5).map((m) => (
             <Avatar key={m} name={m} size="sm" />
           ))}
-          {overview.members.length > 5 && (
-            <span className="text-content-quaternary">+{overview.members.length - 5}</span>
+          {(overview.members ?? []).length > 5 && (
+            <span className="text-content-quaternary">+{(overview.members ?? []).length - 5}</span>
           )}
         </div>
         <span>{t('project_detail.cost')}: ${overview.total_cost.toFixed(2)}</span>

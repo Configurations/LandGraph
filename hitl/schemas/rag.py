@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -42,6 +42,32 @@ class ConversationMessage(BaseModel):
     sender: str
     content: str
     created_at: datetime
+
+
+class AnalysisMessage(BaseModel):
+    """A message in the unified analysis conversation."""
+
+    id: str
+    sender: Literal["agent", "user", "system"]
+    type: Literal["progress", "question", "reply", "artifact", "result", "system"]
+    content: str
+    request_id: Optional[str] = None
+    status: Optional[str] = None
+    artifact_key: Optional[str] = None
+    created_at: str
+
+
+class AnalysisReplyRequest(BaseModel):
+    """Reply to an agent question."""
+
+    request_id: str
+    response: str
+
+
+class AnalysisFreeMessageRequest(BaseModel):
+    """Free message to the agent (triggers relaunch)."""
+
+    content: str
 
 
 class UploadResponse(BaseModel):

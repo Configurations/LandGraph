@@ -10,6 +10,9 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 
 from core.security import TokenData, get_current_user
 from schemas.rag import (
+    AnalysisFreeMessageRequest,
+    AnalysisMessage,
+    AnalysisReplyRequest,
     ConversationMessage,
     GitCloneRequest,
     GitCloneResponse,
@@ -188,22 +191,53 @@ async def start_analysis(
 @router.get("/{slug}/analysis/status")
 async def analysis_status(
     slug: str,
-    task_id: str,
     user: TokenData = Depends(get_current_user),
 ) -> dict:
-    """Check analysis task status."""
+    """Check analysis status with dispatcher sync."""
     await _require_project(slug, user)
-    return await analysis_service.get_analysis_status(task_id)
+    return await analysis_service.get_analysis_status(slug)
 
 
 @router.get(
     "/{slug}/analysis/conversation",
-    response_model=list[ConversationMessage],
+    response_model=list[AnalysisMessage],
 )
 async def get_conversation(
     slug: str,
     user: TokenData = Depends(get_current_user),
-) -> list[ConversationMessage]:
-    """Get the analysis conversation history."""
+) -> list[AnalysisMessage]:
+    """Get the merged analysis conversation history."""
     await _require_project(slug, user)
     return await analysis_service.get_conversation(slug)
+
+
+@router.post("/{slug}/analysis/reply")
+async def reply_to_question(
+    slug: str,
+    body: AnalysisReplyRequest,
+    user: TokenData = Depends(get_current_user),
+) -> dict:
+    """Reply to an agent question in the analysis conversation."""
+    await _require_project(slug, user)
+    try:
+        return await analysis_service.reply_to_question(
+            slug, body.request_id, body.response, user.email,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/{slug}/analysis/message")
+async def send_free_message(
+    slug: str,
+    body: AnalysisFreeMessageRequest,
+    user: TokenData = Depends(get_current_user),
+) -> dict:
+    """Send a free message — relaunches the agent with enriched context."""
+    await _require_project(slug, user)
+    try:
+        return await analysis_service.send_free_message(
+            slug, body.content, user.email,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))

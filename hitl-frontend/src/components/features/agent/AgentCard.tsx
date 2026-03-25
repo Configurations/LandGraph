@@ -34,28 +34,26 @@ export function AgentCard({
     <button
       onClick={handleClick}
       className={[
-        'flex flex-col items-start gap-3 rounded-lg border border-border bg-surface-secondary p-4',
-        'hover:bg-surface-hover transition-colors cursor-pointer text-left w-full',
+        'flex flex-col items-center gap-2 rounded-lg border border-border bg-surface-secondary p-4',
+        'hover:bg-surface-hover transition-colors cursor-pointer text-center w-full',
         className,
       ].join(' ')}
     >
-      <div className="flex items-center gap-3 w-full">
-        <div className="relative">
-          <Avatar name={agent.name} imageUrl={agent.avatar_url} size="md" />
-          <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-accent-green border-2 border-surface-secondary" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-content-primary truncate">{agent.name}</p>
-          <p className="text-xs text-content-tertiary truncate">{agent.llm}</p>
-        </div>
+      <div className="relative">
+        <Avatar name={agent.name} imageUrl={agent.avatar_url} size="md" />
+        <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-accent-green border-2 border-surface-secondary" />
+      </div>
+      <div className="min-w-0 w-full">
+        <p className="text-sm font-medium text-content-primary truncate">{agent.name}</p>
+        <p className="text-xs text-content-tertiary truncate">{agent.id}</p>
+      </div>
+      <div className="flex items-center gap-2">
+        <Badge size="sm" color={typeColor}>{t(`agent.type_${agent.type}`)}</Badge>
         {agent.pending_questions > 0 && (
           <Badge variant="count" color="red" size="sm">
             {agent.pending_questions}
           </Badge>
         )}
-      </div>
-      <div className="flex items-center gap-2">
-        <Badge size="sm" color={typeColor}>{t(`agent.type_${agent.type}`)}</Badge>
       </div>
     </button>
   );

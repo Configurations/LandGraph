@@ -135,10 +135,24 @@
   },
   "analysis": {
     "title": "Project analysis",
+    "start": "Start analysis",
     "starting": "Launching analysis agent...",
-    "chat_placeholder": "Your message...",
-    "agent_thinking": "Agent is analyzing your documents...",
-    "complete": "Analysis complete"
+    "running": "Agent is analyzing your documents...",
+    "waiting_input": "Agent is waiting for your response",
+    "completed": "Analysis complete",
+    "failed": "Analysis failed",
+    "reply_placeholder": "Reply to the question...",
+    "message_placeholder": "Send a message to the agent...",
+    "relaunching": "Relaunching agent with your message...",
+    "no_orchestrator": "No orchestrator configured for this team",
+    "no_documents": "No documents uploaded",
+    "question_badge": "Question",
+    "artifact_badge": "Deliverable",
+    "result_success": "Analysis complete. You can proceed to the next step.",
+    "result_failure": "Analysis failed. You can retry or skip.",
+    "relaunch": "Relaunch analysis",
+    "conversation_empty": "The conversation will appear here once the analysis starts",
+    "reconnecting": "Reconnecting..."
   },
   "wizard": {
     "step_setup": "Setup",

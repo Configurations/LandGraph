@@ -25,17 +25,28 @@ router = APIRouter(prefix="/api/pm", tags=["pm-issues"])
 @router.get("/issues", response_model=list[IssueResponse])
 async def list_issues(
     team_id: Optional[str] = Query(None),
-    project_id: Optional[int] = Query(None),
+    project_id: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     assignee: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     user: TokenData = Depends(get_current_user),
 ) -> list[IssueResponse]:
-    """List issues with optional filters."""
+    """List issues with optional filters. project_id accepts slug or numeric ID."""
+    resolved_pid: Optional[int] = None
+    if project_id is not None:
+        try:
+            resolved_pid = int(project_id)
+        except ValueError:
+            # It's a slug — resolve to integer ID
+            from core.database import fetch_one
+            row = await fetch_one(
+                "SELECT id FROM project.pm_projects WHERE slug = $1", project_id,
+            )
+            resolved_pid = row["id"] if row else None
     return await issue_service.list_issues(
         team_id=team_id,
-        project_id=project_id,
+        project_id=resolved_pid,
         status=status,
         assignee=assignee,
         limit=limit,

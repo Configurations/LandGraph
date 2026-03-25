@@ -33,8 +33,9 @@ export function IssueRow({
   className = '',
 }: IssueRowProps): JSX.Element {
   const { t } = useTranslation();
-  const visibleTags = issue.tags.slice(0, MAX_VISIBLE_TAGS);
-  const extraTagCount = issue.tags.length - MAX_VISIBLE_TAGS;
+  const tags = issue.tags ?? [];
+  const visibleTags = tags.slice(0, MAX_VISIBLE_TAGS);
+  const extraTagCount = tags.length - MAX_VISIBLE_TAGS;
 
   return (
     <button

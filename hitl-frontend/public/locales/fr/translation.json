@@ -135,10 +135,24 @@
   },
   "analysis": {
     "title": "Analyse du projet",
+    "start": "Lancer l'analyse",
     "starting": "Lancement de l'agent d'analyse...",
-    "chat_placeholder": "Votre message...",
-    "agent_thinking": "L'agent analyse vos documents...",
-    "complete": "Analyse terminee"
+    "running": "L'agent analyse vos documents...",
+    "waiting_input": "L'agent attend votre reponse",
+    "completed": "Analyse terminee",
+    "failed": "L'analyse a echoue",
+    "reply_placeholder": "Repondez a la question...",
+    "message_placeholder": "Envoyer un message a l'agent...",
+    "relaunching": "Relance de l'agent avec votre message...",
+    "no_orchestrator": "Aucun orchestrateur configure pour cette equipe",
+    "no_documents": "Aucun document uploade",
+    "question_badge": "Question",
+    "artifact_badge": "Livrable",
+    "result_success": "L'analyse est terminee. Vous pouvez passer a la suite.",
+    "result_failure": "L'analyse a echoue. Vous pouvez relancer ou passer.",
+    "relaunch": "Relancer l'analyse",
+    "conversation_empty": "La conversation apparaitra ici une fois l'analyse lancee",
+    "reconnecting": "Reconnexion en cours..."
   },
   "wizard": {
     "step_setup": "Configuration",

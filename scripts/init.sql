@@ -423,6 +423,15 @@ BEGIN
     END IF;
 END $$;
 
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='project' AND table_name='pm_projects' AND column_name='analysis_task_id') THEN
+        ALTER TABLE project.pm_projects ADD COLUMN analysis_task_id TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='project' AND table_name='pm_projects' AND column_name='analysis_status') THEN
+        ALTER TABLE project.pm_projects ADD COLUMN analysis_status TEXT DEFAULT 'not_started';
+    END IF;
+END $$;
+
 -- ── Phase 3a: PM inbox notification trigger ───────
 CREATE OR REPLACE FUNCTION notify_pm_inbox() RETURNS TRIGGER AS $$
 BEGIN
