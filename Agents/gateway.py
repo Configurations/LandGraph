@@ -86,10 +86,29 @@ def resolve_agents_by_team(team_id: str):
 # ── Canal de communication ────────────────────
 async def post_to_channel(channel_id, message, thread_id=""):
     """Envoie un message via le canal par defaut (Discord, Email, etc.).
-    Si thread_id commence par 'hitl-chat-', ecrit dans hitl_chat_messages a la place."""
+    Si thread_id commence par 'hitl-chat-' ou 'onboarding-', ecrit en DB."""
     if not channel_id and not thread_id:
         return
-    # HITL chat callback — store in DB instead of channel
+    # Onboarding callback — store in dispatcher_task_events for HITL console
+    if thread_id and thread_id.startswith("onboarding-"):
+        try:
+            conn = psycopg.connect(os.getenv("DATABASE_URI"), autocommit=True)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO project.dispatcher_task_events (task_id, event_type, data)
+                        SELECT t.id, 'progress', %s::jsonb
+                        FROM project.dispatcher_tasks t
+                        WHERE t.thread_id = %s
+                        ORDER BY t.created_at DESC LIMIT 1
+                    """, (json.dumps({"data": str(message)[:4000]}), thread_id))
+            finally:
+                conn.close()
+            logger.info(f"[onboarding] Saved event for {thread_id}")
+            return
+        except Exception as e:
+            logger.error(f"[onboarding] Failed to save event: {e}")
+    # HITL chat callback — store in hitl_chat_messages instead of channel
     if thread_id and thread_id.startswith("hitl-chat-"):
         try:
             parts = thread_id.split("-", 4)  # hitl-chat-{team_id}-{agent_id}
@@ -256,12 +275,12 @@ async def run_single_deliverable(deliv_info, state, channel_id, thread_id=""):
     """Run a single deliverable: inject _deliverable_dispatch and call the agent."""
     agent_id = deliv_info["agent_id"]
     agent_callable = deliv_info["agent"]
-    step_key = deliv_info["pipeline_step"]
+    step_key = deliv_info["step"]
     output_key = f"{agent_id}:{step_key}"
     try:
         local_state = dict(state)
         local_state["_deliverable_dispatch"] = {
-            "pipeline_step": step_key,
+            "step": step_key,
             "step_name": deliv_info.get("step_name", deliv_info.get("deliverable_key", step_key)),
             "instruction": deliv_info.get("instruction", ""),
         }
@@ -314,7 +333,7 @@ async def run_deliverables_parallel(deliverables_to_run, state, channel_id, thre
     if len(deliverables_to_run) > 1:
         names = []
         for d in deliverables_to_run:
-            ok = f"{d['agent_id']}:{d['pipeline_step']}"
+            ok = f"{d['agent_id']}:{d['step']}"
             output = merged.get(ok, {})
             status = output.get("status", "?")
             emoji = "✅" if status == "complete" else "❌" if status == "blocked" else "⏳"
@@ -336,11 +355,11 @@ async def run_deliverables_parallel(deliverables_to_run, state, channel_id, thre
             resolved = _resolve_deliverables(next_deliverables, team_id, channel_id)
             if resolved:
                 for d in resolved:
-                    bus.emit(Event("agent_dispatch", agent_id=f"{d['agent_id']}:{d['pipeline_step']}",
+                    bus.emit(Event("agent_dispatch", agent_id=f"{d['agent_id']}:{d['step']}",
                                     thread_id=thread_id, team_id=team_id,
                                     data={"trigger": "workflow_auto", "depth": _depth + 1}))
                 await post_to_channel(channel_id,
-                    f"⚡ Workflow : livrables suivants → {', '.join(d['agent_id'] + ':' + d['pipeline_step'] for d in resolved)}", thread_id)
+                    f"⚡ Workflow : livrables suivants → {', '.join(d['agent_id'] + ':' + d['step'] for d in resolved)}", thread_id)
                 await run_deliverables_parallel(resolved, state, channel_id, thread_id, _depth + 1)
                 return
 
@@ -374,7 +393,7 @@ async def run_deliverables_parallel(deliverables_to_run, state, channel_id, thre
 
 def _resolve_deliverables(deliverable_specs, team_id, channel_id):
     """Resolve deliverable specs to runnable dicts with agent instances and instructions."""
-    from agents.shared.agent_loader import get_pipeline_step_instruction
+    from agents.shared.agent_loader import get_step_instruction
     canonical_agents, _, _ = resolve_agents(channel_id)
     resolved = []
     for spec in deliverable_specs:
@@ -382,21 +401,21 @@ def _resolve_deliverables(deliverable_specs, team_id, channel_id):
         if aid not in canonical_agents:
             logger.warning(f"Agent {aid} not found for deliverable {spec['deliverable_key']}")
             continue
-        instruction = get_pipeline_step_instruction(aid, spec["pipeline_step"], team_id)
+        instruction = get_step_instruction(aid, spec["step"], team_id)
         if not instruction:
             instruction = spec.get("description", "")
         # Get step name from registry
-        step_name = spec.get("description", spec["pipeline_step"])
+        step_name = spec.get("description", spec["step"])
         from agents.shared.team_resolver import load_team_json
         registry = load_team_json(team_id, "agents_registry.json") or {}
-        for s in registry.get("agents", {}).get(aid, {}).get("pipeline_steps", []):
-            if s.get("output_key") == spec["pipeline_step"]:
+        for s in registry.get("agents", {}).get(aid, {}).get("steps", []):
+            if s.get("output_key") == spec["step"]:
                 step_name = s.get("name", step_name)
                 break
         resolved.append({
             "deliverable_key": spec["deliverable_key"],
             "agent_id": aid,
-            "pipeline_step": spec["pipeline_step"],
+            "step": spec["step"],
             "agent": canonical_agents[aid],
             "instruction": instruction,
             "step_name": step_name,
@@ -463,7 +482,7 @@ async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="defau
             resolved = _resolve_deliverables(next_deliverables, team_id, channel_id)
             if resolved:
                 await post_to_channel(channel_id,
-                    f"⚡ Workflow : livrables suivants → {', '.join(d['agent_id'] + ':' + d['pipeline_step'] for d in resolved)}", thread_id)
+                    f"⚡ Workflow : livrables suivants → {', '.join(d['agent_id'] + ':' + d['step'] for d in resolved)}", thread_id)
                 await run_deliverables_parallel(resolved, state, channel_id, thread_id, _depth + 1)
                 return
 
@@ -1082,7 +1101,7 @@ class InvokeRequest(BaseModel):
     channel_id: str = ""
     team_id: str = ""
     direct_agent: str = ""
-    deliverable_step: str = ""  # If set, run only this pipeline step (for remark re-invocation)
+    deliverable_step: str = ""  # If set, run only this step (for remark re-invocation)
 
 class InvokeResponse(BaseModel):
     output: str
@@ -1133,7 +1152,7 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
                 deliverable_info = {
                     "deliverable_key": request.deliverable_step,
                     "agent_id": canonical_id,
-                    "pipeline_step": request.deliverable_step,
+                    "step": request.deliverable_step,
                     "agent": agent_callable,
                     "instruction": task_msg,
                     "step_name": request.deliverable_step,

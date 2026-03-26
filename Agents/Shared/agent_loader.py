@@ -29,7 +29,7 @@ def _create_agent(agent_id, conf, has_mcp, team_id="default"):
         "default_temperature": conf.get("temperature", 0.3),
         "default_max_tokens": conf.get("max_tokens", 32768),
         "prompt_filename": conf.get("prompt", f"{agent_id}.md"),
-        "pipeline_steps": conf.get("pipeline_steps", []),
+        "steps": conf.get("steps", []),
         "use_tools": use_tools,
         "requires_approval": conf.get("requires_approval", False),
         "team_id": team_id,
@@ -93,14 +93,14 @@ def get_agent(agent_id: str, team_id: str = "default"):
     return agents.get(agent_id)
 
 
-def get_pipeline_step_instruction(agent_id: str, pipeline_step: str, team_id: str = "default") -> str:
-    """Return the instruction for a specific pipeline step from the registry."""
+def get_step_instruction(agent_id: str, step_key: str, team_id: str = "default") -> str:
+    """Return the instruction for a specific step from the registry."""
     registry = load_team_json(team_id, "agents_registry.json")
     if not registry:
         return ""
     agent_conf = registry.get("agents", {}).get(agent_id, {})
-    for step in agent_conf.get("pipeline_steps", []):
-        if step.get("output_key") == pipeline_step:
+    for step in agent_conf.get("steps", []):
+        if step.get("output_key") == step_key:
             return step.get("instruction", "")
     return ""
 

@@ -91,6 +91,48 @@ def _uploads_dir(slug: str) -> str:
     return os.path.join(settings.ag_flow_root, "projects", slug, "uploads")
 
 
+async def _load_deduced_prompt(
+    project_slug: str,
+    project_name: str,
+    documents: list[str],
+) -> Optional[str]:
+    """Load the orchestrator prompt deduced at step 3 of the wizard.
+
+    Returns the prompt content with project context injected, or None if
+    no deduced prompt is available (fallback to default instruction).
+    """
+    from services import wizard_data_service
+    from services.project_type_service import _shared_projects_dir
+
+    step3 = await wizard_data_service.get_step(project_slug, 3)
+    if not step3:
+        return None
+
+    type_id = step3.get("selectedTypeId", "")
+    prompt_filename = step3.get("orchestratorPrompt", "")
+    if not type_id or not prompt_filename:
+        return None
+
+    prompt_path = os.path.join(_shared_projects_dir(), type_id, prompt_filename)
+    if not os.path.isfile(prompt_path):
+        log.warning(
+            "deduced_prompt_not_found",
+            slug=project_slug,
+            path=prompt_path,
+        )
+        return None
+
+    with open(prompt_path, encoding="utf-8") as f:
+        prompt_content = f.read()
+
+    doc_list = "\n".join(f"- {d}" for d in documents) if documents else "(aucun document)"
+    return (
+        f"Nouveau projet : {project_name} (slug: {project_slug})\n\n"
+        f"Documents fournis (consultables via RAG) :\n{doc_list}\n\n"
+        f"---\n\n{prompt_content}"
+    )
+
+
 # ── Public API ───────────────────────────────────────────────────
 
 
@@ -123,46 +165,65 @@ async def start_analysis(
 
     thread_id = f"{ONBOARDING_THREAD_PREFIX}{project_slug}"
     rag_endpoint = f"{settings.hitl_internal_url}/api/internal/rag/search"
-    instruction = _build_instruction(project_slug, project_name, team_name, documents)
 
-    payload: dict[str, Any] = {
-        "agent_id": agent_id,
+    # Try to load deduced orchestrator prompt from create-project.json
+    instruction = await _load_deduced_prompt(project_slug, project_name, documents)
+    if not instruction:
+        instruction = _build_instruction(project_slug, project_name, team_name, documents)
+
+    # Create a tracking task row in dispatcher_tasks (for event storage)
+    task_row = await fetch_one(
+        """INSERT INTO project.dispatcher_tasks
+           (agent_id, team_id, thread_id, project_slug, phase, instruction, status, docker_image)
+           VALUES ($1, $2, $3, $4, 'discovery', $5, 'running', 'gateway')
+           RETURNING id""",
+        agent_id, team_id, thread_id, project_slug, instruction[:4000],
+    )
+    task_id = str(task_row["id"]) if task_row else ""
+
+    # Call gateway /invoke instead of dispatcher (full multi-agent orchestration)
+    gateway_url = settings.langgraph_api_url or "http://langgraph-api:8000"
+    invoke_payload: dict[str, Any] = {
+        "messages": [{"role": "user", "content": instruction}],
         "team_id": team_id,
         "thread_id": thread_id,
         "project_slug": project_slug,
-        "phase": "onboarding",
-        "payload": {
-            "instruction": instruction,
-            "context": {
-                "rag_endpoint": rag_endpoint,
-                "project_slug": project_slug,
-                "documents": documents,
-            },
-        },
     }
-    if workflow_id is not None:
-        payload["workflow_id"] = workflow_id
 
     try:
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
-                f"{settings.dispatcher_url}/api/tasks/run", json=payload,
+                f"{gateway_url}/invoke", json=invoke_payload,
             )
             resp.raise_for_status()
             data = resp.json()
     except httpx.HTTPError as exc:
         log.error("analysis_dispatch_failed", slug=project_slug, error=str(exc))
-        return {"error": "dispatcher_unavailable"}
+        await execute(
+            "UPDATE project.dispatcher_tasks SET status = 'failure', error_message = $1 WHERE id = $2::uuid",
+            str(exc)[:500], task_id,
+        )
+        return {"error": "gateway_unavailable"}
 
-    task_id = data.get("task_id", data.get("id", ""))
+    # Store orchestrator decisions as progress event
+    decisions = data.get("decisions", [])
+    agents_dispatched = data.get("agents_dispatched", [])
+    await execute(
+        """INSERT INTO project.dispatcher_task_events (task_id, event_type, data)
+           VALUES ($1::uuid, 'progress', $2::jsonb)""",
+        task_id,
+        json.dumps({"data": data.get("output", ""), "agents_dispatched": agents_dispatched},
+                    ensure_ascii=False),
+    )
 
     await execute(
         "UPDATE project.pm_projects SET analysis_task_id = $1, analysis_status = 'in_progress' WHERE slug = $2",
-        str(task_id), project_slug,
+        task_id, project_slug,
     )
 
-    log.info("analysis_started", slug=project_slug, task_id=task_id, agent_id=agent_id)
-    return {"task_id": str(task_id), "agent_id": agent_id, "status": "started"}
+    log.info("analysis_started", slug=project_slug, task_id=task_id, agent_id=agent_id,
+             agents_dispatched=agents_dispatched)
+    return {"task_id": task_id, "agent_id": agent_id, "status": "started"}
 
 
 async def _sync_status(project_slug: str, task_id: str) -> str:
@@ -180,15 +241,14 @@ async def _sync_status(project_slug: str, task_id: str) -> str:
         )
         return "waiting_input"
 
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(f"{settings.dispatcher_url}/api/tasks/{task_id}")
-            resp.raise_for_status()
-            task_data = resp.json()
-    except httpx.HTTPError:
+    # Check task status from dispatcher_tasks table directly (gateway writes here)
+    task_row = await fetch_one(
+        "SELECT status FROM project.dispatcher_tasks WHERE id = $1::uuid", task_id,
+    )
+    if not task_row:
         return "in_progress"
 
-    status = task_data.get("status", "")
+    status = task_row.get("status", "")
     if status in ("success",):
         new_status = "completed"
     elif status in ("failure", "timeout", "cancelled"):
@@ -384,49 +444,43 @@ async def send_free_message(
     team_id = proj["team_id"]
     old_task_id = proj["analysis_task_id"]
 
-    if old_task_id:
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                await client.post(f"{settings.dispatcher_url}/api/tasks/{old_task_id}/cancel")
-        except httpx.HTTPError:
-            pass
-
     conversation = await get_conversation(project_slug)
     instruction = _build_relaunch_instruction(conversation, content)
 
-    orch = await _resolve_orchestrator(team_id)
     thread_id = f"{ONBOARDING_THREAD_PREFIX}{project_slug}"
 
-    payload: dict[str, Any] = {
-        "agent_id": orch["agent_id"],
+    # Call gateway /invoke (full multi-agent orchestration)
+    gateway_url = settings.langgraph_api_url or "http://langgraph-api:8000"
+    invoke_payload: dict[str, Any] = {
+        "messages": [{"role": "user", "content": instruction}],
         "team_id": team_id,
         "thread_id": thread_id,
         "project_slug": project_slug,
-        "phase": "onboarding",
-        "payload": {
-            "instruction": instruction,
-            "context": {
-                "rag_endpoint": f"{settings.hitl_internal_url}/api/internal/rag/search",
-                "project_slug": project_slug,
-            },
-        },
     }
 
     try:
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
-                f"{settings.dispatcher_url}/api/tasks/run", json=payload,
+                f"{gateway_url}/invoke", json=invoke_payload,
             )
             resp.raise_for_status()
             data = resp.json()
     except httpx.HTTPError as exc:
         log.error("analysis_relaunch_failed", slug=project_slug, error=str(exc))
-        return {"error": "dispatcher_unavailable"}
+        return {"error": "gateway_unavailable"}
 
-    task_id = data.get("task_id", data.get("id", ""))
+    # Store progress event
+    if old_task_id:
+        await execute(
+            """INSERT INTO project.dispatcher_task_events (task_id, event_type, data)
+               VALUES ($1::uuid, 'progress', $2::jsonb)""",
+            old_task_id,
+            json.dumps({"data": data.get("output", "")}, ensure_ascii=False),
+        )
+
     await execute(
-        "UPDATE project.pm_projects SET analysis_task_id = $1, analysis_status = 'in_progress' WHERE slug = $2",
-        str(task_id), project_slug,
+        "UPDATE project.pm_projects SET analysis_status = 'in_progress' WHERE slug = $1",
+        project_slug,
     )
 
-    return {"task_id": str(task_id), "status": "started"}
+    return {"task_id": old_task_id or "", "status": "started"}

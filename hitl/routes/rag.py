@@ -117,7 +117,7 @@ async def upload_git(
 
     try:
         dest_dir, files = await upload_service.clone_git_to_uploads(
-            slug, req.repo_name, service, url, login, token,
+            slug, req.repo_name, service, url, login, token, req.branch,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -139,6 +139,37 @@ async def upload_git(
         files_count=len(files),
         chunks_indexed=chunks_indexed,
     )
+
+
+@router.post("/{slug}/upload-git/branches")
+async def list_upload_git_branches(
+    slug: str,
+    req: GitCloneRequest,
+    user: TokenData = Depends(get_current_user),
+) -> dict:
+    """List branches of a repo, resolving project credentials if needed."""
+    from services import git_service
+    from schemas.project import GitConfig
+
+    project = await project_service.get_project(slug)
+    if not project:
+        raise HTTPException(status_code=404, detail="project.not_found")
+    _check_project_access(user, project.team_id)
+
+    service = req.service or (project.git_service if req.use_project_creds else "other")
+    url = req.url or (project.git_url if req.use_project_creds else "")
+    login = req.login or (project.git_login if req.use_project_creds else "")
+    token = req.token
+    if not token and req.use_project_creds:
+        from core.database import fetch_one
+        row = await fetch_one(
+            "SELECT git_token_env FROM project.pm_projects WHERE slug = $1", slug,
+        )
+        token = row["git_token_env"] if row else ""
+
+    config = GitConfig(service=service, url=url, login=login, token=token, repo_name=req.repo_name)
+    branches = await git_service.list_remote_branches(config)
+    return {"branches": branches}
 
 
 @router.get("/{slug}/uploads")

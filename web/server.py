@@ -3503,11 +3503,50 @@ async def delete_project_workflow(project_id: str, wf_name: str):
     if not wf.exists():
         raise HTTPException(404, f"Workflow '{name}' introuvable")
     wf.unlink()
-    # Also delete associated design file
-    design = project_dir / f"{name}.wrk.design.json"
-    if design.exists():
-        design.unlink()
+    # Also delete associated design + phase prompt files
+    for f in project_dir.glob(f"{name}.wrk.design.json"):
+        f.unlink()
+    for f in project_dir.glob(f"{name}.wrk.phase.*.md"):
+        f.unlink()
     return {"ok": True}
+
+
+@app.get("/api/templates/projects/{project_id}/project-json")
+async def get_project_json(project_id: str):
+    """Return the raw project.json metadata (workflows with mode, priority, depends_on)."""
+    project_dir = _project_dir_or_404(project_id)
+    pj = project_dir / "project.json"
+    if not pj.exists():
+        return {"workflows": []}
+    return json.loads(pj.read_text(encoding="utf-8"))
+
+
+@app.get("/api/templates/projects/{project_id}/workflows/{wf_name}/phase-files")
+async def list_workflow_phase_files(project_id: str, wf_name: str):
+    """List .wrk.phase.{id}.md files for a workflow."""
+    project_dir = _project_dir_or_404(project_id)
+    name = _wf_name_safe(wf_name)
+    prefix = f"{name}.wrk.phase."
+    suffix = ".md"
+    files = []
+    for f in sorted(project_dir.iterdir()):
+        if f.name.startswith(prefix) and f.name.endswith(suffix):
+            phase_id = f.name[len(prefix):-len(suffix)]
+            files.append({"phase_id": phase_id, "filename": f.name})
+    return {"files": files}
+
+
+@app.get("/api/templates/projects/{project_id}/workflows/{wf_name}/phase-files/{phase_id}")
+async def read_workflow_phase_file(project_id: str, wf_name: str, phase_id: str):
+    """Read a single phase prompt file."""
+    project_dir = _project_dir_or_404(project_id)
+    name = _wf_name_safe(wf_name)
+    if ".." in phase_id or "/" in phase_id or "\\" in phase_id:
+        raise HTTPException(400, "phase_id invalide")
+    filepath = project_dir / f"{name}.wrk.phase.{phase_id}.md"
+    if not filepath.exists():
+        raise HTTPException(404, "Fichier phase introuvable")
+    return {"phase_id": phase_id, "filename": filepath.name, "content": filepath.read_text(encoding="utf-8")}
 
 
 # ── API: Project Workflow — visual editor endpoints ────
@@ -3762,10 +3801,11 @@ async def delete_prod_project_workflow(project_id: str, wf_name: str):
     if not wf.exists():
         raise HTTPException(404, f"Workflow '{name}' introuvable")
     wf.unlink()
-    # Also delete associated design file
-    design = project_dir / f"{name}.wrk.design.json"
-    if design.exists():
-        design.unlink()
+    # Also delete associated design + phase prompt files
+    for f in project_dir.glob(f"{name}.wrk.design.json"):
+        f.unlink()
+    for f in project_dir.glob(f"{name}.wrk.phase.*.md"):
+        f.unlink()
     return {"ok": True}
 
 

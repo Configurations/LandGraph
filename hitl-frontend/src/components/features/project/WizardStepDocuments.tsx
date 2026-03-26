@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { DocumentDropzone } from './DocumentDropzone';
 import { DocumentList } from './DocumentList';
@@ -24,12 +24,15 @@ export function WizardStepDocuments({ className = '' }: WizardStepDocumentsProps
 
   // Git clone state
   const [showGitForm, setShowGitForm] = useState(false);
-  const [useProjectCreds, setUseProjectCreds] = useState(true);
+  const [useProjectCreds, setUseProjectCreds] = useState(!!gitConfig);
   const [gitRepoName, setGitRepoName] = useState('');
   const [gitService, setGitService] = useState('');
   const [gitUrl, setGitUrl] = useState('');
   const [gitLogin, setGitLogin] = useState('');
   const [gitToken, setGitToken] = useState('');
+  const [gitBranch, setGitBranch] = useState('');
+  const [branches, setBranches] = useState<string[]>([]);
+  const [loadingBranches, setLoadingBranches] = useState(false);
   const [cloning, setCloning] = useState(false);
   const [cloneError, setCloneError] = useState<string | null>(null);
 
@@ -82,6 +85,37 @@ export function WizardStepDocuments({ className = '' }: WizardStepDocumentsProps
     }
   }, [slug]);
 
+  const fetchBranches = useCallback(async () => {
+    if (!slug || !gitRepoName) return;
+    setLoadingBranches(true);
+    setBranches([]);
+    setGitBranch('');
+    try {
+      const result = await ragApi.listUploadGitBranches(slug, {
+        repo_name: gitRepoName,
+        use_project_creds: useProjectCreds,
+        service: useProjectCreds ? undefined : gitService,
+        url: useProjectCreds ? undefined : gitUrl,
+        login: useProjectCreds ? undefined : gitLogin,
+        token: useProjectCreds ? undefined : gitToken,
+      });
+      setBranches(result);
+    } catch {
+      // silent — branches select will just not appear
+    } finally {
+      setLoadingBranches(false);
+    }
+  }, [slug, gitRepoName, useProjectCreds, gitService, gitUrl, gitLogin, gitToken]);
+
+  // Auto-fetch branches when repo name changes (debounced) or form opens with pre-filled name
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (!showGitForm || !gitRepoName || gitRepoName.length < 3) return;
+    debounceRef.current = setTimeout(() => { void fetchBranches(); }, 600);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [gitRepoName, fetchBranches, showGitForm]);
+
   const handleCloneGit = useCallback(async () => {
     if (!slug || !gitRepoName) return;
     setCloning(true);
@@ -89,6 +123,7 @@ export function WizardStepDocuments({ className = '' }: WizardStepDocumentsProps
     try {
       await ragApi.cloneGitToUploads(slug, {
         repo_name: gitRepoName,
+        branch: gitBranch || undefined,
         use_project_creds: useProjectCreds,
         service: useProjectCreds ? undefined : gitService,
         url: useProjectCreds ? undefined : gitUrl,
@@ -103,7 +138,7 @@ export function WizardStepDocuments({ className = '' }: WizardStepDocumentsProps
     } finally {
       setCloning(false);
     }
-  }, [slug, gitRepoName, useProjectCreds, gitService, gitUrl, gitLogin, gitToken, loadFiles]);
+  }, [slug, gitRepoName, gitBranch, useProjectCreds, gitService, gitUrl, gitLogin, gitToken, loadFiles]);
 
   const SERVICE_OPTIONS = useMemo(() => [
     { value: 'other', label: t('git.other'), url: '' },
@@ -147,11 +182,34 @@ export function WizardStepDocuments({ className = '' }: WizardStepDocumentsProps
             <input
               type="text"
               value={gitRepoName}
-              onChange={(e) => setGitRepoName(e.target.value)}
+              onChange={(e) => { setGitRepoName(e.target.value); setBranches([]); setGitBranch(''); }}
               placeholder="owner/repo"
               className={inputClass}
             />
           </label>
+
+          {/* Branch selection */}
+          {loadingBranches && (
+            <div className="flex items-center gap-2 text-content-secondary">
+              <Spinner size="sm" />
+              <span className="text-xs">{t('documents.loading_branches')}</span>
+            </div>
+          )}
+          {branches.length > 0 && (
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-content-tertiary">{t('documents.branch')}</span>
+              <select
+                value={gitBranch}
+                onChange={(e) => setGitBranch(e.target.value)}
+                className={inputClass}
+              >
+                <option value="">{t('documents.default_branch')}</option>
+                {branches.map((b) => (
+                  <option key={b} value={b}>{b}</option>
+                ))}
+              </select>
+            </label>
+          )}
 
           {gitConfig && (
             <label className="flex items-center gap-2 text-xs text-content-secondary">

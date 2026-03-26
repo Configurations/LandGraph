@@ -82,11 +82,70 @@ async def list_remote_branches(config: GitConfig) -> list[str]:
     return sorted(branches)
 
 
+async def ensure_branch_structure(slug: str) -> list[str]:
+    """Ensure the repo has main -> uat -> dev branch structure.
+
+    Creates missing branches and pushes them. Returns list of created branches.
+    """
+    repo = _repo_path(slug)
+    if not os.path.isdir(os.path.join(repo, ".git")):
+        return []
+
+    # Fetch all remote branches
+    await _run_git(repo, "fetch", "--all")
+
+    # Detect the main branch name (main or master)
+    rc, out, _ = await _run_git(repo, "branch", "-r")
+    remote_branches = [b.strip().removeprefix("origin/") for b in out.splitlines() if b.strip() and "HEAD" not in b]
+    main_branch = "main" if "main" in remote_branches else ("master" if "master" in remote_branches else "")
+
+    if not main_branch:
+        log.warning("ensure_branches_no_main", slug=slug, branches=remote_branches)
+        return []
+
+    created: list[str] = []
+
+    # Ensure uat exists (from main)
+    if "uat" not in remote_branches:
+        rc, _, err = await _run_git(repo, "checkout", "-b", "uat", f"origin/{main_branch}")
+        if rc == 0:
+            rc, _, err = await _run_git(repo, "push", "-u", "origin", "uat")
+            if rc == 0:
+                created.append("uat")
+                log.info("branch_created", slug=slug, branch="uat", from_branch=main_branch)
+            else:
+                log.error("branch_push_failed", slug=slug, branch="uat", stderr=err[:200])
+        else:
+            log.error("branch_create_failed", slug=slug, branch="uat", stderr=err[:200])
+
+    # Ensure dev exists (from uat)
+    if "dev" not in remote_branches:
+        # Make sure we're on uat
+        source = "origin/uat" if "uat" in remote_branches or "uat" in created else f"origin/{main_branch}"
+        rc, _, err = await _run_git(repo, "checkout", "-b", "dev", source)
+        if rc == 0:
+            rc, _, err = await _run_git(repo, "push", "-u", "origin", "dev")
+            if rc == 0:
+                created.append("dev")
+                log.info("branch_created", slug=slug, branch="dev", from_branch=source)
+            else:
+                log.error("branch_push_failed", slug=slug, branch="dev", stderr=err[:200])
+        else:
+            log.error("branch_create_failed", slug=slug, branch="dev", stderr=err[:200])
+
+    # Return to main branch
+    if created:
+        await _run_git(repo, "checkout", main_branch)
+
+    return created
+
+
 async def clone_repo(slug: str, config: GitConfig) -> bool:
     """Clone a remote repository into the project repo directory."""
     repo = _repo_path(slug)
     if os.path.isdir(os.path.join(repo, ".git")):
         log.info("git_repo_already_cloned", slug=slug)
+        await ensure_branch_structure(slug)
         return True
 
     clone_url = _build_clone_url(config)
@@ -98,6 +157,7 @@ async def clone_repo(slug: str, config: GitConfig) -> bool:
         return False
 
     log.info("git_cloned", slug=slug)
+    await ensure_branch_structure(slug)
     return True
 
 
@@ -134,6 +194,9 @@ async def init_repo(slug: str, config: GitConfig) -> bool:
         rc, _, err = await _run_git(repo, "push", "-u", "origin", "master")
         if rc != 0:
             log.warning("git_push_failed", slug=slug, stderr=err[:300])
+
+    # Create uat and dev branches
+    await ensure_branch_structure(slug)
 
     log.info("git_repo_initialized", slug=slug)
     return True

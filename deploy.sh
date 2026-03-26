@@ -1,4 +1,4 @@
-#!/bin/bash
+claude#!/bin/bash
 # ─────────────────────────────────────────────────────────────
 # deploy.sh — Push local files to remote host, rebuild & restart
 #

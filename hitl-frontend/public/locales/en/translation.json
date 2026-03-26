@@ -89,6 +89,7 @@
   "project": {
     "projects": "Projects",
     "new_project": "New project",
+    "continue_setup": "Continue project setup",
     "name": "Project name",
     "slug": "Directory",
     "slug_available": "Available",
@@ -131,6 +132,10 @@
     "git_repo_name": "Repo name (owner/repo)",
     "use_project_creds": "Use project credentials",
     "clone": "Clone",
+    "load_branches": "Branches",
+    "loading_branches": "Loading branches...",
+    "branch": "Branch",
+    "default_branch": "Default branch",
     "files": "files"
   },
   "analysis": {
@@ -360,7 +365,12 @@
     "select_type": "Project type",
     "no_types": "No project types available",
     "skip": "Skip this step",
-    "workflows_count": "{{count}} workflows"
+    "workflows_count": "{{count}} workflows",
+    "tab_phases": "Phases",
+    "tab_prompt": "Orchestrator Prompt",
+    "tab_files": "Files",
+    "no_prompt": "No prompt available",
+    "no_files": "No phase files"
   },
   "multi_workflow": {
     "active_workflows": "Active workflows",

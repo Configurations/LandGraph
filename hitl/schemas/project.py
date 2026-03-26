@@ -62,6 +62,7 @@ class ProjectResponse(BaseModel):
     git_repo_name: str
     git_connected: bool
     git_repo_exists: bool
+    wizard_pending: bool = False
     status: str
     color: str
     created_at: datetime

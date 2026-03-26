@@ -1,5 +1,5 @@
 import { apiFetch } from './client';
-import type { ProjectTypeResponse } from './types';
+import type { PhaseFile, PhaseFileContent, ProjectTypeResponse } from './types';
 
 export async function listProjectTypes(_teamId?: string): Promise<ProjectTypeResponse[]> {
   try {
@@ -15,12 +15,51 @@ export function getProjectType(typeId: string): Promise<ProjectTypeResponse> {
   );
 }
 
+export interface ApplyProjectTypeResult {
+  ok: boolean;
+  workflow_ids: number[];
+  orchestrator_prompt: string | null;
+}
+
+export async function fetchPhaseFiles(
+  typeId: string,
+  wfFilename: string,
+): Promise<PhaseFile[]> {
+  try {
+    return await apiFetch<PhaseFile[]>(
+      `/api/project-types/${encodeURIComponent(typeId)}/workflows/${encodeURIComponent(wfFilename)}/phase-files`,
+    );
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchPhaseFileContent(
+  typeId: string,
+  wfFilename: string,
+  phaseId: string,
+): Promise<PhaseFileContent | null> {
+  try {
+    return await apiFetch<PhaseFileContent>(
+      `/api/project-types/${encodeURIComponent(typeId)}/workflows/${encodeURIComponent(wfFilename)}/phase-files/${encodeURIComponent(phaseId)}`,
+    );
+  } catch {
+    return null;
+  }
+}
+
 export function applyProjectType(
   slug: string,
   typeId: string,
-): Promise<{ applied: boolean }> {
-  return apiFetch<{ applied: boolean }>(
+  workflowFilename?: string,
+): Promise<ApplyProjectTypeResult> {
+  return apiFetch<ApplyProjectTypeResult>(
     `/api/projects/${encodeURIComponent(slug)}/apply-type/${encodeURIComponent(typeId)}`,
-    { method: 'POST' },
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        workflow_filename: workflowFilename ?? '',
+      }),
+    },
   );
 }

@@ -32,13 +32,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelna
 # ENUMS & MODELS
 # ══════════════════════════════════════════════
 
-class ProjectPhase(str, Enum):
-    DISCOVERY = "discovery"
-    DESIGN = "design"
-    BUILD = "build"
-    SHIP = "ship"
-    ITERATE = "iterate"
-
 
 class DecisionType(str, Enum):
     ROUTE = "route"
@@ -106,35 +99,12 @@ CONFIG = {
     "confidence_threshold": float(os.getenv("ORCHESTRATOR_CONFIDENCE_THRESHOLD", "0.7")),
 }
 
-# Phase requirements — livrables requis pour chaque transition
-PHASE_REQUIREMENTS: dict[str, list[str]] = {
-    "discovery": ["prd", "user_stories", "acceptance_criteria", "moscow_matrix"],
-    "design": [
-        "wireframes", "mockups", "design_tokens",
-        "adrs", "c4_diagrams", "openapi_specs",
-        "sprint_backlog", "roadmap", "risk_register",
-        "accessibility_report",
-    ],
-    "build": ["source_code", "qa_verdict_go", "ux_audit", "test_coverage_ok"],
-    "ship": [
-        "cicd_pipeline", "staging_deploy_ok",
-        "documentation_published", "legal_documents",
-        "production_deploy_ok",
-    ],
-}
 
-# Agents du systeme
-AGENT_IDS = [
-    "requirements_analyst",
-    "ux_designer",
-    "architect",
-    "planner",
-    "lead_dev",
-    "qa_engineer",
-    "devops_engineer",
-    "docs_writer",
-    "legal_advisor",
-]
+def _load_agent_ids(team_id: str = "team1") -> list[str]:
+    """Charge la liste des agents depuis le registry de l'equipe (hors orchestrator)."""
+    from agents.shared.team_resolver import load_team_json
+    registry = load_team_json(team_id, "agents_registry.json")
+    return [aid for aid, cfg in registry.get("agents", {}).items() if cfg.get("type") != "orchestrator"]
 
 
 # ══════════════════════════════════════════════
@@ -142,38 +112,19 @@ AGENT_IDS = [
 # ══════════════════════════════════════════════
 
 def load_system_prompt(team_id: str = "team1") -> str:
-    """Charge le system prompt depuis le dossier de l'equipe."""
+    """Charge le system prompt depuis le dossier de l'equipe. Pas de cache : le prompt
+    est recalcule a chaque phase (il integre le contexte workflow courant)."""
     from agents.shared.team_resolver import find_team_file
     prompt_file = _orch_config.get("prompt", "orchestrator.md")
     path = find_team_file(team_id, prompt_file)
-    if path:
-        logger.info(f"Orchestrator prompt [{team_id}]: {path}")
-        with open(path, "r") as f:
-            return f.read()
-
-    # Fallback : prompt inline minimal
-    return """Tu es l'Orchestrateur, cerveau central d'un systeme multi-agent LangGraph.
-Tu routes les taches vers le bon agent, geres les transitions de phase,
-et decides quand impliquer l'humain.
-
-Agents disponibles : requirements_analyst, ux_designer, architect, planner,
-lead_dev, qa_engineer, devops_engineer, docs_writer, legal_advisor.
-
-Phases : discovery -> design -> build -> ship -> iterate.
-
-Reponds TOUJOURS en JSON valide avec cette structure :
-{
-  "decision_type": "route | escalate | wait | phase_transition | parallel_dispatch",
-  "confidence": 0.0-1.0,
-  "reasoning": "explication de ta decision",
-  "actions": [
-    {"action": "dispatch_agent | human_gate | notify_discord | escalate_human | retry_agent | block",
-     "target": "agent_id", "task": "description"}
-  ]
-}"""
-
-
-SYSTEM_PROMPT = load_system_prompt()
+    if not path:
+        raise FileNotFoundError(
+            f"Prompt orchestrateur obligatoire : '{prompt_file}' introuvable "
+            f"pour l'equipe '{team_id}'. Verifiez config/{team_id}/{prompt_file}."
+        )
+    logger.info(f"Orchestrator prompt [{team_id}]: {path}")
+    with open(path, "r") as f:
+        return f.read()
 
 
 # ══════════════════════════════════════════════
@@ -192,13 +143,6 @@ def get_llm():
 # ══════════════════════════════════════════════
 # HELPERS
 # ══════════════════════════════════════════════
-
-def check_phase_requirements(agent_outputs: dict, phase: str) -> tuple[bool, list[str]]:
-    """Verifie si tous les livrables requis pour la phase sont presents."""
-    required = PHASE_REQUIREMENTS.get(phase, [])
-    missing = [r for r in required if r not in agent_outputs or
-               agent_outputs[r].get("status") != "complete"]
-    return len(missing) == 0, missing
 
 
 def detect_loop(history: list[dict], agent_id: str, max_loops: int = 3) -> bool:
@@ -497,12 +441,15 @@ def route_after_orchestrator(state: dict) -> str:
     if not decisions:
         return "orchestrator"
 
+    team_id = state.get("_team_id", "team1")
+    agent_ids = _load_agent_ids(team_id)
+
     last_decision = decisions[-1]
     for action in last_decision.get("actions", []):
         action_type = action.get("action")
         target = action.get("target")
 
-        if action_type == "dispatch_agent" and target in AGENT_IDS:
+        if action_type == "dispatch_agent" and target in agent_ids:
             return target
         if action_type in ("human_gate", "escalate_human", "block"):
             return "human_gate"
@@ -598,23 +545,26 @@ def placeholder_agent_node(state: dict) -> dict:
 # GRAPH BUILDER
 # ══════════════════════════════════════════════
 
-def build_graph():
-    """Construit le graphe LangGraph complet."""
+def build_graph(team_id: str = "team1"):
+    """Construit le graphe LangGraph complet avec les agents du registry."""
+    agent_ids = _load_agent_ids(team_id)
+    logger.info(f"Building graph [{team_id}]: {len(agent_ids)} agents: {agent_ids}")
+
     graph = StateGraph(dict)
 
     # Noeud principal
     graph.add_node("orchestrator", orchestrator_node)
     graph.add_node("human_gate", human_gate_node)
 
-    # Noeuds agents (placeholders pour l'instant)
-    for agent_id in AGENT_IDS:
+    # Noeuds agents depuis le registry
+    for agent_id in agent_ids:
         graph.add_node(agent_id, placeholder_agent_node)
 
     # Entry point
     graph.set_entry_point("orchestrator")
 
     # Routing conditionnel apres l'orchestrateur
-    routing_map = {agent_id: agent_id for agent_id in AGENT_IDS}
+    routing_map = {agent_id: agent_id for agent_id in agent_ids}
     routing_map["human_gate"] = "human_gate"
     routing_map["orchestrator"] = "orchestrator"
     routing_map["end"] = END
@@ -622,7 +572,7 @@ def build_graph():
     graph.add_conditional_edges("orchestrator", route_after_orchestrator, routing_map)
 
     # Chaque agent retourne a l'orchestrateur
-    for agent_id in AGENT_IDS:
+    for agent_id in agent_ids:
         graph.add_edge(agent_id, "orchestrator")
 
     # Human gate retourne a l'orchestrateur

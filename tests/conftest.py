@@ -172,8 +172,8 @@ SAMPLE_REGISTRY = {
             "temperature": 0.3,
             "max_tokens": 32768,
             "prompt": "requirements_analyst.md",
-            "type": "pipeline",
-            "pipeline_steps": ["analyse", "redaction", "validation"],
+            "type": "manager",
+            "steps": ["analyse", "redaction", "validation"],
         },
         "lead_dev": {
             "name": "Lead Dev",

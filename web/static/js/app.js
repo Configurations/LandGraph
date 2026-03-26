@@ -1045,7 +1045,7 @@ function renderAgents() {
           <span class="tag tag-blue">temp: ${a.temperature}</span>
           <span class="tag tag-blue">tokens: ${a.max_tokens}</span>
           ${a.model ? `<span class="tag tag-yellow">${escHtml(a.model)}</span>` : ''}
-          ${a.type ? `<span class="tag tag-gray">${escHtml(a.type === 'pipeline' ? 'manager' : a.type)}</span>` : ''}
+          ${a.type ? `<span class="tag tag-gray">${escHtml(a.type === 'manager' ? 'Manager' : a.type)}</span>` : ''}
         </div>
         ${mcpList.length ? `<div class="agent-meta" style="margin-top:0.5rem">
           ${mcpList.map(m => `<span class="tag tag-green">${escHtml(m)}</span>`).join('')}
@@ -1085,8 +1085,8 @@ async function editAgent(id) {
     : '<p style="color:var(--text-secondary);font-size:0.8rem">Aucun serveur MCP installe.</p>';
 
   const isOrchestrator = a.type === 'orchestrator';
-  const hasPipeline = a.type === 'pipeline';
-  const curType = isOrchestrator ? 'orchestrator' : (hasPipeline ? 'pipeline' : 'single');
+  const hasManager = a.type === 'manager';
+  const curType = isOrchestrator ? 'orchestrator' : (hasManager ? 'manager' : 'single');
   const hasOtherOrch = Object.entries(agents).some(([aid, ag]) => aid !== id && ag.type === 'orchestrator');
 
   // Build delegates_to checkboxes (all team agents except orchestrator and self)
@@ -1109,7 +1109,7 @@ async function editAgent(id) {
     </div>
     <div class="agent-tabs">
       <div class="agent-tab active" onclick="switchAgentTab('divers')">Divers</div>
-      <div class="agent-tab" id="agent-tab-header-delegates" onclick="switchAgentTab('delegates')" style="${curType === 'pipeline' ? '' : 'display:none'}">Sous-traitance</div>
+      <div class="agent-tab" id="agent-tab-header-delegates" onclick="switchAgentTab('delegates')" style="${curType === 'manager' ? '' : 'display:none'}">Sous-traitance</div>
     </div>
 
     <!-- Tab: Divers -->
@@ -1139,9 +1139,9 @@ async function editAgent(id) {
       </div>
       <div class="form-group">
         <label>Type</label>
-        <select id="agent-edit-type" onchange="document.getElementById('agent-tab-header-delegates').style.display=this.value==='pipeline'?'':'none'">
+        <select id="agent-edit-type" onchange="document.getElementById('agent-tab-header-delegates').style.display=this.value==='manager'?'':'none'">
           <option value="single" ${curType==='single'?'selected':''}>Single</option>
-          <option value="pipeline" ${curType==='pipeline'?'selected':''}>Manager</option>
+          <option value="manager" ${curType==='manager'?'selected':''}>Manager</option>
           <option value="orchestrator" ${curType==='orchestrator'?'selected':''} ${hasOtherOrch && curType!=='orchestrator'?'disabled':''}>Orchestrator</option>
         </select>
       </div>
@@ -1235,7 +1235,7 @@ async function saveAgent(id) {
   const mcpCheckboxes = document.querySelectorAll('.agent-mcp-cb:checked');
   const mcpList = Array.from(mcpCheckboxes).map(cb => cb.value);
   const delegateCbs = document.querySelectorAll('.agent-delegate-cb:checked');
-  const delegates_to = agentType === 'pipeline' ? Array.from(delegateCbs).map(cb => cb.value) : [];
+  const delegates_to = agentType === 'manager' ? Array.from(delegateCbs).map(cb => cb.value) : [];
 
   const teamDir = agents[id]._team_dir || agents[id]._team_id || 'default';
   try {
@@ -1303,7 +1303,7 @@ async function showAddAgentModal() {
       <label>Type</label>
       <select id="agent-new-type">
         <option value="single" selected>Single</option>
-        <option value="pipeline">Manager</option>
+        <option value="manager">Manager</option>
         <option value="orchestrator" ${Object.values(agents).some(ag => ag.type === 'orchestrator') ? 'disabled' : ''}>Orchestrator</option>
       </select>
     </div>
@@ -2577,7 +2577,7 @@ function renderTeams() {
           ${a.temperature != null ? `<span class="tag tag-blue">temp: ${a.temperature}</span>` : ''}
           ${a.max_tokens != null ? `<span class="tag tag-blue">tokens: ${a.max_tokens}</span>` : ''}
           ${a.llm || a.model ? `<span class="tag tag-yellow">${escHtml(a.llm || a.model)}</span>` : ''}
-          ${a.type ? `<span class="tag tag-gray">${escHtml(a.type === 'pipeline' ? 'manager' : a.type)}</span>` : ''}
+          ${a.type ? `<span class="tag tag-gray">${escHtml(a.type === 'manager' ? 'Manager' : a.type)}</span>` : ''}
           ${a.delivers_docs ? '<span class="tag tag-purple">Documentation</span>' : ''}
           ${a.delivers_code ? '<span class="tag tag-purple">Code</span>' : ''}
           ${a.delivers_design ? '<span class="tag tag-purple">Maquette / Design</span>' : ''}
@@ -2663,7 +2663,7 @@ async function showAddCfgAgentModal(dir) {
       <label>Type</label>
       <select id="cfg-agent-new-type">
         <option value="single" selected>Single</option>
-        <option value="pipeline">Manager</option>
+        <option value="manager">Manager</option>
         <option value="orchestrator" ${hasOrch?'disabled':''}>Orchestrator</option>
       </select>
     </div>
@@ -2741,10 +2741,22 @@ async function editCfgAgent(dir, agentId) {
 
   const promptRaw = _composeAgentPrompt(a);
   const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
-  const hasPipeline = a.type === 'pipeline';
+  const hasManager = a.type === 'manager';
   const isOrchestrator = a.type === 'orchestrator';
-  const curType = isOrchestrator ? 'orchestrator' : (hasPipeline ? 'pipeline' : 'single');
+  const curType = isOrchestrator ? 'orchestrator' : (hasManager ? 'manager' : 'single');
   const hasOtherOrch = Object.entries(team.agents || {}).some(([aid, ag]) => aid !== agentId && ag.type === 'orchestrator');
+
+  // Build delegates_to checkboxes (all team agents except orchestrator and self)
+  const delegatesTo = a.delegates_to || [];
+  const delegateChips = Object.entries(team.agents || {})
+    .filter(([aid, ag]) => aid !== agentId && ag.type !== 'orchestrator')
+    .map(([aid, ag]) => {
+      const checked = delegatesTo.includes(aid);
+      return `<label class="mcp-chip${checked ? ' active' : ''}" title="${escHtml(aid)}">
+        <input type="checkbox" class="cfg-agent-delegate-cb" value="${escHtml(aid)}" ${checked ? 'checked' : ''} onchange="this.parentElement.classList.toggle('active',this.checked)" />
+        ${escHtml(ag.name || aid)}
+      </label>`;
+    }).join('');
 
   showModal(`
     <div class="modal-header">
@@ -2754,6 +2766,7 @@ async function editCfgAgent(dir, agentId) {
     <div class="prompt-tabs" style="margin-bottom:0.5rem">
       <div class="prompt-tab active" id="cfg-modal-tab-info" onclick="switchCfgModalTab('info')">Signaletique</div>
       <div class="prompt-tab" id="cfg-modal-tab-prompt" onclick="switchCfgModalTab('prompt')">Prompt</div>
+      <div class="prompt-tab" id="cfg-modal-tab-delegates" onclick="switchCfgModalTab('delegates')" style="${curType === 'manager' ? '' : 'display:none'}">Sous-traitance</div>
     </div>
     <div id="cfg-modal-pane-info">
       <div class="form-row">
@@ -2780,7 +2793,7 @@ async function editCfgAgent(dir, agentId) {
         <label>Type</label>
         <select id="cfg-agent-edit-type" onchange="_onCfgTypeChange(this.value)">
           <option value="single" ${curType==='single'?'selected':''}>Single</option>
-          <option value="pipeline" ${curType==='pipeline'?'selected':''}>Manager</option>
+          <option value="manager" ${curType==='manager'?'selected':''}>Manager</option>
           <option value="orchestrator" ${curType==='orchestrator'?'selected':''} ${hasOtherOrch && curType!=='orchestrator'?'disabled':''}>Orchestrator</option>
         </select>
       </div>
@@ -2799,6 +2812,12 @@ async function editCfgAgent(dir, agentId) {
         <div class="prompt-preview" id="cfg-agent-prompt-preview" style="max-height:500px;overflow-y:auto"></div>
       </div>
     </div>
+    <div id="cfg-modal-pane-delegates" style="display:none">
+      <p style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:12px">Cet agent peut deleguer du travail aux agents coches ci-dessous :</p>
+      <div class="mcp-chips">
+        ${delegateChips || '<p style="color:var(--text-secondary);font-size:0.8rem">Aucun autre agent dans cette equipe.</p>'}
+      </div>
+    </div>
     <div class="modal-actions">
       <button class="btn btn-primary" onclick="saveCfgAgent('${escHtml(dir)}','${escHtml(agentId)}')">Sauvegarder</button>
       <button class="btn btn-outline" onclick="closeModal()">Fermer</button>
@@ -2810,7 +2829,7 @@ async function editCfgAgent(dir, agentId) {
 }
 
 function switchCfgModalTab(tab) {
-  ['info', 'prompt'].forEach(t => {
+  ['info', 'prompt', 'delegates'].forEach(t => {
     const pane = document.getElementById('cfg-modal-pane-' + t);
     const tabEl = document.getElementById('cfg-modal-tab-' + t);
     if (pane) pane.style.display = t === tab ? '' : 'none';
@@ -2819,7 +2838,8 @@ function switchCfgModalTab(tab) {
 }
 
 function _onCfgTypeChange(val) {
-  // Type change handler (no-op)
+  const tab = document.getElementById('cfg-modal-tab-delegates');
+  if (tab) tab.style.display = val === 'manager' ? '' : 'none';
 }
 
 async function saveCfgAgent(dir, agentId) {
@@ -2829,9 +2849,12 @@ async function saveCfgAgent(dir, agentId) {
     toast('Un orchestrator existe deja dans cette equipe', 'error'); return;
   }
   try {
+    const delegateCbs = document.querySelectorAll('.cfg-agent-delegate-cb:checked');
+    const delegates_to = agentType === 'manager' ? Array.from(delegateCbs).map(cb => cb.value) : [];
     await api(`/api/agents/${encodeURIComponent(agentId)}`, { method: 'PUT', body: {
       id: agentId, name: agentId,
       type: agentType,
+      delegates_to,
       team_id: dir,
     }});
     toast('Agent sauvegarde', 'success');
@@ -4413,6 +4436,7 @@ function _projRenderWorkflows() {
   const p = _tplProjects.find(x => x.id === _projSelectedId);
   if (!p) return;
   const wfs = p.workflows || [];
+  // Keep chips for quick access / delete
   const chipsDiv = _projEl('wf-chips');
   chipsDiv.innerHTML = wfs.map(w =>
     '<span class="proj-wf-chip' + (w === _projActiveWf ? ' active' : '') + '" onclick="_projOpenWf(\'' + escHtml(w) + '\')">' +
@@ -4425,6 +4449,255 @@ function _projRenderWorkflows() {
     _projActiveWf = null;
     _projEl('wf-editor').innerHTML = '';
   }
+  // Render timeline below
+  _projRenderTimeline(p, wfs);
+}
+
+let _projExpandedWf = null;
+let _projTimelineTab = {};  // wfName -> active tab
+let _projPhaseFilesCache = {};  // wfName -> files array
+let _projPhaseContentCache = {};  // "wfName:phaseId" -> content
+let _projOpenFileId = {};  // wfName -> currently open file phase_id
+let _projWrkJsonCache = {};  // wfName -> parsed wrk.json phases dict
+
+async function _projRenderTimeline(p, wfs) {
+  const el = _projEl('wf-timeline');
+  if (!el || wfs.length === 0) { if (el) el.innerHTML = ''; return; }
+
+  // Load project.json metadata to get workflow details (mode, priority, depends_on)
+  let wfMeta = {};
+  try {
+    const pjData = await api('/api/templates/projects/' + encodeURIComponent(p.id) + '/project-json');
+    const metaWfs = (pjData && pjData.workflows) || [];
+    metaWfs.forEach(function(m) {
+      const base = (m.filename || '').replace('.wrk.json', '');
+      wfMeta[base] = m;
+    });
+  } catch { /* no project.json metadata, use defaults */ }
+
+  // Build sorted list
+  var sorted = wfs.map(function(w) {
+    var m = wfMeta[w] || {};
+    return { name: w, mode: m.mode || 'sequential', priority: m.priority || 50, depends_on: m.depends_on || null };
+  }).sort(function(a, b) { return (b.priority) - (a.priority); });
+
+  // Dots
+  var dotsHtml = sorted.map(function(wf, i) {
+    var isExp = _projExpandedWf === wf.name;
+    var dotClass = 'proj-wf-timeline-dot' + (isExp || i === 0 ? ' active' : '');
+    var html = '<div class="' + dotClass + '"></div>';
+    if (i < sorted.length - 1) {
+      html += '<div class="proj-wf-timeline-line' + (i < sorted.indexOf(sorted.find(function(s) { return s.name === _projExpandedWf; })) ? ' active' : '') + '"></div>';
+    }
+    return html;
+  }).join('');
+
+  // Blocks
+  var blocksHtml = sorted.map(function(wf, i) {
+    var isExp = _projExpandedWf === wf.name;
+    var modeBadge = '<span class="proj-wf-badge ' + (wf.mode === 'parallel' ? 'par' : 'seq') + '">' + escHtml(wf.mode) + '</span>';
+    var prioBadge = '<span class="proj-wf-badge prio">prio: ' + wf.priority + '</span>';
+
+    var headerHtml = '<div class="proj-wf-block-header" onclick="_projToggleTimeline(\'' + escHtml(wf.name) + '\')">' +
+      '<div class="proj-wf-block-title">' + escHtml(wf.name) + ' ' + modeBadge + ' ' + prioBadge + '</div>' +
+      '<div style="display:flex;align-items:center;gap:0.6rem;">' +
+        '<span class="proj-wf-block-arrow">' + (isExp ? '▼' : '▶') + '</span>' +
+      '</div>' +
+    '</div>';
+
+    var bodyHtml = '';
+    if (isExp) {
+      var tab = _projTimelineTab[wf.name] || 'phases';
+      bodyHtml = '<div class="proj-wf-tabs">' +
+        '<div class="proj-wf-tab' + (tab === 'phases' ? ' active' : '') + '" onclick="_projSwitchTab(\'' + escHtml(wf.name) + '\',\'phases\')">Phases</div>' +
+        '<div class="proj-wf-tab' + (tab === 'prompt' ? ' active' : '') + '" onclick="_projSwitchTab(\'' + escHtml(wf.name) + '\',\'prompt\')">Prompt Orchestrateur</div>' +
+        '<div class="proj-wf-tab' + (tab === 'files' ? ' active' : '') + '" onclick="_projSwitchTab(\'' + escHtml(wf.name) + '\',\'files\')">Fichiers</div>' +
+      '</div>' +
+      '<div class="proj-wf-tab-content" id="' + _projPrefix + '-wf-tab-content-' + escHtml(wf.name) + '"></div>';
+    }
+
+    var depHtml = '';
+    if (i < sorted.length - 1 && sorted[i + 1].depends_on) {
+      depHtml = '<div class="proj-wf-dep">⬇ Depend de : ' + escHtml(sorted[i + 1].depends_on) + '</div>';
+    }
+
+    return '<div class="proj-wf-block' + (isExp ? ' expanded' : '') + '">' + headerHtml + bodyHtml + '</div>' + depHtml;
+  }).join('');
+
+  el.innerHTML = '<div class="proj-wf-timeline-inner">' +
+    '<div class="proj-wf-timeline-dots">' + dotsHtml + '</div>' +
+    '<div class="proj-wf-timeline-blocks">' + blocksHtml + '</div>' +
+  '</div>';
+
+  // If expanded, load tab content
+  if (_projExpandedWf) {
+    await _projLoadTabContent(_projExpandedWf);
+  }
+}
+
+function _projToggleTimeline(wfName) {
+  _projExpandedWf = (_projExpandedWf === wfName) ? null : wfName;
+  if (!_projTimelineTab[wfName]) _projTimelineTab[wfName] = 'phases';
+  _projRenderWorkflows();
+}
+
+function _projSwitchTab(wfName, tab) {
+  _projTimelineTab[wfName] = tab;
+  _projRenderWorkflows();
+}
+
+function _projNavigateToWorkflow(targetWfName) {
+  _projExpandedWf = targetWfName;
+  _projTimelineTab[targetWfName] = 'phases';
+  _projRenderWorkflows();
+}
+
+async function _projLoadTabContent(wfName) {
+  var tab = _projTimelineTab[wfName] || 'phases';
+  var el = document.getElementById(_projPrefix + '-wf-tab-content-' + wfName);
+  if (!el) return;
+
+  // Ensure phase files are loaded
+  if (!_projPhaseFilesCache[wfName]) {
+    try {
+      var res = await api('/api/templates/projects/' + encodeURIComponent(_projSelectedId) + '/workflows/' + encodeURIComponent(wfName) + '/phase-files');
+      _projPhaseFilesCache[wfName] = res.files || [];
+    } catch { _projPhaseFilesCache[wfName] = []; }
+  }
+  var files = _projPhaseFilesCache[wfName];
+
+  // Ensure wrk.json phases are loaded (for names, order, agents, deliverables)
+  if (!_projWrkJsonCache[wfName]) {
+    try {
+      var wrkRes = await api('/api/templates/projects/' + encodeURIComponent(_projSelectedId) + '/workflows/' + encodeURIComponent(wfName));
+      var wrkData = JSON.parse(wrkRes.content || '{}');
+      _projWrkJsonCache[wfName] = wrkData.phases || {};
+      _projWrkJsonCache['_transitions_' + wfName] = wrkData.transitions || [];
+    } catch { _projWrkJsonCache[wfName] = {}; }
+  }
+  var phasesDict = _projWrkJsonCache[wfName];
+
+  // Build ordered phases list from wrk.json, matched with phase files
+  var wrkTransitions = _projWrkJsonCache['_transitions_' + wfName] || [];
+  var phasesList = Object.keys(phasesDict).map(function(pid) {
+    var ph = phasesDict[pid];
+    var isExternal = ph.type === 'external';
+    var extWorkflow = isExternal ? (ph.external_workflow || '').replace('.wrk.json', '') : '';
+    var agents = !isExternal && ph.agents ? Object.keys(ph.agents) : [];
+    var deliverables = !isExternal && ph.deliverables ? Object.keys(ph.deliverables).map(function(dk) {
+      var d = ph.deliverables[dk];
+      return { key: dk, name: d.name || dk, required: d.required !== false, type: d.type || '' };
+    }) : [];
+    // Check if any transition from this phase has human_gate
+    var humanGate = wrkTransitions.some(function(t) { return t.from === pid && t.human_gate; });
+    return {
+      id: pid,
+      name: ph.name || pid.replace(/_/g, ' '),
+      order: ph.order || 999,
+      agents: agents,
+      deliverables: deliverables,
+      humanGate: humanGate,
+      isExternal: isExternal,
+      externalWorkflow: extWorkflow
+    };
+  }).sort(function(a, b) { return a.order - b.order; });
+
+  if (tab === 'phases') {
+    if (phasesList.length === 0) {
+      el.innerHTML = '<span style="font-size:0.75rem;color:var(--text-muted)">Aucune phase</span>';
+      return;
+    }
+    el.innerHTML = '<div class="proj-wf-phases-row">' + phasesList.map(function(ph, idx) {
+      var arrow = idx < phasesList.length - 1 ? '<div class="proj-wf-phase-arrow">↓</div>' : '';
+      if (ph.isExternal) {
+        var clickAttr = ph.externalWorkflow ? ' onclick="_projNavigateToWorkflow(\'' + escHtml(ph.externalWorkflow) + '\')" style="cursor:pointer;"' : '';
+        return '<div class="proj-wf-phase-card external"' + clickAttr + '>' +
+          '<h5>' + escHtml(ph.name) + '</h5>' +
+          '<div class="agents" style="color:var(--warning,#f39c12);">↗ ' + escHtml(ph.externalWorkflow) + '</div>' +
+        '</div>' + arrow;
+      }
+      var agentsHtml = ph.agents.length > 0 ? '<div class="agents">👤 ' + ph.agents.map(escHtml).join(', ') + '</div>' : '';
+      var gateHtml = ph.humanGate ? '<div style="font-size:0.65rem;color:var(--warning,#f39c12);margin-top:0.25rem;">🔒 human gate</div>' : '';
+      return '<div class="proj-wf-phase-card"><h5>' + escHtml(ph.name) + '</h5>' + agentsHtml + gateHtml + '</div>' + arrow;
+    }).join('') + '</div>';
+
+  } else if (tab === 'prompt') {
+    // Sort files by phase order
+    var orderedFiles = files.slice().sort(function(a, b) {
+      var pa = phasesDict[a.phase_id], pb = phasesDict[b.phase_id];
+      return ((pa && pa.order) || 999) - ((pb && pb.order) || 999);
+    });
+    if (orderedFiles.length === 0) {
+      el.innerHTML = '<span style="font-size:0.75rem;color:var(--text-muted)">Aucun prompt disponible</span>';
+      return;
+    }
+    var first = orderedFiles[0];
+    var cacheKey = wfName + ':' + first.phase_id;
+    if (!_projPhaseContentCache[cacheKey]) {
+      el.innerHTML = '<span style="font-size:0.75rem;color:var(--text-muted)">Chargement...</span>';
+      try {
+        var res = await api('/api/templates/projects/' + encodeURIComponent(_projSelectedId) + '/workflows/' + encodeURIComponent(wfName) + '/phase-files/' + encodeURIComponent(first.phase_id));
+        _projPhaseContentCache[cacheKey] = res.content || '';
+      } catch { _projPhaseContentCache[cacheKey] = '(erreur de chargement)'; }
+    }
+    el.innerHTML = '<div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:0.3rem;">📄 ' + escHtml(first.filename) + '</div>' +
+      '<div class="proj-wf-prompt-viewer">' + escHtml(_projPhaseContentCache[cacheKey]) + '</div>';
+
+  } else if (tab === 'files') {
+    // Sort files by phase order
+    var sortedFiles = files.slice().sort(function(a, b) {
+      var pa = phasesDict[a.phase_id], pb = phasesDict[b.phase_id];
+      return ((pa && pa.order) || 999) - ((pb && pb.order) || 999);
+    });
+    if (sortedFiles.length === 0) {
+      el.innerHTML = '<span style="font-size:0.75rem;color:var(--text-muted)">Aucun fichier de phase</span>';
+      return;
+    }
+    var openId = _projOpenFileId[wfName] || null;
+    var html = '<div class="proj-wf-file-list">';
+    for (var i = 0; i < sortedFiles.length; i++) {
+      var f = sortedFiles[i];
+      var isOpen = openId === f.phase_id;
+      html += '<div class="proj-wf-file-row' + (isOpen ? ' open' : '') + '" onclick="_projToggleFile(\'' + escHtml(wfName) + '\',\'' + escHtml(f.phase_id) + '\')">' +
+        '<span>' + (isOpen ? '📝' : '📝') + ' ' + escHtml(f.filename) + '</span>' +
+        '<span style="font-size:0.6rem;color:var(--text-muted);">' + (isOpen ? '▼' : '▶') + '</span>' +
+      '</div>';
+      if (isOpen) {
+        var ck = wfName + ':' + f.phase_id;
+        var content = _projPhaseContentCache[ck];
+        if (content !== undefined) {
+          html += '<div class="proj-wf-file-content"><div class="proj-wf-prompt-viewer">' + escHtml(content) + '</div></div>';
+        } else {
+          html += '<div class="proj-wf-file-content"><span style="font-size:0.7rem;color:var(--text-muted)">Chargement...</span></div>';
+          // Trigger async load
+          _projLoadFileContent(wfName, f.phase_id);
+        }
+      }
+    }
+    html += '</div>';
+    el.innerHTML = html;
+  }
+}
+
+async function _projToggleFile(wfName, phaseId) {
+  if (_projOpenFileId[wfName] === phaseId) {
+    _projOpenFileId[wfName] = null;
+  } else {
+    _projOpenFileId[wfName] = phaseId;
+    var ck = wfName + ':' + phaseId;
+    if (!_projPhaseContentCache[ck]) {
+      await _projLoadFileContent(wfName, phaseId);
+    }
+  }
+  await _projLoadTabContent(wfName);
+}
+
+async function _projLoadFileContent(wfName, phaseId) {
+  var ck = wfName + ':' + phaseId;
+  try {
+    var res = await api('/api/templates/projects/' + encodeURIComponent(_projSelectedId) + '/workflows/' + encodeURIComponent(wfName) + '/phase-files/' + encodeURIComponent(phaseId));
+    _projPhaseContentCache[ck] = res.content || '';
+  } catch { _projPhaseContentCache[ck] = '(erreur de chargement)'; }
 }
 
 async function _projOpenWf(wfName) {
@@ -5545,7 +5818,7 @@ function _renderSaInfo(agent, id) {
     '<div class="form-row">' +
     '<div class="form-group"><label>Type</label><select id="sa-type" onchange="_saTypeChanged(this.value)">' +
       '<option value="single"' + ((agent.type || 'single') === 'single' ? ' selected' : '') + '>Single</option>' +
-      '<option value="pipeline"' + (agent.type === 'pipeline' ? ' selected' : '') + '>Manager</option>' +
+      '<option value="manager"' + (agent.type === 'manager' ? ' selected' : '') + '>Manager</option>' +
       '<option value="orchestrator"' + (agent.type === 'orchestrator' ? ' selected' : '') + '>Orchestrator</option>' +
     '</select></div>' +
     '<div class="form-group"><label>Temperature</label><input id="sa-temp" type="number" step="0.1" min="0" max="2" value="' + (agent.temperature ?? 0.3) + '" /></div>' +
@@ -5922,7 +6195,7 @@ function _renderProdTeams() {
           '<span class="tag tag-blue">temp: ' + (a.temperature ?? '') + '</span>' +
           '<span class="tag tag-blue">tokens: ' + (a.max_tokens ?? '') + '</span>' +
           (a.llm ? '<span class="tag tag-yellow">' + escHtml(a.llm) + '</span>' : '') +
-          (a.type ? '<span class="tag tag-gray">' + escHtml(a.type === 'pipeline' ? 'manager' : a.type) + '</span>' : '') +
+          (a.type ? '<span class="tag tag-gray">' + escHtml(a.type === 'manager' ? 'Manager' : a.type) + '</span>' : '') +
         '</div>' +
         (mcpList.length ? '<div class="agent-meta">' + mcpList.map(m => '<span class="tag tag-green">' + escHtml(m) + '</span>').join('') + '</div>' : '') +
       '</div>';
@@ -6885,7 +7158,7 @@ function renderTplTeams() {
           <span class="tag tag-blue">temp: ${a.temperature}</span>
           <span class="tag tag-blue">tokens: ${a.max_tokens}</span>
           ${a.llm ? `<span class="tag tag-yellow">${escHtml(a.llm)}</span>` : ''}
-          ${a.type ? `<span class="tag tag-gray">${escHtml(a.type === 'pipeline' ? 'manager' : a.type)}</span>` : ''}
+          ${a.type ? `<span class="tag tag-gray">${escHtml(a.type === 'manager' ? 'Manager' : a.type)}</span>` : ''}
         </div>
         ${mcpList.length ? `<div class="agent-meta">
           ${mcpList.map(m => `<span class="tag tag-green">${escHtml(m)}</span>`).join('')}
@@ -7000,7 +7273,7 @@ async function showAddTplAgentModal(dir) {
       <label>Type</label>
       <select id="tpl-agent-new-type">
         <option value="single" selected>Single</option>
-        <option value="pipeline">Manager</option>
+        <option value="manager">Manager</option>
         <option value="orchestrator" ${hasOrch?'disabled':''}>Orchestrator</option>
       </select>
     </div>
@@ -7081,9 +7354,9 @@ async function editTplAgent(dir, agentId) {
 
   const promptRaw = _composeAgentPrompt(a);
   const promptHtml = typeof marked !== 'undefined' ? marked.parse(promptRaw) : escHtml(promptRaw);
-  const hasPipeline = a.type === 'pipeline';
+  const hasManager = a.type === 'manager';
   const isOrchestrator = a.type === 'orchestrator';
-  const curType = isOrchestrator ? 'orchestrator' : (hasPipeline ? 'pipeline' : 'single');
+  const curType = isOrchestrator ? 'orchestrator' : (hasManager ? 'manager' : 'single');
   const hasOtherOrch = Object.entries(tpl.agents || {}).some(([aid, ag]) => aid !== agentId && ag.type === 'orchestrator');
 
   // Resolve avatar theme for this team
@@ -7113,7 +7386,7 @@ async function editTplAgent(dir, agentId) {
     <div class="prompt-tabs" style="margin-bottom:0.5rem">
       <div class="prompt-tab active" id="tpl-modal-tab-info" onclick="switchTplModalTab('info')">Identite</div>
       <div class="prompt-tab" id="tpl-modal-tab-prompt" onclick="switchTplModalTab('prompt')">Prompt</div>
-      ${curType === 'orchestrator' ? `<div class="prompt-tab" id="tpl-modal-tab-manager" onclick="switchTplModalTab('manager')">Manager</div>` : ''}
+      ${curType === 'manager' ? `<div class="prompt-tab" id="tpl-modal-tab-manager" onclick="switchTplModalTab('manager')">Manager</div>` : ''}
     </div>
     <div id="tpl-modal-pane-info">
       <div class="form-row">
@@ -7140,7 +7413,7 @@ async function editTplAgent(dir, agentId) {
         <label>Type</label>
         <select id="tpl-agent-edit-type" onchange="_onTplTypeChange(this.value)">
           <option value="single" ${curType==='single'?'selected':''}>Single</option>
-          <option value="pipeline" ${curType==='pipeline'?'selected':''}>Manager</option>
+          <option value="manager" ${curType==='manager'?'selected':''}>Manager</option>
           <option value="orchestrator" ${curType==='orchestrator'?'selected':''} ${hasOtherOrch && curType!=='orchestrator'?'disabled':''}>Orchestrator</option>
         </select>
       </div>
@@ -7232,7 +7505,8 @@ function switchTplModalTab(tab) {
 }
 
 function _onTplTypeChange(val) {
-  // Type change handler (no-op)
+  const tab = document.getElementById('tpl-modal-tab-manager');
+  if (tab) tab.style.display = val === 'manager' ? '' : 'none';
 }
 
 function _onTplAvatarChange(theme) {

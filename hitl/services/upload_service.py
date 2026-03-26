@@ -213,6 +213,7 @@ async def clone_git_to_uploads(
     url: str = "",
     login: str = "",
     token: str = "",
+    branch: str = "",
 ) -> tuple[str, list[str]]:
     """Clone a git repo into uploads/{repo_short_name}/.
 
@@ -236,8 +237,13 @@ async def clone_git_to_uploads(
     config = GitConfig(service=service, url=url, login=login, token=token, repo_name=repo_name)
     clone_url = _build_clone_url(config)
 
+    cmd = ["git", "clone", "--depth", "1"]
+    if branch:
+        cmd += ["--branch", branch]
+    cmd += [clone_url, dest_dir]
+
     proc = await asyncio.create_subprocess_exec(
-        "git", "clone", "--depth", "1", clone_url, dest_dir,
+        *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )

@@ -1,14 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
 import { ProjectTypeCard } from './ProjectTypeCard';
+import { WorkflowTemplateTimeline } from './WorkflowTemplateTimeline';
 import * as projectTypesApi from '../../../api/projectTypes';
 import type { ProjectTypeResponse } from '../../../api/types';
 
 interface ProjectTypeSelectorProps {
   selectedTypeId: string | null;
-  onSelect: (typeId: string | null) => void;
+  onSelect: (typeId: string | null, workflowFilename?: string) => void;
   className?: string;
 }
 
@@ -29,6 +30,11 @@ export function ProjectTypeSelector({
       .catch(() => setTypes([]))
       .finally(() => setLoading(false));
   }, []);
+
+  const selectedType = useMemo(
+    () => types.find((pt) => pt.id === selectedTypeId) ?? null,
+    [types, selectedTypeId],
+  );
 
   if (loading) {
     return (
@@ -60,10 +66,19 @@ export function ProjectTypeSelector({
             key={pt.id}
             projectType={pt}
             selected={selectedTypeId === pt.id}
-            onSelect={onSelect}
+            onSelect={(id) => {
+              const wf = pt.workflows[0];
+              onSelect(id, wf?.filename);
+            }}
           />
         ))}
       </div>
+
+      {/* Timeline des workflows du type sélectionné */}
+      {selectedType && selectedType.workflows.length > 0 && (
+        <WorkflowTemplateTimeline projectType={selectedType} />
+      )}
+
       <Button variant="ghost" size="sm" onClick={() => onSelect(null)} className="self-start">
         {t('project_type.skip')}
       </Button>

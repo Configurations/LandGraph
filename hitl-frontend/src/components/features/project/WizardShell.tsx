@@ -13,6 +13,7 @@ import { useProjectStore } from '../../../stores/projectStore';
 import { useTeamStore } from '../../../stores/teamStore';
 import * as projectsApi from '../../../api/projects';
 import * as projectTypesApi from '../../../api/projectTypes';
+import * as wizardDataApi from '../../../api/wizardData';
 
 interface WizardShellProps {
   className?: string;
@@ -44,6 +45,8 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedTypeId, setSelectedTypeId] = useState<string | null>(null);
+  const [selectedWorkflowFilename, setSelectedWorkflowFilename] = useState<string>('');
+  const updateWizardData = useProjectStore((s) => s.updateWizardData);
 
   const steps = useMemo(
     () => STEP_KEYS.map((key, idx) => ({ labelKey: key, completed: completed.has(idx) })),
@@ -61,23 +64,49 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
   }, [wizardStep, wizardData]);
 
   const handleNext = useCallback(async () => {
+    // Save wizard step data immediately at each step
+    if (wizardStep === 0) {
+      void wizardDataApi.saveWizardStep(wizardData.slug, 0, {
+        name: wizardData.name,
+        slug: wizardData.slug,
+      });
+    }
+
+    if (wizardStep === 1) {
+      void wizardDataApi.saveWizardStep(wizardData.slug, 1, {
+        gitConfig: wizardData.gitConfig,
+        gitBranch: wizardData.gitBranch,
+      });
+    }
+
     if (wizardStep === 2 && !completed.has(2)) {
       setCreating(true);
       setError(null);
       try {
-        await projectsApi.createProject({
-          name: wizardData.name,
-          slug: wizardData.slug,
-          language: wizardData.language,
-          team_id: wizardData.teamId || activeTeamId || teams[0]?.id || '',
-          git_config: wizardData.gitConfig ?? undefined,
-        });
-        // Initialize git repo (clone existing or create new)
-        if (wizardData.gitConfig) {
-          await projectsApi.initGit(wizardData.slug, wizardData.gitConfig);
+        const teamId = wizardData.teamId || activeTeamId || teams[0]?.id || '';
+        try {
+          await projectsApi.createProject({
+            name: wizardData.name,
+            slug: wizardData.slug,
+            language: wizardData.language,
+            team_id: teamId,
+            git_config: wizardData.gitConfig ?? undefined,
+          });
+          // Initialize git repo (clone existing or create new)
+          if (wizardData.gitConfig) {
+            await projectsApi.initGit(wizardData.slug, wizardData.gitConfig);
+          }
+          await loadProjects();
+        } catch (createErr) {
+          // 409 = slug already exists (resume mode) — skip creation
+          const msg = createErr instanceof Error ? createErr.message : '';
+          if (!msg.includes('slug_exists')) throw createErr;
         }
         markComplete(2);
-        await loadProjects();
+        void wizardDataApi.saveWizardStep(wizardData.slug, 2, {
+          language: wizardData.language,
+          teamId: teamId,
+        });
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
         setCreating(false);
@@ -90,7 +119,15 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
       setCreating(true);
       setError(null);
       try {
-        await projectTypesApi.applyProjectType(wizardData.slug, selectedTypeId);
+        const result = await projectTypesApi.applyProjectType(
+          wizardData.slug, selectedTypeId, selectedWorkflowFilename,
+        );
+        updateWizardData({ orchestratorPrompt: result.orchestrator_prompt });
+        void wizardDataApi.saveWizardStep(wizardData.slug, 3, {
+          selectedTypeId,
+          workflowFilename: selectedWorkflowFilename,
+          orchestratorPrompt: result.orchestrator_prompt,
+        });
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
         setCreating(false);
@@ -99,14 +136,21 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
       setCreating(false);
     }
 
+    if (wizardStep === 4) {
+      // Persist document step (best-effort)
+      void wizardDataApi.saveWizardStep(wizardData.slug, 4, { completed: true });
+    }
+
     markComplete(wizardStep);
     if (wizardStep < STEP_KEYS.length - 1) {
       setWizardStep(wizardStep + 1);
     } else {
+      // Wizard complete — delete create-project.json
+      void wizardDataApi.deleteWizardData(wizardData.slug);
       resetWizard();
       navigate('/projects');
     }
-  }, [wizardStep, wizardData, completed, selectedTypeId, markComplete, setWizardStep, navigate, resetWizard, loadProjects]);
+  }, [wizardStep, wizardData, completed, selectedTypeId, selectedWorkflowFilename, markComplete, setWizardStep, navigate, resetWizard, loadProjects, updateWizardData, activeTeamId, teams]);
 
   const handlePrevious = useCallback(() => {
     if (wizardStep > 0) setWizardStep(wizardStep - 1);
@@ -129,7 +173,10 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
         {wizardStep === 3 && (
           <ProjectTypeSelector
             selectedTypeId={selectedTypeId}
-            onSelect={setSelectedTypeId}
+            onSelect={(typeId, workflowFilename) => {
+              setSelectedTypeId(typeId);
+              setSelectedWorkflowFilename(workflowFilename ?? '');
+            }}
           />
         )}
         {wizardStep === 4 && <WizardStepDocuments />}

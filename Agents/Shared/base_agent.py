@@ -192,7 +192,7 @@ class BaseAgent:
     default_temperature = 0.3
     default_max_tokens = 32768
     prompt_filename = "base.md"
-    pipeline_steps = []
+    steps = []
     use_tools = False
     requires_approval = False
 
@@ -554,16 +554,16 @@ class BaseAgent:
 
     # ── Modes d'execution ────────────────────────────────────────────────────
 
-    def _run_pipeline(self, state):
+    def _run_steps(self, state):
         ctx = self.build_context(state)
         ch = self._get_channel_id(state)
         dl = {}
 
-        for i, step in enumerate(self.pipeline_steps, 1):
+        for i, step in enumerate(self.steps, 1):
             sn, ins, ok = step["name"], step["instruction"], step["output_key"]
-            logger.info(f"[{self.agent_id}] Pipeline {i}/{len(self.pipeline_steps)}: {sn}")
-            self._evt("pipeline_step_start", state, step=i, total=len(self.pipeline_steps), step_name=sn)
-            _post_to_discord_sync(ch, f"⏳ **{self.agent_name}** — etape {i}/{len(self.pipeline_steps)} : **{sn}**...")
+            logger.info(f"[{self.agent_id}] Step {i}/{len(self.steps)}: {sn}")
+            self._evt("step_start", state, step=i, total=len(self.steps), step_name=sn)
+            _post_to_discord_sync(ch, f"⏳ **{self.agent_name}** — etape {i}/{len(self.steps)} : **{sn}**...")
 
             if self.use_tools:
                 raw = self._call_llm_with_tools(ins, ctx, dl if dl else None, _state=state)
@@ -583,16 +583,15 @@ class BaseAgent:
                 _post_to_discord_sync(ch, f"✅ **{self.agent_name}** — **{sn}**\n\n{formatted}")
             except json.JSONDecodeError as e:
                 logger.error(f"[{self.agent_id}] {sn} JSON fail: {e}")
-                # Store error message + raw content as markdown
                 err_msg = f"> **Erreur de parsing JSON**: {str(e)[:150]}\n\n"
                 dl[ok] = err_msg + (raw[:8000] if raw.strip() else "*Aucun contenu retourne par le LLM*")
                 _post_to_discord_sync(ch, f"⚠️ **{self.agent_name}** — **{sn}** : output brut preserve.")
-            self._evt("pipeline_step_end", state, step=i, step_name=sn, success=ok in dl)
+            self._evt("step_end", state, step=i, step_name=sn, success=ok in dl)
 
-        _post_to_discord_sync(ch, f"📋 **{self.agent_name}** — {len(self.pipeline_steps)} etapes terminees ✅")
+        _post_to_discord_sync(ch, f"📋 **{self.agent_name}** — {len(self.steps)} etapes terminees ✅")
         return {
             "agent_id": self.agent_id, "status": "complete", "confidence": 0.85,
-            "deliverables": dl, "pipeline_steps_completed": len(self.pipeline_steps),
+            "deliverables": dl, "steps_completed": len(self.steps),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -653,19 +652,19 @@ class BaseAgent:
                        team_id=state.get("_team_id", ""), data=data))
 
     def _run_deliverable(self, state, dispatch_info):
-        """Run a single deliverable: one pipeline step with enriched prompt."""
+        """Run a single deliverable: one step with enriched prompt."""
         from agents.shared.rate_limiter import throttled_invoke
         from agents.shared.langfuse_setup import get_langfuse_callbacks
         from agents.shared.agent_loader import load_agent_supplementary_prompts
 
         ctx = self.build_context(state)
         ch = self._get_channel_id(state)
-        step_name = dispatch_info.get("step_name", dispatch_info.get("pipeline_step", ""))
-        step_key = dispatch_info.get("pipeline_step", "")
+        step_name = dispatch_info.get("step_name", dispatch_info.get("step", ""))
+        step_key = dispatch_info.get("step", "")
         instruction = dispatch_info.get("instruction", "")
 
         if not instruction:
-            return {"agent_id": self.agent_id, "pipeline_step": step_key,
+            return {"agent_id": self.agent_id, "step": step_key,
                     "status": "blocked", "error": "No instruction for this deliverable",
                     "timestamp": datetime.now(timezone.utc).isoformat()}
 
@@ -733,7 +732,7 @@ class BaseAgent:
             _post_to_discord_sync(ch, f"⚠️ **{self.agent_name}** — **{step_name}** : output brut preserve.")
 
         return {
-            "agent_id": self.agent_id, "pipeline_step": step_key,
+            "agent_id": self.agent_id, "step": step_key,
             "status": "complete", "confidence": 0.85,
             "deliverables": dl,
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -746,10 +745,10 @@ class BaseAgent:
             # Deliverable-based dispatch: run a single step
             dispatch_info = state.get("_deliverable_dispatch")
             if dispatch_info:
-                step_key = dispatch_info.get("pipeline_step", "")
+                step_key = dispatch_info.get("step", "")
                 output_key = f"{self.agent_id}:{step_key}"
                 logger.info(f"[{self.agent_id}] Deliverable dispatch: {output_key}")
-                self._evt("agent_start", state, pipeline_steps=1, use_tools=self.use_tools, deliverable=step_key)
+                self._evt("agent_start", state, steps=1, use_tools=self.use_tools, deliverable=step_key)
                 output = self._run_deliverable(state, dispatch_info)
 
                 ao = dict(state.get("agent_outputs", {}))
@@ -763,9 +762,9 @@ class BaseAgent:
                           deliverables=output.get("deliverables", {}))
                 return state
 
-            logger.info(f"[{self.agent_id}] Start — pipeline={len(self.pipeline_steps)}, tools={self.use_tools}")
-            self._evt("agent_start", state, pipeline_steps=len(self.pipeline_steps), use_tools=self.use_tools)
-            output = self._run_pipeline(state) if self.pipeline_steps else self._run_single(state)
+            logger.info(f"[{self.agent_id}] Start — steps={len(self.steps)}, tools={self.use_tools}")
+            self._evt("agent_start", state, steps=len(self.steps), use_tools=self.use_tools)
+            output = self._run_steps(state) if self.steps else self._run_single(state)
 
             # Human gate — demander validation si configure
             if self.requires_approval and output.get("status") == "complete":

@@ -1,0 +1,163 @@
+<h2>Timeline Workflow — Vue fichier phase</h2>
+<p class="subtitle">Quand l'utilisateur clique sur un fichier .wrk.phase.{id}.md, que voit-il ?</p>
+
+<div style="background:#1a1a2e;border-radius:10px;padding:24px;font-family:-apple-system,system-ui,sans-serif;font-size:13px;color:#e0e0e0;max-width:720px;margin:0 auto;">
+
+  <!-- Header type projet -->
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;padding-bottom:12px;border-bottom:1px solid #333;">
+    <div style="width:40px;height:40px;border-radius:8px;background:linear-gradient(135deg,#4a9eff,#7c3aed);display:flex;align-items:center;justify-content:center;font-size:18px;">📋</div>
+    <div>
+      <div style="font-weight:bold;font-size:15px;color:#fff;">SaaS Starter</div>
+      <div style="color:#888;font-size:12px;">3 workflows · team1</div>
+    </div>
+  </div>
+
+  <!-- Timeline -->
+  <div style="display:flex;gap:16px;">
+    <!-- Timeline dots -->
+    <div style="display:flex;flex-direction:column;align-items:center;width:20px;padding-top:16px;">
+      <div style="width:12px;height:12px;border-radius:50%;background:#4a9eff;flex-shrink:0;"></div>
+      <div style="width:2px;flex:1;background:#4a9eff;min-height:20px;"></div>
+      <div style="width:12px;height:12px;border-radius:50%;background:#555;flex-shrink:0;"></div>
+      <div style="width:2px;flex:1;background:#555;min-height:20px;"></div>
+      <div style="width:12px;height:12px;border-radius:50%;background:#555;flex-shrink:0;border:2px solid #555;"></div>
+    </div>
+
+    <div style="flex:1;">
+
+      <!-- ═══ Workflow 1: Discovery — EXPANDED with file viewer ═══ -->
+      <div style="border:1px solid #4a9eff;border-radius:8px;margin-bottom:16px;overflow:hidden;">
+        <!-- Header -->
+        <div style="background:#1e2a3a;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span style="font-weight:bold;color:#4a9eff;font-size:14px;">📋 Discovery</span>
+            <span style="background:#2d4a2d;color:#7dff7d;padding:2px 8px;border-radius:10px;font-size:10px;">sequential</span>
+            <span style="background:#3a2d4a;color:#c47dff;padding:2px 8px;border-radius:10px;font-size:10px;">prio: 90</span>
+          </div>
+          <span style="color:#4a9eff;font-size:10px;">▼</span>
+        </div>
+
+        <!-- Tabs -->
+        <div style="background:#151525;padding:0 16px;display:flex;gap:0;border-bottom:1px solid #333;">
+          <div style="padding:8px 14px;color:#888;font-size:11px;cursor:pointer;border-bottom:2px solid transparent;">Phases</div>
+          <div style="padding:8px 14px;color:#888;font-size:11px;cursor:pointer;border-bottom:2px solid transparent;">Prompt Orchestrateur</div>
+          <div style="padding:8px 14px;color:#4a9eff;font-size:11px;cursor:pointer;border-bottom:2px solid #4a9eff;font-weight:bold;">Fichiers</div>
+        </div>
+
+        <!-- Tab: Fichiers — liste des .wrk.phase.{id}.md -->
+        <div style="padding:16px;background:#0d0d1a;">
+          <div style="background:#111;border:1px solid #2a2a3a;border-radius:6px;overflow:hidden;">
+            <!-- File row - selected -->
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#1e2a3a;border-left:3px solid #4a9eff;cursor:pointer;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span style="color:#4a9eff;">📝</span>
+                <span style="color:#fff;font-size:12px;">discovery.wrk.phase.analyse_besoins.md</span>
+              </div>
+              <span style="color:#4a9eff;font-size:10px;">ouvert ▼</span>
+            </div>
+
+            <!-- File content expanded — read-only viewer -->
+            <div style="padding:14px;background:#090915;border-bottom:1px solid #222;">
+              <div style="background:#0f0f1f;border:1px solid #2a2a3a;border-radius:6px;padding:14px;font-family:'Fira Code',monospace;font-size:11px;line-height:1.7;color:#ccc;max-height:220px;overflow-y:auto;">
+                <div style="color:#4a9eff;font-weight:bold;">## Rôle</div>
+                <div style="margin-bottom:8px;">Tu es l'orchestrateur de l'équipe produit.</div>
+                <div style="margin-bottom:8px;">Un nouveau projet <span style="color:#ff9f43;">'{project_name}'</span> (slug: <span style="color:#ff9f43;">{project_slug}</span>) vient d'être créé.</div>
+                <br>
+                <div style="color:#4a9eff;font-weight:bold;">## Documents fournis</div>
+                <div style="margin-bottom:8px;color:#7dff7d;">(consultables via RAG)</div>
+                <br>
+                <div style="color:#4a9eff;font-weight:bold;">## Mission — Phase Analyse des besoins</div>
+                <div>1. Analyse les documents fournis via le RAG</div>
+                <div>2. Identifie les parties prenantes et leurs besoins</div>
+                <div>3. Délègue à <span style="color:#7dff7d;">requirements_analyst</span> la rédaction du PRD</div>
+                <div>4. Délègue à <span style="color:#7dff7d;">legal_advisor</span> la revue légale</div>
+                <div>5. Vérifie la cohérence des livrables</div>
+                <br>
+                <div style="color:#4a9eff;font-weight:bold;">## Agents disponibles</div>
+                <div>- <span style="color:#7dff7d;">requirements_analyst</span> : Rédaction PRD, analyse fonctionnelle</div>
+                <div>- <span style="color:#7dff7d;">legal_advisor</span> : Conformité, revue contractuelle</div>
+                <br>
+                <div style="color:#4a9eff;font-weight:bold;">## Livrables attendus</div>
+                <div>- <span style="color:#ff9f43;">PRD</span> (required) → requirements_analyst</div>
+                <div>- <span style="color:#ff9f43;">Revue légale</span> → legal_advisor</div>
+                <br>
+                <div style="color:#4a9eff;font-weight:bold;">## Transition</div>
+                <div>🔒 Human gate avant passage à la phase Validation</div>
+              </div>
+            </div>
+
+            <!-- File row - collapsed -->
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid #222;cursor:pointer;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span style="color:#888;">📝</span>
+                <span style="color:#ccc;font-size:12px;">discovery.wrk.phase.validation.md</span>
+              </div>
+              <span style="color:#888;font-size:10px;">▶</span>
+            </div>
+
+            <!-- File row - collapsed -->
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;cursor:pointer;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span style="color:#888;">📝</span>
+                <span style="color:#ccc;font-size:12px;">discovery.wrk.phase.synthese.md</span>
+              </div>
+              <span style="color:#888;font-size:10px;">▶</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Dependency -->
+      <div style="display:flex;align-items:center;margin:-8px 0 8px 0;">
+        <span style="color:#ff9f43;font-size:10px;background:#1a1a2e;padding:0 8px;">⬇ depends_on: Discovery</span>
+      </div>
+
+      <!-- ═══ Workflow 2: Design — COLLAPSED ═══ -->
+      <div style="border:1px solid #444;border-radius:8px;margin-bottom:16px;overflow:hidden;">
+        <div style="background:#1e1e2e;padding:12px 16px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span style="font-weight:bold;color:#ccc;font-size:14px;">🎨 Design</span>
+            <span style="background:#2d4a2d;color:#7dff7d;padding:2px 8px;border-radius:10px;font-size:10px;">sequential</span>
+            <span style="background:#3a2d4a;color:#c47dff;padding:2px 8px;border-radius:10px;font-size:10px;">prio: 80</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <span style="color:#888;font-size:11px;">2 phases · 2 agents · 3 livrables</span>
+            <span style="color:#888;font-size:10px;">▶</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Dependency -->
+      <div style="display:flex;align-items:center;margin:-8px 0 8px 0;">
+        <span style="color:#ff9f43;font-size:10px;background:#1a1a2e;padding:0 8px;">⬇ depends_on: Design</span>
+      </div>
+
+      <!-- ═══ Workflow 3: Development — COLLAPSED ═══ -->
+      <div style="border:1px solid #444;border-radius:8px;overflow:hidden;opacity:0.8;">
+        <div style="background:#1e1e2e;padding:12px 16px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span style="font-weight:bold;color:#ccc;font-size:14px;">⚙️ Development</span>
+            <span style="background:#4a2d2d;color:#ff7d7d;padding:2px 8px;border-radius:10px;font-size:10px;">parallel</span>
+            <span style="background:#3a2d4a;color:#c47dff;padding:2px 8px;border-radius:10px;font-size:10px;">prio: 70</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <span style="color:#888;font-size:11px;">4 phases · 5 agents · 8 livrables</span>
+            <span style="color:#888;font-size:10px;">▶</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:24px;padding:16px;background:rgba(74,158,255,0.1);border-radius:8px;border:1px solid rgba(74,158,255,0.2);">
+  <h3 style="margin:0 0 8px 0;color:#4a9eff;">Résumé du comportement</h3>
+  <ul style="margin:0;padding-left:20px;color:#ccc;font-size:13px;">
+    <li><strong>Pas d'édition</strong> — lecture seule sur les prompts</li>
+    <li><strong>Fichiers affichés</strong> : uniquement <code>{name}.wrk.phase.{id}.md</code></li>
+    <li><strong>Clic sur un fichier</strong> → déplie le contenu markdown en read-only</li>
+    <li><strong>Un seul fichier ouvert à la fois</strong> (accordéon)</li>
+    <li><strong>Variables</strong> surlignées (<code>{project_name}</code>, <code>{project_slug}</code>)</li>
+  </ul>
+</div>

@@ -112,6 +112,7 @@ export interface ProjectResponse {
   git_repo_name: string;
   git_connected: boolean;
   git_repo_exists: boolean;
+  wizard_pending: boolean;
   status: string;
   color: string;
   created_at: string;
@@ -530,8 +531,22 @@ export interface WorkflowStatusResponse {
 export interface WorkflowTemplate {
   id: string;
   name: string;
+  filename: string;
   type: string;
   mode: 'sequential' | 'parallel';
+  priority: number;
+  depends_on: string | null;
+}
+
+export interface PhaseFile {
+  phase_id: string;
+  filename: string;
+}
+
+export interface PhaseFileContent {
+  phase_id: string;
+  filename: string;
+  content: string;
 }
 
 export interface ProjectTypeResponse {

@@ -1585,6 +1585,48 @@ tr:hover { background: rgba(255,255,255,0.02); }
 .proj-wf-chip .proj-wf-chip-x:hover { opacity: 1; }
 .proj-wf-actions { display: flex; align-items: center; gap: 0.4rem; }
 
+/* ── Workflow Timeline ── */
+.proj-wf-timeline { margin-top: 0.75rem; }
+.proj-wf-timeline-inner { display: flex; gap: 1rem; }
+.proj-wf-timeline-dots { display: flex; flex-direction: column; align-items: center; width: 20px; padding-top: 1rem; }
+.proj-wf-timeline-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--border); flex-shrink: 0; }
+.proj-wf-timeline-dot.active { background: var(--accent); }
+.proj-wf-timeline-line { width: 2px; flex: 1; min-height: 32px; background: var(--border); }
+.proj-wf-timeline-line.active { background: var(--accent); }
+.proj-wf-timeline-blocks { flex: 1; display: flex; flex-direction: column; gap: 0.5rem; }
+.proj-wf-block { border: 1px solid var(--border); border-radius: 0.5rem; overflow: hidden; transition: border-color 0.2s; }
+.proj-wf-block.expanded { border-color: var(--accent); }
+.proj-wf-block-header { display: flex; align-items: center; justify-content: space-between; padding: 0.6rem 0.8rem; cursor: pointer; background: var(--bg-card); }
+.proj-wf-block-header:hover { background: var(--bg-hover, var(--bg-card)); }
+.proj-wf-block-title { display: flex; align-items: center; gap: 0.5rem; font-weight: 600; font-size: 0.85rem; }
+.proj-wf-block-meta { font-size: 0.7rem; color: var(--text-muted); }
+.proj-wf-block-arrow { font-size: 0.65rem; color: var(--text-muted); }
+.proj-wf-badge { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 0.75rem; font-size: 0.65rem; font-weight: 500; }
+.proj-wf-badge.seq { background: rgba(46,204,113,.15); color: #2ecc71; }
+.proj-wf-badge.par { background: rgba(231,76,60,.15); color: #e74c3c; }
+.proj-wf-badge.prio { background: rgba(155,89,182,.15); color: #9b59b6; }
+.proj-wf-dep { display: flex; align-items: center; gap: 0.4rem; padding: 0.15rem 0.5rem; font-size: 0.65rem; color: var(--warning, #f39c12); }
+.proj-wf-tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--bg-body, #0d0d1a); }
+.proj-wf-tab { padding: 0.4rem 0.8rem; font-size: 0.7rem; cursor: pointer; border-bottom: 2px solid transparent; color: var(--text-muted); }
+.proj-wf-tab:hover { color: var(--text-secondary); }
+.proj-wf-tab.active { border-bottom-color: var(--accent); color: var(--accent); font-weight: 600; }
+.proj-wf-tab-content { padding: 0.8rem; }
+.proj-wf-phases-row { display: flex; flex-direction: column; gap: 0; }
+.proj-wf-phase-card { background: var(--bg-body, #1e1e2e); border-radius: 0.4rem; padding: 0.6rem; border-left: 3px solid var(--accent); }
+.proj-wf-phase-arrow { text-align: center; color: var(--accent); font-size: 0.8rem; padding: 0.15rem 0; }
+.proj-wf-phase-card h5 { margin: 0 0 0.3rem 0; font-size: 0.75rem; color: var(--accent); }
+.proj-wf-phase-card.external { border-left-color: var(--warning, #f39c12); background: rgba(243,156,18,.08); }
+.proj-wf-phase-card.external h5 { color: var(--warning, #f39c12); }
+.proj-wf-phase-card.external:hover { background: rgba(243,156,18,.15); }
+.proj-wf-phase-card .agents, .proj-wf-phase-card .deliverables { font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem; }
+.proj-wf-prompt-viewer { background: var(--bg-body, #111); border: 1px solid var(--border); border-radius: 0.4rem; padding: 0.8rem; font-family: monospace; font-size: 0.7rem; white-space: pre-wrap; max-height: 250px; overflow-y: auto; line-height: 1.6; color: var(--text-secondary); }
+.proj-wf-file-list { border: 1px solid var(--border); border-radius: 0.4rem; overflow: hidden; }
+.proj-wf-file-row { display: flex; align-items: center; justify-content: space-between; padding: 0.4rem 0.6rem; cursor: pointer; font-size: 0.75rem; border-bottom: 1px solid var(--border); }
+.proj-wf-file-row:last-child { border-bottom: none; }
+.proj-wf-file-row:hover { background: var(--bg-hover, var(--bg-card)); }
+.proj-wf-file-row.open { background: var(--bg-hover, var(--bg-card)); border-left: 2px solid var(--accent); }
+.proj-wf-file-content { padding: 0.6rem; border-bottom: 1px solid var(--border); background: var(--bg-body, #0a0a15); }
+
 .proj-wf-editor:empty { display: none; }
 .proj-wf-editor.active {
   position: fixed;

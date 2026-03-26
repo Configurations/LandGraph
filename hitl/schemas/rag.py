@@ -84,6 +84,7 @@ class GitCloneRequest(BaseModel):
     """Request to clone a git repo into project uploads."""
 
     repo_name: str
+    branch: str = ""
     service: str = ""
     url: str = ""
     login: str = ""

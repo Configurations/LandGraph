@@ -15,7 +15,8 @@ from schemas.project import (
     ProjectResponse,
     SlugCheckResponse,
 )
-from services import git_service, project_service
+from schemas.wizard import WizardStepBody
+from services import git_service, project_service, wizard_data_service
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -154,3 +155,36 @@ async def git_status(
         raise HTTPException(status_code=404, detail="project.not_found")
     _check_team_access(user, project.team_id)
     return await git_service.get_status(slug)
+
+
+# ── Wizard data ─────────────────────────────────────────────────
+
+
+@router.get("/{slug}/wizard-data")
+async def get_wizard_data(
+    slug: str,
+    user: TokenData = Depends(get_current_user),
+) -> list[dict]:
+    """Read all wizard step data for a project."""
+    return await wizard_data_service.get_wizard_data(slug)
+
+
+@router.put("/{slug}/wizard-data/{step_id}")
+async def save_wizard_step(
+    slug: str,
+    step_id: int,
+    body: WizardStepBody,
+    user: TokenData = Depends(get_current_user),
+) -> list[dict]:
+    """Save a wizard step's data. No DB check — directory is created on the fly."""
+    return await wizard_data_service.save_step(slug, step_id, body.data)
+
+
+@router.delete("/{slug}/wizard-data")
+async def delete_wizard_data(
+    slug: str,
+    user: TokenData = Depends(get_current_user),
+) -> dict:
+    """Delete create-project.json — marks wizard as complete."""
+    await wizard_data_service.delete_wizard_data(slug)
+    return {"ok": True}

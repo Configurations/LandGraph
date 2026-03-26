@@ -1,0 +1,201 @@
+<h2>Affichage des Workflows — Type de Projet</h2>
+<p class="subtitle">Quand on sélectionne un type de projet, les workflows s'affichent en blocs en dessous. Choisis le layout qui te convient.</p>
+
+<div class="options">
+
+  <!-- Option A -->
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Blocs empilés avec phases dépliables</h3>
+      <p>Chaque workflow = un bloc vertical. Clic pour déplier et voir les phases, agents et livrables. Flèches de dépendance entre blocs.</p>
+      <div style="background:#1a1a2e;border-radius:8px;padding:16px;margin-top:12px;font-family:monospace;font-size:12px;color:#e0e0e0;">
+        <div style="border:1px solid #4a9eff;border-radius:6px;padding:12px;margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <span style="color:#4a9eff;font-weight:bold;">📋 Discovery</span>
+              <span style="background:#2d4a2d;color:#7dff7d;padding:2px 8px;border-radius:10px;margin-left:8px;font-size:10px;">sequential</span>
+              <span style="color:#888;margin-left:8px;">priorité: 90</span>
+            </div>
+            <span style="color:#4a9eff;">▼</span>
+          </div>
+          <!-- Expanded content -->
+          <div style="margin-top:12px;border-top:1px solid #333;padding-top:12px;">
+            <div style="display:flex;gap:8px;margin-bottom:8px;">
+              <div style="flex:1;background:#1e2a3a;border-radius:4px;padding:8px;border-left:3px solid #4a9eff;">
+                <div style="color:#4a9eff;font-size:11px;">Phase 1</div>
+                <div style="color:#fff;font-weight:bold;">Analyse des besoins</div>
+                <div style="color:#888;font-size:10px;margin-top:4px;">👤 requirements_analyst, legal_advisor</div>
+                <div style="color:#888;font-size:10px;">📄 PRD, Revue légale</div>
+              </div>
+              <div style="flex:1;background:#1e2a3a;border-radius:4px;padding:8px;border-left:3px solid #4a9eff;">
+                <div style="color:#4a9eff;font-size:11px;">Phase 2</div>
+                <div style="color:#fff;font-weight:bold;">Validation</div>
+                <div style="color:#888;font-size:10px;margin-top:4px;">👤 planner</div>
+                <div style="color:#888;font-size:10px;">📄 Plan projet</div>
+              </div>
+            </div>
+            <div style="text-align:right;margin-top:4px;">
+              <span style="color:#666;font-size:10px;cursor:pointer;">📁 Voir fichiers générés</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Arrow dependency -->
+        <div style="text-align:center;color:#ff9f43;font-size:14px;margin:4px 0;">
+          ↓ <span style="font-size:10px;">dépend de Discovery</span>
+        </div>
+
+        <div style="border:1px solid #555;border-radius:6px;padding:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <span style="color:#ccc;font-weight:bold;">🎨 Design</span>
+              <span style="background:#2d4a2d;color:#7dff7d;padding:2px 8px;border-radius:10px;margin-left:8px;font-size:10px;">sequential</span>
+              <span style="color:#888;margin-left:8px;">priorité: 80</span>
+            </div>
+            <span style="color:#888;">▶</span>
+          </div>
+        </div>
+
+        <div style="text-align:center;color:#ff9f43;font-size:14px;margin:4px 0;">
+          ↓ <span style="font-size:10px;">dépend de Design</span>
+        </div>
+
+        <div style="border:1px solid #555;border-radius:6px;padding:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <span style="color:#ccc;font-weight:bold;">⚙️ Development</span>
+              <span style="background:#4a2d2d;color:#ff7d7d;padding:2px 8px;border-radius:10px;margin-left:8px;font-size:10px;">parallel</span>
+              <span style="color:#888;margin-left:8px;">priorité: 70</span>
+            </div>
+            <span style="color:#888;">▶</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Option B -->
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Timeline verticale avec cartes phases</h3>
+      <p>Workflows affichés en timeline (ligne verticale à gauche). Chaque phase = carte détaillée avec agents, livrables, et badge de type. Dépendances visibles par la position.</p>
+      <div style="background:#1a1a2e;border-radius:8px;padding:16px;margin-top:12px;font-family:monospace;font-size:12px;color:#e0e0e0;">
+        <div style="display:flex;gap:12px;">
+          <!-- Timeline line -->
+          <div style="display:flex;flex-direction:column;align-items:center;width:24px;">
+            <div style="width:12px;height:12px;border-radius:50%;background:#4a9eff;"></div>
+            <div style="width:2px;flex:1;background:#4a9eff;"></div>
+            <div style="width:12px;height:12px;border-radius:50%;background:#4a9eff;"></div>
+            <div style="width:2px;flex:1;background:#555;"></div>
+            <div style="width:12px;height:12px;border-radius:50%;background:#555;border:2px solid #555;"></div>
+          </div>
+          <!-- Cards -->
+          <div style="flex:1;">
+            <div style="background:#1e2a3a;border-radius:6px;padding:12px;margin-bottom:12px;">
+              <div style="display:flex;justify-content:space-between;">
+                <span style="color:#4a9eff;font-weight:bold;">📋 Discovery</span>
+                <span style="color:#888;font-size:10px;">discovery.wrk.json</span>
+              </div>
+              <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+                <span style="background:#2a2a4a;padding:2px 6px;border-radius:4px;font-size:10px;">Analyse besoins</span>
+                <span style="background:#2a2a4a;padding:2px 6px;border-radius:4px;font-size:10px;">→ Validation</span>
+              </div>
+              <div style="margin-top:6px;color:#888;font-size:10px;">3 agents · 5 livrables · 🔒 human gate</div>
+            </div>
+            <div style="background:#1e2a3a;border-radius:6px;padding:12px;margin-bottom:12px;">
+              <div style="display:flex;justify-content:space-between;">
+                <span style="color:#4a9eff;font-weight:bold;">🎨 Design</span>
+                <span style="color:#888;font-size:10px;">design.wrk.json</span>
+              </div>
+              <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+                <span style="background:#2a2a4a;padding:2px 6px;border-radius:4px;font-size:10px;">UX/UI</span>
+                <span style="background:#2a2a4a;padding:2px 6px;border-radius:4px;font-size:10px;">→ Architecture</span>
+              </div>
+              <div style="margin-top:6px;color:#888;font-size:10px;">2 agents · 3 livrables</div>
+            </div>
+            <div style="background:#252535;border-radius:6px;padding:12px;opacity:0.7;">
+              <div style="display:flex;justify-content:space-between;">
+                <span style="color:#888;font-weight:bold;">⚙️ Development</span>
+                <span style="color:#666;font-size:10px;">development.wrk.json</span>
+              </div>
+              <div style="margin-top:6px;color:#666;font-size:10px;">5 agents · 8 livrables · parallel</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Option C -->
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Panneaux accordéon avec vue fichiers intégrée</h3>
+      <p>Chaque workflow = accordéon. Ouvert : phases en colonnes + onglet "Fichiers" pour voir les .wrk.json et prompts générés. Barre de dépendance latérale colorée.</p>
+      <div style="background:#1a1a2e;border-radius:8px;padding:16px;margin-top:12px;font-family:monospace;font-size:12px;color:#e0e0e0;">
+        <!-- Workflow block expanded -->
+        <div style="border:1px solid #4a9eff;border-radius:6px;overflow:hidden;margin-bottom:8px;">
+          <div style="background:#1e2a3a;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span style="color:#4a9eff;font-weight:bold;">📋 Discovery</span>
+              <span style="background:#2d4a2d;color:#7dff7d;padding:1px 6px;border-radius:8px;font-size:10px;">seq</span>
+              <span style="background:#4a2d4a;color:#ff7dff;padding:1px 6px;border-radius:8px;font-size:10px;">prio:90</span>
+            </div>
+            <div style="display:flex;gap:4px;">
+              <span style="padding:2px 8px;background:#4a9eff;color:#000;border-radius:4px;font-size:10px;">Phases</span>
+              <span style="padding:2px 8px;background:#333;color:#aaa;border-radius:4px;font-size:10px;">Fichiers</span>
+            </div>
+          </div>
+          <!-- Phases tab -->
+          <div style="padding:12px;display:flex;gap:8px;">
+            <div style="flex:1;background:#252535;border-radius:4px;padding:8px;position:relative;">
+              <div style="font-size:10px;color:#4a9eff;">① Analyse</div>
+              <div style="font-size:11px;color:#fff;margin-top:2px;">Analyse des besoins</div>
+              <div style="font-size:10px;color:#888;margin-top:4px;">👤 analyst, legal</div>
+              <div style="font-size:10px;color:#888;">📄 PRD · Revue légale</div>
+              <div style="position:absolute;right:-12px;top:50%;color:#4a9eff;">→</div>
+            </div>
+            <div style="flex:1;background:#252535;border-radius:4px;padding:8px;">
+              <div style="font-size:10px;color:#4a9eff;">② Validation</div>
+              <div style="font-size:11px;color:#fff;margin-top:2px;">Gate humaine</div>
+              <div style="font-size:10px;color:#888;margin-top:4px;">👤 planner</div>
+              <div style="font-size:10px;color:#888;">🔒 human gate</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Dependency connector -->
+        <div style="display:flex;align-items:center;margin:4px 0 4px 16px;">
+          <div style="width:2px;height:16px;background:#ff9f43;"></div>
+          <span style="color:#ff9f43;font-size:10px;margin-left:8px;">depends_on: Discovery</span>
+        </div>
+
+        <!-- Workflow collapsed -->
+        <div style="border:1px solid #555;border-radius:6px;overflow:hidden;margin-bottom:8px;">
+          <div style="background:#252535;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span style="color:#ccc;font-weight:bold;">🎨 Design</span>
+              <span style="background:#2d4a2d;color:#7dff7d;padding:1px 6px;border-radius:8px;font-size:10px;">seq</span>
+              <span style="color:#888;font-size:10px;">2 phases · 2 agents · 3 livrables</span>
+            </div>
+            <span style="color:#888;">▶</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div style="margin-top:24px;padding:16px;background:rgba(74,158,255,0.1);border-radius:8px;border:1px solid rgba(74,158,255,0.2);">
+  <h3 style="margin:0 0 8px 0;color:#4a9eff;">Fonctionnalités communes aux 3 options</h3>
+  <ul style="margin:0;padding-left:20px;color:#ccc;font-size:13px;">
+    <li>Affichage des dépendances inter-workflows (depends_on)</li>
+    <li>Badge mode (sequential/parallel) + priorité</li>
+    <li>Compteur agents / livrables / human gates par workflow</li>
+    <li>Accès aux fichiers générés (.wrk.json, prompts .md)</li>
+    <li>Nom du fichier .wrk.json visible</li>
+  </ul>
+</div>

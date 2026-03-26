@@ -22,6 +22,7 @@ import { useProjectStore } from '../stores/projectStore';
 import { apiFetch } from '../api/client';
 import * as workflowApi from '../api/workflow';
 import * as automationApi from '../api/automation';
+import * as wizardDataApi from '../api/wizardData';
 import type {
   AgentInfo,
   AutomationRule,
@@ -46,6 +47,9 @@ export function ProjectDetailPage(): JSX.Element {
   const { slug } = useParams<{ slug: string }>();
   const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
   const storeDeleteProject = useProjectStore((s) => s.deleteProject);
+  const projects = useProjectStore((s) => s.projects);
+  const updateWizardData = useProjectStore((s) => s.updateWizardData);
+  const setWizardStep = useProjectStore((s) => s.setWizardStep);
   const [deleting, setDeleting] = useState(false);
   const [tab, setTab] = useState<ProjectTab>('issues');
   const [overview, setOverview] = useState<ProjectOverviewData | null>(null);
@@ -62,8 +66,44 @@ export function ProjectDetailPage(): JSX.Element {
   const [loading, setLoading] = useState(true);
   const { issues, loadIssues, setFilters, setSelected } = useIssueStore();
 
+  // Redirect to wizard if project creation is not finished
   useEffect(() => {
     if (!slug) return;
+    const project = projects.find((p) => p.slug === slug);
+    if (project?.wizard_pending) {
+      // Load wizard data and restore state, then redirect
+      void wizardDataApi.getWizardData(slug).then((steps) => {
+        const step0 = steps.find((s) => s.step_id === 0)?.data;
+        const step1 = steps.find((s) => s.step_id === 1)?.data;
+        const step3 = steps.find((s) => s.step_id === 3)?.data;
+        if (step0) {
+          updateWizardData({
+            name: (step0.name as string) ?? '',
+            slug: (step0.slug as string) ?? '',
+          });
+        }
+        if (step1) {
+          updateWizardData({
+            gitConfig: (step1.gitConfig as null) ?? null,
+            gitBranch: (step1.gitBranch as string) ?? '',
+          });
+        }
+        if (step3) {
+          updateWizardData({
+            orchestratorPrompt: (step3.orchestratorPrompt as string) ?? null,
+          });
+        }
+        setWizardStep(2); // Resume at step 2 (culture — first post-creation step)
+        navigate(`/projects/new?resume=${slug}`, { replace: true });
+      });
+      return;
+    }
+  }, [slug, projects, navigate, updateWizardData, setWizardStep]);
+
+  useEffect(() => {
+    if (!slug) return;
+    const project = projects.find((p) => p.slug === slug);
+    if (project?.wizard_pending) return; // skip loading — redirecting to wizard
     setLoading(true);
     const encodedSlug = encodeURIComponent(slug);
     Promise.all([

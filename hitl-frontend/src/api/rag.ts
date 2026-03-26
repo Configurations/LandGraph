@@ -45,6 +45,7 @@ export function deleteUpload(slug: string, filename: string): Promise<void> {
 
 export interface GitClonePayload {
   repo_name: string;
+  branch?: string;
   service?: string;
   url?: string;
   login?: string;
@@ -63,6 +64,18 @@ export function cloneGitToUploads(slug: string, payload: GitClonePayload): Promi
     `/api/projects/${encodeURIComponent(slug)}/upload-git`,
     { method: 'POST', body: JSON.stringify(payload) },
   );
+}
+
+export async function listUploadGitBranches(slug: string, payload: GitClonePayload): Promise<string[]> {
+  try {
+    const data = await apiFetch<{ branches: string[] }>(
+      `/api/projects/${encodeURIComponent(slug)}/upload-git/branches`,
+      { method: 'POST', body: JSON.stringify(payload) },
+    );
+    return data.branches ?? [];
+  } catch {
+    return [];
+  }
 }
 
 export function searchRag(slug: string, query: string, topK?: number): Promise<RagSearchResult[]> {

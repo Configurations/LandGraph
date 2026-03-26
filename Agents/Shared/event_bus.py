@@ -20,7 +20,7 @@ logger = logging.getLogger("event_bus")
 # agent_start, agent_complete, agent_error
 # llm_call_start, llm_call_end
 # tool_call
-# pipeline_step_start, pipeline_step_end
+# step_start, step_end
 # human_gate_requested, human_gate_responded
 # phase_transition
 # agent_dispatch

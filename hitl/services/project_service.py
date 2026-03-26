@@ -31,10 +31,12 @@ def _row_to_response(row: dict) -> ProjectResponse:
     """Convert a DB row to ProjectResponse."""
     git_url = row.get("git_url", "")
     git_repo_name = row.get("git_repo_name", "")
+    slug = row.get("slug", "")
+    wizard_path = os.path.join(_projects_dir(), slug, "create-project.json") if slug else ""
     return ProjectResponse(
         id=str(row["id"]),
         name=row["name"],
-        slug=row.get("slug", ""),
+        slug=slug,
         team_id=row["team_id"],
         language=row.get("language", "fr"),
         git_service=row.get("git_service", "other"),
@@ -43,6 +45,7 @@ def _row_to_response(row: dict) -> ProjectResponse:
         git_repo_name=git_repo_name,
         git_connected=bool(git_url),
         git_repo_exists=bool(git_repo_name),
+        wizard_pending=bool(wizard_path and os.path.isfile(wizard_path)),
         status=row.get("status", "on-track"),
         color=row.get("color", "#6366f1"),
         created_at=row["created_at"],
@@ -92,11 +95,8 @@ async def create_project(data: ProjectCreate) -> ProjectResponse:
 
 
 async def check_slug_exists(slug: str) -> SlugCheckResponse:
-    """Check if a project slug already exists (disk or database)."""
+    """Check if a project slug already exists in the database."""
     path = _project_dir(slug)
-    on_disk = os.path.isdir(path)
-    if on_disk:
-        return SlugCheckResponse(exists=True, path=path)
     row = await fetch_one(
         "SELECT 1 FROM project.pm_projects WHERE slug = $1", slug,
     )

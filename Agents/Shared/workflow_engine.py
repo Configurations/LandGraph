@@ -19,7 +19,7 @@ def set_disk_check_context(slug: str, team_id: str, workflow: str = "main",
                        "iteration": iteration, "phase": phase}
 
 
-def _check_deliverable_on_disk(agent_id: str, pipeline_step: str) -> str:
+def _check_deliverable_on_disk(agent_id: str, step: str) -> str:
     """Check if a deliverable file exists on disk. Returns 'complete' if found, '' otherwise."""
     ctx = _disk_check_ctx
     if not ctx.get("slug"):
@@ -36,9 +36,9 @@ def _check_deliverable_on_disk(agent_id: str, pipeline_step: str) -> str:
         entry_phase = entry.split(":", 1)[1]
         if phase and entry_phase != phase:
             continue
-        deliv_path = os.path.join(base, entry, agent_id, f"{pipeline_step}.md")
+        deliv_path = os.path.join(base, entry, agent_id, f"{step}.md")
         if os.path.isfile(deliv_path) and os.path.getsize(deliv_path) > 50:
-            logger.info(f"Deliverable {agent_id}:{pipeline_step} found on disk, skipping dispatch")
+            logger.info(f"Deliverable {agent_id}:{step} found on disk, skipping dispatch")
             return "complete"
     return ""
 
@@ -112,13 +112,13 @@ def check_phase_complete(phase_id: str, agent_outputs: dict, team_id: str = "tea
 
     issues, missing_agents, missing_deliverables = [], [], []
 
-    # Check deliverable-level completion (new: keyed by agent_id:pipeline_step)
+    # Check deliverable-level completion (keyed by agent_id:step)
     for dk, dconf in phase.get("deliverables", {}).items():
         if not dconf.get("required"):
             continue
         aid = dconf.get("agent", "")
-        pipeline_step = dconf.get("pipeline_step", dk)
-        output_key = f"{aid}:{pipeline_step}"
+        step = dconf.get("step", dconf.get("pipeline_step", dk))
+        output_key = f"{aid}:{step}"
         output = agent_outputs.get(output_key, {})
         if output and output.get("status") == "complete":
             continue
@@ -126,7 +126,7 @@ def check_phase_complete(phase_id: str, agent_outputs: dict, team_id: str = "tea
         legacy_output = agent_outputs.get(aid, {})
         if legacy_output.get("status") in ("complete", "pending_review", "approved"):
             legacy_delivs = legacy_output.get("deliverables", {})
-            if pipeline_step in legacy_delivs or dk in legacy_delivs:
+            if step in legacy_delivs or dk in legacy_delivs:
                 continue
         missing_deliverables.append(f"{dk} ({output_key})")
 
@@ -223,8 +223,8 @@ def get_agents_to_dispatch(phase_id: str, agent_outputs: dict, team_id: str = "t
 
 def get_deliverables_to_dispatch(phase_id: str, agent_outputs: dict, team_id: str = "team1") -> list:
     """Return deliverables ready to dispatch in the current phase.
-    Each deliverable maps to one agent + one pipeline_step.
-    Returns list of dicts: {deliverable_key, agent_id, pipeline_step, parallel_group, required, type, description}."""
+    Each deliverable maps to one agent + one step.
+    Returns list of dicts: {deliverable_key, agent_id, step, parallel_group, required, type, description}."""
     phase = get_phase(phase_id, team_id)
     if not phase:
         return []
@@ -249,7 +249,7 @@ def get_deliverables_to_dispatch(phase_id: str, agent_outputs: dict, team_id: st
                 if not dconf.get("required"):
                     continue
                 d_agent = dconf.get("agent", "")
-                d_step = dconf.get("pipeline_step", dk)
+                d_step = dconf.get("step", dconf.get("pipeline_step", dk))
                 output_key = f"{d_agent}:{d_step}"
                 prev_status = agent_outputs.get(output_key, {}).get("status", "")
                 # Fallback legacy
@@ -282,12 +282,12 @@ def get_deliverables_to_dispatch(phase_id: str, agent_outputs: dict, team_id: st
                 dep_dels = [d for d in deliverables.values()
                             if d.get("agent") == dep_aid and d.get("required")]
                 def _dep_done(dep_aid, d):
-                    s = agent_outputs.get(f"{dep_aid}:{d.get('pipeline_step', '')}", {}).get("status", "")
+                    s = agent_outputs.get(f"{dep_aid}:{d.get('step', d.get('pipeline_step', ''))}", {}).get("status", "")
                     if not s:
                         leg = agent_outputs.get(dep_aid, {})
                         if leg.get("status") in ("complete", "pending_review", "approved"):
-                            step = d.get("pipeline_step", "")
-                            if step in leg.get("deliverables", {}):
+                            st = d.get("step", d.get("pipeline_step", ""))
+                            if st in leg.get("deliverables", {}):
                                 return True
                     return s in ("complete", "pending_review", "approved")
                 if any(not _dep_done(dep_aid, d) for d in dep_dels):
@@ -302,7 +302,7 @@ def get_deliverables_to_dispatch(phase_id: str, agent_outputs: dict, team_id: st
             for dep_dk in deliv_deps:
                 dep_dconf = deliverables.get(dep_dk, {})
                 dep_agent = dep_dconf.get("agent", "")
-                dep_step = dep_dconf.get("pipeline_step", dep_dk)
+                dep_step = dep_dconf.get("step", dep_dconf.get("pipeline_step", dep_dk))
                 dep_output_key = f"{dep_agent}:{dep_step}" if dep_agent else dep_dk
                 dep_status = agent_outputs.get(dep_output_key, {}).get("status", "")
                 # Legacy fallback
@@ -317,19 +317,19 @@ def get_deliverables_to_dispatch(phase_id: str, agent_outputs: dict, team_id: st
             if not deliv_deps_ok:
                 continue
 
-            pipeline_step = dconf.get("pipeline_step", dk)
-            output_key = f"{agent_id}:{pipeline_step}"
+            step = dconf.get("step", dconf.get("pipeline_step", dk))
+            output_key = f"{agent_id}:{step}"
             existing_status = agent_outputs.get(output_key, {}).get("status", "")
             # Fallback: check legacy format (agent_outputs[agent_id].deliverables[step])
             if not existing_status:
                 legacy = agent_outputs.get(agent_id, {})
                 if legacy.get("status") in ("complete", "pending_review", "approved"):
                     legacy_delivs = legacy.get("deliverables", {})
-                    if pipeline_step in legacy_delivs or dk in legacy_delivs:
+                    if step in legacy_delivs or dk in legacy_delivs:
                         existing_status = legacy.get("status")
             # Fallback: check if deliverable file exists on disk (state may have been lost)
             if not existing_status:
-                existing_status = _check_deliverable_on_disk(agent_id, pipeline_step)
+                existing_status = _check_deliverable_on_disk(agent_id, step)
             # Don't re-dispatch if already complete, pending review, or approved
             if existing_status in ("complete", "pending_review", "approved"):
                 continue
@@ -337,7 +337,7 @@ def get_deliverables_to_dispatch(phase_id: str, agent_outputs: dict, team_id: st
             to_dispatch.append({
                 "deliverable_key": dk,
                 "agent_id": agent_id,
-                "pipeline_step": pipeline_step,
+                "step": step,
                 "parallel_group": aconf.get("parallel_group", "A"),
                 "required": dconf.get("required", True),
                 "type": dconf.get("type", ""),
@@ -372,7 +372,7 @@ def get_workflow_status(current_phase: str, agent_outputs: dict, team_id: str = 
                 "required": dv.get("required", False),
                 "type": dv.get("type", ""),
                 "description": dv.get("description", dk),
-                "pipeline_step": dv.get("pipeline_step", ""),
+                "step": dv.get("step", dv.get("pipeline_step", "")),
                 "depends_on": dv.get("depends_on", []),
             }
         status["phases"][pid] = {

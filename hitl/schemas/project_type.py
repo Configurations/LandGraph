@@ -28,7 +28,23 @@ class ProjectTypeResponse(BaseModel):
     workflows: list[WorkflowTemplate] = Field(default_factory=list)
 
 
+class PhaseFileResponse(BaseModel):
+    """A phase prompt file discovered inside a project type."""
+
+    phase_id: str
+    filename: str
+
+
+class PhaseFileContentResponse(BaseModel):
+    """Content of a single phase prompt file."""
+
+    phase_id: str
+    filename: str
+    content: str
+
+
 class ApplyProjectTypeRequest(BaseModel):
     """Request body when applying a project type to a project."""
 
+    workflow_filename: str = ""
     config: dict[str, str] = Field(default_factory=dict)

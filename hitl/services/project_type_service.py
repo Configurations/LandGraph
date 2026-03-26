@@ -10,7 +10,12 @@ import structlog
 
 from core.config import _find_config_dir
 from core.database import execute
-from schemas.project_type import ProjectTypeResponse, WorkflowTemplate
+from schemas.project_type import (
+    PhaseFileContentResponse,
+    PhaseFileResponse,
+    ProjectTypeResponse,
+    WorkflowTemplate,
+)
 from schemas.workflow import ProjectWorkflowCreate
 from services.multi_workflow_service import create_workflow
 
@@ -128,6 +133,98 @@ async def get_project_type(type_id: str) -> Optional[ProjectTypeResponse]:
             ))
 
     return pt
+
+
+def deduce_orchestrator_prompt(type_id: str, workflow_filename: str) -> str:
+    """Walk the workflow phase chain to find the first non-external phase.
+
+    Returns the orchestrator prompt filename for that phase.
+    Raises ValueError if the workflow is misconfigured.
+    """
+    base = _shared_projects_dir()
+    type_dir = os.path.join(base, type_id)
+    current_filename = workflow_filename
+
+    for _ in range(10):
+        wrk_path = os.path.join(type_dir, current_filename)
+        if not os.path.isfile(wrk_path):
+            raise ValueError(f"Workflow introuvable : {current_filename}")
+
+        with open(wrk_path, encoding="utf-8") as f:
+            wrk = json.load(f)
+
+        # Find phase with order: 1
+        first_phase_id, first_phase = None, None
+        for pid, pdata in wrk.get("phases", {}).items():
+            if pdata.get("order") == 1:
+                first_phase_id = pid
+                first_phase = pdata
+                break
+
+        if not first_phase:
+            raise ValueError(f"Aucune phase avec order:1 dans {current_filename}")
+
+        # External phase → follow the reference
+        if first_phase.get("type") == "external":
+            ext = first_phase.get("external_workflow", "")
+            if not ext:
+                raise ValueError(
+                    f"Phase externe sans external_workflow dans {current_filename}"
+                )
+            current_filename = ext
+            continue
+
+        # Internal phase found → derive prompt filename
+        basename = current_filename.split(".")[0]
+        return f"{basename}.wrk.phase.{first_phase_id}.md"
+
+    raise ValueError("Cycle detecte : profondeur max (10) atteinte")
+
+
+def list_phase_files(
+    type_id: str,
+    workflow_filename: str,
+) -> list[PhaseFileResponse]:
+    """List .wrk.phase.{id}.md files for a workflow inside a project type."""
+    base = _shared_projects_dir()
+    type_dir = os.path.join(base, type_id)
+    if not os.path.isdir(type_dir):
+        return []
+
+    basename = workflow_filename.split(".")[0]
+    prefix = f"{basename}.wrk.phase."
+    suffix = ".md"
+
+    results: list[PhaseFileResponse] = []
+    for fname in sorted(os.listdir(type_dir)):
+        if fname.startswith(prefix) and fname.endswith(suffix):
+            phase_id = fname[len(prefix):-len(suffix)]
+            results.append(PhaseFileResponse(phase_id=phase_id, filename=fname))
+    return results
+
+
+def read_phase_file(
+    type_id: str,
+    workflow_filename: str,
+    phase_id: str,
+) -> PhaseFileContentResponse | None:
+    """Read the content of a single phase prompt file."""
+    base = _shared_projects_dir()
+    type_dir = os.path.join(base, type_id)
+    basename = workflow_filename.split(".")[0]
+    filename = f"{basename}.wrk.phase.{phase_id}.md"
+    filepath = os.path.join(type_dir, filename)
+
+    if not os.path.isfile(filepath):
+        return None
+
+    with open(filepath, encoding="utf-8") as f:
+        content = f.read()
+    return PhaseFileContentResponse(
+        phase_id=phase_id,
+        filename=filename,
+        content=content,
+    )
 
 
 async def apply_project_type(
