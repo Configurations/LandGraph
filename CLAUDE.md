@@ -114,6 +114,8 @@ Curseur : fix mineur → étapes 1-2 | feature → toutes | refactor → + véri
 - Avant une exploration large (>5 fichiers) : utilise un subagent Task() et renvoie un résumé structuré
 - Après chaque tâche complétée : /clear avant de passer à la suivante
 - Si la conversation dépasse ~50% du contexte : /compact manuellement
+- N'explique pas les étapes intermédiaires. Exécute directement et rapporte uniquement ce qui a changé.
+- Termine toutes les étapes avant de faire un résumé » et « Ne t'arrête pas tant que le plan n'est pas entièrement exécuté. 
 
 ## Auto-amélioration
 

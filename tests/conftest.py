@@ -64,77 +64,55 @@ SAMPLE_WORKFLOW = {
         "discovery": {
             "name": "Discovery",
             "order": 1,
-            "agents": {
-                "requirements_analyst": {
-                    "role": "Analyste",
-                    "required": True,
-                    "parallel_group": "A",
+            "groups": [
+                {
+                    "id": "A",
+                    "deliverables": [
+                        {"id": "prd", "Name": "PRD", "agent": "requirements_analyst", "required": True, "type": "specs", "description": "Product Requirements Document", "depends_on": []},
+                        {"id": "legal_audit", "Name": "Audit legal", "agent": "legal_advisor", "required": False, "type": "documentation", "description": "Audit legal", "depends_on": []},
+                    ],
                 },
-                "legal_advisor": {
-                    "role": "Juriste",
-                    "required": False,
-                    "parallel_group": "A",
-                },
-            },
-            "deliverables": {
-                "prd": {"agent": "requirements_analyst", "required": True},
-                "legal_audit": {"agent": "legal_advisor", "required": False},
-            },
+            ],
             "exit_conditions": {"human_gate": True, "no_critical_alerts": True},
         },
         "design": {
             "name": "Design",
             "order": 2,
-            "agents": {
-                "ux_designer": {
-                    "role": "UX Designer",
-                    "required": True,
-                    "parallel_group": "A",
+            "groups": [
+                {
+                    "id": "A",
+                    "deliverables": [
+                        {"id": "wireframes", "Name": "Wireframes", "agent": "ux_designer", "required": True, "type": "design", "description": "Wireframes", "depends_on": []},
+                        {"id": "adr", "Name": "ADR", "agent": "architect", "required": True, "type": "specs", "description": "Architecture Decision Records", "depends_on": []},
+                    ],
                 },
-                "architect": {
-                    "role": "Architecte",
-                    "required": True,
-                    "parallel_group": "A",
-                    "depends_on": [],
-                },
-            },
-            "deliverables": {
-                "wireframes": {"agent": "ux_designer", "required": True},
-                "adr": {"agent": "architect", "required": True},
-            },
+            ],
             "exit_conditions": {"human_gate": False},
         },
         "build": {
             "name": "Build",
             "order": 3,
-            "agents": {
-                "lead_dev": {
-                    "role": "Lead Dev",
-                    "required": True,
-                    "parallel_group": "A",
+            "groups": [
+                {
+                    "id": "A",
+                    "deliverables": [
+                        {"id": "tech_lead_plan", "Name": "Plan technique", "agent": "lead_dev", "required": True, "type": "specs", "description": "Plan technique du lead dev", "depends_on": []},
+                    ],
                 },
-                "dev_frontend_web": {
-                    "role": "Dev Frontend",
-                    "required": True,
-                    "parallel_group": "B",
-                    "depends_on": ["lead_dev"],
-                    "delegated_by": "lead_dev",
+                {
+                    "id": "B",
+                    "deliverables": [
+                        {"id": "frontend_code", "Name": "Code frontend", "agent": "dev_frontend_web", "required": True, "type": "code", "description": "Code frontend", "depends_on": ["A:tech_lead_plan"]},
+                        {"id": "backend_code", "Name": "Code backend", "agent": "dev_backend_api", "required": True, "type": "code", "description": "Code backend", "depends_on": ["A:tech_lead_plan"]},
+                    ],
                 },
-                "dev_backend_api": {
-                    "role": "Dev Backend",
-                    "required": True,
-                    "parallel_group": "B",
-                    "depends_on": ["lead_dev"],
-                    "delegated_by": "lead_dev",
+                {
+                    "id": "C",
+                    "deliverables": [
+                        {"id": "test_report", "Name": "Rapport QA", "agent": "qa_engineer", "required": True, "type": "documentation", "description": "Rapport de tests", "depends_on": ["B:frontend_code", "B:backend_code"]},
+                    ],
                 },
-                "qa_engineer": {
-                    "role": "QA Engineer",
-                    "required": True,
-                    "parallel_group": "C",
-                    "depends_on": ["dev_frontend_web", "dev_backend_api"],
-                },
-            },
-            "deliverables": {},
+            ],
             "exit_conditions": {},
         },
     },

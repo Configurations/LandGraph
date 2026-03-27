@@ -4577,25 +4577,20 @@ async function _projLoadTabContent(wfName) {
   }
   var phasesDict = _projWrkJsonCache[wfName];
 
-  // Build ordered phases list from wrk.json, matched with phase files
+  // Build ordered phases list from wrk.json (groups format)
   var wrkTransitions = _projWrkJsonCache['_transitions_' + wfName] || [];
   var phasesList = Object.keys(phasesDict).map(function(pid) {
     var ph = phasesDict[pid];
     var isExternal = ph.type === 'external';
     var extWorkflow = isExternal ? (ph.external_workflow || '').replace('.wrk.json', '') : '';
-    var agents = !isExternal && ph.agents ? Object.keys(ph.agents) : [];
-    var deliverables = !isExternal && ph.deliverables ? Object.keys(ph.deliverables).map(function(dk) {
-      var d = ph.deliverables[dk];
-      return { key: dk, name: d.name || dk, required: d.required !== false, type: d.type || '' };
-    }) : [];
-    // Check if any transition from this phase has human_gate
+    // Extract groups with their deliverables
+    var groups = !isExternal ? (ph.groups || []) : [];
     var humanGate = wrkTransitions.some(function(t) { return t.from === pid && t.human_gate; });
     return {
       id: pid,
       name: ph.name || pid.replace(/_/g, ' '),
       order: ph.order || 999,
-      agents: agents,
-      deliverables: deliverables,
+      groups: groups,
       humanGate: humanGate,
       isExternal: isExternal,
       externalWorkflow: extWorkflow
@@ -4616,9 +4611,22 @@ async function _projLoadTabContent(wfName) {
           '<div class="agents" style="color:var(--warning,#f39c12);">↗ ' + escHtml(ph.externalWorkflow) + '</div>' +
         '</div>' + arrow;
       }
-      var agentsHtml = ph.agents.length > 0 ? '<div class="agents">👤 ' + ph.agents.map(escHtml).join(', ') + '</div>' : '';
+      // Render groups with their deliverables
+      var groupsHtml = ph.groups.map(function(g, gi) {
+        var tc = {documentation:'#8b5cf6',code:'#3b82f6',design:'#ec4899',automation:'#f59e0b',tasklist:'#10b981',specs:'#06b6d4',contract:'#f97316'};
+        var delsHtml = (g.deliverables || []).map(function(d) {
+          var color = tc[d.type] || '';
+          return '<span class="wf-mini-chip"' + (color ? ' style="border-left:3px solid ' + color + '"' : '') + '>' +
+            escHtml(d.Name || d.id) + ' <span style="opacity:0.6;font-size:0.6rem;">' + escHtml(d.agent || '') + '</span></span>';
+        }).join('');
+        var groupArrow = gi < ph.groups.length - 1 ? '<div style="text-align:center;font-size:0.7rem;color:var(--text-muted);padding:0.15rem 0;">↓</div>' : '';
+        return '<div style="margin-bottom:0.15rem;">' +
+          '<span style="font-size:0.6rem;font-weight:600;color:var(--accent);margin-right:0.3rem;">Groupe ' + escHtml(g.id) + '</span>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:0.2rem;margin-top:0.15rem;">' + delsHtml + '</div>' +
+        '</div>' + groupArrow;
+      }).join('');
       var gateHtml = ph.humanGate ? '<div style="font-size:0.65rem;color:var(--warning,#f39c12);margin-top:0.25rem;">🔒 human gate</div>' : '';
-      return '<div class="proj-wf-phase-card"><h5>' + escHtml(ph.name) + '</h5>' + agentsHtml + gateHtml + '</div>' + arrow;
+      return '<div class="proj-wf-phase-card"><h5>' + escHtml(ph.name) + '</h5>' + groupsHtml + gateHtml + '</div>' + arrow;
     }).join('') + '</div>';
 
   } else if (tab === 'prompt') {
@@ -7812,7 +7820,7 @@ async function openWorkflowEditor(dir, apiBase, label, registryDir, inlineTarget
       wfTeams = (td.teams || []);
     } catch {}
     const isValidWf = raw && raw.phases && Object.keys(raw).length;
-    const data = isValidWf ? raw : { phases: {}, transitions: [], parallel_groups: { description: '', order: ['A','B','C'] }, rules: {} };
+    const data = isValidWf ? raw : { phases: {}, transitions: [], rules: {} };
     delete data.positions;
     data.categories = data.categories || [];
     _wf = {
@@ -8029,8 +8037,8 @@ function wfRender() {
     const sel = _wf.selected === id ? ' wf-selected' : '';
     const isExternal = p.type === 'external';
     const extClass = isExternal ? ' wf-external' : '';
-    const agentIds = Object.keys(p.agents || {});
-    const delIds = Object.keys(p.deliverables || {});
+    const groups = p.groups || [];
+    const allDels = groups.flatMap(g => (g.deliverables || []).map(d => ({...d, _gid: g.id || ''})));
     html += `
       <div class="wf-phase${sel}${extClass}" id="wf-p-${id}" data-id="${id}"
            style="left:${pos.x}px;top:${pos.y}px"
@@ -8047,35 +8055,33 @@ function wfRender() {
         </div>
         ` : `
         <div class="wf-phase-body">
-          <div class="wf-mini-label">Agents (${agentIds.length})</div>
           ${(() => {
-            const groups = {};
-            for (const a of agentIds) {
-              const g = (p.agents[a] || {}).parallel_group || 'A';
-              (groups[g] = groups[g] || []).push(a);
+            if (groups.length <= 1) {
+              return `<div class="wf-mini-label">Livrables (${allDels.length})</div>
+                <div class="wf-mini-list">${allDels.map(d => {
+                  const tc = {documentation:'#8b5cf6',code:'#3b82f6',design:'#ec4899',automation:'#f59e0b',tasklist:'#10b981',specs:'#06b6d4',contract:'#f97316'}[d.type]||'';
+                  const dlabel = d.Name || d.name || d.id;
+                  const dk = d._gid + ':' + d.id;
+                  return `<span class="wf-mini-chip${d.required?' required':''}"${tc?` style="border-left:3px solid ${tc}"`:''} title="${escHtml(d.agent||'')} — ${escHtml(dk)}" onclick="event.stopPropagation();wfSelectDeliverable('${id}','${escHtml(dk)}')">${escHtml(dlabel)}</span>`;
+                }).join('')}</div>`;
             }
-            const order = (_wf.data.parallel_groups || {}).order || ['A','B','C'];
-            const sorted = order.filter(g => groups[g]);
-            if (sorted.length <= 1) {
-              return `<div class="wf-mini-list">${agentIds.map(a => `<span class="wf-mini-chip${(p.agents[a]||{}).required?' required':''}">${escHtml(a)}</span>`).join('')}</div>`;
-            }
-            return sorted.map((g, i) => `
-              <div class="wf-group wf-group-${g.toLowerCase()}">
-                <span class="wf-group-badge">${g}</span>
-                <div class="wf-mini-list">
-                  ${groups[g].map(a => `<span class="wf-mini-chip${(p.agents[a]||{}).required?' required':''}">${escHtml(a)}</span>`).join('')}
+            return groups.map((g, i) => {
+              const gDels = g.deliverables || [];
+              return `
+                <div class="wf-group wf-group-${(g.id||'a').toLowerCase()}">
+                  <span class="wf-group-badge">${g.id || '?'}</span>
+                  <div class="wf-mini-list">
+                    ${gDels.map(d => {
+                      const tc = {documentation:'#8b5cf6',code:'#3b82f6',design:'#ec4899',automation:'#f59e0b',tasklist:'#10b981',specs:'#06b6d4',contract:'#f97316'}[d.type]||'';
+                      const dlabel = d.Name || d.name || d.id;
+                      const dk = (g.id||'') + ':' + (d.id||'');
+                      return `<span class="wf-mini-chip${d.required?' required':''}"${tc?` style="border-left:3px solid ${tc}"`:''} title="${escHtml(d.agent||'')} — ${escHtml(dk)}" onclick="event.stopPropagation();wfSelectDeliverable('${id}','${escHtml(dk)}')">${escHtml(dlabel)}</span>`;
+                    }).join('')}
+                  </div>
                 </div>
-              </div>
-              ${i < sorted.length - 1 ? '<div class="wf-group-arrow">↓</div>' : ''}
-            `).join('');
+                ${i < groups.length - 1 ? '<div class="wf-group-arrow">\u2193</div>' : ''}`;
+            }).join('');
           })()}
-          <div class="wf-mini-label">Livrables (${delIds.length})</div>
-          <div class="wf-mini-list">${delIds.map(d => {
-            const dd = p.deliverables[d]||{};
-            const tc = {documentation:'#8b5cf6',code:'#3b82f6',design:'#ec4899',automation:'#f59e0b',tasklist:'#10b981',specs:'#06b6d4',contract:'#f97316'}[dd.type]||'';
-            const dlabel = dd.name || d;
-            return `<span class="wf-mini-chip${dd.required?' required':''}"${tc?` style="border-left:3px solid ${tc}"`:''} title="${escHtml(d)}" onclick="event.stopPropagation();wfSelectDeliverable('${id}','${escHtml(d)}')">${escHtml(dlabel)}</span>`;
-          }).join('')}</div>
         </div>
         `}
         <div class="wf-anchor wf-anchor-left" data-side="left" onmousedown="wfLinkStart(event,'${id}','left')"></div>
@@ -8289,8 +8295,10 @@ function _wfCountCategoryRefs(prefix) {
   let count = 0;
   const phases = (_wf && _wf.data && _wf.data.phases) || {};
   Object.values(phases).forEach(p => {
-    Object.values(p.deliverables || {}).forEach(d => {
-      if (d.category && (d.category === prefix || d.category.startsWith(prefix + '/'))) count++;
+    (p.groups || []).forEach(g => {
+      (g.deliverables || []).forEach(d => {
+        if (d.category && (d.category === prefix || d.category.startsWith(prefix + '/'))) count++;
+      });
     });
   });
   return count;
@@ -8312,8 +8320,10 @@ function _wfCatApply() {
   let cleaned = 0;
   const phases = (_wf && _wf.data && _wf.data.phases) || {};
   Object.values(phases).forEach(p => {
-    Object.values(p.deliverables || {}).forEach(d => {
-      if (d.category && !validCats.has(d.category)) { d.category = ''; cleaned++; }
+    (p.groups || []).forEach(g => {
+      (g.deliverables || []).forEach(d => {
+        if (d.category && !validCats.has(d.category)) { d.category = ''; cleaned++; }
+      });
     });
   });
   _wf.data.categories = _wfCatClone;
@@ -8323,13 +8333,10 @@ function _wfCatApply() {
 }
 
 function _wfRenderWorkspaceProps(el) {
-  const pg = _wf.data.parallel_groups || { description: '', order: ['A','B','C'] };
   const rules = _wf.data.rules || {};
   const WF_BOOL_RULES = [
     { key: 'critical_alert_blocks_transition', label: 'Alerte critique bloque la transition' },
     { key: 'human_gate_required_for_all_transitions', label: 'Human gate sur toutes les transitions' },
-    { key: 'lead_dev_only_dispatcher_for_devs', label: 'Lead dev seul dispatcher pour les devs' },
-    { key: 'qa_must_run_after_dev', label: 'QA doit tourner apres les devs' },
   ];
   let rulesHtml = WF_BOOL_RULES.map(r => {
     const checked = !!rules[r.key];
@@ -8341,19 +8348,6 @@ function _wfRenderWorkspaceProps(el) {
     <input type="number" min="1" max="20" value="${maxPar != null ? maxPar : ''}" placeholder="ex: 3"
            onchange="wfSetMaxParallel(this.value)" style="width:80px" />
   </div>`;
-
-  // Build parallel groups list with usage check
-  const pgOrder = pg.order || [];
-  const pgUsed = _wfGetUsedGroups();
-  let pgHtml = pgOrder.map(g => {
-    const used = pgUsed.has(g);
-    const isA = g === 'A';
-    return `<div class="wf-prop-item">
-      <span class="wf-item-label" style="font-weight:600">${escHtml(g)}</span>
-      ${used ? '<span style="font-size:0.65rem;color:var(--text-secondary)">utilise</span>' : ''}
-      <button class="btn-icon danger" onclick="wfRemovePG('${escHtml(g)}')" ${isA ? 'disabled title="Le groupe A ne peut pas etre supprime"' : ''}>x</button>
-    </div>`;
-  }).join('');
 
   // Build team selector options
   const teamOptions = (_wf.teams || []).map(t => {
@@ -8378,21 +8372,6 @@ function _wfRenderWorkspaceProps(el) {
             ${teamOptions}
           </select>
         </div>
-      </div>
-    </div>
-
-    <div class="wf-props-section">
-      <div class="wf-props-section-title" onclick="_wfToggleSection(this)">
-        <span class="wf-section-arrow">${_wf._openSection === 'wk-pg' ? '\u25bc' : '\u25b6'}</span>
-        Groupes paralleles
-        <button class="btn-icon" style="font-size:0.75rem" onclick="event.stopPropagation();wfAddPG()">+</button>
-      </div>
-      <div class="wf-section-body" ${_wf._openSection === 'wk-pg' ? '' : 'style="display:none"'} data-section="wk-pg">
-        <div class="form-group">
-          <label>Description</label>
-          <input value="${escHtml(pg.description || '')}" onchange="wfSetPGDesc(this.value)" />
-        </div>
-        ${pgHtml || '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucun groupe</div>'}
       </div>
     </div>
 
@@ -8483,10 +8462,9 @@ function wfSelectTransition(e, idx) {
 
 function _wfRenderPhaseProps(el, phaseId) {
   const p = _wf.data.phases[phaseId];
-  const agents = p.agents || {};
-  const deliverables = p.deliverables || {};
+  if (!p.groups) p.groups = [];
+  const groups = p.groups;
   const exitConds = p.exit_conditions || {};
-  const pgOrder = (_wf.data.parallel_groups && _wf.data.parallel_groups.order) || ['A'];
 
   // ── External phase: different panel ──
   if (p.type === 'external') {
@@ -8584,45 +8562,15 @@ function _wfRenderPhaseProps(el, phaseId) {
     return;
   }
 
-  // Agents — inline editable blocks
-  const allAgentIds = Object.keys(agents);
-  let agentsHtml = Object.entries(agents).map(([id, a]) => {
-    const pgOpts = pgOrder.map(g => `<option value="${escHtml(g)}" ${g===a.parallel_group?'selected':''}>${g}</option>`).join('');
-    const others = allAgentIds.filter(o => o !== id);
-    const depsSet = new Set(a.depends_on || []);
-    const delegSet = new Set(a.can_delegate_to || []);
-    const depsChecks = others.length ? others.map(o =>
-      `<label class="wf-inline-check"><input type="checkbox" ${depsSet.has(o)?'checked':''} onchange="_wfToggleAgentList('${phaseId}','${escHtml(id)}','depends_on','${escHtml(o)}',this.checked)" />${escHtml(o)}</label>`
-    ).join('') : '<span style="font-size:0.65rem;color:var(--text-secondary)">--</span>';
-    const delegChecks = others.length ? others.map(o =>
-      `<label class="wf-inline-check"><input type="checkbox" ${delegSet.has(o)?'checked':''} onchange="_wfToggleAgentList('${phaseId}','${escHtml(id)}','can_delegate_to','${escHtml(o)}',this.checked)" />${escHtml(o)}</label>`
-    ).join('') : '<span style="font-size:0.65rem;color:var(--text-secondary)">--</span>';
-    const collapsed = _wf._collapsed && _wf._collapsed[`${phaseId}:${id}`];
-    return `<div class="wf-inline-block${collapsed ? ' collapsed' : ''}">
-      <div class="wf-inline-head" onclick="wfToggleCollapse('${phaseId}','${escHtml(id)}')">
-        <span class="wf-collapse-arrow">${collapsed ? '\u25b6' : '\u25bc'}</span>
-        <select class="wf-inline-agent-select" onclick="event.stopPropagation()" onchange="_wfChangeAgent('${phaseId}','${escHtml(id)}',this.value)" id="wf-agent-sel-${phaseId}-${escHtml(id)}"></select>
-        <button class="btn-icon danger" onclick="event.stopPropagation();wfRemoveAgent('${phaseId}','${escHtml(id)}')">x</button>
-      </div>
-      <div class="wf-inline-fields"${collapsed ? ' style="display:none"' : ''}>
-        <input placeholder="Role" value="${escHtml(a.role || '')}" onchange="_wfSetAgentField('${phaseId}','${escHtml(id)}','role',this.value)" />
-        <div style="display:flex;gap:0.3rem">
-          <select style="flex:1" onchange="_wfSetAgentField('${phaseId}','${escHtml(id)}','required',this.value==='true')">
-            <option value="true" ${a.required?'selected':''}>Requis</option><option value="false" ${!a.required?'selected':''}>Optionnel</option>
-          </select>
-          <select style="width:50px" onchange="_wfSetAgentField('${phaseId}','${escHtml(id)}','parallel_group',this.value)">${pgOpts}</select>
-        </div>
-        <div class="wf-inline-label">Depends on</div>
-        <div class="wf-inline-checks">${depsChecks}</div>
-        <div class="wf-inline-label">Can delegate to</div>
-        <div class="wf-inline-checks">${delegChecks}</div>
-      </div>
-    </div>`;
-  }).join('');
-
-  // Deliverables — inline editable blocks (collapsed by default)
+  // Groups + Deliverables — inline editable blocks
   if (!_wf._collapsed) _wf._collapsed = {};
-  const agentIds = Object.keys(agents);
+  // Collect all deliverable keys for depends_on checkboxes
+  const allDelKeys = [];
+  for (const g of groups) {
+    for (const d of (g.deliverables || [])) {
+      allDelKeys.push((g.id || '') + ':' + (d.id || ''));
+    }
+  }
   const WF_ALL_DELIV_TYPES = [
     { value: 'documentation', label: 'Documentation', cap: 'documentation' },
     { value: 'code', label: 'Code', cap: 'code' },
@@ -8632,62 +8580,62 @@ function _wfRenderPhaseProps(el, phaseId) {
     { value: 'specs', label: 'Specifications', cap: 'specs' },
     { value: 'contract', label: 'Contrat', cap: 'contract' },
   ];
-  const allDelKeys = Object.keys(deliverables);
-  let delsHtml = Object.entries(deliverables).map(([id, d]) => {
-    const agOpts = agentIds.map(a => `<option value="${escHtml(a)}" ${a===d.agent?'selected':''}>${a}</option>`).join('');
-    // Filter types by agent capabilities
+  // Render deliverable block for a single deliverable within a group
+  function _renderDelBlock(gid, di, d) {
+    const delKey = gid + ':' + (d.id || '');
+    const agOpts = '<option value="">-- Agent --</option>' + (Object.keys(_wf.agentProfiles || {})).map(a => `<option value="${escHtml(a)}" ${a===d.agent?'selected':''}>${a}</option>`).join('');
     const caps = (_wf.agentCaps || {})[d.agent];
     const hasCaps = caps && (caps.documentation || caps.code || caps.design || caps.automation || caps.tasklist || caps.specs || caps.contract);
     const availTypes = hasCaps ? WF_ALL_DELIV_TYPES.filter(t => caps[t.cap]) : WF_ALL_DELIV_TYPES;
     const typeOpts = '<option value="">-- Type --</option>' + availTypes.map(t => `<option value="${t.value}" ${t.value===(d.type||'')?'selected':''}>${t.label}</option>`).join('');
-    const computedId = id;
-    // Depends on — checkboxes of other deliverables in this phase
     const depsSet = new Set(d.depends_on || []);
-    const otherDels = allDelKeys.filter(k => k !== id);
+    const otherDels = allDelKeys.filter(k => k !== delKey);
     const depsChecks = otherDels.length ? otherDels.map(k =>
-      `<label class="wf-inline-check"><input type="checkbox" ${depsSet.has(k)?'checked':''} onchange="_wfToggleDelDep('${phaseId}','${escHtml(id)}','${escHtml(k)}',this.checked)" />${escHtml((deliverables[k] && deliverables[k].name) || k)}</label>`
+      `<label class="wf-inline-check"><input type="checkbox" ${depsSet.has(k)?'checked':''} onchange="_wfToggleDelDep('${phaseId}','${escHtml(gid)}',${di},'${escHtml(k)}',this.checked)" />${escHtml(k)}</label>`
     ).join('') : '<span style="font-size:0.65rem;color:var(--text-secondary)">--</span>';
-    // Agent profile: roles, missions, skills
     const profile = (_wf.agentProfiles || {})[d.agent] || { roles: [], missions: [], skills: [] };
     const selRoles = new Set(d.roles || []);
     const selMissions = new Set(d.missions || []);
     const selSkills = new Set(d.skills || []);
     const rolesChecks = profile.roles.length ? profile.roles.map(r =>
-      `<label class="wf-inline-check"><input type="checkbox" ${selRoles.has(r)?'checked':''} onchange="_wfToggleDelProfile('${phaseId}','${escHtml(id)}','roles','${escHtml(r)}',this.checked)" />${escHtml(r)}</label>`
+      `<label class="wf-inline-check"><input type="checkbox" ${selRoles.has(r)?'checked':''} onchange="_wfToggleDelProfile('${phaseId}','${escHtml(gid)}',${di},'roles','${escHtml(r)}',this.checked)" />${escHtml(r)}</label>`
     ).join('') : '<span style="font-size:0.65rem;color:var(--text-secondary)">--</span>';
     const missionsChecks = profile.missions.length ? profile.missions.map(m =>
-      `<label class="wf-inline-check"><input type="checkbox" ${selMissions.has(m)?'checked':''} onchange="_wfToggleDelProfile('${phaseId}','${escHtml(id)}','missions','${escHtml(m)}',this.checked)" />${escHtml(m)}</label>`
+      `<label class="wf-inline-check"><input type="checkbox" ${selMissions.has(m)?'checked':''} onchange="_wfToggleDelProfile('${phaseId}','${escHtml(gid)}',${di},'missions','${escHtml(m)}',this.checked)" />${escHtml(m)}</label>`
     ).join('') : '<span style="font-size:0.65rem;color:var(--text-secondary)">--</span>';
     const skillsChecks = profile.skills.length ? profile.skills.map(s =>
-      `<label class="wf-inline-check"><input type="checkbox" ${selSkills.has(s)?'checked':''} onchange="_wfToggleDelProfile('${phaseId}','${escHtml(id)}','skills','${escHtml(s)}',this.checked)" />${escHtml(s)}</label>`
+      `<label class="wf-inline-check"><input type="checkbox" ${selSkills.has(s)?'checked':''} onchange="_wfToggleDelProfile('${phaseId}','${escHtml(gid)}',${di},'skills','${escHtml(s)}',this.checked)" />${escHtml(s)}</label>`
     ).join('') : '<span style="font-size:0.65rem;color:var(--text-secondary)">--</span>';
-    const colKey = `${phaseId}:del:${id}`;
+    const colKey = `${phaseId}:del:${delKey}`;
     const expanded = _wf._collapsed[colKey] === true;
     const focused = _wf._focusDel === colKey ? ' wf-del-focus' : '';
-    const delDisplayName = d.name || computedId;
+    const delDisplayName = d.Name || d.name || d.id || delKey;
     return `<div class="wf-inline-block${expanded ? '' : ' collapsed'}${focused}" id="wf-del-block-${colKey.replace(/[^a-zA-Z0-9_-]/g,'_')}">
       <div class="wf-inline-head" onclick="wfToggleCollapseKey('${colKey}',this)">
         <span class="wf-collapse-arrow">${expanded ? '\u25bc' : '\u25b6'}</span>
         <span class="wf-inline-id">${escHtml(delDisplayName)}</span>
-        <button class="btn-icon" title="SkillMatcher" onclick="event.stopPropagation();wfSkillMatch('${phaseId}','${escHtml(id)}')" style="font-size:0.85rem">&#10024;</button>
-        <button class="btn-icon danger" onclick="event.stopPropagation();wfRemoveDeliverable('${phaseId}','${escHtml(id)}')">x</button>
+        <button class="btn-icon" title="SkillMatcher" onclick="event.stopPropagation();wfSkillMatch('${phaseId}','${escHtml(gid)}',${di})" style="font-size:0.85rem">&#10024;</button>
+        <button class="btn-icon danger" onclick="event.stopPropagation();wfRemoveDeliverable('${phaseId}','${escHtml(gid)}',${di})">x</button>
       </div>
       <div class="wf-inline-fields"${expanded ? '' : ' style="display:none"'}>
-        <input placeholder="Nom" value="${escHtml(d.name || '')}" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','name',this.value)" />
+        <div style="display:flex;gap:0.3rem">
+          <input style="flex:1" placeholder="ID" value="${escHtml(d.id || '')}" onchange="_wfSetDelField('${phaseId}','${escHtml(gid)}',${di},'id',this.value)" />
+          <input style="flex:2" placeholder="Nom" value="${escHtml(d.Name || d.name || '')}" onchange="_wfSetDelField('${phaseId}','${escHtml(gid)}',${di},'Name',this.value)" />
+        </div>
         <div style="display:flex;gap:0.3rem;align-items:center">
-          <input style="flex:1" placeholder="Description" value="${escHtml(d.description || '')}" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','description',this.value)" />
-          <button class="btn-icon" title="Editer la description" onclick="event.stopPropagation();_wfEditDelDesc('${phaseId}','${escHtml(id)}')" style="font-size:0.85rem">&#9998;</button>
+          <input style="flex:1" placeholder="Description" value="${escHtml(d.description || '')}" onchange="_wfSetDelField('${phaseId}','${escHtml(gid)}',${di},'description',this.value)" />
+          <button class="btn-icon" title="Editer la description" onclick="event.stopPropagation();_wfEditDelDesc('${phaseId}','${escHtml(gid)}',${di})" style="font-size:0.85rem">&#9998;</button>
         </div>
         <div style="display:flex;gap:0.3rem">
-          <select style="flex:1" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','agent',this.value)">${agOpts}</select>
+          <select style="flex:1" onchange="_wfSetDelField('${phaseId}','${escHtml(gid)}',${di},'agent',this.value)">${agOpts}</select>
         </div>
         <div style="display:flex;gap:0.3rem">
-          <select style="width:110px" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','type',this.value)">${typeOpts}</select>
-          <select style="width:80px" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','required',this.value==='true')">
+          <select style="width:110px" onchange="_wfSetDelField('${phaseId}','${escHtml(gid)}',${di},'type',this.value)">${typeOpts}</select>
+          <select style="width:80px" onchange="_wfSetDelField('${phaseId}','${escHtml(gid)}',${di},'required',this.value==='true')">
             <option value="true" ${d.required?'selected':''}>Requis</option><option value="false" ${!d.required?'selected':''}>Opt</option>
           </select>
         </div>
-        <select style="width:100%" onchange="_wfSetDelField('${phaseId}','${escHtml(id)}','category',this.value)">${_wfBuildCategoryOptions(d.category)}</select>
+        <select style="width:100%" onchange="_wfSetDelField('${phaseId}','${escHtml(gid)}',${di},'category',this.value)">${_wfBuildCategoryOptions(d.category)}</select>
         <div class="wf-inline-label">Roles</div>
         <div class="wf-inline-checks">${rolesChecks}</div>
         <div class="wf-inline-label">Missions</div>
@@ -8696,7 +8644,30 @@ function _wfRenderPhaseProps(el, phaseId) {
         <div class="wf-inline-checks">${skillsChecks}</div>
         <div class="wf-inline-label">Depends on</div>
         <div class="wf-inline-checks">${depsChecks}</div>
+        ${groups.length > 1 ? `<div class="wf-inline-label">Deplacer vers groupe</div>
+        <select style="width:100%;font-size:0.75rem" onchange="if(this.value)wfMoveDeliverable('${phaseId}','${escHtml(gid)}',${di},this.value)">
+          <option value="">-- Rester dans ${escHtml(gid)} --</option>
+          ${groups.filter(og => og.id !== gid).map(og => `<option value="${escHtml(og.id)}">${escHtml(og.id)}</option>`).join('')}
+        </select>` : ''}
       </div>
+    </div>`;
+  }
+
+  // Build groups HTML
+  let groupsHtml = groups.map((g, gi) => {
+    const gid = g.id || '';
+    const gDels = g.deliverables || [];
+    const delsHtml = gDels.map((d, di) => _renderDelBlock(gid, di, d)).join('');
+    return `<div class="wf-group-block" style="border:1px solid var(--border);border-radius:6px;padding:0.5rem;margin-bottom:0.5rem">
+      <div style="display:flex;align-items:center;gap:0.3rem;margin-bottom:0.3rem">
+        <span class="wf-group-badge">${escHtml(gid)}</span>
+        <input style="flex:1;font-size:0.75rem" placeholder="Group ID" value="${escHtml(gid)}" onchange="_wfSetGroupId('${phaseId}',${gi},this.value)" />
+        ${gi > 0 ? `<button class="btn-icon" style="font-size:0.65rem" onclick="wfMoveGroupUp('${phaseId}',${gi})" title="Monter">\u25b2</button>` : ''}
+        ${gi < groups.length - 1 ? `<button class="btn-icon" style="font-size:0.65rem" onclick="wfMoveGroupDown('${phaseId}',${gi})" title="Descendre">\u25bc</button>` : ''}
+        <button class="btn-icon" style="font-size:0.75rem" onclick="wfAddDeliverable('${phaseId}','${escHtml(gid)}')" title="Ajouter un livrable">+</button>
+        <button class="btn-icon danger" onclick="wfRemoveGroup('${phaseId}',${gi})" title="Supprimer le groupe">x</button>
+      </div>
+      ${delsHtml || '<div style="font-size:0.7rem;color:var(--text-secondary);padding:0.25rem">Aucun livrable</div>'}
     </div>`;
   }).join('');
 
@@ -8706,6 +8677,8 @@ function _wfRenderPhaseProps(el, phaseId) {
     const checked = !!exitConds[k];
     return `<label class="wf-rule-check"><input type="checkbox" ${checked ? 'checked' : ''} onchange="wfToggleCondition('${phaseId}','${k}',this.checked)" /><span>${escHtml(k)}</span></label>`;
   }).join('');
+
+  const totalDels = groups.reduce((s, g) => s + (g.deliverables || []).length, 0);
 
   el.innerHTML = `
     <h4>
@@ -8741,25 +8714,12 @@ function _wfRenderPhaseProps(el, phaseId) {
 
     <div class="wf-props-section">
       <div class="wf-props-section-title" onclick="_wfToggleSection(this)">
-        <span class="wf-section-arrow">${_wf._openSection === 'ph-agents' ? '\u25bc' : '\u25b6'}</span>
-        Agents (${Object.keys(agents).length})
-      </div>
-      <div class="wf-section-body" ${_wf._openSection === 'ph-agents' ? '' : 'style="display:none"'} data-section="ph-agents">
-        ${agentsHtml || '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucun agent</div>'}
-        <select class="wf-add-select" id="wf-add-agent-${phaseId}" onchange="wfAddAgent('${phaseId}',this.value);this.value=''">
-          <option value="">+ Ajouter un agent...</option>
-        </select>
-      </div>
-    </div>
-
-    <div class="wf-props-section">
-      <div class="wf-props-section-title" onclick="_wfToggleSection(this)">
         <span class="wf-section-arrow">${_wf._openSection === 'ph-dels' ? '\u25bc' : '\u25b6'}</span>
-        Livrables (${Object.keys(deliverables).length})
-        <button class="btn-icon" style="font-size:0.75rem" onclick="event.stopPropagation();wfAddDeliverable('${phaseId}')">+</button>
+        Groupes &amp; Livrables (${groups.length} groupes, ${totalDels} livrables)
+        <button class="btn-icon" style="font-size:0.75rem" onclick="event.stopPropagation();wfAddGroup('${phaseId}')">+ Groupe</button>
       </div>
       <div class="wf-section-body" ${_wf._openSection === 'ph-dels' ? '' : 'style="display:none"'} data-section="ph-dels">
-        ${delsHtml || '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucun livrable</div>'}
+        ${groupsHtml || '<div style="font-size:0.75rem;color:var(--text-secondary)">Aucun groupe</div>'}
       </div>
     </div>
 
@@ -8795,7 +8755,7 @@ function _wfRenderPhaseProps(el, phaseId) {
       </div>
     </div>
   `;
-  setTimeout(() => _wfLoadAgentSelect(phaseId), 0);
+  // Agent selects are now inline in deliverable blocks
 }
 
 // ── Workspace interactions ──
@@ -9084,7 +9044,11 @@ async function _wfLoadExternalApercu(filename) {
     var phases = data.phases || {};
     var phaseList = typeof phases === 'object' && !Array.isArray(phases) ? Object.values(phases) : (Array.isArray(phases) ? phases : []);
     var phaseCount = phaseList.length;
-    var agentCount = phaseList.reduce(function(sum, p) { return sum + Object.keys(p.agents || {}).length; }, 0);
+    var agentCount = phaseList.reduce(function(sum, p) {
+      var agents = new Set();
+      (p.groups || []).forEach(function(g) { (g.deliverables || []).forEach(function(d) { if (d.agent) agents.add(d.agent); }); });
+      return sum + agents.size;
+    }, 0);
     var phaseNames = phaseList.map(function(p) { return p.name || '?'; }).join(', ');
     return '<div style="background:var(--bg-secondary);border-radius:6px;padding:0.5rem;font-size:0.8rem;margin-top:0.5rem">' +
       '<div><strong>' + phaseCount + '</strong> phase(s) &bull; <strong>' + agentCount + '</strong> agent(s)</div>' +
@@ -9215,187 +9179,143 @@ function wfToggleCollapseKey(key, headEl) {
   }
 }
 
-// ── Agent CRUD within a phase (inline, no modal) ──
-function wfAddAgent(phaseId, agentId) {
-  if (!agentId) return;
-  if (!_wf.data.phases[phaseId].agents) _wf.data.phases[phaseId].agents = {};
-  if (_wf.data.phases[phaseId].agents[agentId]) { toast('Agent deja dans cette phase', 'error'); return; }
-  _wf.data.phases[phaseId].agents[agentId] = {
-    role: '',
-    required: true,
-    parallel_group: (_wf.data.parallel_groups && _wf.data.parallel_groups.order && _wf.data.parallel_groups.order[0]) || 'A'
-  };
+// ── Group CRUD within a phase ──
+function wfAddGroup(phaseId) {
+  const p = _wf.data.phases[phaseId];
+  if (!p.groups) p.groups = [];
+  const existing = p.groups.map(g => g.id || '');
+  let letter = 'A';
+  for (let c = 65; c <= 90; c++) {
+    const l = String.fromCharCode(c);
+    if (!existing.includes(l)) { letter = l; break; }
+  }
+  p.groups.push({ id: letter, deliverables: [] });
   wfRender();
 }
 
-async function _wfLoadAgentSelect(phaseId) {
-  const assigned = new Set(Object.keys(_wf.data.phases[phaseId].agents || {}));
-  const registryBase = _wf.apiBase.includes('templates') ? '/api/templates/registry' : '/api/agents/registry';
-  const regDir = _wf.registryDir || _wf.dir;
-  let allAgents = [];
-  try {
-    const reg = await api(`${registryBase}/${encodeURIComponent(regDir)}`);
-    allAgents = Object.keys(reg.agents || reg || {});
-  } catch {}
-  // Populate the "add agent" select
-  const addSel = document.getElementById(`wf-add-agent-${phaseId}`);
-  if (addSel && addSel.options.length <= 1) {
-    const available = allAgents.filter(a => !assigned.has(a));
-    available.forEach(a => {
-      const opt = document.createElement('option');
-      opt.value = a;
-      opt.textContent = a;
-      addSel.appendChild(opt);
-    });
-    if (available.length === 0) {
-      addSel.options[0].textContent = '(tous assignes)';
-      addSel.disabled = true;
+function wfRemoveGroup(phaseId, gi) {
+  const p = _wf.data.phases[phaseId];
+  if (!p.groups || !p.groups[gi]) return;
+  if (p.groups.length <= 1) { toast('Il faut au moins un groupe', 'error'); return; }
+  const removedId = p.groups[gi].id;
+  p.groups.splice(gi, 1);
+  // Clean depends_on referencing removed group
+  for (const g of p.groups) {
+    for (const d of (g.deliverables || [])) {
+      if (Array.isArray(d.depends_on)) {
+        d.depends_on = d.depends_on.filter(k => !k.startsWith(removedId + ':'));
+      }
     }
   }
-  // Populate each agent's identity select (current + available from registry)
-  for (const agentId of assigned) {
-    const sel = document.getElementById(`wf-agent-sel-${phaseId}-${agentId}`);
-    if (!sel || sel.options.length > 0) continue;
-    // Current agent (selected)
-    const cur = document.createElement('option');
-    cur.value = agentId;
-    cur.textContent = agentId;
-    cur.selected = true;
-    sel.appendChild(cur);
-    // Other available agents from registry (not already assigned)
-    const others = allAgents.filter(a => a !== agentId && !assigned.has(a));
-    others.forEach(a => {
-      const opt = document.createElement('option');
-      opt.value = a;
-      opt.textContent = a;
-      sel.appendChild(opt);
-    });
-  }
+  wfRender();
 }
 
-function _wfChangeAgent(phaseId, oldId, newId) {
-  if (!newId || newId === oldId) return;
-  const phase = _wf.data.phases[phaseId];
-  if (!phase || !phase.agents) return;
-  if (phase.agents[newId]) { toast('Agent deja dans cette phase', 'error'); wfRender(); return; }
-  // Move agent data from oldId to newId
-  phase.agents[newId] = phase.agents[oldId];
-  delete phase.agents[oldId];
-  // Update deliverables referencing old agent
-  for (const d of Object.values(phase.deliverables || {})) {
-    if (d.agent === oldId) d.agent = newId;
-  }
-  // Update depends_on / can_delegate_to referencing old agent
-  for (const a of Object.values(phase.agents)) {
-    if (a.depends_on) a.depends_on = a.depends_on.map(x => x === oldId ? newId : x);
-    if (a.can_delegate_to) a.can_delegate_to = a.can_delegate_to.map(x => x === oldId ? newId : x);
+function _wfSetGroupId(phaseId, gi, newId) {
+  const p = _wf.data.phases[phaseId];
+  if (!p.groups || !p.groups[gi]) return;
+  const oldId = p.groups[gi].id;
+  p.groups[gi].id = newId;
+  // Update depends_on references in all groups
+  for (const g of p.groups) {
+    for (const d of (g.deliverables || [])) {
+      if (Array.isArray(d.depends_on)) {
+        d.depends_on = d.depends_on.map(k => k.startsWith(oldId + ':') ? newId + ':' + k.split(':').slice(1).join(':') : k);
+      }
+    }
   }
   wfRender();
 }
 
-// Inline field setters for agents
-function _wfSetAgentField(phaseId, agentId, field, val) {
-  const ag = _wf.data.phases[phaseId]?.agents?.[agentId];
-  if (!ag) return;
-  ag[field] = val;
-}
-
-function _wfToggleAgentList(phaseId, agentId, field, targetId, checked) {
-  const ag = _wf.data.phases[phaseId]?.agents?.[agentId];
-  if (!ag) return;
-  if (!ag[field]) ag[field] = [];
-  if (checked) {
-    if (!ag[field].includes(targetId)) ag[field].push(targetId);
-  } else {
-    ag[field] = ag[field].filter(x => x !== targetId);
+// ── Deliverable CRUD (inline, within groups) ──
+function wfAddDeliverable(phaseId, groupId) {
+  const p = _wf.data.phases[phaseId];
+  if (!p.groups) p.groups = [];
+  let group = p.groups.find(g => g.id === groupId);
+  if (!group) {
+    if (p.groups.length === 0) { p.groups.push({ id: 'A', deliverables: [] }); group = p.groups[0]; }
+    else { group = p.groups[0]; }
   }
-  if (ag[field].length === 0) delete ag[field];
-}
-
-function wfRemoveAgent(phaseId, agentId) {
-  delete _wf.data.phases[phaseId].agents[agentId];
-  wfRender();
-}
-
-// ── Deliverable CRUD (inline, no modal) ──
-function wfAddDeliverable(phaseId) {
-  const agentIds = Object.keys(_wf.data.phases[phaseId].agents || {});
-  if (agentIds.length === 0) { toast('Ajoutez d\'abord un agent a cette phase', 'error'); return; }
-  if (!_wf.data.phases[phaseId].deliverables) _wf.data.phases[phaseId].deliverables = {};
-  const agent = agentIds[0];
-  const existingCount = Object.keys(_wf.data.phases[phaseId].deliverables).filter(k => k.startsWith(agent + ':')).length;
-  const id = `${agent}:phase${existingCount + 1}`;
-  if (_wf.data.phases[phaseId].deliverables[id]) {
-    toast('Ce livrable existe deja', 'error'); return;
-  }
-  _wf.data.phases[phaseId].deliverables[id] = {
+  if (!group.deliverables) group.deliverables = [];
+  const count = group.deliverables.length;
+  group.deliverables.push({
+    id: 'new_deliverable_' + (count + 1),
+    Name: '',
     description: '',
-    agent,
+    agent: '',
     type: '',
     required: true
-  };
+  });
   wfRender();
 }
 
-// Inline field setter for deliverables
-function _wfSetDelField(phaseId, delId, field, val) {
-  const dels = _wf.data.phases[phaseId]?.deliverables;
-  const d = dels?.[delId];
-  if (!d) return;
+// Inline field setter for deliverables (group-based)
+function _wfSetDelField(phaseId, groupId, di, field, val) {
+  const p = _wf.data.phases[phaseId];
+  if (!p || !p.groups) return;
+  const group = p.groups.find(g => g.id === groupId);
+  if (!group || !group.deliverables || !group.deliverables[di]) return;
+  const d = group.deliverables[di];
   d[field] = val;
-  // When agent changes, reset type if incompatible and rename key
-  if (field === 'agent') {
-    if (d.type) {
-      const caps = (_wf.agentCaps || {})[val];
-      const hasCaps = caps && (caps.documentation || caps.code || caps.design || caps.automation || caps.tasklist || caps.specs || caps.contract);
-      if (hasCaps && !caps[d.type]) d.type = '';
-    }
-    // Rename deliverable key to {agent}:phase{n}
-    const existingCount = Object.keys(dels).filter(k => k !== delId && k.startsWith(val + ':')).length;
-    const newId = `${val}:phase${existingCount + 1}`;
-    if (newId !== delId && !dels[newId]) {
-      dels[newId] = d;
-      delete dels[delId];
-    }
+  // When agent changes, reset type if incompatible
+  if (field === 'agent' && d.type) {
+    const caps = (_wf.agentCaps || {})[val];
+    const hasCaps = caps && (caps.documentation || caps.code || caps.design || caps.automation || caps.tasklist || caps.specs || caps.contract);
+    if (hasCaps && !caps[d.type]) d.type = '';
   }
   wfRenderProps();
 }
 
-function wfRemoveDeliverable(phaseId, delId) {
-  delete _wf.data.phases[phaseId].deliverables[delId];
-  // Also remove from depends_on of other deliverables
-  const dels = _wf.data.phases[phaseId].deliverables || {};
-  for (const d of Object.values(dels)) {
-    if (Array.isArray(d.depends_on)) {
-      d.depends_on = d.depends_on.filter(k => k !== delId);
+function wfRemoveDeliverable(phaseId, groupId, di) {
+  const p = _wf.data.phases[phaseId];
+  if (!p || !p.groups) return;
+  const group = p.groups.find(g => g.id === groupId);
+  if (!group || !group.deliverables) return;
+  const removedKey = groupId + ':' + (group.deliverables[di]?.id || '');
+  group.deliverables.splice(di, 1);
+  // Clean depends_on referencing removed deliverable
+  for (const g of p.groups) {
+    for (const d of (g.deliverables || [])) {
+      if (Array.isArray(d.depends_on)) {
+        d.depends_on = d.depends_on.filter(k => k !== removedKey);
+      }
     }
   }
   wfRender();
 }
 
-function _wfEditDelDesc(phaseId, delId) {
-  const d = _wf.data.phases[phaseId]?.deliverables?.[delId];
-  if (!d) return;
-  const delName = d.name || delId;
+function _wfEditDelDesc(phaseId, groupId, di) {
+  const p = _wf.data.phases[phaseId];
+  if (!p || !p.groups) return;
+  const group = p.groups.find(g => g.id === groupId);
+  if (!group || !group.deliverables || !group.deliverables[di]) return;
+  const d = group.deliverables[di];
+  const delName = d.Name || d.name || d.id;
   showModal('<div class="modal-header"><h3>Description — ' + escHtml(delName) + '</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
     '<textarea id="wf-del-desc-edit" rows="12" style="width:100%;font-family:monospace;font-size:0.85rem;background:var(--bg-primary);border:1px solid var(--border);padding:0.5rem;resize:vertical;box-sizing:border-box">' + escHtml(d.description || '') + '</textarea>' +
     '<div class="modal-actions">' +
-    '<button class="btn btn-outline" id="wf-del-desc-gen-btn" onclick="_wfGenDelDesc(\'' + escHtml(phaseId) + '\',\'' + escHtml(delId) + '\')" style="gap:0.3rem" title="Generer avec IA">&#10024; Generer</button>' +
+    '<button class="btn btn-outline" id="wf-del-desc-gen-btn" onclick="_wfGenDelDesc(\'' + escHtml(phaseId) + '\',\'' + escHtml(groupId) + '\',' + di + ')" style="gap:0.3rem" title="Generer avec IA">&#10024; Generer</button>' +
     '<span style="flex:1"></span>' +
     '<button class="btn btn-outline" onclick="closeModal()">Annuler</button>' +
-    '<button class="btn btn-primary" onclick="_wfSaveDelDesc(\'' + escHtml(phaseId) + '\',\'' + escHtml(delId) + '\')">Sauvegarder</button></div>');
+    '<button class="btn btn-primary" onclick="_wfSaveDelDesc(\'' + escHtml(phaseId) + '\',\'' + escHtml(groupId) + '\',' + di + ')">Sauvegarder</button></div>');
 }
 
-function _wfSaveDelDesc(phaseId, delId) {
-  const d = _wf.data.phases[phaseId]?.deliverables?.[delId];
+function _wfGetDel(phaseId, groupId, di) {
+  const p = _wf.data.phases[phaseId];
+  if (!p || !p.groups) return null;
+  const g = p.groups.find(g => g.id === groupId);
+  return (g && g.deliverables && g.deliverables[di]) || null;
+}
+
+function _wfSaveDelDesc(phaseId, groupId, di) {
+  const d = _wfGetDel(phaseId, groupId, di);
   if (!d) return;
   d.description = (document.getElementById('wf-del-desc-edit').value || '').trim();
   closeModal();
   wfRenderProps();
 }
 
-async function _wfGenDelDesc(phaseId, delId) {
-  const d = _wf.data.phases[phaseId]?.deliverables?.[delId];
+async function _wfGenDelDesc(phaseId, groupId, di) {
+  const d = _wfGetDel(phaseId, groupId, di);
   if (!d) return;
   const phase = _wf.data.phases[phaseId] || {};
   const btn = document.getElementById('wf-del-desc-gen-btn');
@@ -9411,11 +9331,12 @@ async function _wfGenDelDesc(phaseId, delId) {
   const agentProfile = (_wf.agentProfiles || {})[d.agent] || {};
   const agentName = agentProfile.name || d.agent || '';
   try {
-    const currentDesc = (document.getElementById('wf-del-desc-edit').value || '').trim() || d.name || delId;
+    const delKey = groupId + ':' + (d.id || '');
+    const currentDesc = (document.getElementById('wf-del-desc-edit').value || '').trim() || d.Name || d.name || d.id;
     const res = await api('/api/agents/generate-description', {
       method: 'POST',
       body: {
-        deliverable_key: delId,
+        deliverable_key: delKey,
         current_description: currentDesc,
         agent_id: d.agent || '',
         agent_name: agentName,
@@ -9436,8 +9357,8 @@ async function _wfGenDelDesc(phaseId, delId) {
   }
 }
 
-function _wfToggleDelDep(phaseId, delId, depKey, checked) {
-  const d = _wf.data.phases[phaseId]?.deliverables?.[delId];
+function _wfToggleDelDep(phaseId, groupId, di, depKey, checked) {
+  const d = _wfGetDel(phaseId, groupId, di);
   if (!d) return;
   if (!d.depends_on) d.depends_on = [];
   if (checked && !d.depends_on.includes(depKey)) {
@@ -9447,8 +9368,8 @@ function _wfToggleDelDep(phaseId, delId, depKey, checked) {
   }
 }
 
-function _wfToggleDelProfile(phaseId, delId, field, value, checked) {
-  const d = _wf.data.phases[phaseId]?.deliverables?.[delId];
+function _wfToggleDelProfile(phaseId, groupId, di, field, value, checked) {
+  const d = _wfGetDel(phaseId, groupId, di);
   if (!d) return;
   if (!d[field]) d[field] = [];
   if (checked && !d[field].includes(value)) {
@@ -9458,8 +9379,8 @@ function _wfToggleDelProfile(phaseId, delId, field, value, checked) {
   }
 }
 
-async function wfSkillMatch(phaseId, delId) {
-  const d = _wf.data.phases[phaseId]?.deliverables?.[delId];
+async function wfSkillMatch(phaseId, groupId, di) {
+  const d = _wfGetDel(phaseId, groupId, di);
   if (!d || !d.agent) { toast('Agent requis', 'error'); return; }
   // Extract project_id from apiBase: /api/{templates|prod}-project-workflow/{projectId}
   const m = (_wf.apiBase || '').match(/project-workflow\/([^/]+)/);
@@ -9471,7 +9392,7 @@ async function wfSkillMatch(phaseId, delId) {
   try {
     const res = await api(`${smBase}/${encodeURIComponent(projectId)}/deliverable-skillmatch`, {
       method: 'POST',
-      body: { agent_id: d.agent, description: d.description || delId }
+      body: { agent_id: d.agent, description: d.description || d.id || '' }
     });
     if (res.full_profile) {
       // Select all roles/missions/skills
@@ -9529,46 +9450,46 @@ function wfSetMaxParallel(val) {
   }
 }
 
-// ── Parallel groups ──
-function wfSetPGDesc(val) {
-  if (!_wf.data.parallel_groups) _wf.data.parallel_groups = {};
-  _wf.data.parallel_groups.description = val;
-}
-
-function _wfGetUsedGroups() {
-  const used = new Set();
-  for (const phase of Object.values(_wf.data.phases || {})) {
-    for (const agent of Object.values(phase.agents || {})) {
-      if (agent.parallel_group) used.add(agent.parallel_group);
+// ── Drag & drop: move deliverable between groups ──
+function wfMoveDeliverable(phaseId, fromGroupId, fromDi, toGroupId) {
+  const p = _wf.data.phases[phaseId];
+  if (!p || !p.groups) return;
+  const fromGroup = p.groups.find(g => g.id === fromGroupId);
+  const toGroup = p.groups.find(g => g.id === toGroupId);
+  if (!fromGroup || !toGroup || fromGroupId === toGroupId) return;
+  if (!fromGroup.deliverables || !fromGroup.deliverables[fromDi]) return;
+  const d = fromGroup.deliverables.splice(fromDi, 1)[0];
+  if (!toGroup.deliverables) toGroup.deliverables = [];
+  toGroup.deliverables.push(d);
+  // Update depends_on references across all groups
+  const oldKey = fromGroupId + ':' + (d.id || '');
+  const newKey = toGroupId + ':' + (d.id || '');
+  for (const g of p.groups) {
+    for (const del of (g.deliverables || [])) {
+      if (Array.isArray(del.depends_on)) {
+        del.depends_on = del.depends_on.map(k => k === oldKey ? newKey : k);
+      }
     }
   }
-  return used;
-}
-
-function wfAddPG() {
-  if (!_wf.data.parallel_groups) _wf.data.parallel_groups = { description: '', order: [] };
-  if (!_wf.data.parallel_groups.order) _wf.data.parallel_groups.order = [];
-  const existing = _wf.data.parallel_groups.order;
-  // Find next available letter
-  let letter = 'A';
-  for (let c = 65; c <= 90; c++) {
-    const l = String.fromCharCode(c);
-    if (!existing.includes(l)) { letter = l; break; }
-  }
-  existing.push(letter);
   wfRender();
 }
 
-function wfRemovePG(name) {
-  if (name === 'A') { toast('Le groupe A ne peut pas etre supprime', 'error'); return; }
-  if (!_wf.data.parallel_groups || !_wf.data.parallel_groups.order) return;
-  // Reassign agents using this group to group A
-  for (const phase of Object.values(_wf.data.phases || {})) {
-    for (const agent of Object.values(phase.agents || {})) {
-      if (agent.parallel_group === name) agent.parallel_group = 'A';
-    }
-  }
-  _wf.data.parallel_groups.order = _wf.data.parallel_groups.order.filter(g => g !== name);
+// ── Drag & drop: reorder groups within a phase ──
+function wfMoveGroupUp(phaseId, gi) {
+  const p = _wf.data.phases[phaseId];
+  if (!p || !p.groups || gi <= 0) return;
+  const tmp = p.groups[gi - 1];
+  p.groups[gi - 1] = p.groups[gi];
+  p.groups[gi] = tmp;
+  wfRender();
+}
+
+function wfMoveGroupDown(phaseId, gi) {
+  const p = _wf.data.phases[phaseId];
+  if (!p || !p.groups || gi >= p.groups.length - 1) return;
+  const tmp = p.groups[gi + 1];
+  p.groups[gi + 1] = p.groups[gi];
+  p.groups[gi] = tmp;
   wfRender();
 }
 
@@ -10115,19 +10036,11 @@ async function _wfCheckStatus(dir, wfApiBase, registryApiBase, prefix) {
 
     let hasError = false;
     for (const [, phase] of Object.entries(wfData.phases)) {
-      const phaseAgents = new Set(Object.keys(phase.agents || {}));
-      // Check agents exist in registry
-      for (const agentId of phaseAgents) {
-        if (!registryAgents.has(agentId)) { hasError = true; break; }
-        const cfg = phase.agents[agentId];
-        if (Array.isArray(cfg.can_delegate_to) && cfg.can_delegate_to.some(r => !phaseAgents.has(r) || !registryAgents.has(r))) { hasError = true; break; }
-        if (cfg.delegated_by && (!phaseAgents.has(cfg.delegated_by) || !registryAgents.has(cfg.delegated_by))) { hasError = true; break; }
-        if (Array.isArray(cfg.depends_on) && cfg.depends_on.some(r => !phaseAgents.has(r) || !registryAgents.has(r))) { hasError = true; break; }
-      }
-      if (hasError) break;
-      // Check deliverables
-      for (const [, del] of Object.entries(phase.deliverables || {})) {
-        if (del.agent && (!registryAgents.has(del.agent) || !phaseAgents.has(del.agent))) { hasError = true; break; }
+      for (const group of (phase.groups || [])) {
+        for (const del of (group.deliverables || [])) {
+          if (del.agent && !registryAgents.has(del.agent)) { hasError = true; break; }
+        }
+        if (hasError) break;
       }
       if (hasError) break;
     }
@@ -10157,7 +10070,7 @@ async function _wfValidate() {
     warnings.push('Impossible de charger agents_registry.json — validation des agents ignoree');
   }
 
-  // 2. Validate all agent references in the workflow
+  // 2. Validate phases (groups format)
   for (const [phaseId, phase] of Object.entries(phases)) {
     if (phase.type === 'external') {
       if (!phase.external_workflow) {
@@ -10166,85 +10079,78 @@ async function _wfValidate() {
       continue;
     }
     const phaseName = phase.name || phaseId;
-    const phaseAgents = new Set(Object.keys(phase.agents || {}));
+    const groups = phase.groups || [];
 
-    // 2a. Agents assigned to the phase must exist in the registry
-    if (registryAgents.size > 0) {
-      for (const agentId of phaseAgents) {
-        if (!registryAgents.has(agentId)) {
-          errors.push(`Phase "${phaseName}" : l'agent "${agentId}" n'existe pas dans agents_registry.json`);
-        }
-      }
+    // 2a. Phase must have at least one group with a required deliverable
+    var hasRequired = groups.some(function(g) {
+      return (g.deliverables || []).some(function(d) { return d.required; });
+    });
+    if (!hasRequired) {
+      warnings.push('Phase "' + phaseName + '" : aucun livrable requis');
     }
 
-    for (const [agentId, agentCfg] of Object.entries(phase.agents || {})) {
-      // 2b. can_delegate_to — must be in registry AND assigned in this phase
-      if (Array.isArray(agentCfg.can_delegate_to)) {
-        for (const ref of agentCfg.can_delegate_to) {
-          if (registryAgents.size > 0 && !registryAgents.has(ref)) {
-            errors.push(`Phase "${phaseName}" / ${agentId} : can_delegate_to "${ref}" n'existe pas dans agents_registry.json`);
-          } else if (!phaseAgents.has(ref)) {
-            errors.push(`Phase "${phaseName}" / ${agentId} : can_delegate_to "${ref}" n'est pas assigne dans cette phase`);
-          }
-        }
-      }
-      // 2c. delegated_by — must be in registry AND assigned in this phase
-      if (agentCfg.delegated_by) {
-        if (registryAgents.size > 0 && !registryAgents.has(agentCfg.delegated_by)) {
-          errors.push(`Phase "${phaseName}" / ${agentId} : delegated_by "${agentCfg.delegated_by}" n'existe pas dans agents_registry.json`);
-        } else if (!phaseAgents.has(agentCfg.delegated_by)) {
-          errors.push(`Phase "${phaseName}" / ${agentId} : delegated_by "${agentCfg.delegated_by}" n'est pas assigne dans cette phase`);
-        }
-      }
-      // 2d. depends_on — must be in registry AND assigned in this phase
-      if (Array.isArray(agentCfg.depends_on)) {
-        for (const ref of agentCfg.depends_on) {
-          if (registryAgents.size > 0 && !registryAgents.has(ref)) {
-            errors.push(`Phase "${phaseName}" / ${agentId} : depends_on "${ref}" n'existe pas dans agents_registry.json`);
-          } else if (!phaseAgents.has(ref)) {
-            errors.push(`Phase "${phaseName}" / ${agentId} : depends_on "${ref}" n'est pas assigne dans cette phase`);
-          }
-        }
+    // 2b. Validate each group and its deliverables
+    var allDeliverableKeys = new Set();
+    // First pass: collect all deliverable keys
+    for (var gi = 0; gi < groups.length; gi++) {
+      var group = groups[gi];
+      var gid = group.id || '';
+      for (var di = 0; di < (group.deliverables || []).length; di++) {
+        var d = group.deliverables[di];
+        var fullKey = gid + ':' + (d.id || '');
+        allDeliverableKeys.add(fullKey);
       }
     }
+    // Second pass: validate
+    var seenKeys = new Set();
+    for (var gi2 = 0; gi2 < groups.length; gi2++) {
+      var g = groups[gi2];
+      var gid2 = g.id || '';
+      for (var di2 = 0; di2 < (g.deliverables || []).length; di2++) {
+        var del = g.deliverables[di2];
+        var fk = gid2 + ':' + (del.id || '');
 
-    // 2e. Deliverables — agent must be in registry AND assigned in this phase
-    for (const [delId, del] of Object.entries(phase.deliverables || {})) {
-      if (del.agent) {
-        if (registryAgents.size > 0 && !registryAgents.has(del.agent)) {
-          errors.push(`Phase "${phaseName}" / livrable "${delId}" : l'agent "${del.agent}" n'existe pas dans agents_registry.json`);
-        } else if (!phaseAgents.has(del.agent)) {
-          errors.push(`Phase "${phaseName}" / livrable "${delId}" : l'agent "${del.agent}" n'est pas assigne dans cette phase`);
+        // Unique check
+        if (seenKeys.has(fk)) {
+          errors.push('Phase "' + phaseName + '" : livrable "' + fk + '" duplique');
+        }
+        seenKeys.add(fk);
+
+        // Agent exists in registry
+        if (del.agent && registryAgents.size > 0 && !registryAgents.has(del.agent)) {
+          errors.push('Phase "' + phaseName + '" / ' + fk + ' : l\'agent "' + del.agent + '" n\'existe pas dans agents_registry.json');
+        }
+
+        // depends_on references exist and point to previous groups only
+        var previousGroupIds = new Set();
+        for (var pgi = 0; pgi < gi2; pgi++) {
+          previousGroupIds.add(groups[pgi].id || '');
+        }
+        for (var depIdx = 0; depIdx < (del.depends_on || []).length; depIdx++) {
+          var dep = del.depends_on[depIdx];
+          if (!allDeliverableKeys.has(dep)) {
+            errors.push('Phase "' + phaseName + '" / ' + fk + ' : depends_on "' + dep + '" introuvable');
+          } else {
+            var depGroup = dep.split(':')[0];
+            if (depGroup === gid2) {
+              errors.push('Phase "' + phaseName + '" / ' + fk + ' : depends_on "' + dep + '" reference le meme groupe ' + gid2);
+            } else if (!previousGroupIds.has(depGroup)) {
+              errors.push('Phase "' + phaseName + '" / ' + fk + ' : depends_on "' + dep + '" reference un groupe posterieur');
+            }
+          }
         }
       }
     }
   }
 
-  // 3. Validate transitions reference existing phases
-  for (const t of (_wf.data.transitions || [])) {
+  // 3. Validate transitions
+  for (var ti = 0; ti < (_wf.data.transitions || []).length; ti++) {
+    var t = _wf.data.transitions[ti];
     if (t.from && !phaseIds.includes(t.from)) {
-      errors.push(`Transition : la phase source "${t.from}" n'existe pas`);
+      errors.push('Transition : la phase source "' + t.from + '" n\'existe pas');
     }
     if (t.to && !phaseIds.includes(t.to)) {
-      errors.push(`Transition : la phase cible "${t.to}" n'existe pas`);
-    }
-  }
-
-  // 4. Check phases have at least one agent
-  for (const [phaseId, phase] of Object.entries(phases)) {
-    if (phase.type === 'external') continue;
-    if (!phase.agents || Object.keys(phase.agents).length === 0) {
-      warnings.push(`Phase "${phase.name || phaseId}" : aucun agent assigne`);
-    }
-  }
-
-  // 5. Check parallel_groups referenced by agents exist in the order list
-  const pgOrder = (_wf.data.parallel_groups && _wf.data.parallel_groups.order) || [];
-  for (const [phaseId, phase] of Object.entries(phases)) {
-    for (const [agentId, agentCfg] of Object.entries(phase.agents || {})) {
-      if (agentCfg.parallel_group && !pgOrder.includes(agentCfg.parallel_group)) {
-        warnings.push(`Phase "${phase.name || phaseId}" / ${agentId} : groupe parallele "${agentCfg.parallel_group}" n'est pas dans l'ordre des groupes`);
-      }
+      errors.push('Transition : la phase cible "' + t.to + '" n\'existe pas');
     }
   }
 

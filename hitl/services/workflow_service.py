@@ -227,15 +227,15 @@ async def get_workflow_status(
     for phase_id, phase_cfg in phases_items:
         phase_name = phase_cfg.get("name", phase_id)
 
-        # Resolve agents
+        # Flatten deliverables from groups (new format)
         agents: list[PhaseAgent] = []
         agent_ids_seen: set[str] = set()
-        raw_deliverables = phase_cfg.get("deliverables", {})
-        # Support both dict and list
-        if isinstance(raw_deliverables, dict):
-            deliverables_cfg = [{"key": k, **v} for k, v in raw_deliverables.items()]
-        else:
-            deliverables_cfg = raw_deliverables
+        deliverables_cfg = []
+        for group in phase_cfg.get("groups", []):
+            gid = group.get("id", "")
+            for d in group.get("deliverables", []):
+                key = f"{gid}:{d.get('id', '')}"
+                deliverables_cfg.append({"key": key, **d})
 
         for deliv in deliverables_cfg:
             aid = deliv.get("agent", "")
@@ -260,7 +260,7 @@ async def get_workflow_status(
             deliverables.append(PhaseDeliverable(
                 key=key,
                 agent_id=aid,
-                deliverable_type=deliv.get("deliverable_type", ""),
+                deliverable_type=deliv.get("type", deliv.get("deliverable_type", "")),
                 category=deliv.get("category"),
                 required=deliv.get("required", True),
                 status=d_status,

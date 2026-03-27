@@ -7,14 +7,14 @@ Les cles sont a la RACINE du JSON. Pas de wrapper.
 | Champ | Type | Description |
 |---|---|---|
 | `team` | `string` | Equipe source des agents (`Shared/Teams/{team}/agents_registry.json`) |
-| `phases` | `object` | Dictionnaire des phases (cle = snake_case) |
+| `phases` | `object` | Dictionnaire des phases (cle = snake_case ou `_N`) |
 | `transitions` | `array` | Transitions entre phases |
-| `parallel_groups` | `object` | Configuration des groupes paralleles |
 | `rules` | `object` | Regles globales |
+| `categories` | `array` | Categories de livrables (optionnel) |
 | `coverage_report` | `object` | Rapport de couverture agents (optionnel, genere par LLM) |
 | `missing_roles` | `array` | Postes manquants identifies (optionnel, genere par LLM) |
 
-Le champ `team` determine quelle equipe fournit les agents disponibles dans le workflow. Toutes les listes d'agents (ajout, assignation, delegation) sont construites a partir du registry de cette equipe. Le selecteur d'equipe dans l'editeur visuel met a jour ce champ.
+Le champ `team` determine quelle equipe fournit les agents disponibles dans le workflow.
 
 ## Phase
 
@@ -23,63 +23,58 @@ Le champ `team` determine quelle equipe fournit les agents disponibles dans le w
 | `name` | `string` | oui | Nom affiche |
 | `description` | `string` | non | Description fonctionnelle |
 | `order` | `integer` | oui | Ordre sequentiel (1, 2, 3...) |
-| `agents` | `object` | oui | Agents assignes a cette phase |
-| `deliverables` | `object` | oui | Livrables attendus |
+| `groups` | `array` | oui | Groupes paralleles contenant les livrables |
 | `exit_conditions` | `object` | non | Conditions de sortie |
 | `next_phase` | `string` | non | Override de transition (pour les boucles) |
 
-## Agent (dans une phase)
+### Phase externe
 
-Les agents disponibles dans le workflow proviennent du registry de l'equipe selectionnee (`Shared/Teams/{team}/agents_registry.json`). Le selecteur d'equipe dans l'editeur de workflow permet de changer l'equipe source.
+Une phase peut referencer un workflow externe :
 
 | Champ | Type | Description |
 |---|---|---|
-| `role` | `string` | Role contextualise au projet dans cette phase |
-| `required` | `boolean` | Doit terminer pour completer la phase |
-| `parallel_group` | `string` | Groupe d'execution (A, B, C) |
-| `depends_on` | `array[string]` | Agent IDs (MEME PHASE uniquement) dont les livrables doivent etre termines avant dispatch |
-| `can_delegate_to` | `array[string]` | Agent IDs vers lesquels cet agent peut deleguer du travail |
-| `delegated_by` | `string\|null` | ID de l'agent DELEGATEUR (pas de soi-meme) — si present, pas de dispatch automatique |
+| `type` | `"external"` | Marque la phase comme externe |
+| `external_workflow` | `string` | Nom du fichier `.wrk.json` reference |
 
-### depends_on (agent)
+## Groupe parallele
 
-Les valeurs sont des **agent IDs simples** de la **meme phase**. Le workflow engine ne supporte PAS les references cross-phase.
+Les groupes sont un ARRAY ordonne dans la phase. L'ordre du array determine l'ordre d'execution (le premier groupe est execute en premier).
 
+| Champ | Type | Description |
+|---|---|---|
+| `id` | `string` | Identifiant du groupe (A, B, C, ...) |
+| `deliverables` | `array` | Livrables de ce groupe |
+
+```json
+"groups": [
+  { "id": "A", "deliverables": [...] },
+  { "id": "B", "deliverables": [...] },
+  { "id": "C", "deliverables": [...] }
+]
 ```
-VALIDE :   "depends_on": ["ux_designer", "architect"]
-INVALIDE : "depends_on": ["discovery:architect:adrs"]       ← cross-phase interdit
-INVALIDE : "depends_on": ["architect:adrs"]                  ← c'est une cle livrable, pas un agent ID
-```
 
-Le moteur resout les dependances ainsi : pour chaque agent_id dans depends_on, il verifie que TOUS les livrables required de cet agent dans la meme phase sont termines.
-
-### Delegation
-
-Un agent avec `delegated_by` n'est jamais dispatche automatiquement par le workflow engine. Il est dispatche par l'agent delegateur (typiquement le lead_dev qui delegue aux devs). Le `can_delegate_to` de l'agent delegateur liste les agents qu'il peut dispatcher.
-
-`delegated_by` contient l'ID de l'agent qui DELEGUE, pas l'ID de l'agent lui-meme.
-
-```
-VALIDE :   dev_mobile a "delegated_by": "lead_dev"    ← le lead_dev delegue AU dev_mobile
-INVALIDE : dev_mobile a "delegated_by": "dev_mobile"   ← auto-reference interdite
-```
+- Groupe A dispatche en premier
+- Groupe B attend que tous les livrables required du groupe A soient termines
+- Groupe C attend que tous les livrables required du groupe B soient termines
+- Auto-dispatch recursif (max 5 niveaux)
 
 ## Livrable (deliverable)
 
-Chaque livrable represente une unite de travail assignee a un agent. La cle du livrable suit la convention `{agent_id}:{pipeline_step}` (renommage automatique dans l'editeur).
+Chaque livrable est un objet DANS un groupe. Il represente une unite de travail assignee a un agent.
 
 | Champ | Type | Requis | Description |
 |---|---|---|---|
-| `name` | `string` | non | Nom affiche du livrable (dans le diagramme et les proprietes). Si absent, la cle technique est affichee. |
-| `agent` | `string` | oui | Agent responsable |
-| `pipeline_step` | `string` | oui | Cle du step dans le pipeline de l'agent |
-| `required` | `boolean` | oui | Bloquant pour la phase |
+| `id` | `string` | oui | Identifiant unique du livrable |
+| `Name` | `string` | oui | Nom d'affichage |
+| `description` | `string` | non | Description du livrable |
+| `agent` | `string` | oui | Agent responsable (doit exister dans le registry d'equipe) |
+| `required` | `boolean` | oui | Bloquant pour la completion du groupe |
 | `type` | `string` | oui | Type de livrable (voir ci-dessous) |
-| `description` | `string` | non | Description du livrable. Editable en popup plein ecran avec generation IA (baguette magique, prompt `WriteDescription.md`). |
-| `depends_on` | `array[string]` | non | Cles de livrables prerequis (MEME PHASE uniquement, pas de cross-phase). Affiches par leur `name` dans l'editeur. |
-| `roles` | `array[string]` | non | Roles de l'agent actives pour ce livrable (depuis `Shared/Agents/{id}/role_*.md`) |
-| `missions` | `array[string]` | non | Missions de l'agent activees pour ce livrable (depuis `Shared/Agents/{id}/mission_*.md`) |
-| `skills` | `array[string]` | non | Competences de l'agent activees pour ce livrable (depuis `Shared/Agents/{id}/skill_*.md`) |
+| `depends_on` | `array[string]` | non | Format `"GROUPE_ID:LIVRABLE_ID"` — info contextuelle pour l'agent |
+| `roles` | `array[string]` | non | Roles actifs de l'agent pour ce livrable |
+| `missions` | `array[string]` | non | Missions activees |
+| `skills` | `array[string]` | non | Competences activees |
+| `category` | `string` | non | Categorie du livrable |
 
 ### Types de livrables
 
@@ -95,25 +90,26 @@ Chaque livrable represente une unite de travail assignee a un agent. La cle du l
 
 ### depends_on (livrable)
 
-Les valeurs sont des **cles de livrables** du dictionnaire `deliverables` de la **meme phase**. Le workflow engine ne supporte PAS les references cross-phase.
+Le `depends_on` est une **information contextuelle**, pas une contrainte de dispatch.
+Il dit a l'agent "utilise les resultats de ces livrables pour produire le tien".
+Le dispatch est gere uniquement par l'ordre sequentiel des groupes.
+
+Format : `"GROUPE_ID:LIVRABLE_ID"` (ex: `"A:adrs"`, `"B:openapi_spec"`)
 
 ```
-VALIDE :   "depends_on": ["architect:adrs", "ux_designer:wireframes"]
-INVALIDE : "depends_on": ["design:architect:adrs"]              ← cross-phase interdit
-INVALIDE : "depends_on": ["planning:architect:architecture_spec"] ← cross-phase interdit
+VALIDE :   "depends_on": ["A:adrs", "A:wireframes"]
+INVALIDE : "depends_on": ["architect:adrs"]              ← ancien format
+INVALIDE : "depends_on": ["design:A:adrs"]               ← cross-phase interdit
 ```
 
-Les dependances cross-phase sont gerees implicitement par les groupes paralleles et les transitions. Il n'est pas necessaire de les declarer.
+### Cle de sortie dans le state
 
-### Cle de sortie
-
-La cle de sortie dans le state est `{agent_id}:{pipeline_step}`. Elle doit etre unique par agent dans tout le workflow. Si deux livrables du meme agent ont le meme pipeline_step, le second ecrase le premier.
+`{GROUP_ID}:{deliverable_id}` — ex: `"A:adrs"`, `"B:wireframes"`
 
 ### Profil livrable (roles, missions, skills)
 
-Chaque livrable peut specifier quels roles, missions et competences de l'agent sont actives pour cette tache. Ces valeurs correspondent aux fichiers `role_*.md`, `mission_*.md` et `skill_*.md` dans le catalogue agent (`Shared/Agents/{id}/`).
-
-L'editeur de workflow propose une baguette magique (skill-match) qui appelle un LLM pour auto-selectionner les roles/missions/skills pertinents en fonction de la description du livrable et du profil de l'agent.
+Chaque livrable peut specifier quels roles, missions et competences de l'agent sont actives.
+Ces valeurs correspondent aux fichiers `role_*.md`, `mission_*.md` et `skill_*.md` dans le catalogue agent (`Shared/Agents/{id}/`).
 
 ## Transition
 
@@ -127,35 +123,12 @@ L'editeur de workflow propose une baguette magique (skill-match) qui appelle un 
 | `from_side` | `string` | Cote de sortie sur le canvas (left, right, top, bottom) |
 | `to_side` | `string` | Cote d'arrivee sur le canvas (left, right, top, bottom) |
 
-```
-VALIDE :   "transitions": [{"from": "discovery", "to": "design", "human_gate": true, "from_side": "right", "to_side": "left"}]
-INVALIDE : "transitions": {"discovery": ["design"]}   ← le moteur attend un ARRAY d'objets avec from/to
-```
-
-Les champs `from_side` et `to_side` sont utilises par l'editeur visuel pour le positionnement des fleches.
-
-## Groupes paralleles
-
-```json
-{
-  "description": "Les agents du meme groupe tournent en parallele. B attend A. C attend B.",
-  "order": ["A", "B", "C"]
-}
-```
-
-- Groupe A dispatche en premier
-- Groupe B attend que tous les livrables required du groupe A soient termines
-- Groupe C attend que tous les livrables required du groupe B soient termines
-- Auto-dispatch recursif (max 5 niveaux) : quand un groupe termine, le gateway verifie s'il y a un groupe suivant et le dispatche automatiquement
-
 ## Regles globales
 
 | Champ | Type | Description |
 |---|---|---|
 | `critical_alert_blocks_transition` | `boolean` | Bloque la transition si alertes critiques |
 | `human_gate_required_for_all_transitions` | `boolean` | Force validation humaine sur toutes les transitions |
-| `lead_dev_only_dispatcher_for_devs` | `boolean` | Seul le lead dev peut dispatcher les devs |
-| `qa_must_run_after_dev` | `boolean` | Le QA ne demarre qu'apres les devs |
 | `max_agents_parallel` | `integer` | Nombre maximum d'agents simultanes |
 
 ## Conditions de sortie
@@ -179,19 +152,19 @@ Les statuts `complete`, `pending_review` et `approved` sont consideres comme ter
 
 ## Dispatch
 
-Pour chaque groupe parallele dans l'ordre :
+Pour chaque groupe dans l'ordre du array :
 
 1. Verifier que tous les livrables required des groupes precedents sont termines
-2. Pour chaque livrable du groupe courant :
-   - Verifier que ses `depends_on` sont satisfaits
-   - Si oui, dispatcher l'agent avec le `pipeline_step` du livrable
+2. Pour chaque livrable du groupe courant non termine : dispatcher l'agent assigne
 3. Un seul groupe actif a la fois
 4. Quand le groupe courant termine, auto-dispatch du groupe suivant (recursif, max 5 niveaux)
 5. Quand tous les groupes sont termines, verifier les exit conditions de la phase
 
+Pas de delegation — tous les agents sont dispatches directement.
+
 ### Fallback disque
 
-En cas de perte de state (redemarrage), le workflow engine peut verifier l'existence de fichiers livrables sur le disque (`/root/ag.flow/projects/{slug}/{team_id}/{workflow}/`) et marquer les livrables correspondants comme `complete`.
+En cas de perte de state (redemarrage), le workflow engine peut verifier l'existence de fichiers livrables sur le disque et marquer les livrables correspondants comme `complete`.
 
 ## Fichiers associes
 
@@ -201,48 +174,19 @@ En cas de perte de state (redemarrage), le workflow engine peut verifier l'exist
 |---|---|---|
 | `Workflow.json` | `Shared/Teams/{team}/` | Workflow template d'equipe |
 | `{name}.wrk.json` | `Shared/Projects/{project}/` | Workflow de projet |
-| `{name}.wrk.design.json` | `Shared/Projects/{project}/` | Positions des phases sur le canvas (fichier design) |
-| `workflows_design.json` | `Shared/Teams/{team}/` | Positions des phases pour le workflow template |
+| `{name}.wrk.design.json` | `Shared/Projects/{project}/` | Positions des phases sur le canvas |
+| `{name}.wrk.phase.{id}.md` | `Shared/Projects/{project}/` | Prompt orchestrateur par phase |
 
 ### Agents
 
 | Fichier | Emplacement | Description |
 |---|---|---|
-| `agents_registry.json` | `Shared/Teams/{team}/` | Liste des agents de l'equipe avec type, pipeline_steps |
-| `agent.json` | `Shared/Agents/{id}/` | Config agent (nom, type, capabilities, delivers_*) |
-| `identity.md` | `Shared/Agents/{id}/` | Identite de l'agent |
-| `role_*.md` | `Shared/Agents/{id}/` | Fichiers de roles (un par role) |
-| `mission_*.md` | `Shared/Agents/{id}/` | Fichiers de missions (un par mission) |
-| `skill_*.md` | `Shared/Agents/{id}/` | Fichiers de competences (un par competence) |
+| `agents_registry.json` | `Shared/Teams/{team}/` | Liste des agents de l'equipe |
+| `agent.json` | `Shared/Agents/{id}/` | Config agent |
+| `role_*.md` | `Shared/Agents/{id}/` | Fichiers de roles |
+| `mission_*.md` | `Shared/Agents/{id}/` | Fichiers de missions |
+| `skill_*.md` | `Shared/Agents/{id}/` | Fichiers de competences |
 
-## Editeur visuel
+## Migration depuis l'ancien format
 
-### Layout
-
-L'onglet Templates > Projets utilise un layout inline (pas de popup) :
-
-- **Selecteur projet** : dropdown filtrable (nom, description, equipe) avec crayon pour editer les proprietes
-- **Barre d'actions** : `+ Projet`, `+ Workflow`, engrenage (prompt orchestrateur) — les deux derniers apparaissent quand un projet est selectionne
-- **Chips workflows** : tags cliquables pour chaque workflow du projet. Cliquer ouvre l'editeur inline, re-cliquer le ferme
-- **Editeur fullscreen** : l'editeur de workflow s'ouvre en `position: fixed` couvrant toute la page (z-index 200)
-- **Fleche retour** (en haut a gauche) : quitte l'editeur avec confirmation si modifications non sauvegardees
-
-### Canvas et proprietes
-
-- **Canvas visuel** avec phases draggables et fleches de transition (courbes de Bezier)
-- **Splitter vertical** entre le canvas et le panneau de proprietes — redimensionnable par drag (min 200px, max 60%)
-- **Boite a outils** : icone "Phase" draggable — glisser-deposer sur le canvas pour creer une phase a la position du drop
-- **Clic droit sur une phase** : menu contextuel avec "Supprimer" (confirmation requise)
-- **Clic sur un livrable** dans le diagramme : selectionne la phase, ouvre la section Livrables dans les proprietes, et deplie le livrable cible
-- **Livrables collapses** par defaut dans les proprietes — comportement accordeon (deplier un collapse les autres)
-- **Diagramme** : les livrables affichent leur `name` (si defini) au lieu de la cle technique
-
-### Outils IA
-
-- **Baguette magique skill-match** (sur le titre du livrable) : auto-selectionne roles/missions/skills en fonction de la description
-- **Baguette magique description** (dans la popup d'edition de description) : genere une description via le prompt `WriteDescription.md` avec variables contextuelles (deliverable_key, agent_id, agent_name, deliverable_type, phase_name, project_description, current_description). Les appels sont traces dans `Shared/Projects/{project}/chat/`
-- **Selecteur d'equipe** dans les proprietes du workflow — charge les agents depuis le registry de l'equipe selectionnee
-- **Ajout d'agents** par dropdown — liste filtree depuis le registry de l'equipe
-- **Groupes paralleles** editables (A → Z)
-- **Vue JSON** pour edition directe du workflow
-- **Double fichier** : le workflow (`.wrk.json`) et le design (`.wrk.design.json`) sont sauvegardes separement
+L'ancien format utilisait des blocs `agents` et `deliverables` separes dans la phase, avec `parallel_group` sur chaque agent. Le script `migrate_groups.py` convertit automatiquement les fichiers `.wrk.json` vers le nouveau format `groups`.
