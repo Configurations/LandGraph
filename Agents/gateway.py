@@ -1102,6 +1102,7 @@ class InvokeRequest(BaseModel):
     team_id: str = ""
     direct_agent: str = ""
     deliverable_step: str = ""  # If set, run only this step (for remark re-invocation)
+    system_prompt: str = ""  # Optional system prompt injected by HITL chat
 
 class InvokeResponse(BaseModel):
     output: str
@@ -1115,6 +1116,8 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
     try:
         channel_id = request.channel_id
         msgs = [(m.get("role", "user"), m.get("content", "")) for m in request.messages]
+        if request.system_prompt:
+            msgs.insert(0, ("system", request.system_prompt))
 
         # Resoudre l'equipe pour ce channel (ou team_id explicite)
         if request.team_id:

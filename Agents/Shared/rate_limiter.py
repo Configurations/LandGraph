@@ -112,15 +112,15 @@ def get_throttle(env_key: str) -> ProviderThrottle:
 
 def throttled_invoke(llm, messages, provider_name: str = "", model: str = "", estimated_tokens: int = 1000, callbacks: list | None = None):
     env_key = "_default"
-    if provider_name:
-        env_key = _get_env_key_for_provider(provider_name)
-    elif model:
-        env_key = _get_env_key_for_provider(model)
+    resolved = provider_name or getattr(llm, "_provider_name", "") or model
+    if resolved:
+        env_key = _get_env_key_for_provider(resolved)
 
     throttle = get_throttle(env_key)
     last_error = None
     invoke_kwargs = {"config": {"callbacks": callbacks}} if callbacks else {}
 
+    logger.info(f"Invoke [{env_key}]: provider={resolved}, attempt start")
     for attempt in range(MAX_RETRIES + 1):
         throttle.wait_if_needed(estimated_tokens)
         try:

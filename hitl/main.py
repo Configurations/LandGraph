@@ -104,6 +104,41 @@ async def _ensure_schema() -> None:
         AFTER INSERT ON project.hitl_chat_messages
         FOR EACH ROW EXECUTE FUNCTION notify_hitl_chat()
     """)
+    # PG NOTIFY trigger for dispatcher_task_events → task_progress / task_artifact
+    await execute("""
+        CREATE OR REPLACE FUNCTION notify_task_event() RETURNS trigger AS $$
+        DECLARE
+            channel TEXT;
+            v_team_id TEXT;
+        BEGIN
+            IF NEW.event_type IN ('progress', 'result') THEN
+                channel := 'task_progress';
+            ELSIF NEW.event_type = 'artifact' THEN
+                channel := 'task_artifact';
+            ELSE
+                RETURN NEW;
+            END IF;
+            SELECT team_id INTO v_team_id FROM project.dispatcher_tasks WHERE id = NEW.task_id;
+            PERFORM pg_notify(channel, json_build_object(
+                'id', NEW.id,
+                'task_id', NEW.task_id,
+                'team_id', COALESCE(v_team_id, ''),
+                'event_type', NEW.event_type,
+                'data', NEW.data,
+                'created_at', NEW.created_at
+            )::text);
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+    """)
+    await execute(
+        "DROP TRIGGER IF EXISTS task_event_notify ON project.dispatcher_task_events"
+    )
+    await execute("""
+        CREATE TRIGGER task_event_notify
+        AFTER INSERT ON project.dispatcher_task_events
+        FOR EACH ROW EXECUTE FUNCTION notify_task_event()
+    """)
 
 
 async def _seed_admin() -> None:
@@ -222,6 +257,7 @@ from routes.workflows import router as workflows_router
 from routes.project_types import router as project_types_router
 from routes.automation import router as automation_router
 from routes.project_detail import router as project_detail_router
+from routes.logs import router as logs_router
 
 app.include_router(health_router)
 app.include_router(auth_router)
@@ -246,6 +282,7 @@ app.include_router(workflows_router)
 app.include_router(project_types_router)
 app.include_router(automation_router)
 app.include_router(project_detail_router)
+app.include_router(logs_router)
 
 # Serve avatar images if directory exists (Docker volume mount)
 _avatars_dir = os.environ.get("AVATARS_DIR", "/app/avatars")

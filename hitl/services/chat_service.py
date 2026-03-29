@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -14,6 +17,10 @@ from schemas.chat import ChatMessageResponse
 log = structlog.get_logger(__name__)
 
 _GATEWAY_TIMEOUT = 120.0
+
+# Shared directory for loading project prompts
+_SHARED_DIR = Path(os.environ.get("SHARED_DIR", "/app/Shared"))
+_PROJECTS_DIR = _SHARED_DIR / "Projects"
 
 
 async def get_history(
@@ -53,9 +60,28 @@ async def send_message(
     agent_id: str,
     user_email: str,
     content: str,
+    project_id: str = "",
+    chat_id: str = "",
 ) -> ChatMessageResponse:
     """Send a message to an agent and return the agent's response."""
     thread_id = f"hitl-chat-{team_id}-{agent_id}"
+    if project_id and chat_id:
+        thread_id = f"hitl-chat-{team_id}-{agent_id}-{project_id}-{chat_id}"
+
+    log.info(
+        "chat_send_message",
+        team_id=team_id,
+        agent_id=agent_id,
+        thread_id=thread_id,
+        user=user_email,
+        project_id=project_id or None,
+        chat_id=chat_id or None,
+    )
+
+    # Load agent prompt if project/chat context is set
+    system_prompt = ""
+    if project_id and chat_id:
+        system_prompt = _load_agent_prompt(project_id, chat_id, agent_id)
 
     # Insert user message
     await execute(
@@ -68,7 +94,7 @@ async def send_message(
     )
 
     # Call gateway
-    agent_content = await _invoke_agent(team_id, agent_id, thread_id, content)
+    agent_content = await _invoke_agent(team_id, agent_id, thread_id, content, system_prompt=system_prompt)
 
     # Insert agent response
     row = await fetch_one(
@@ -91,15 +117,47 @@ async def send_message(
     )
 
 
+def _load_agent_prompt(project_id: str, chat_id: str, agent_id: str) -> str:
+    """Load the generated agent prompt from the project directory."""
+    project_dir = _PROJECTS_DIR / project_id
+    if not project_dir.exists():
+        log.warning("chat_project_not_found", project_id=project_id)
+        return ""
+    # Read project.json to find chat config
+    pj_file = project_dir / "project.json"
+    if not pj_file.exists():
+        return ""
+    try:
+        pj = json.loads(pj_file.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    chats = pj.get("chats", [])
+    chat = next((c for c in chats if c.get("id") == chat_id), None)
+    if not chat:
+        return ""
+    agent_prompts = chat.get("agent_prompts", {})
+    prompt_file = agent_prompts.get(agent_id, "")
+    if not prompt_file:
+        return ""
+    prompt_path = project_dir / prompt_file
+    if not prompt_path.exists():
+        log.warning("chat_agent_prompt_not_found", path=str(prompt_path))
+        return ""
+    return prompt_path.read_text(encoding="utf-8")
+
+
 async def _invoke_agent(
     team_id: str,
     agent_id: str,
     thread_id: str,
     message: str,
+    system_prompt: str = "",
 ) -> str:
     """POST to the gateway /invoke endpoint. Returns agent response text."""
+    config_key = "langgraph_api_url" if settings.langgraph_api_url else "dispatcher_url"
     url = settings.langgraph_api_url or settings.dispatcher_url
     if not url:
+        log.error("chat_invoke_no_url", agent_id=agent_id)
         return "[error: no gateway URL configured]"
 
     invoke_url = f"{url.rstrip('/')}/invoke"
@@ -109,12 +167,30 @@ async def _invoke_agent(
         "thread_id": thread_id,
         "direct_agent": agent_id,
     }
+    if system_prompt:
+        payload["system_prompt"] = system_prompt
+
+    log.info(
+        "chat_invoke_agent",
+        config_key=config_key,
+        url=invoke_url,
+        agent_id=agent_id,
+        team_id=team_id,
+        thread_id=thread_id,
+        has_system_prompt=bool(system_prompt),
+    )
 
     try:
         async with httpx.AsyncClient(timeout=_GATEWAY_TIMEOUT) as client:
             resp = await client.post(invoke_url, json=payload)
             resp.raise_for_status()
             data = resp.json()
+            log.info(
+                "chat_invoke_ok",
+                agent_id=agent_id,
+                status=resp.status_code,
+                response_keys=list(data.keys()),
+            )
             return data.get("output", data.get("response", data.get("content", "")))
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code

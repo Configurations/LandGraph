@@ -6,13 +6,14 @@
   <title>ag.flow Admin</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/style.css?v=20260327b">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260329b">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/codemirror.min.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/theme/material-darker.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/codemirror.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/addon/mode/simple.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/mode/dockerfile/dockerfile.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/mode/shell/shell.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/mode/markdown/markdown.min.js"></script>
 </head>
 <body>
   <div class="app-layout">
@@ -264,15 +265,29 @@
             <button class="btn-icon proj-selector-action" id="ppj-btn-edit" onclick="_projEditSelected()" title="Editer le projet" style="display:none">&#9998;</button>
             <button class="btn-icon proj-selector-action" id="ppj-btn-delete" onclick="_projDeleteSelected()" title="Supprimer le projet" style="display:none">&times;</button>
             <button class="btn btn-primary btn-sm" onclick="showAddProjectModal()">+ Projet</button>
-            <button class="btn btn-outline btn-sm" id="ppj-btn-add-wf" onclick="_projAddWorkflow()" style="display:none">+ Workflow</button>
-            <button class="btn-icon proj-selector-action" id="ppj-btn-orch" onclick="_projBuildOrchPrompt()" title="Generer prompt orchestrateur" style="display:none">&#9881;</button>
             <button class="btn btn-outline btn-sm" onclick="copyProdProjectsFromConfig()">Copier depuis Configuration</button>
           </div>
           <div id="ppj-content" class="proj-content" style="display:none">
-            <div class="proj-wf-bar">
-              <div class="proj-wf-chips" id="ppj-wf-chips"></div>
+            <div class="proj-section-header" onclick="_projToggleSection('workflows')">
+              <span class="proj-section-arrow" id="ppj-section-arrow-workflows">&#9660;</span>
+              <h4 style="margin:0;font-size:0.85rem;">Workflows</h4>
+              <button class="btn btn-outline btn-sm" id="ppj-btn-add-wf-inline" onclick="event.stopPropagation();_projAddWorkflow()" style="margin-left:auto;font-size:0.7rem;">+ Workflow</button>
             </div>
-            <div id="ppj-wf-editor" class="proj-wf-editor"></div>
+            <div id="ppj-section-workflows">
+              <div class="proj-wf-bar">
+                <div class="proj-wf-chips" id="ppj-wf-chips"></div>
+              </div>
+              <div id="ppj-wf-timeline" class="proj-wf-timeline"></div>
+              <div id="ppj-wf-editor" class="proj-wf-editor"></div>
+            </div>
+            <div class="proj-section-header" onclick="_projToggleSection('chats')">
+              <span class="proj-section-arrow" id="ppj-section-arrow-chats">&#9660;</span>
+              <h4 style="margin:0;font-size:0.85rem;">Chats</h4>
+              <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();_projAddChat()" style="margin-left:auto;font-size:0.7rem;">+ Chat</button>
+            </div>
+            <div id="ppj-section-chats">
+              <div id="ppj-chats-list"></div>
+            </div>
           </div>
         </div>
 
@@ -668,16 +683,29 @@
             <button class="btn-icon proj-selector-action" id="proj-btn-edit" onclick="_projEditSelected()" title="Editer le projet" style="display:none">&#9998;</button>
             <button class="btn-icon proj-selector-action" id="proj-btn-delete" onclick="_projDeleteSelected()" title="Supprimer le projet" style="display:none">&times;</button>
             <button class="btn btn-primary btn-sm" onclick="showAddProjectModal()">+ Projet</button>
-            <button class="btn btn-outline btn-sm" id="proj-btn-add-wf" onclick="_projAddWorkflow()" style="display:none">+ Workflow</button>
-            <button class="btn-icon proj-selector-action" id="proj-btn-orch" onclick="_projBuildOrchPrompt()" title="Generer prompt orchestrateur" style="display:none">&#9881;</button>
           </div>
-          <!-- Project content: workflows -->
+          <!-- Project content: workflows + chats -->
           <div id="proj-content" class="proj-content" style="display:none">
-            <div class="proj-wf-bar">
-              <div class="proj-wf-chips" id="proj-wf-chips"></div>
+            <div class="proj-section-header" onclick="_projToggleSection('workflows')">
+              <span class="proj-section-arrow" id="proj-section-arrow-workflows">&#9660;</span>
+              <h4 style="margin:0;font-size:0.85rem;">Workflows</h4>
+              <button class="btn btn-outline btn-sm" id="proj-btn-add-wf-inline" onclick="event.stopPropagation();_projAddWorkflow()" style="margin-left:auto;font-size:0.7rem;">+ Workflow</button>
             </div>
-            <div id="proj-wf-timeline" class="proj-wf-timeline"></div>
-            <div id="proj-wf-editor" class="proj-wf-editor"></div>
+            <div id="proj-section-workflows">
+              <div class="proj-wf-bar">
+                <div class="proj-wf-chips" id="proj-wf-chips"></div>
+              </div>
+              <div id="proj-wf-timeline" class="proj-wf-timeline"></div>
+              <div id="proj-wf-editor" class="proj-wf-editor"></div>
+            </div>
+            <div class="proj-section-header" onclick="_projToggleSection('chats')">
+              <span class="proj-section-arrow" id="proj-section-arrow-chats">&#9660;</span>
+              <h4 style="margin:0;font-size:0.85rem;">Chats</h4>
+              <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();_projAddChat()" style="margin-left:auto;font-size:0.7rem;">+ Chat</button>
+            </div>
+            <div id="proj-section-chats">
+              <div id="proj-chats-list"></div>
+            </div>
           </div>
         </div>
 
@@ -1646,6 +1674,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="/static/js/app.js?v=20260327b"></script>
+  <script src="/static/js/app.js?v=20260329b"></script>
 </body>
 </html>

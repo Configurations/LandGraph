@@ -98,8 +98,9 @@ async def _load_deduced_prompt(
 ) -> Optional[str]:
     """Load the orchestrator prompt deduced at step 3 of the wizard.
 
-    Returns the prompt content with project context injected, or None if
-    no deduced prompt is available (fallback to default instruction).
+    First tries to load the onboarding chat prompt from the project type config.
+    Falls back to the legacy phase prompt if no chat is configured.
+    Returns the prompt content with project context injected, or None.
     """
     from services import wizard_data_service
     from services.project_type_service import _shared_projects_dir
@@ -109,11 +110,41 @@ async def _load_deduced_prompt(
         return None
 
     type_id = step3.get("selectedTypeId", "")
-    prompt_filename = step3.get("orchestratorPrompt", "")
-    if not type_id or not prompt_filename:
+    if not type_id:
         return None
 
-    prompt_path = os.path.join(_shared_projects_dir(), type_id, prompt_filename)
+    type_dir = os.path.join(_shared_projects_dir(), type_id)
+
+    # Try onboarding chat prompt from project.json
+    pj_path = os.path.join(type_dir, "project.json")
+    if os.path.isfile(pj_path):
+        try:
+            with open(pj_path, encoding="utf-8") as f:
+                pj = json.load(f)
+            chats = pj.get("chats", [])
+            onboarding_chat = next((c for c in chats if c.get("type") == "onboarding"), None)
+            if onboarding_chat:
+                prompt_file = onboarding_chat.get("prompt", "")
+                if prompt_file:
+                    prompt_path = os.path.join(type_dir, prompt_file)
+                    if os.path.isfile(prompt_path):
+                        with open(prompt_path, encoding="utf-8") as f:
+                            prompt_content = f.read()
+                        doc_list = "\n".join(f"- {d}" for d in documents) if documents else "(aucun document)"
+                        return (
+                            f"Nouveau projet : {project_name} (slug: {project_slug})\n\n"
+                            f"Documents fournis (consultables via RAG) :\n{doc_list}\n\n"
+                            f"---\n\n{prompt_content}"
+                        )
+        except Exception:
+            pass
+
+    # Fallback: legacy phase prompt
+    prompt_filename = step3.get("orchestratorPrompt", "")
+    if not prompt_filename:
+        return None
+
+    prompt_path = os.path.join(type_dir, prompt_filename)
     if not os.path.isfile(prompt_path):
         log.warning(
             "deduced_prompt_not_found",
@@ -131,6 +162,40 @@ async def _load_deduced_prompt(
         f"Documents fournis (consultables via RAG) :\n{doc_list}\n\n"
         f"---\n\n{prompt_content}"
     )
+
+
+async def _load_onboarding_system_prompt(project_slug: str) -> str:
+    """Load the raw orchestrator system prompt from the onboarding chat config."""
+    from services import wizard_data_service
+    from services.project_type_service import _shared_projects_dir
+
+    step3 = await wizard_data_service.get_step(project_slug, 3)
+    if not step3:
+        return ""
+    type_id = step3.get("selectedTypeId", "")
+    if not type_id:
+        return ""
+    type_dir = os.path.join(_shared_projects_dir(), type_id)
+    pj_path = os.path.join(type_dir, "project.json")
+    if not os.path.isfile(pj_path):
+        return ""
+    try:
+        with open(pj_path, encoding="utf-8") as f:
+            pj = json.load(f)
+        chats = pj.get("chats", [])
+        onboarding_chat = next((c for c in chats if c.get("type") == "onboarding"), None)
+        if not onboarding_chat:
+            return ""
+        prompt_file = onboarding_chat.get("prompt", "")
+        if not prompt_file:
+            return ""
+        prompt_path = os.path.join(type_dir, prompt_file)
+        if not os.path.isfile(prompt_path):
+            return ""
+        with open(prompt_path, encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        return ""
 
 
 # ── Public API ───────────────────────────────────────────────────
@@ -167,9 +232,11 @@ async def start_analysis(
     rag_endpoint = f"{settings.hitl_internal_url}/api/internal/rag/search"
 
     # Try to load deduced orchestrator prompt from create-project.json
-    instruction = await _load_deduced_prompt(project_slug, project_name, documents)
-    if not instruction:
-        instruction = _build_instruction(project_slug, project_name, team_name, documents)
+    deduced_prompt = await _load_deduced_prompt(project_slug, project_name, documents)
+    instruction = deduced_prompt or _build_instruction(project_slug, project_name, team_name, documents)
+
+    # Load raw system prompt from onboarding chat (if available)
+    system_prompt = await _load_onboarding_system_prompt(project_slug)
 
     # Create a tracking task row in dispatcher_tasks (for event storage)
     task_row = await fetch_one(
@@ -188,6 +255,7 @@ async def start_analysis(
         "team_id": team_id,
         "thread_id": thread_id,
         "project_slug": project_slug,
+        "system_prompt": system_prompt,
     }
 
     try:
@@ -449,6 +517,9 @@ async def send_free_message(
 
     thread_id = f"{ONBOARDING_THREAD_PREFIX}{project_slug}"
 
+    # Load system prompt from onboarding chat
+    system_prompt = await _load_onboarding_system_prompt(project_slug)
+
     # Call gateway /invoke (full multi-agent orchestration)
     gateway_url = settings.langgraph_api_url or "http://langgraph-api:8000"
     invoke_payload: dict[str, Any] = {
@@ -456,6 +527,7 @@ async def send_free_message(
         "team_id": team_id,
         "thread_id": thread_id,
         "project_slug": project_slug,
+        "system_prompt": system_prompt,
     }
 
     try:

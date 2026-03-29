@@ -77,7 +77,8 @@ export function WizardStepAnalysis({ className = '' }: WizardStepAnalysisProps):
     const d = ev.data ?? {};
 
     if (ev.type === 'task_progress' && d.task_id === taskId) {
-      const content = typeof d.data === 'string' ? d.data : JSON.stringify(d.data);
+      const raw = d.data as string | Record<string, unknown>;
+      const content = typeof raw === 'string' ? raw : (String((raw as Record<string, unknown>)?.data ?? JSON.stringify(raw)));
       addMessage({
         id: `ws-prog-${Date.now()}`,
         sender: 'agent',

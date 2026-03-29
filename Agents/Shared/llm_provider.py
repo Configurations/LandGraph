@@ -43,6 +43,7 @@ def list_providers() -> dict:
 def _create_anthropic(model, temperature, max_tokens, env_key="", **kw):
     from langchain_anthropic import ChatAnthropic
     k = os.getenv(env_key, "")
+    logger.info(f"LLM Anthropic: env_key={env_key}, key={'***' + k[-4:] if k and len(k) > 4 else 'MISSING'}")
     return ChatAnthropic(model=model, temperature=temperature, max_tokens=max_tokens, api_key=k if k else None)
 
 def _create_openai(model, temperature, max_tokens, env_key="", base_url=None, **kw):
@@ -98,13 +99,16 @@ def _detect_type(model):
     return "anthropic"
 
 def create_llm(provider_name=None, temperature=0.3, max_tokens=32768):
-    if not provider_name: provider_name = get_default_provider()
-    conf = get_provider_config(provider_name)
+    resolved = provider_name or get_default_provider()
+    conf = get_provider_config(resolved)
     provider_type = conf.get("type", "auto")
-    model = conf.get("model", provider_name)
+    model = conf.get("model", resolved)
     if provider_type == "auto": provider_type = _detect_type(model)
     factory = FACTORIES.get(provider_type, _create_anthropic)
-    logger.info(f"LLM: {provider_name} -> {provider_type}/{model}")
+    env_key = conf.get("env_key", "")
+    logger.info(f"LLM: {resolved} -> {provider_type}/{model} (env_key={env_key})")
     skip = {"type", "model", "description"}
     extra = {k: v for k, v in conf.items() if k not in skip}
-    return factory(model=model, temperature=temperature, max_tokens=max_tokens, **extra)
+    llm = factory(model=model, temperature=temperature, max_tokens=max_tokens, **extra)
+    llm._provider_name = resolved
+    return llm

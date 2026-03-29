@@ -23,6 +23,8 @@ class SendMessageRequest(BaseModel):
     """Send a message to an agent."""
 
     message: str
+    project_id: str = ""
+    chat_id: str = ""
 
 
 class AgentResponse(BaseModel):

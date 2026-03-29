@@ -14,6 +14,7 @@ import { AgentChatPage } from './pages/AgentChatPage';
 import { IssuesPage } from './pages/IssuesPage';
 import { ReviewsPage } from './pages/ReviewsPage';
 import { PulsePage } from './pages/PulsePage';
+import { LogsPage } from './pages/LogsPage';
 import { ProjectDetailPage } from './pages/ProjectDetailPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { AuthGuard } from './components/layout/AuthGuard';
@@ -40,6 +41,7 @@ export const router = createBrowserRouter([
       { path: 'projects/:slug/deliverables', element: <ProjectDeliverablesPage /> },
       { path: 'reviews', element: <ReviewsPage /> },
       { path: 'pulse', element: <PulsePage /> },
+      { path: 'logs', element: <LogsPage /> },
       { path: 'teams/:teamId/members', element: <TeamMembersPage /> },
       { path: 'teams/:teamId/agents', element: <AgentsPage /> },
       { path: 'teams/:teamId/agents/:agentId/chat', element: <AgentChatPage /> },

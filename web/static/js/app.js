@@ -1,5 +1,18 @@
 /* ag.flow Admin — Frontend */
 
+// ── Marked config: escape XML-like tags so they render as visible text ──
+if (typeof marked !== 'undefined') {
+  marked.setOptions({ breaks: true });
+  marked.use({
+    renderer: {
+      html: function(token) {
+        var raw = typeof token === 'string' ? token : (token.raw || token.text || '');
+        return raw.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      }
+    }
+  });
+}
+
 // ── State ──────────────────────────────────────────
 let envEntries = [];
 let mcpServers = {};
@@ -4406,8 +4419,6 @@ function _projSelectProject(id) {
     _projEl('content').style.display = 'none';
     _projEl('btn-edit').style.display = 'none';
     _projEl('btn-delete').style.display = 'none';
-    _projEl('btn-add-wf').style.display = 'none';
-    _projEl('btn-orch').style.display = 'none';
     return;
   }
   _projSelectedId = id;
@@ -4415,11 +4426,10 @@ function _projSelectProject(id) {
   input.value = p.name || p.id;
   _projEl('btn-edit').style.display = '';
   _projEl('btn-delete').style.display = '';
-  _projEl('btn-add-wf').style.display = '';
-  _projEl('btn-orch').style.display = '';
   _projEl('content').style.display = '';
   _projRenderSelector();
   _projRenderWorkflows();
+  _projRenderChats();
 }
 
 // Close dropdown on outside click (both scopes)
@@ -4455,9 +4465,6 @@ function _projRenderWorkflows() {
 
 let _projExpandedWf = null;
 let _projTimelineTab = {};  // wfName -> active tab
-let _projPhaseFilesCache = {};  // wfName -> files array
-let _projPhaseContentCache = {};  // "wfName:phaseId" -> content
-let _projOpenFileId = {};  // wfName -> currently open file phase_id
 let _projWrkJsonCache = {};  // wfName -> parsed wrk.json phases dict
 
 async function _projRenderTimeline(p, wfs) {
@@ -4467,7 +4474,7 @@ async function _projRenderTimeline(p, wfs) {
   // Load project.json metadata to get workflow details (mode, priority, depends_on)
   let wfMeta = {};
   try {
-    const pjData = await api('/api/templates/projects/' + encodeURIComponent(p.id) + '/project-json');
+    const pjData = await api(_projApiBase + '/' + encodeURIComponent(p.id) + '/project-json');
     const metaWfs = (pjData && pjData.workflows) || [];
     metaWfs.forEach(function(m) {
       const base = (m.filename || '').replace('.wrk.json', '');
@@ -4509,9 +4516,7 @@ async function _projRenderTimeline(p, wfs) {
     if (isExp) {
       var tab = _projTimelineTab[wf.name] || 'phases';
       bodyHtml = '<div class="proj-wf-tabs">' +
-        '<div class="proj-wf-tab' + (tab === 'phases' ? ' active' : '') + '" onclick="_projSwitchTab(\'' + escHtml(wf.name) + '\',\'phases\')">Phases</div>' +
-        '<div class="proj-wf-tab' + (tab === 'prompt' ? ' active' : '') + '" onclick="_projSwitchTab(\'' + escHtml(wf.name) + '\',\'prompt\')">Prompt Orchestrateur</div>' +
-        '<div class="proj-wf-tab' + (tab === 'files' ? ' active' : '') + '" onclick="_projSwitchTab(\'' + escHtml(wf.name) + '\',\'files\')">Fichiers</div>' +
+        '<div class="proj-wf-tab active">Phases</div>' +
       '</div>' +
       '<div class="proj-wf-tab-content" id="' + _projPrefix + '-wf-tab-content-' + escHtml(wf.name) + '"></div>';
     }
@@ -4557,19 +4562,10 @@ async function _projLoadTabContent(wfName) {
   var el = document.getElementById(_projPrefix + '-wf-tab-content-' + wfName);
   if (!el) return;
 
-  // Ensure phase files are loaded
-  if (!_projPhaseFilesCache[wfName]) {
-    try {
-      var res = await api('/api/templates/projects/' + encodeURIComponent(_projSelectedId) + '/workflows/' + encodeURIComponent(wfName) + '/phase-files');
-      _projPhaseFilesCache[wfName] = res.files || [];
-    } catch { _projPhaseFilesCache[wfName] = []; }
-  }
-  var files = _projPhaseFilesCache[wfName];
-
   // Ensure wrk.json phases are loaded (for names, order, agents, deliverables)
   if (!_projWrkJsonCache[wfName]) {
     try {
-      var wrkRes = await api('/api/templates/projects/' + encodeURIComponent(_projSelectedId) + '/workflows/' + encodeURIComponent(wfName));
+      var wrkRes = await api(_projApiBase + '/' + encodeURIComponent(_projSelectedId) + '/workflows/' + encodeURIComponent(wfName));
       var wrkData = JSON.parse(wrkRes.content || '{}');
       _projWrkJsonCache[wfName] = wrkData.phases || {};
       _projWrkJsonCache['_transitions_' + wfName] = wrkData.transitions || [];
@@ -4616,96 +4612,72 @@ async function _projLoadTabContent(wfName) {
         var tc = {documentation:'#8b5cf6',code:'#3b82f6',design:'#ec4899',automation:'#f59e0b',tasklist:'#10b981',specs:'#06b6d4',contract:'#f97316'};
         var delsHtml = (g.deliverables || []).map(function(d) {
           var color = tc[d.type] || '';
-          return '<span class="wf-mini-chip"' + (color ? ' style="border-left:3px solid ' + color + '"' : '') + '>' +
-            escHtml(d.Name || d.id) + ' <span style="opacity:0.6;font-size:0.6rem;">' + escHtml(d.agent || '') + '</span></span>';
+          var livrCollapseId = 'proj-livr-md-' + ph.id + '-' + (g.id || gi) + '-' + (d.id || '') + '-' + (d.agent || '');
+          var livrLink = d.agent ? ' <a href="#" class="wf-group-prompt-link" onclick="event.preventDefault();_projToggleDeliverablePrompt(\'' + escHtml(ph.id) + '\',\'' + escHtml(g.id || '' + gi) + '\',\'' + escHtml(d.id || '') + '\',\'' + escHtml(d.agent || '') + '\',\'' + escHtml(livrCollapseId) + '\')" title="Voir le prompt agent">&#128203;</a>' : '';
+          return '<div class="wf-mini-chip" style="display:block;margin-bottom:2px;' + (color ? 'border-left:3px solid ' + color + ';' : '') + '">' +
+            livrLink + escHtml(d.Name || d.id) + ' <span style="opacity:0.6;font-size:0.6rem;">' + escHtml(d.agent || '') + '</span>' +
+            '<div id="' + escHtml(livrCollapseId) + '" class="wf-group-prompt-panel" style="display:none"></div>' +
+          '</div>';
         }).join('');
+        var collapseId = 'proj-phase-md-' + ph.id + '-' + (g.id || gi);
         var groupArrow = gi < ph.groups.length - 1 ? '<div style="text-align:center;font-size:0.7rem;color:var(--text-muted);padding:0.15rem 0;">↓</div>' : '';
         return '<div style="margin-bottom:0.15rem;">' +
-          '<span style="font-size:0.6rem;font-weight:600;color:var(--accent);margin-right:0.3rem;">Groupe ' + escHtml(g.id) + '</span>' +
-          '<div style="display:flex;flex-wrap:wrap;gap:0.2rem;margin-top:0.15rem;">' + delsHtml + '</div>' +
+          '<div style="display:flex;align-items:center;gap:0.3rem;">' +
+            '<span style="font-size:0.6rem;font-weight:600;color:var(--accent);">Groupe ' + escHtml(g.id) + '</span>' +
+            '<a href="#" class="wf-group-prompt-link" onclick="event.preventDefault();_projToggleGroupPrompt(\'' + escHtml(ph.id) + '\',\'' + escHtml(g.id || '' + gi) + '\',\'' + escHtml(collapseId) + '\')" title="Voir le prompt genere">&#128196;</a>' +
+          '</div>' +
+          '<div id="' + escHtml(collapseId) + '" class="wf-group-prompt-panel" style="display:none"></div>' +
+          '<div style="display:flex;flex-direction:column;gap:2px;margin-top:0.15rem;">' + delsHtml + '</div>' +
         '</div>' + groupArrow;
       }).join('');
       var gateHtml = ph.humanGate ? '<div style="font-size:0.65rem;color:var(--warning,#f39c12);margin-top:0.25rem;">🔒 human gate</div>' : '';
       return '<div class="proj-wf-phase-card"><h5>' + escHtml(ph.name) + '</h5>' + groupsHtml + gateHtml + '</div>' + arrow;
     }).join('') + '</div>';
 
-  } else if (tab === 'prompt') {
-    // Sort files by phase order
-    var orderedFiles = files.slice().sort(function(a, b) {
-      var pa = phasesDict[a.phase_id], pb = phasesDict[b.phase_id];
-      return ((pa && pa.order) || 999) - ((pb && pb.order) || 999);
-    });
-    if (orderedFiles.length === 0) {
-      el.innerHTML = '<span style="font-size:0.75rem;color:var(--text-muted)">Aucun prompt disponible</span>';
-      return;
-    }
-    var first = orderedFiles[0];
-    var cacheKey = wfName + ':' + first.phase_id;
-    if (!_projPhaseContentCache[cacheKey]) {
-      el.innerHTML = '<span style="font-size:0.75rem;color:var(--text-muted)">Chargement...</span>';
-      try {
-        var res = await api('/api/templates/projects/' + encodeURIComponent(_projSelectedId) + '/workflows/' + encodeURIComponent(wfName) + '/phase-files/' + encodeURIComponent(first.phase_id));
-        _projPhaseContentCache[cacheKey] = res.content || '';
-      } catch { _projPhaseContentCache[cacheKey] = '(erreur de chargement)'; }
-    }
-    el.innerHTML = '<div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:0.3rem;">📄 ' + escHtml(first.filename) + '</div>' +
-      '<div class="proj-wf-prompt-viewer">' + escHtml(_projPhaseContentCache[cacheKey]) + '</div>';
-
-  } else if (tab === 'files') {
-    // Sort files by phase order
-    var sortedFiles = files.slice().sort(function(a, b) {
-      var pa = phasesDict[a.phase_id], pb = phasesDict[b.phase_id];
-      return ((pa && pa.order) || 999) - ((pb && pb.order) || 999);
-    });
-    if (sortedFiles.length === 0) {
-      el.innerHTML = '<span style="font-size:0.75rem;color:var(--text-muted)">Aucun fichier de phase</span>';
-      return;
-    }
-    var openId = _projOpenFileId[wfName] || null;
-    var html = '<div class="proj-wf-file-list">';
-    for (var i = 0; i < sortedFiles.length; i++) {
-      var f = sortedFiles[i];
-      var isOpen = openId === f.phase_id;
-      html += '<div class="proj-wf-file-row' + (isOpen ? ' open' : '') + '" onclick="_projToggleFile(\'' + escHtml(wfName) + '\',\'' + escHtml(f.phase_id) + '\')">' +
-        '<span>' + (isOpen ? '📝' : '📝') + ' ' + escHtml(f.filename) + '</span>' +
-        '<span style="font-size:0.6rem;color:var(--text-muted);">' + (isOpen ? '▼' : '▶') + '</span>' +
-      '</div>';
-      if (isOpen) {
-        var ck = wfName + ':' + f.phase_id;
-        var content = _projPhaseContentCache[ck];
-        if (content !== undefined) {
-          html += '<div class="proj-wf-file-content"><div class="proj-wf-prompt-viewer">' + escHtml(content) + '</div></div>';
-        } else {
-          html += '<div class="proj-wf-file-content"><span style="font-size:0.7rem;color:var(--text-muted)">Chargement...</span></div>';
-          // Trigger async load
-          _projLoadFileContent(wfName, f.phase_id);
-        }
-      }
-    }
-    html += '</div>';
-    el.innerHTML = html;
   }
 }
 
-async function _projToggleFile(wfName, phaseId) {
-  if (_projOpenFileId[wfName] === phaseId) {
-    _projOpenFileId[wfName] = null;
-  } else {
-    _projOpenFileId[wfName] = phaseId;
-    var ck = wfName + ':' + phaseId;
-    if (!_projPhaseContentCache[ck]) {
-      await _projLoadFileContent(wfName, phaseId);
-    }
-  }
-  await _projLoadTabContent(wfName);
-}
 
-async function _projLoadFileContent(wfName, phaseId) {
-  var ck = wfName + ':' + phaseId;
+async function _projToggleGroupPrompt(phaseId, groupId, collapseId) {
+  var panel = document.getElementById(collapseId);
+  if (!panel) return;
+  if (panel.style.display !== 'none') {
+    panel.style.display = 'none';
+    return;
+  }
+  var filePhaseId = phaseId + '.' + groupId;
+  var wfName = _projExpandedWf || '';
+  panel.innerHTML = '<div style="padding:0.3rem;font-size:0.7rem;color:var(--text-secondary)">Chargement...</div>';
+  panel.style.display = 'block';
   try {
-    var res = await api('/api/templates/projects/' + encodeURIComponent(_projSelectedId) + '/workflows/' + encodeURIComponent(wfName) + '/phase-files/' + encodeURIComponent(phaseId));
-    _projPhaseContentCache[ck] = res.content || '';
-  } catch { _projPhaseContentCache[ck] = '(erreur de chargement)'; }
+    var res = await api(_projApiBase + '/' + encodeURIComponent(_projSelectedId) + '/workflows/' + encodeURIComponent(wfName) + '/phase-files/' + encodeURIComponent(filePhaseId));
+    var content = res.content || '(vide)';
+    var html = typeof marked !== 'undefined' ? marked.parse(content) : escHtml(content);
+    panel.innerHTML = '<div class="prompt-preview">' + html + '</div>';
+  } catch {
+    panel.innerHTML = '<div style="padding:0.3rem;font-size:0.7rem;color:var(--warning)">Fichier non genere</div>';
+  }
+}
+
+async function _projToggleDeliverablePrompt(phaseId, groupId, delivrableId, agentId, collapseId) {
+  var panel = document.getElementById(collapseId);
+  if (!panel) return;
+  if (panel.style.display !== 'none') {
+    panel.style.display = 'none';
+    return;
+  }
+  var livrId = phaseId + '.' + groupId + '.' + delivrableId + '.' + agentId;
+  var wfName = _projExpandedWf || '';
+  panel.innerHTML = '<div style="padding:0.3rem;font-size:0.7rem;color:var(--text-secondary)">Chargement...</div>';
+  panel.style.display = 'block';
+  try {
+    var res = await api(_projApiBase + '/' + encodeURIComponent(_projSelectedId) + '/workflows/' + encodeURIComponent(wfName) + '/livr-files/' + encodeURIComponent(livrId));
+    var content = res.content || '(vide)';
+    var html = typeof marked !== 'undefined' ? marked.parse(content) : escHtml(content);
+    panel.innerHTML = '<div class="prompt-preview">' + html + '</div>';
+  } catch {
+    panel.innerHTML = '<div style="padding:0.3rem;font-size:0.7rem;color:var(--warning)">Fichier non genere</div>';
+  }
 }
 
 async function _projOpenWf(wfName) {
@@ -4798,20 +4770,7 @@ async function _projDeleteSelected() {
     _projEl('content').style.display = 'none';
     _projEl('btn-edit').style.display = 'none';
     _projEl('btn-delete').style.display = 'none';
-    _projEl('btn-add-wf').style.display = 'none';
-    _projEl('btn-orch').style.display = 'none';
     _projEl('selector-input').value = '';
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-async function _projBuildOrchPrompt() {
-  if (!_projSelectedId) return;
-  try {
-    const res = await api(_projApiBase + '/' + encodeURIComponent(_projSelectedId) + '/orchestrator/build', { method: 'POST' });
-    toast('Prompt orchestrateur genere', 'success');
-    showModal('<div class="modal-header"><h3>Prompt orchestrateur — ' + escHtml(_projSelectedId) + '</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
-      '<textarea readonly rows="20" style="width:100%;font-family:monospace;font-size:0.8rem;background:var(--bg-secondary);border:1px solid var(--border);padding:0.5rem;resize:vertical">' + escHtml(res.content || '') + '</textarea>' +
-      '<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Fermer</button></div>', 'modal-wide');
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -4894,10 +4853,265 @@ function editProjectWorkflow(projectId, wfName) {
   _projOpenWf(wfName);
 }
 function deleteProjectWorkflow(projectId, wfName) { _projDeleteWf(wfName); }
-function buildOrchestratorPrompt(projectId) { _projSelectedId = projectId; _projBuildOrchPrompt(); }
 function editTplProject(id) { _projSelectedId = id; _projEditSelected(); }
 async function deleteTplProject(id) { _projSelectedId = id; await _projDeleteSelected(); }
 async function saveTplProject(id) { _projSelectedId = id; await _projSaveEdit(); }
+
+// ── Project Sections collapse ──────────
+function _projToggleSection(section) {
+  var el = document.getElementById(_projPrefix + '-section-' + section);
+  var arrow = document.getElementById(_projPrefix + '-section-arrow-' + section);
+  if (!el) return;
+  if (el.style.display === 'none') {
+    el.style.display = '';
+    if (arrow) arrow.classList.remove('collapsed');
+  } else {
+    el.style.display = 'none';
+    if (arrow) arrow.classList.add('collapsed');
+  }
+}
+
+// ── Project Chats ──────────
+var _projChats = [];
+
+async function _projRenderChats() {
+  var list = document.getElementById(_projPrefix + '-chats-list');
+  if (!list || !_projSelectedId) return;
+  try {
+    var res = await api(_projApiBase + '/' + encodeURIComponent(_projSelectedId) + '/project-json');
+    _projChats = res.chats || [];
+  } catch { _projChats = []; }
+  if (!_projChats.length) {
+    list.innerHTML = '<div style="font-size:0.7rem;color:var(--text-secondary);padding:0.5rem;">Aucun chat defini</div>';
+    return;
+  }
+  list.innerHTML = _projChats.map(function(c, i) {
+    var agentPrompts = c.agent_prompts || {};
+    var agentsHtml = (c.agents || []).map(function(a, ai) {
+      var apFile = agentPrompts[a] || '';
+      var apCollapseId = 'proj-chat-agent-prompt-' + i + '-' + ai;
+      var apLink = apFile
+        ? ' <a href="#" class="wf-group-prompt-link" onclick="event.preventDefault();_projToggleChatPrompt(\'' + escHtml(apFile) + '\',\'' + escHtml(apCollapseId) + '\')" title="Voir le prompt agent">&#128203;</a>'
+        : '';
+      return '<div style="margin-bottom:0.2rem;">' +
+        '<span class="agent-chip">&#9679; ' + escHtml(a) + apLink + '</span>' +
+        '<div id="' + escHtml(apCollapseId) + '" class="wf-group-prompt-panel" style="display:none"></div>' +
+      '</div>';
+    }).join('');
+    var promptFile = c.prompt || '';
+    var collapseId = 'proj-chat-prompt-' + i;
+    var promptLink = promptFile
+      ? ' <a href="#" class="wf-group-prompt-link" onclick="event.preventDefault();_projToggleChatPrompt(\'' + escHtml(promptFile) + '\',\'' + escHtml(collapseId) + '\')" title="Voir le prompt">&#128196;</a>'
+      : '';
+    return '<div class="proj-chat-card">' +
+      '<div class="chat-header">' +
+        '<div class="chat-header-left">' +
+          escHtml(c.id || '') +
+          ' <span class="chat-type-badge">' + escHtml(c.type || 'onboarding') + '</span>' +
+        '</div>' +
+        '<div class="chat-actions">' +
+          '<button class="btn-icon" onclick="_projEditChat(' + i + ')" title="Editer">&#9998;</button>' +
+          '<button class="btn-icon" onclick="_projDeleteChat(' + i + ')" title="Supprimer">&times;</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="chat-body">' +
+        '<div class="chat-body-row">Prompt: <strong>' + escHtml((promptFile || c.source_prompt || '(aucun)').replace(/\.md$/, '')) + '</strong>' + promptLink + '</div>' +
+        '<div id="' + escHtml(collapseId) + '" class="wf-group-prompt-panel" style="display:none"></div>' +
+        '<div class="chat-agents">' + agentsHtml + '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+async function _projToggleChatPrompt(filename, collapseId) {
+  var panel = document.getElementById(collapseId);
+  if (!panel) return;
+  if (panel.style.display !== 'none') {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.innerHTML = '<div style="padding:0.3rem;font-size:0.7rem;color:var(--text-secondary)">Chargement...</div>';
+  panel.style.display = 'block';
+  try {
+    var res = await api(_projApiBase + '/' + encodeURIComponent(_projSelectedId) + '/chat-prompt/' + encodeURIComponent(filename));
+    var content = res.content || '(vide)';
+    var html = typeof marked !== 'undefined' ? marked.parse(content) : escHtml(content);
+    panel.innerHTML = '<div class="prompt-preview">' + html + '</div>';
+  } catch {
+    panel.innerHTML = '<div style="padding:0.3rem;font-size:0.7rem;color:var(--warning)">Fichier non genere</div>';
+  }
+}
+
+async function _projSaveChats() {
+  try {
+    await api(_projApiBase + '/' + encodeURIComponent(_projSelectedId) + '/chats', {
+      method: 'PUT', body: { chats: _projChats }
+    });
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function _projAddChat() {
+  if (!_projSelectedId) return;
+  _projShowChatModal(-1);
+}
+
+function _projEditChat(idx) {
+  _projShowChatModal(idx);
+}
+
+async function _projDeleteChat(idx) {
+  if (!confirm('Supprimer ce chat ?')) return;
+  _projChats.splice(idx, 1);
+  await _projSaveChats();
+  _projRenderChats();
+  toast('Chat supprime', 'success');
+}
+
+var _chatAgentsData = [];
+
+async function _projShowChatModal(idx) {
+  var isNew = idx < 0;
+  var chat = isNew ? { id: '', type: 'onboarding', source_prompt: '', prompt: '', agents: [], agent_config: {} } : JSON.parse(JSON.stringify(_projChats[idx]));
+  var agentCfg = chat.agent_config || {};
+  // Load shared agents
+  _chatAgentsData = [];
+  try {
+    var agRes = await api('/api/shared-agents');
+    _chatAgentsData = agRes.agents || [];
+  } catch {}
+  // Load prompts
+  var promptsData = [];
+  try {
+    var pmRes = await api('/api/templates/prompts?culture=' + encodeURIComponent('fr-fr'));
+    promptsData = pmRes.prompts || [];
+  } catch {}
+  var chatTypes = ['onboarding'];
+  var typeOptions = chatTypes.map(function(t) {
+    return '<option value="' + escHtml(t) + '"' + (chat.type === t ? ' selected' : '') + '>' + escHtml(t) + '</option>';
+  }).join('');
+  var promptOptions = '<option value="">(aucun)</option>' + promptsData.map(function(p) {
+    return '<option value="' + escHtml(p.name) + '"' + (chat.source_prompt === p.name ? ' selected' : '') + '>' + escHtml(p.name.replace(/\.md$/, '')) + '</option>';
+  }).join('');
+  var agentChecks = _chatAgentsData.map(function(a) {
+    var isSelected = (chat.agents || []).indexOf(a.id) >= 0;
+    var checked = isSelected ? ' checked' : '';
+    var cfg = agentCfg[a.id] || {};
+    var detailStyle = isSelected ? '' : 'display:none;';
+    var rolesHtml = (a.role_names || []).map(function(r) {
+      var rc = (cfg.roles || []).indexOf(r) >= 0 ? ' checked' : '';
+      return '<label class="chat-sub-check"><input type="checkbox" class="proj-chat-role-cb" data-agent="' + escHtml(a.id) + '" value="' + escHtml(r) + '"' + rc + '> ' + escHtml(r) + '</label>';
+    }).join('');
+    var missionsHtml = (a.mission_names || []).map(function(m) {
+      var mc = (cfg.missions || []).indexOf(m) >= 0 ? ' checked' : '';
+      return '<label class="chat-sub-check"><input type="checkbox" class="proj-chat-mission-cb" data-agent="' + escHtml(a.id) + '" value="' + escHtml(m) + '"' + mc + '> ' + escHtml(m) + '</label>';
+    }).join('');
+    var skillsHtml = (a.skill_names || []).map(function(s) {
+      var sc = (cfg.skills || []).indexOf(s) >= 0 ? ' checked' : '';
+      return '<label class="chat-sub-check"><input type="checkbox" class="proj-chat-skill-cb" data-agent="' + escHtml(a.id) + '" value="' + escHtml(s) + '"' + sc + '> ' + escHtml(s) + '</label>';
+    }).join('');
+    var hasDetail = rolesHtml || missionsHtml || skillsHtml;
+    var detailHtml = hasDetail ? '<div class="chat-agent-detail" id="chat-agent-detail-' + escHtml(a.id) + '" style="' + detailStyle + 'margin-left:1.2rem;margin-top:0.2rem;font-size:0.7rem;">' +
+      (rolesHtml ? '<div style="margin-bottom:0.2rem;"><span style="font-weight:600;color:var(--accent);font-size:0.65rem;">Roles</span><div style="display:flex;flex-wrap:wrap;gap:0.15rem 0.5rem;">' + rolesHtml + '</div></div>' : '') +
+      (missionsHtml ? '<div style="margin-bottom:0.2rem;"><span style="font-weight:600;color:var(--accent);font-size:0.65rem;">Missions</span><div style="display:flex;flex-wrap:wrap;gap:0.15rem 0.5rem;">' + missionsHtml + '</div></div>' : '') +
+      (skillsHtml ? '<div style="margin-bottom:0.2rem;"><span style="font-weight:600;color:var(--accent);font-size:0.65rem;">Skills</span><div style="display:flex;flex-wrap:wrap;gap:0.15rem 0.5rem;">' + skillsHtml + '</div></div>' : '') +
+    '</div>' : '';
+    var wandStyle = isSelected ? 'font-size:0.85rem;opacity:0.6;' : 'font-size:0.85rem;opacity:0.6;display:none;';
+    var wandBtn = hasDetail ? '<button class="btn-icon chat-wand-btn" id="chat-wand-' + escHtml(a.id) + '" title="SkillMatcher" onclick="event.stopPropagation();_chatSkillMatch(\'' + escHtml(a.id) + '\')" style="' + wandStyle + '">&#10024;</button>' : '';
+    return '<div style="margin-bottom:0.3rem;">' +
+      '<div style="display:flex;align-items:center;gap:0.3rem;">' +
+        '<label style="display:flex;align-items:center;gap:0.3rem;font-size:0.75rem;cursor:pointer;font-weight:500;">' +
+          '<input type="checkbox" class="proj-chat-agent-cb" value="' + escHtml(a.id) + '"' + checked + ' onchange="_chatToggleAgentDetail(\'' + escHtml(a.id) + '\',this.checked)"> ' +
+          escHtml(a.name || a.id) +
+        '</label>' + wandBtn +
+      '</div>' + detailHtml +
+    '</div>';
+  }).join('');
+  var generatedPromptHtml = chat.prompt
+    ? '<div class="form-group"><label>Prompt genere</label><input value="' + escHtml(chat.prompt) + '" readonly style="opacity:0.7;cursor:default;" /></div>'
+    : '';
+  showModal(
+    '<div class="modal-header"><h3>' + (isNew ? 'Nouveau chat' : 'Editer chat') + '</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
+    '<div class="form-group"><label>Identifiant</label><input id="proj-chat-id" value="' + escHtml(chat.id) + '" placeholder="ex: onboarding-discovery" /></div>' +
+    '<div class="form-group"><label>Type</label><select id="proj-chat-type">' + typeOptions + '</select></div>' +
+    '<div class="form-group"><label>Prompt source</label><select id="proj-chat-source-prompt">' + promptOptions + '</select></div>' +
+    generatedPromptHtml +
+    '<div class="form-group"><label>Agents</label><div style="max-height:350px;overflow-y:auto;display:flex;flex-direction:column;gap:0.1rem;" id="proj-chat-agents">' + agentChecks + '</div></div>' +
+    '<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Annuler</button>' +
+    '<button class="btn btn-primary" onclick="_projSaveChatModal(' + idx + ')">Sauvegarder</button></div>',
+    'modal-wide'
+  );
+}
+
+function _chatToggleAgentDetail(agentId, show) {
+  var el = document.getElementById('chat-agent-detail-' + agentId);
+  if (el) el.style.display = show ? '' : 'none';
+  var wand = document.getElementById('chat-wand-' + agentId);
+  if (wand) wand.style.display = show ? '' : 'none';
+}
+
+async function _chatSkillMatch(agentId) {
+  if (!_projSelectedId) return;
+  var smBase = _projApiBase.includes('/prod-') ? '/api/prod-projects' : '/api/templates/projects';
+  var chatId = (document.getElementById('proj-chat-id').value || '').trim();
+  var chatType = (document.getElementById('proj-chat-type').value || '');
+  var description = chatId + ' ' + chatType;
+  toast('SkillMatcher en cours...', 'info');
+  try {
+    var res = await api(smBase + '/' + encodeURIComponent(_projSelectedId) + '/deliverable-skillmatch', {
+      method: 'POST', body: { agent_id: agentId, description: description }
+    });
+    var agent = _chatAgentsData.find(function(a) { return a.id === agentId; });
+    var allRoles = agent ? (agent.role_names || []) : [];
+    var allMissions = agent ? (agent.mission_names || []) : [];
+    var allSkills = agent ? (agent.skill_names || []) : [];
+    var selRoles = res.full_profile ? allRoles : (res.roles || []);
+    var selMissions = res.full_profile ? allMissions : (res.missions || []);
+    var selSkills = res.full_profile ? allSkills : (res.skills || []);
+    document.querySelectorAll('.proj-chat-role-cb[data-agent="' + agentId + '"]').forEach(function(cb) {
+      cb.checked = selRoles.indexOf(cb.value) >= 0;
+    });
+    document.querySelectorAll('.proj-chat-mission-cb[data-agent="' + agentId + '"]').forEach(function(cb) {
+      cb.checked = selMissions.indexOf(cb.value) >= 0;
+    });
+    document.querySelectorAll('.proj-chat-skill-cb[data-agent="' + agentId + '"]').forEach(function(cb) {
+      cb.checked = selSkills.indexOf(cb.value) >= 0;
+    });
+    toast('SkillMatcher applique pour ' + agentId, 'success');
+  } catch (e) {
+    toast(e.message || 'Erreur SkillMatcher', 'error');
+  }
+}
+
+async function _projSaveChatModal(idx) {
+  var id = (document.getElementById('proj-chat-id').value || '').trim();
+  var type = document.getElementById('proj-chat-type').value;
+  var source_prompt = document.getElementById('proj-chat-source-prompt').value;
+  var agents = [];
+  var agent_config = {};
+  document.querySelectorAll('.proj-chat-agent-cb:checked').forEach(function(cb) {
+    var aid = cb.value;
+    agents.push(aid);
+    var roles = [];
+    document.querySelectorAll('.proj-chat-role-cb[data-agent="' + aid + '"]:checked').forEach(function(r) { roles.push(r.value); });
+    var missions = [];
+    document.querySelectorAll('.proj-chat-mission-cb[data-agent="' + aid + '"]:checked').forEach(function(m) { missions.push(m.value); });
+    var skills = [];
+    document.querySelectorAll('.proj-chat-skill-cb[data-agent="' + aid + '"]:checked').forEach(function(s) { skills.push(s.value); });
+    agent_config[aid] = { roles: roles, missions: missions, skills: skills };
+  });
+  if (!id) { toast('Identifiant requis', 'error'); return; }
+  if (!source_prompt) { toast('Prompt source requis', 'error'); return; }
+  var chat = { id: id, type: type, source_prompt: source_prompt, agents: agents, agent_config: agent_config };
+  if (idx < 0) {
+    _projChats.push(chat);
+  } else {
+    _projChats[idx] = chat;
+  }
+  await _projSaveChats();
+  closeModal();
+  _projRenderChats();
+  toast('Chat sauvegarde', 'success');
+}
 
 // ── Template Prompts (Shared/Prompts/<culture>/) ──────────
 
@@ -7880,6 +8094,7 @@ function _wfOpenEditorUI() {
       <div class="wf-toolbar-left">
         ${backBtn}
         <button class="btn btn-primary btn-sm" onclick="wfSave()">Sauvegarder</button>
+        <button class="btn btn-outline btn-sm" onclick="wfGeneratePrompts()" id="btn-wf-gen-prompts">Generer prompts</button>
         <button class="btn btn-outline btn-sm" onclick="wfShowJSON()">JSON</button>
       </div>
       <h3>Workflow — ${escHtml(_wf.dir)}</h3>
@@ -8106,6 +8321,7 @@ function wfRender() {
     _wf._focusDel = null;
   }
 }
+
 
 
 
@@ -10186,6 +10402,36 @@ async function wfSave() {
     if (_wf) _wf._savedSnapshot = JSON.stringify(_wf.data);
     toast('Workflow sauvegarde', 'success');
   } catch (e) { toast(e.message, 'error'); }
+}
+
+async function wfGeneratePrompts() {
+  if (!_wf) return;
+  if (_wfIsDirty()) {
+    toast('Sauvegardez le workflow avant de generer les prompts', 'error');
+    return;
+  }
+  const btn = document.getElementById('btn-wf-gen-prompts');
+  if (!btn) return;
+  const prevText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Generation...';
+  try {
+    const result = await api(
+      `${_wf.apiBase}/${encodeURIComponent(_wf.dir)}/generate-prompts`,
+      { method: 'POST' }
+    );
+    const msg = result.generated + ' prompt(s) genere(s)';
+    if (result.errors && result.errors.length > 0) {
+      toast(msg + ' (' + result.errors.length + ' erreur(s))', 'warning');
+    } else {
+      toast(msg, 'success');
+    }
+  } catch (e) {
+    toast('Erreur generation: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prevText;
+  }
 }
 
 // ═══════════════════════════════════════════════════

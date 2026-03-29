@@ -959,45 +959,192 @@ async def put_templates_registry(directory: str, request: Request):
 
 # ── Phase file generation helper ──────────────────
 def _generate_phase_files(workflow_data: dict, workflow_filename: str, output_dir: Path, team_id: str):
-    """Generate one .md file per phase with the data blocks (phase_id, phase, global_rules, agents_summary)."""
+    """Generate one .md file per group from template + deliverables + agent orchestrator prompts."""
     phases = workflow_data.get("phases", {})
-    # Collect existing phase files for cleanup
     prefix = f"{workflow_filename}.phase."
-    stale = {f.name: f for f in output_dir.glob(f"{prefix}*.md")}
-    if not phases:
-        for f in stale.values():
-            f.unlink(missing_ok=True)
-        return
-    rules = workflow_data.get("rules", {})
-    rules_json = json.dumps(rules, indent=2, ensure_ascii=False)
-    team_dir = SHARED_TEAMS_DIR / team_id
-    for phase_id, phase_data in phases.items():
-        phase_json = json.dumps(phase_data, indent=2, ensure_ascii=False)
-        agents_in_phase = phase_data.get("agents", {})
-        summary_parts = []
-        for agent_id in agents_in_phase:
-            orch_file = team_dir / f"orch_{agent_id}.md"
-            if orch_file.exists():
-                summary_parts.append(orch_file.read_text(encoding="utf-8"))
-            else:
-                summary_parts.append(
-                    f"### {agent_id}\n\n"
-                    f"(profil non disponible \u2014 construisez le prompt orchestrateur depuis Templates > Equipes)\n"
-                )
-        agents_summary = "\n\n".join(summary_parts)
-        content = (
-            f"<phase_id>{phase_id}</phase_id>\n\n"
-            f"<phase>\n{phase_json}\n</phase>\n\n"
-            f"<global_rules>\n{rules_json}\n</global_rules>\n\n"
-            f"<agents_summary>\n{agents_summary}\n</agents_summary>\n"
-        )
-        fname = f"{prefix}{phase_id}.md"
-        (output_dir / fname).write_text(content, encoding="utf-8")
-        stale.pop(fname, None)
-    # Remove phase files that no longer exist in the workflow
-    for f in stale.values():
+    # Purge existing phase files
+    for f in output_dir.glob(f"{workflow_filename}.phase.*.md"):
         f.unlink(missing_ok=True)
-    _log.info("Generated %d phase files in %s (removed %d stale)", len(phases), output_dir, len(stale))
+    if not phases:
+        return
+    # Load template
+    culture = os.getenv("CULTURE", "fr-fr")
+    template_path = SHARED_DIR / "Models" / culture / "prompt-phase-orchestrator.md"
+    if not template_path.exists():
+        raise HTTPException(400, f"Template introuvable : {template_path.relative_to(SHARED_DIR)}")
+    template = template_path.read_text(encoding="utf-8")
+    errors = []
+    generated = 0
+    for phase_id, phase_data in phases.items():
+        if phase_data.get("external_workflow"):
+            continue
+        phase_name = phase_data.get("name", phase_id)
+        phase_desc = phase_data.get("description", "")
+        project_context = f"{phase_name} : {phase_desc}"
+        groups = phase_data.get("groups", [])
+        if not groups:
+            groups = [{"id": phase_id}]
+        for group in groups:
+            group_id = group.get("id", phase_id)
+            deliverables = group.get("deliverables", [])
+            # Build {deliverables} content
+            deliv_parts = []
+            agent_ids = set()
+            for d in deliverables:
+                name = d.get("Name") or d.get("name") or d.get("id", "")
+                desc = d.get("description", "")
+                agent_id = d.get("agent", "")
+                if agent_id:
+                    agent_ids.add(agent_id)
+                agent_name = agent_id
+                agent_dir = SHARED_AGENTS_DIR / agent_id
+                agent_json_path = agent_dir / "agent.json"
+                if agent_json_path.exists():
+                    try:
+                        aj = json.loads(agent_json_path.read_text(encoding="utf-8"))
+                        agent_name = aj.get("name", agent_id)
+                    except Exception:
+                        pass
+                section = f"## {name}\n{desc}\n\nCe livrable doit \u00eatre produit par : {agent_name}\n"
+                deliv_parts.append(section)
+            deliverables_content = "\n---\n\n".join(deliv_parts) if deliv_parts else "(aucun livrable)"
+            # Build {agents} content from orch_{agent_id}.md
+            agents_parts = []
+            for aid in sorted(agent_ids):
+                orch_path = SHARED_TEAMS_DIR / team_id / f"orch_{aid}.md"
+                if not orch_path.exists():
+                    errors.append(f"Fichier manquant : Shared/Teams/{team_id}/orch_{aid}.md")
+                    continue
+                agents_parts.append(orch_path.read_text(encoding="utf-8"))
+            agents_content = "\n\n".join(agents_parts) if agents_parts else "(aucun agent)"
+            # Resolve template
+            content = template.replace("{project_context}", project_context)
+            content = content.replace("{agents}", agents_content)
+            content = content.replace("{deliverables}", deliverables_content)
+            fname = f"{prefix}{phase_id}.{group_id}.md"
+            (output_dir / fname).write_text(content, encoding="utf-8")
+            generated += 1
+    # ── Generate per-deliverable prompt files ──
+    livr_prefix = f"{workflow_filename}.livr."
+    for f in output_dir.glob(f"{workflow_filename}.livr.*.md"):
+        f.unlink(missing_ok=True)
+    deliv_template_path = SHARED_DIR / "Models" / culture / "prompt-delivrable.md"
+    if not deliv_template_path.exists():
+        errors.append(f"Template introuvable : Shared/Models/{culture}/prompt-delivrable.md")
+    else:
+        deliv_template = deliv_template_path.read_text(encoding="utf-8")
+        for phase_id, phase_data in phases.items():
+            if phase_data.get("external_workflow"):
+                continue
+            phase_name = phase_data.get("name", phase_id)
+            phase_desc = phase_data.get("description", "")
+            project_context = f"{phase_name}\n{phase_desc}"
+            groups = phase_data.get("groups", [])
+            if not groups:
+                groups = [{"id": phase_id}]
+            for group in groups:
+                group_id = group.get("id", phase_id)
+                for d in group.get("deliverables", []):
+                    d_id = d.get("id", "")
+                    d_name = d.get("Name") or d.get("name") or d_id
+                    d_desc = d.get("description", "")
+                    agent_id = d.get("agent", "")
+                    if not agent_id:
+                        continue
+                    agent_dir = SHARED_AGENTS_DIR / agent_id
+                    # Clean roles/missions/skills: remove items without matching files
+                    d["roles"] = [r for r in d.get("roles", []) if (agent_dir / f"role_{r}.md").exists()]
+                    d["missions"] = [m for m in d.get("missions", []) if (agent_dir / f"mission_{m}.md").exists()]
+                    d["skills"] = [s for s in d.get("skills", []) if (agent_dir / f"skill_{s}.md").exists()]
+                    # Build {agent_card}: identity + roles + missions + skills
+                    card_parts = []
+                    identity_path = agent_dir / "identity.md"
+                    if not identity_path.exists():
+                        errors.append(f"Fichier manquant : Shared/Agents/{agent_id}/identity.md")
+                    else:
+                        card_parts.append(identity_path.read_text(encoding="utf-8"))
+                    for r in d["roles"]:
+                        card_parts.append((agent_dir / f"role_{r}.md").read_text(encoding="utf-8"))
+                    for m in d["missions"]:
+                        card_parts.append((agent_dir / f"mission_{m}.md").read_text(encoding="utf-8"))
+                    for s in d["skills"]:
+                        card_parts.append((agent_dir / f"skill_{s}.md").read_text(encoding="utf-8"))
+                    agent_card = "\n\n".join(card_parts) if card_parts else "(aucune carte agent)"
+                    deliverable_content = f"## {d_name}\n{d_desc}"
+                    # Resolve template
+                    out = deliv_template.replace("{project_context}", project_context)
+                    out = out.replace("{agent_card}", agent_card)
+                    out = out.replace("{deliverable}", deliverable_content)
+                    fname = f"{livr_prefix}{phase_id}.{group_id}.{d_id}.{agent_id}.md"
+                    (output_dir / fname).write_text(out, encoding="utf-8")
+                    generated += 1
+    if errors:
+        raise HTTPException(400, "\n".join(errors))
+    _log.info("Generated %d phase files in %s", generated, output_dir)
+
+
+# ── Orchestrator prompt generation per group ──────
+
+_DELIVERABLE_FIELDS = ("id", "Name", "agent", "type", "description", "depends_on", "required", "category", "roles", "missions", "skills")
+
+
+def _build_group_json(workflow_data: dict, phase_id: str, phase_data: dict, group_index: int, group: dict) -> str:
+    """Build the JSON payload for a single group to inject into the orchestrator template."""
+    deliverables = []
+    for d in group.get("deliverables", []):
+        deliverables.append({k: d.get(k) for k in _DELIVERABLE_FIELDS if d.get(k) is not None})
+    payload = {
+        "phase_id": phase_id,
+        "phase_name": phase_data.get("name", phase_id),
+        "phase_order": phase_data.get("order", 0),
+        "group_id": group.get("id", str(group_index)),
+        "group_order": group_index,
+        "total_groups": len(phase_data.get("groups", [])),
+        "deliverables": deliverables,
+        "exit_conditions": phase_data.get("exit_conditions", {}),
+        "next_phase": phase_data.get("next_phase", ""),
+        "rules": workflow_data.get("rules", {}),
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+async def _generate_orchestrator_prompts(workflow_data: dict, workflow_name: str, culture: str | None = None) -> dict:
+    """For each phase/group, call the admin LLM with the orchestrator template and save the result."""
+    c = culture or _CULTURE
+    models_dir = SHARED_DIR / "Models" / c
+    template_path = models_dir / "orchestrator-prompt.md"
+    if not template_path.exists():
+        raise HTTPException(404, f"Template introuvable: Models/{c}/orchestrator-prompt.md")
+    template_content = template_path.read_text(encoding="utf-8")
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    prefix = f"{workflow_name}.wrk."
+    for f in models_dir.glob(f"{workflow_name}.wrk.phase.*.md"):
+        f.unlink(missing_ok=True)
+
+    phases = workflow_data.get("phases", {})
+    generated = []
+    errors = []
+
+    for phase_id, phase_data in phases.items():
+        groups = phase_data.get("groups", [])
+        for group_index, group in enumerate(groups):
+            group_id = group.get("id", str(group_index))
+            fname = f"{prefix}phase.{phase_id}.{group_id}.md"
+            try:
+                group_json = _build_group_json(workflow_data, phase_id, phase_data, group_index, group)
+                filled = template_content.replace("{group_json}", group_json)
+                result = await chat(ChatRequest(messages=[{"role": "user", "content": filled}], use_admin_llm=True))
+                output = result.get("content", "").strip()
+                (models_dir / fname).write_text(output, encoding="utf-8")
+                generated.append(fname)
+                _log.info("Generated orchestrator prompt: %s", fname)
+            except Exception as exc:
+                _log.error("Failed to generate prompt for %s/%s: %s", phase_id, group_id, exc)
+                errors.append(f"{phase_id}/{group_id}: {exc}")
+
+    _log.info("Orchestrator prompts: %d generated, %d errors", len(generated), len(errors))
+    return {"ok": True, "generated": len(generated), "removed": removed, "errors": errors, "files": generated}
 
 
 # ── API: Workflow (per team) ──────────────────────
@@ -1021,6 +1168,17 @@ async def put_template_workflow(directory: str, request: Request):
     return {"ok": True}
 
 
+@app.post("/api/templates/workflow/{directory}/generate-prompts")
+async def generate_template_workflow_prompts(directory: str):
+    """Generate orchestrator prompts for each group of a Shared template workflow."""
+    tdir = SHARED_TEAMS_DIR / directory
+    path = tdir / "Workflow.json"
+    if not path.exists():
+        raise HTTPException(404, "Workflow.json introuvable")
+    data = _read_json(path)
+    return await _generate_orchestrator_prompts(data, "Workflow")
+
+
 @app.get("/api/workflow/{directory}")
 async def get_workflow(directory: str):
     """Return Workflow.json for a Configs team directory."""
@@ -1038,6 +1196,17 @@ async def put_workflow(directory: str, request: Request):
     _write_json(tdir / "Workflow.json", data)
     _generate_phase_files(data, "Workflow", tdir, directory)
     return {"ok": True}
+
+
+@app.post("/api/workflow/{directory}/generate-prompts")
+async def generate_workflow_prompts(directory: str):
+    """Generate orchestrator prompts for each group of a Configs team workflow."""
+    tdir = TEAMS_DIR / directory
+    path = tdir / "Workflow.json"
+    if not path.exists():
+        raise HTTPException(404, "Workflow.json introuvable")
+    data = _read_json(path)
+    return await _generate_orchestrator_prompts(data, "Workflow")
 
 
 # ── API: Workflow Design (positions/layout) ───────
@@ -3246,6 +3415,90 @@ def _update_project(base_dir: Path, project_id: str, entry: ProjectUpdate):
     return {"ok": True}
 
 
+def _update_project_chats(base_dir: Path, project_id: str, chats: list):
+    if ".." in project_id or "/" in project_id or "\\" in project_id:
+        raise HTTPException(400, "ID invalide")
+    project_dir = base_dir / project_id
+    if not project_dir.exists():
+        raise HTTPException(404, f"Projet '{project_id}' introuvable")
+    cfg_file = project_dir / "project.json"
+    cfg = json.loads(cfg_file.read_text(encoding="utf-8")) if cfg_file.exists() else {}
+    team_id = cfg.get("team", "")
+    culture = os.getenv("CULTURE", "fr-fr")
+    errors = []
+    for chat in chats:
+        chat_id = chat.get("id", "")
+        chat_type = chat.get("type", "onboarding")
+        source_prompt = chat.get("source_prompt", "")
+        agents = chat.get("agents", [])
+        if not chat_id or not source_prompt:
+            continue
+        # Load source prompt template
+        prompt_path = SHARED_DIR / "Prompts" / culture / source_prompt
+        if not prompt_path.exists():
+            errors.append(f"Prompt introuvable : Shared/Prompts/{culture}/{source_prompt}")
+            continue
+        template = prompt_path.read_text(encoding="utf-8")
+        # Build {agents} from orch_{agent_id}.md
+        agents_parts = []
+        for aid in agents:
+            orch_path = SHARED_TEAMS_DIR / team_id / f"orch_{aid}.md"
+            if not orch_path.exists():
+                errors.append(f"Fichier manquant : Shared/Teams/{team_id}/orch_{aid}.md")
+                continue
+            agents_parts.append(orch_path.read_text(encoding="utf-8"))
+        agents_content = "\n\n".join(agents_parts) if agents_parts else "(aucun agent)"
+        # Resolve template
+        content = template.replace("{agents}", agents_content)
+        # Write local prompt file
+        local_name = f"{chat_id}.{chat_type}.md"
+        (project_dir / local_name).write_text(content, encoding="utf-8")
+        chat["prompt"] = local_name
+        # ── Generate per-agent prompt files ──
+        deliv_template_path = SHARED_DIR / "Models" / culture / "prompt-delivrable.md"
+        if not deliv_template_path.exists():
+            errors.append(f"Template introuvable : Shared/Models/{culture}/prompt-delivrable.md")
+        else:
+            deliv_template = deliv_template_path.read_text(encoding="utf-8")
+            agent_config = chat.get("agent_config", {})
+            agent_prompts = {}
+            for aid in agents:
+                agent_dir = SHARED_AGENTS_DIR / aid
+                cfg_a = agent_config.get(aid, {})
+                # Build {agent_card}: identity + roles + missions + skills
+                card_parts = []
+                identity_path = agent_dir / "identity.md"
+                if identity_path.exists():
+                    card_parts.append(identity_path.read_text(encoding="utf-8"))
+                for r in cfg_a.get("roles", []):
+                    rp = agent_dir / f"role_{r}.md"
+                    if rp.exists():
+                        card_parts.append(rp.read_text(encoding="utf-8"))
+                for m in cfg_a.get("missions", []):
+                    mp = agent_dir / f"mission_{m}.md"
+                    if mp.exists():
+                        card_parts.append(mp.read_text(encoding="utf-8"))
+                for s in cfg_a.get("skills", []):
+                    sp = agent_dir / f"skill_{s}.md"
+                    if sp.exists():
+                        card_parts.append(sp.read_text(encoding="utf-8"))
+                agent_card = "\n\n".join(card_parts) if card_parts else "(aucune carte agent)"
+                deliverable_content = "## Interaction utilisateur\nInteraction avec l'utilisateur pour developper l'idee du projet"
+                project_context = f"{chat_id}\n{chat_type}"
+                out = deliv_template.replace("{project_context}", project_context)
+                out = out.replace("{agent_card}", agent_card)
+                out = out.replace("{deliverable}", deliverable_content)
+                agent_fname = f"{chat_id}.{chat_type}.{aid}.md"
+                (project_dir / agent_fname).write_text(out, encoding="utf-8")
+                agent_prompts[aid] = agent_fname
+            chat["agent_prompts"] = agent_prompts
+    cfg["chats"] = chats
+    cfg_file.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+    if errors:
+        raise HTTPException(400, "\n".join(errors))
+    return {"ok": True}
+
+
 def _delete_project(base_dir: Path, project_id: str):
     if ".." in project_id or "/" in project_id or "\\" in project_id:
         raise HTTPException(400, "ID invalide")
@@ -3273,6 +3526,21 @@ async def update_template_project(project_id: str, entry: ProjectUpdate):
 async def delete_template_project(project_id: str):
     return _delete_project(SHARED_PROJECTS_DIR, project_id)
 
+@app.put("/api/templates/projects/{project_id}/chats")
+async def update_template_project_chats(project_id: str, request: Request):
+    data = await request.json()
+    return _update_project_chats(SHARED_PROJECTS_DIR, project_id, data.get("chats", []))
+
+@app.get("/api/templates/projects/{project_id}/chat-prompt/{filename}")
+async def read_template_chat_prompt(project_id: str, filename: str):
+    project_dir = _project_dir_or_404(project_id)
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(400, "Nom de fichier invalide")
+    filepath = project_dir / filename
+    if not filepath.exists():
+        raise HTTPException(404, "Fichier prompt introuvable")
+    return {"filename": filename, "content": filepath.read_text(encoding="utf-8")}
+
 
 # Production routes
 @app.get("/api/prod-projects")
@@ -3290,6 +3558,21 @@ async def update_prod_project(project_id: str, entry: ProjectUpdate):
 @app.delete("/api/prod-projects/{project_id}")
 async def delete_prod_project(project_id: str):
     return _delete_project(CFG_PROJECTS_DIR, project_id)
+
+@app.put("/api/prod-projects/{project_id}/chats")
+async def update_prod_project_chats(project_id: str, request: Request):
+    data = await request.json()
+    return _update_project_chats(CFG_PROJECTS_DIR, project_id, data.get("chats", []))
+
+@app.get("/api/prod-projects/{project_id}/chat-prompt/{filename}")
+async def read_prod_chat_prompt(project_id: str, filename: str):
+    project_dir = _cfg_project_dir_or_404(project_id)
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(400, "Nom de fichier invalide")
+    filepath = project_dir / filename
+    if not filepath.exists():
+        raise HTTPException(404, "Fichier prompt introuvable")
+    return {"filename": filename, "content": filepath.read_text(encoding="utf-8")}
 
 @app.post("/api/prod-projects/copy-from-config")
 async def copy_prod_projects_from_config(request: Request):
@@ -3549,6 +3832,19 @@ async def read_workflow_phase_file(project_id: str, wf_name: str, phase_id: str)
     return {"phase_id": phase_id, "filename": filepath.name, "content": filepath.read_text(encoding="utf-8")}
 
 
+@app.get("/api/templates/projects/{project_id}/workflows/{wf_name}/livr-files/{livr_id}")
+async def read_workflow_livr_file(project_id: str, wf_name: str, livr_id: str):
+    """Read a single deliverable prompt file."""
+    project_dir = _project_dir_or_404(project_id)
+    name = _wf_name_safe(wf_name)
+    if ".." in livr_id or "/" in livr_id or "\\" in livr_id:
+        raise HTTPException(400, "livr_id invalide")
+    filepath = project_dir / f"{name}.wrk.livr.{livr_id}.md"
+    if not filepath.exists():
+        raise HTTPException(404, "Fichier livrable introuvable")
+    return {"livr_id": livr_id, "filename": filepath.name, "content": filepath.read_text(encoding="utf-8")}
+
+
 # ── API: Project Workflow — visual editor endpoints ────
 # These follow the same pattern as /api/templates/workflow/{dir}
 # Used by openWorkflowEditor(wfName, '/api/templates/project-workflow/{project_id}', ...)
@@ -3806,7 +4102,71 @@ async def delete_prod_project_workflow(project_id: str, wf_name: str):
         f.unlink()
     for f in project_dir.glob(f"{name}.wrk.phase.*.md"):
         f.unlink()
+    for f in project_dir.glob(f"{name}.wrk.livr.*.md"):
+        f.unlink()
     return {"ok": True}
+
+
+@app.get("/api/prod-projects/{project_id}/project-json")
+async def get_prod_project_json(project_id: str):
+    """Return the raw project.json metadata for a production project."""
+    project_dir = _cfg_project_dir_or_404(project_id)
+    pj = project_dir / "project.json"
+    if not pj.exists():
+        return {"workflows": []}
+    return json.loads(pj.read_text(encoding="utf-8"))
+
+
+@app.get("/api/prod-projects/{project_id}/workflows/{wf_name}/phase-files")
+async def list_prod_workflow_phase_files(project_id: str, wf_name: str):
+    """List .wrk.phase.{id}.md files for a production project workflow."""
+    project_dir = _cfg_project_dir_or_404(project_id)
+    name = _wf_name_safe(wf_name)
+    prefix = f"{name}.wrk.phase."
+    suffix = ".md"
+    files = []
+    for f in sorted(project_dir.iterdir()):
+        if f.name.startswith(prefix) and f.name.endswith(suffix):
+            phase_id = f.name[len(prefix):-len(suffix)]
+            files.append({"phase_id": phase_id, "filename": f.name})
+    return {"files": files}
+
+
+@app.get("/api/prod-projects/{project_id}/workflows/{wf_name}/phase-files/{phase_id}")
+async def read_prod_workflow_phase_file(project_id: str, wf_name: str, phase_id: str):
+    """Read a single phase prompt file from a production project."""
+    project_dir = _cfg_project_dir_or_404(project_id)
+    name = _wf_name_safe(wf_name)
+    if ".." in phase_id or "/" in phase_id or "\\" in phase_id:
+        raise HTTPException(400, "phase_id invalide")
+    filepath = project_dir / f"{name}.wrk.phase.{phase_id}.md"
+    if not filepath.exists():
+        raise HTTPException(404, "Fichier phase introuvable")
+    return {"phase_id": phase_id, "filename": filepath.name, "content": filepath.read_text(encoding="utf-8")}
+
+
+@app.get("/api/prod-projects/{project_id}/workflows/{wf_name}/livr-files/{livr_id}")
+async def read_prod_workflow_livr_file(project_id: str, wf_name: str, livr_id: str):
+    """Read a single deliverable prompt file from a production project."""
+    project_dir = _cfg_project_dir_or_404(project_id)
+    name = _wf_name_safe(wf_name)
+    if ".." in livr_id or "/" in livr_id or "\\" in livr_id:
+        raise HTTPException(400, "livr_id invalide")
+    filepath = project_dir / f"{name}.wrk.livr.{livr_id}.md"
+    if not filepath.exists():
+        raise HTTPException(404, "Fichier livrable introuvable")
+    return {"livr_id": livr_id, "filename": filepath.name, "content": filepath.read_text(encoding="utf-8")}
+
+
+@app.get("/api/prod-projects/{project_id}/available-workflows")
+async def list_prod_available_workflows(project_id: str):
+    """List available .wrk.json files in a production project directory."""
+    project_dir = _cfg_project_dir_or_404(project_id)
+    workflows = []
+    for f in sorted(project_dir.glob("*.wrk.json")):
+        name = f.name.replace(".wrk.json", "")
+        workflows.append({"name": name, "filename": f.name})
+    return {"workflows": workflows}
 
 
 @app.post("/api/prod-projects/{project_id}/orchestrator/build")
