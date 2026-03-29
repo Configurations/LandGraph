@@ -371,7 +371,9 @@
     "tab_prompt": "Prompt Orchestrateur",
     "tab_files": "Fichiers",
     "no_prompt": "Aucun prompt disponible",
-    "no_files": "Aucun fichier de phase"
+    "no_files": "Aucun fichier de phase",
+    "select_chat": "Chat d'onboarding",
+    "select_workflows": "Workflows"
   },
   "multi_workflow": {
     "active_workflows": "Workflows actifs",

@@ -1197,12 +1197,12 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
         for i, d in enumerate(decisions, 1):
             dtype = d.get("decision_type", "unknown")
             conf = d.get("confidence", 0)
-            reasoning = d.get("reasoning", "")[:200]
+            reasoning = d.get("reasoning", "")
             output_parts.append(f"**Decision** : {dtype} (confiance: {conf})\n{reasoning}")
             for a in d.get("actions", []):
                 if isinstance(a, dict) and a.get("action") == "dispatch_agent":
                     t = a.get("target", "")
-                    task = (a.get("task") or "")[:150]
+                    task = a.get("task") or ""
                     if t:
                         agents_dispatched.append(t)
                         output_parts.append(f"  ⏳ {t} : {task}")

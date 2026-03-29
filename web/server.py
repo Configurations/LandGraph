@@ -1250,6 +1250,8 @@ class LLMProviderEntry(BaseModel):
     type: str
     model: str
     env_key: str = ""
+    api_key: str = ""
+    max_tokens: int = 0
     description: str = ""
     base_url: str = ""
     azure_endpoint: str = ""
@@ -1267,6 +1269,10 @@ async def add_llm_provider(entry: LLMProviderEntry):
     prov = {"type": entry.type, "model": entry.model, "description": entry.description}
     if entry.env_key:
         prov["env_key"] = entry.env_key
+    if entry.api_key:
+        prov["api_key"] = entry.api_key
+    if entry.max_tokens:
+        prov["max_tokens"] = entry.max_tokens
     if entry.base_url:
         prov["base_url"] = entry.base_url
     if entry.type == "azure":
@@ -1282,28 +1288,21 @@ async def add_llm_provider(entry: LLMProviderEntry):
 
 
 @app.put("/api/llm/providers/provider/{provider_id}")
-async def update_llm_provider(provider_id: str, entry: LLMProviderEntry):
+async def update_llm_provider(provider_id: str, request: Request):
+    """Read file from disk, overwrite the provider entry, write back."""
+    body = await request.json()
     data = _read_json(LLM_PROVIDERS_FILE)
     if provider_id not in data.get("providers", {}):
         raise HTTPException(404, f"Provider '{provider_id}' introuvable")
-    prov = {"type": entry.type, "model": entry.model, "description": entry.description}
-    if entry.env_key:
-        prov["env_key"] = entry.env_key
-    if entry.base_url:
-        prov["base_url"] = entry.base_url
-    if entry.type == "azure":
-        if entry.azure_endpoint:
-            prov["azure_endpoint"] = entry.azure_endpoint
-        if entry.azure_deployment:
-            prov["azure_deployment"] = entry.azure_deployment
-        if entry.api_version:
-            prov["api_version"] = entry.api_version
-    # If ID changed, remove old and add new
-    if entry.id != provider_id:
+    new_id = body.pop("id", provider_id)
+    # Overwrite the entire provider entry with what the frontend sent
+    if new_id != provider_id:
         del data["providers"][provider_id]
         if data.get("default") == provider_id:
-            data["default"] = entry.id
-    data["providers"][entry.id] = prov
+            data["default"] = new_id
+        if data.get("admin_llm") == provider_id:
+            data["admin_llm"] = new_id
+    data["providers"][new_id] = body
     _write_json(LLM_PROVIDERS_FILE, data)
     return {"ok": True}
 
@@ -2478,15 +2477,18 @@ class ChatRequest(BaseModel):
     messages: list[dict]
     provider_id: str = ""
     use_admin_llm: bool = False
+    scope: str = "production"  # "production" -> config/, "configuration" -> Shared/
 
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     default_key = "admin_llm" if req.use_admin_llm else "default"
-    data = _read_json(SHARED_LLM_FILE)
+    # Production scope reads config/, Configuration scope reads Shared/
+    llm_file = SHARED_LLM_FILE if req.scope == "configuration" else LLM_PROVIDERS_FILE
+    data = _read_json(llm_file)
     chosen_id = req.provider_id or data.get(default_key, "") or data.get("default", "")
     if not chosen_id or chosen_id not in data.get("providers", {}):
-        raise HTTPException(400, "Aucun provider LLM configure dans Shared/llm_providers.json")
+        raise HTTPException(400, f"Aucun provider LLM configure dans {llm_file.name}")
 
     provider = data["providers"][chosen_id]
     ptype = provider["type"]
@@ -2495,9 +2497,9 @@ async def chat(req: ChatRequest):
     env_key = provider.get("env_key", "")
     base_url = provider.get("base_url", "")
 
-    # Resolve API key from .env or environment
-    api_key = ""
-    if env_key:
+    # Resolve API key: direct api_key in config takes priority, then env_key from .env
+    api_key = provider.get("api_key", "")
+    if not api_key and env_key:
         env_entries = {e["key"]: e["value"] for e in _parse_env(ENV_FILE) if e.get("key")}
         api_key = env_entries.get(env_key, "") or os.environ.get(env_key, "")
 
@@ -3730,7 +3732,7 @@ async def generate_project_workflow(project_id: str, entry: WorkflowGenerate):
         result = await chat(ChatRequest(messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg},
-        ], use_admin_llm=True))
+        ], use_admin_llm=True, scope="configuration"))
         raw = result.get("content", "")
     except Exception as e:
         raise HTTPException(500, f"Generation echouee: {e}")
@@ -3990,7 +3992,9 @@ async def generate_prod_project_workflow(project_id: str, entry: WorkflowGenerat
     wf_path = project_dir / f"{name}.wrk.json"
     if wf_path.exists():
         raise HTTPException(409, f"Le workflow '{name}' existe deja")
-    meta_path = PROMPTS_DIR / "CreateWorkflow.md"
+    # Production: read from config/Prompts first, fallback to Shared/Prompts
+    _cfg_meta = _resolve_prompts_dir(CFG_PROMPTS_BASE) / "CreateWorkflow.md"
+    meta_path = _cfg_meta if _cfg_meta.exists() else PROMPTS_DIR / "CreateWorkflow.md"
     if not meta_path.exists():
         raise HTTPException(500, "Meta-prompt CreateWorkflow.md introuvable")
     system_template = meta_path.read_text(encoding="utf-8")
@@ -4051,7 +4055,7 @@ async def generate_prod_project_workflow(project_id: str, entry: WorkflowGenerat
         result = await chat(ChatRequest(messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg},
-        ], use_admin_llm=True))
+        ], use_admin_llm=True, scope="production"))
         raw = result.get("content", "")
     except Exception as e:
         raise HTTPException(500, f"Generation echouee: {e}")

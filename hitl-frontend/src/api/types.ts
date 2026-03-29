@@ -549,12 +549,20 @@ export interface PhaseFileContent {
   content: string;
 }
 
+export interface ChatTemplate {
+  id: string;
+  type: string;
+  agents: string[];
+  source_prompt: string;
+}
+
 export interface ProjectTypeResponse {
   id: string;
   name: string;
   description: string;
   team: string;
   workflows: WorkflowTemplate[];
+  chats: ChatTemplate[];
 }
 
 /* ── Project Workflows ── */

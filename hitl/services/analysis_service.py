@@ -116,13 +116,19 @@ async def _load_deduced_prompt(
     type_dir = os.path.join(_shared_projects_dir(), type_id)
 
     # Try onboarding chat prompt from project.json
+    selected_chat_id = step3.get("selectedChatId", "")
     pj_path = os.path.join(type_dir, "project.json")
     if os.path.isfile(pj_path):
         try:
             with open(pj_path, encoding="utf-8") as f:
                 pj = json.load(f)
             chats = pj.get("chats", [])
-            onboarding_chat = next((c for c in chats if c.get("type") == "onboarding"), None)
+            # Use selectedChatId if set, otherwise fall back to first onboarding chat
+            onboarding_chat = None
+            if selected_chat_id:
+                onboarding_chat = next((c for c in chats if c.get("id") == selected_chat_id), None)
+            if not onboarding_chat:
+                onboarding_chat = next((c for c in chats if c.get("type") == "onboarding"), None)
             if onboarding_chat:
                 prompt_file = onboarding_chat.get("prompt", "")
                 if prompt_file:
@@ -175,6 +181,7 @@ async def _load_onboarding_system_prompt(project_slug: str) -> str:
     type_id = step3.get("selectedTypeId", "")
     if not type_id:
         return ""
+    selected_chat_id = step3.get("selectedChatId", "")
     type_dir = os.path.join(_shared_projects_dir(), type_id)
     pj_path = os.path.join(type_dir, "project.json")
     if not os.path.isfile(pj_path):
@@ -183,7 +190,11 @@ async def _load_onboarding_system_prompt(project_slug: str) -> str:
         with open(pj_path, encoding="utf-8") as f:
             pj = json.load(f)
         chats = pj.get("chats", [])
-        onboarding_chat = next((c for c in chats if c.get("type") == "onboarding"), None)
+        onboarding_chat = None
+        if selected_chat_id:
+            onboarding_chat = next((c for c in chats if c.get("id") == selected_chat_id), None)
+        if not onboarding_chat:
+            onboarding_chat = next((c for c in chats if c.get("type") == "onboarding"), None)
         if not onboarding_chat:
             return ""
         prompt_file = onboarding_chat.get("prompt", "")
@@ -384,9 +395,12 @@ async def get_conversation(project_slug: str) -> list[AnalysisMessage]:
     for r in event_rows:
         etype = r["event_type"]
         data = r["data"] if isinstance(r["data"], dict) else {}
-        content = data.get("data", data.get("content", str(data)))
+        content = data.get("data", data.get("content", ""))
         if isinstance(content, dict):
-            content = json.dumps(content, ensure_ascii=False)
+            content = json.dumps(content, ensure_ascii=False) if content else ""
+        content = str(content).strip() if content else ""
+        if not content:
+            continue  # skip empty events
 
         msg_type = etype if etype in ("progress", "artifact", "result") else "progress"
 
@@ -394,7 +408,7 @@ async def get_conversation(project_slug: str) -> list[AnalysisMessage]:
             id=f"evt-{r['id']}",
             sender="agent",
             type=msg_type,
-            content=str(content)[:5000],
+            content=content,
             artifact_key=data.get("key") if etype == "artifact" else None,
             created_at=r["created_at"].isoformat(),
         ))

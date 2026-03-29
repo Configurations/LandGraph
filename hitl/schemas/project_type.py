@@ -18,6 +18,15 @@ class WorkflowTemplate(BaseModel):
     depends_on: Optional[str] = None
 
 
+class ChatTemplate(BaseModel):
+    """A chat definition within a project type."""
+
+    id: str
+    type: str = ""
+    agents: list[str] = Field(default_factory=list)
+    source_prompt: str = ""
+
+
 class ProjectTypeResponse(BaseModel):
     """A project type read from Shared/Projects/*/project.json."""
 
@@ -26,6 +35,7 @@ class ProjectTypeResponse(BaseModel):
     description: str = ""
     team: str = ""
     workflows: list[WorkflowTemplate] = Field(default_factory=list)
+    chats: list[ChatTemplate] = Field(default_factory=list)
 
 
 class PhaseFileResponse(BaseModel):

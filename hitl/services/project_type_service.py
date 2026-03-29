@@ -11,6 +11,7 @@ import structlog
 from core.config import _find_config_dir
 from core.database import execute
 from schemas.project_type import (
+    ChatTemplate,
     PhaseFileContentResponse,
     PhaseFileResponse,
     ProjectTypeResponse,
@@ -59,24 +60,47 @@ def _build_project_type(
     data: dict[str, Any],
     type_dir: str,
 ) -> ProjectTypeResponse:
-    """Build a ProjectTypeResponse from project.json data."""
+    """Build a ProjectTypeResponse from project.json data + discovered .wrk.json files."""
     workflows_cfg = data.get("workflows", [])
     workflows: list[WorkflowTemplate] = []
+    known_filenames: set[str] = set()
     for w in workflows_cfg:
+        fn = w.get("filename", "")
+        if fn:
+            known_filenames.add(fn)
         workflows.append(WorkflowTemplate(
             name=w.get("name", ""),
-            filename=w.get("filename", ""),
+            filename=fn,
             type=w.get("type", "custom"),
             mode=w.get("mode", "sequential"),
             priority=w.get("priority", 50),
             depends_on=w.get("depends_on"),
         ))
+    # Auto-discover .wrk.json files not listed in project.json
+    for filename in _list_workflow_files(type_dir):
+        if filename not in known_filenames:
+            name = filename.replace(".wrk.json", "")
+            workflows.append(WorkflowTemplate(
+                name=name,
+                filename=filename,
+            ))
+    chats_cfg = data.get("chats", [])
+    chats: list[ChatTemplate] = []
+    for c in chats_cfg:
+        chats.append(ChatTemplate(
+            id=c.get("id", ""),
+            type=c.get("type", ""),
+            agents=c.get("agents", []),
+            source_prompt=c.get("source_prompt", ""),
+        ))
+
     return ProjectTypeResponse(
         id=type_id,
         name=data.get("name", type_id),
         description=data.get("description", ""),
         team=data.get("team", ""),
         workflows=workflows,
+        chats=chats,
     )
 
 
@@ -201,6 +225,67 @@ def list_phase_files(
             phase_id = fname[len(prefix):-len(suffix)]
             results.append(PhaseFileResponse(phase_id=phase_id, filename=fname))
     return results
+
+
+def resolve_workflow_phases(
+    type_id: str,
+    workflow_filename: str,
+) -> list[dict[str, Any]]:
+    """Return phases from a wrk.json, inlining external workflow phases."""
+    base = _shared_projects_dir()
+    type_dir = os.path.join(base, type_id)
+    return _resolve_phases(type_dir, workflow_filename, depth=0)
+
+
+def _resolve_phases(
+    type_dir: str,
+    workflow_filename: str,
+    depth: int,
+) -> list[dict[str, Any]]:
+    if depth > 10:
+        return []
+    wrk_path = os.path.join(type_dir, workflow_filename)
+    if not os.path.isfile(wrk_path):
+        return []
+    with open(wrk_path, encoding="utf-8") as f:
+        wrk = json.load(f)
+    phases = wrk.get("phases", {})
+    if isinstance(phases, list):
+        items = [(str(i), p) for i, p in enumerate(phases)]
+    else:
+        items = list(phases.items())
+    # Sort by order
+    items.sort(key=lambda x: x[1].get("order", 999))
+    result: list[dict[str, Any]] = []
+    for phase_id, phase_data in items:
+        if phase_data.get("type") == "external" or phase_data.get("external_workflow"):
+            ext_file = phase_data.get("external_workflow", "")
+            if ext_file:
+                ext_phases = _resolve_phases(type_dir, ext_file, depth + 1)
+                result.extend(ext_phases)
+            continue
+        groups = phase_data.get("groups", [])
+        deliverables: list[dict[str, str]] = []
+        agents: set[str] = set()
+        for g in groups:
+            for d in g.get("deliverables", []):
+                deliverables.append({
+                    "key": d.get("id", ""),
+                    "name": d.get("Name") or d.get("name") or d.get("id", ""),
+                    "type": d.get("type", ""),
+                })
+                if d.get("agent"):
+                    agents.add(d["agent"])
+        result.append({
+            "id": phase_id,
+            "name": phase_data.get("name", phase_id),
+            "order": phase_data.get("order", 0),
+            "groups": len(groups),
+            "deliverables": deliverables,
+            "agents": sorted(agents),
+            "humanGate": bool(phase_data.get("exit_conditions", {}).get("human_gate")),
+        })
+    return result
 
 
 def read_phase_file(

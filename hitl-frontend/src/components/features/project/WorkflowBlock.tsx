@@ -157,12 +157,12 @@ export function WorkflowBlock({
 
           {/* Tab: Phases */}
           {activeTab === 'phases' && (
-            <div className="p-4 flex gap-3 overflow-x-auto">
+            <div className="p-4 flex flex-wrap gap-3">
               {phases
                 .sort((a, b) => a.order - b.order)
                 .map((phase, i) => (
-                  <div key={phase.id} className="flex items-start gap-2 flex-shrink-0">
-                    <div className="min-w-[180px] bg-surface-secondary rounded-lg p-3 border-l-3 border-accent-blue">
+                  <div key={phase.id} className="flex items-start gap-2">
+                    <div className="w-[180px] bg-surface-secondary rounded-lg p-3 border-l-3 border-accent-blue">
                       <div className="text-[10px] font-bold text-accent-blue mb-1">
                         ① {phase.name}
                       </div>

@@ -6,23 +6,21 @@ from dotenv import load_dotenv
 load_dotenv()
 logger = logging.getLogger("llm_provider")
 
-_providers_config = None
+_providers_path = None  # cached path only, not content
 
 
 def _load_providers():
-    global _providers_config
-    if _providers_config is None:
+    """Re-read llm_providers.json on every call for hot-reload support."""
+    global _providers_path
+    import json
+    if _providers_path is None:
         from agents.shared.team_resolver import find_global_file
-        import json
-        path = find_global_file("llm_providers.json")
-        if path:
-            with open(path) as f:
-                _providers_config = json.load(f)
-            logger.info(f"LLM providers loaded: {list(_providers_config.get('providers', {}).keys())}")
-        else:
-            logger.warning("llm_providers.json not found")
-            _providers_config = {"providers": {}, "default": "claude-sonnet"}
-    return _providers_config
+        _providers_path = find_global_file("llm_providers.json") or ""
+    if not _providers_path:
+        logger.warning("llm_providers.json not found")
+        return {"providers": {}, "default": "claude-sonnet"}
+    with open(_providers_path) as f:
+        return json.load(f)
 
 
 def get_provider_config(provider_name: str) -> dict:
@@ -40,46 +38,61 @@ def list_providers() -> dict:
     return _load_providers().get("providers", {})
 
 
-def _create_anthropic(model, temperature, max_tokens, env_key="", **kw):
+def _resolve_api_key(env_key: str = "", api_key: str = "", **_kw) -> str:
+    """Resolve API key: explicit api_key in config takes priority, then env var."""
+    if api_key:
+        return api_key
+    return os.getenv(env_key, "") if env_key else ""
+
+
+def _create_anthropic(model, temperature, max_tokens, env_key="", api_key="", **kw):
     from langchain_anthropic import ChatAnthropic
-    k = os.getenv(env_key, "")
-    logger.info(f"LLM Anthropic: env_key={env_key}, key={'***' + k[-4:] if k and len(k) > 4 else 'MISSING'}")
+    k = _resolve_api_key(env_key=env_key, api_key=api_key)
+    src = "config" if api_key else env_key
+    logger.info(f"LLM Anthropic: source={src}, key={'***' + k[-4:] if k and len(k) > 4 else 'MISSING'}")
     return ChatAnthropic(model=model, temperature=temperature, max_tokens=max_tokens, api_key=k if k else None)
 
-def _create_openai(model, temperature, max_tokens, env_key="", base_url=None, **kw):
+def _create_openai(model, temperature, max_tokens, env_key="", api_key="", base_url=None, **kw):
     from langchain_openai import ChatOpenAI
-    p = {"model": model, "temperature": temperature, "max_tokens": max_tokens, "api_key": os.getenv(env_key, "")}
+    k = _resolve_api_key(env_key=env_key, api_key=api_key)
+    p = {"model": model, "temperature": temperature, "max_tokens": max_tokens, "api_key": k}
     if base_url: p["base_url"] = base_url
     return ChatOpenAI(**p)
 
-def _create_azure(model, temperature, max_tokens, env_key="", azure_endpoint="", api_version="2024-02-01", azure_deployment=None, **kw):
+def _create_azure(model, temperature, max_tokens, env_key="", api_key="", azure_endpoint="", api_version="2024-02-01", azure_deployment=None, **kw):
     from langchain_openai import AzureChatOpenAI
+    k = _resolve_api_key(env_key=env_key, api_key=api_key)
     return AzureChatOpenAI(azure_deployment=azure_deployment or model, api_version=api_version,
-        azure_endpoint=azure_endpoint, api_key=os.getenv(env_key, ""), temperature=temperature, max_tokens=max_tokens)
+        azure_endpoint=azure_endpoint, api_key=k, temperature=temperature, max_tokens=max_tokens)
 
-def _create_google(model, temperature, max_tokens, env_key="", **kw):
+def _create_google(model, temperature, max_tokens, env_key="", api_key="", **kw):
     from langchain_google_genai import ChatGoogleGenerativeAI
-    return ChatGoogleGenerativeAI(model=model, temperature=temperature, max_output_tokens=max_tokens, google_api_key=os.getenv(env_key, ""))
+    k = _resolve_api_key(env_key=env_key, api_key=api_key)
+    return ChatGoogleGenerativeAI(model=model, temperature=temperature, max_output_tokens=max_tokens, google_api_key=k)
 
-def _create_mistral(model, temperature, max_tokens, env_key="", **kw):
+def _create_mistral(model, temperature, max_tokens, env_key="", api_key="", **kw):
     from langchain_mistralai import ChatMistralAI
-    return ChatMistralAI(model=model, temperature=temperature, max_tokens=max_tokens, api_key=os.getenv(env_key, ""))
+    k = _resolve_api_key(env_key=env_key, api_key=api_key)
+    return ChatMistralAI(model=model, temperature=temperature, max_tokens=max_tokens, api_key=k)
 
 def _create_ollama(model, temperature, max_tokens, base_url=None, **kw):
     from langchain_ollama import ChatOllama
     return ChatOllama(model=model, temperature=temperature, num_predict=max_tokens, base_url=base_url or "http://localhost:11434")
 
-def _create_groq(model, temperature, max_tokens, env_key="", **kw):
+def _create_groq(model, temperature, max_tokens, env_key="", api_key="", **kw):
     from langchain_groq import ChatGroq
-    return ChatGroq(model=model, temperature=temperature, max_tokens=max_tokens, api_key=os.getenv(env_key, ""))
+    k = _resolve_api_key(env_key=env_key, api_key=api_key)
+    return ChatGroq(model=model, temperature=temperature, max_tokens=max_tokens, api_key=k)
 
-def _create_deepseek(model, temperature, max_tokens, env_key="", **kw):
+def _create_deepseek(model, temperature, max_tokens, env_key="", api_key="", **kw):
     from langchain_openai import ChatOpenAI
-    return ChatOpenAI(model=model, temperature=temperature, max_tokens=max_tokens, api_key=os.getenv(env_key, ""), base_url="https://api.deepseek.com")
+    k = _resolve_api_key(env_key=env_key, api_key=api_key)
+    return ChatOpenAI(model=model, temperature=temperature, max_tokens=max_tokens, api_key=k, base_url="https://api.deepseek.com")
 
-def _create_moonshot(model, temperature, max_tokens, env_key="", base_url=None, **kw):
+def _create_moonshot(model, temperature, max_tokens, env_key="", api_key="", base_url=None, **kw):
     from langchain_openai import ChatOpenAI
-    return ChatOpenAI(model=model, temperature=temperature, max_tokens=max_tokens, api_key=os.getenv(env_key, ""), base_url=base_url or "https://api.moonshot.cn/v1")
+    k = _resolve_api_key(env_key=env_key, api_key=api_key)
+    return ChatOpenAI(model=model, temperature=temperature, max_tokens=max_tokens, api_key=k, base_url=base_url or "https://api.moonshot.cn/v1")
 
 FACTORIES = {
     "anthropic": _create_anthropic, "openai": _create_openai, "azure": _create_azure,

@@ -29,12 +29,25 @@ Le champ `team` determine quelle equipe fournit les agents disponibles dans le w
 
 ### Phase externe
 
-Une phase peut referencer un workflow externe :
+Une phase peut referencer un workflow externe. A l'execution, les phases du workflow reference sont inlinees a la place de la phase externe.
 
 | Champ | Type | Description |
 |---|---|---|
 | `type` | `"external"` | Marque la phase comme externe |
 | `external_workflow` | `string` | Nom du fichier `.wrk.json` reference |
+
+Exemple :
+```json
+"phase_6": {
+  "name": "Phase externe",
+  "order": 1,
+  "type": "external",
+  "external_workflow": "onbording.wrk.json",
+  "exit_conditions": { "human_gate": true }
+}
+```
+
+La resolution des phases externes est recursive (max 10 niveaux) et detecte les cycles.
 
 ## Groupe parallele
 
@@ -98,8 +111,8 @@ Format : `"GROUPE_ID:LIVRABLE_ID"` (ex: `"A:adrs"`, `"B:openapi_spec"`)
 
 ```
 VALIDE :   "depends_on": ["A:adrs", "A:wireframes"]
-INVALIDE : "depends_on": ["architect:adrs"]              ← ancien format
-INVALIDE : "depends_on": ["design:A:adrs"]               ← cross-phase interdit
+INVALIDE : "depends_on": ["architect:adrs"]              <- format agent:step, pas GROUP:id
+INVALIDE : "depends_on": ["design:A:adrs"]               <- cross-phase interdit
 ```
 
 ### Cle de sortie dans le state
@@ -110,6 +123,12 @@ INVALIDE : "depends_on": ["design:A:adrs"]               ← cross-phase interdi
 
 Chaque livrable peut specifier quels roles, missions et competences de l'agent sont actives.
 Ces valeurs correspondent aux fichiers `role_*.md`, `mission_*.md` et `skill_*.md` dans le catalogue agent (`Shared/Agents/{id}/`).
+
+Si absents, l'agent utilise son profil complet (identity + tous roles/missions/skills).
+Si presents, seuls les roles/missions/skills listes sont injectes dans le prompt de l'agent.
+L'editeur propose un skill-match automatique (baguette magique) via LLM.
+
+Les roles/missions/skills invalides (fichier inexistant dans `Shared/Agents/{agent_id}/`) sont automatiquement nettoyes lors de la generation des prompts.
 
 ## Transition
 
@@ -145,7 +164,7 @@ Ces valeurs correspondent aux fichiers `role_*.md`, `mission_*.md` et `skill_*.m
 ## Statuts livrable
 
 ```
-(absent) → pending → complete → pending_review → approved
+(absent) -> pending -> complete -> pending_review -> approved
 ```
 
 Les statuts `complete`, `pending_review` et `approved` sont consideres comme termines pour la resolution des dependances.
@@ -173,20 +192,73 @@ En cas de perte de state (redemarrage), le workflow engine peut verifier l'exist
 | Fichier | Emplacement | Description |
 |---|---|---|
 | `Workflow.json` | `Shared/Teams/{team}/` | Workflow template d'equipe |
-| `{name}.wrk.json` | `Shared/Projects/{project}/` | Workflow de projet |
-| `{name}.wrk.design.json` | `Shared/Projects/{project}/` | Positions des phases sur le canvas |
-| `{name}.wrk.phase.{id}.md` | `Shared/Projects/{project}/` | Prompt orchestrateur par phase |
+| `{name}.wrk.json` | `Shared/Projects/{project}/` ou `config/Projects/{project}/` | Workflow de projet |
+| `{name}.wrk.design.json` | meme emplacement | Positions des phases sur le canvas |
+| `{name}.wrk.phase.{phase_id}.{group_id}.md` | meme emplacement | Prompt orchestrateur par phase/groupe |
+| `{name}.wrk.livr.{phase_id}.{group_id}.{deliv_id}.{agent_id}.md` | meme emplacement | Prompt agent par livrable |
+
+### Chats (onboarding)
+
+| Fichier | Emplacement | Description |
+|---|---|---|
+| `{chat_id}.{type}.md` | `Shared/Projects/{project}/` ou `config/Projects/{project}/` | Prompt orchestrateur du chat |
+| `{chat_id}.{type}.{agent_id}.md` | meme emplacement | Prompt agent pour le chat |
+
+La configuration des chats est dans `project.json` :
+
+```json
+{
+  "chats": [
+    {
+      "id": "discovering_project",
+      "type": "onboarding",
+      "source_prompt": "onboarding.md",
+      "agents": ["Architect", "requirements_analyst", "ux_designer"],
+      "agent_config": {
+        "Architect": { "roles": [...], "missions": [...], "skills": [...] }
+      },
+      "prompt": "discovering_project.onboarding.md",
+      "agent_prompts": {
+        "Architect": "discovering_project.onboarding.Architect.md",
+        "requirements_analyst": "discovering_project.onboarding.requirements_analyst.md",
+        "ux_designer": "discovering_project.onboarding.ux_designer.md"
+      }
+    }
+  ]
+}
+```
 
 ### Agents
 
 | Fichier | Emplacement | Description |
 |---|---|---|
 | `agents_registry.json` | `Shared/Teams/{team}/` | Liste des agents de l'equipe |
-| `agent.json` | `Shared/Agents/{id}/` | Config agent |
+| `agent.json` | `Shared/Agents/{id}/` | Config agent (name, description) |
+| `identity.md` | `Shared/Agents/{id}/` | Identite de l'agent |
 | `role_*.md` | `Shared/Agents/{id}/` | Fichiers de roles |
 | `mission_*.md` | `Shared/Agents/{id}/` | Fichiers de missions |
 | `skill_*.md` | `Shared/Agents/{id}/` | Fichiers de competences |
 
-## Migration depuis l'ancien format
+### Generation des prompts
 
-L'ancien format utilisait des blocs `agents` et `deliverables` separes dans la phase, avec `parallel_group` sur chaque agent. Le script `migrate_groups.py` convertit automatiquement les fichiers `.wrk.json` vers le nouveau format `groups`.
+La generation est declenchee depuis l'admin dashboard lors de la sauvegarde d'un workflow.
+
+**Prompts orchestrateur** (`{name}.wrk.phase.{phase_id}.{group_id}.md`) :
+- Template : `Shared/Models/{culture}/prompt-phase-orchestrator.md`
+- Variables : `{project_context}`, `{agents}` (contenus orch_*.md), `{deliverables}`
+- Les phases externes sont ignorees (leurs prompts viennent du workflow reference)
+
+**Prompts agent** (`{name}.wrk.livr.{phase_id}.{group_id}.{deliv_id}.{agent_id}.md`) :
+- Template : `Shared/Models/{culture}/prompt-delivrable.md`
+- Variables : `{project_context}`, `{agent_card}` (identity + roles/missions/skills filtres), `{deliverable}`
+- Les roles/missions/skills invalides sont nettoyes avant injection
+
+### Scopes de stockage
+
+| Scope | Emplacement | Usage |
+|---|---|---|
+| Configuration (templates) | `Shared/Projects/` | Modeles reutilisables, source pour copie |
+| Production (config) | `config/Projects/` | Configuration active, utilisee par le runtime |
+
+Les deux scopes supportent les memes fichiers. La copie Configuration -> Production est une copie recursive du repertoire complet (`shutil.copytree`).
+

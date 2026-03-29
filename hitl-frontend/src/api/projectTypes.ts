@@ -48,6 +48,19 @@ export async function fetchPhaseFileContent(
   }
 }
 
+export async function fetchResolvedPhases(
+  typeId: string,
+  wfFilename: string,
+): Promise<any[]> {
+  try {
+    return await apiFetch<any[]>(
+      `/api/project-types/${encodeURIComponent(typeId)}/workflows/${encodeURIComponent(wfFilename)}/resolved-phases`,
+    );
+  } catch {
+    return [];
+  }
+}
+
 export function applyProjectType(
   slug: string,
   typeId: string,

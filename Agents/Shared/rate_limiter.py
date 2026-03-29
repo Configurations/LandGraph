@@ -15,22 +15,20 @@ INITIAL_BACKOFF = 5
 BACKOFF_MULTIPLIER = 2
 MAX_BACKOFF = 120
 
-_throttling_config = None
+_throttling_path = None  # cached path only
 
 
 def _load_throttling():
-    global _throttling_config
-    if _throttling_config is None:
+    """Re-read throttling config on every call for hot-reload support."""
+    global _throttling_path
+    if _throttling_path is None:
         from agents.shared.team_resolver import find_global_file
-        path = find_global_file("llm_providers.json")
-        if path:
-            with open(path) as f:
-                data = json.load(f)
-            _throttling_config = data.get("throttling", {})
-            logger.info(f"Throttling loaded: {list(_throttling_config.keys())}")
-        else:
-            _throttling_config = {}
-    return _throttling_config
+        _throttling_path = find_global_file("llm_providers.json") or ""
+    if not _throttling_path:
+        return {}
+    with open(_throttling_path) as f:
+        data = json.load(f)
+    return data.get("throttling", {})
 
 
 def _get_limits(env_key: str) -> dict:
@@ -64,6 +62,8 @@ class ProviderThrottle:
         logger.info(f"Throttle [{env_key}]: RPM={self.limits['rpm']}, TPM={self.limits['tpm']}")
 
     def wait_if_needed(self, estimated_tokens: int = 1000):
+        # Refresh limits from config on each call (hot-reload)
+        self.limits = _get_limits(self.env_key)
         with self._lock:
             now = time.time()
             window = now - 60

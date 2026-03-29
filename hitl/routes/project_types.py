@@ -72,6 +72,16 @@ async def read_phase_file(
     return result
 
 
+@router.get("/api/project-types/{type_id}/workflows/{wf_filename}/resolved-phases")
+async def resolved_phases(
+    type_id: str,
+    wf_filename: str,
+    user: TokenData = Depends(get_current_user),
+) -> list[dict]:
+    """Return workflow phases with external phases inlined."""
+    return project_type_service.resolve_workflow_phases(type_id, wf_filename)
+
+
 @router.post("/api/projects/{slug}/apply-type/{type_id}")
 async def apply_project_type(
     slug: str,

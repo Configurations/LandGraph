@@ -1427,7 +1427,7 @@ function renderLLM() {
           </td>
           <td><span class="tag tag-blue">${escHtml(p.type)}</span></td>
           <td><code style="font-size:0.8rem">${escHtml(p.model)}</code></td>
-          <td>${p.env_key ? `<code style="font-size:0.75rem">${escHtml(p.env_key)}</code>` : '<span style="color:var(--text-secondary)">—</span>'}</td>
+          <td>${p.env_key ? `<code style="font-size:0.75rem">${escHtml(p.env_key)}</code>` : '<span style="color:var(--text-secondary)">—</span>'}${p.api_key ? ' <span class="tag tag-green" style="font-size:0.6rem">direct</span>' : ''}</td>
           <td style="font-size:0.8rem;color:var(--text-secondary)">${escHtml(p.description || '')}</td>
           <td>
             <button class="btn-icon" onclick="editProvider('${escHtml(id)}')" title="Modifier">
@@ -1605,8 +1605,18 @@ function editProvider(id) {
     </div>
     <div class="form-row">
       <div class="form-group">
+        <label>API Key (directe, hot-reload)</label>
+        <input id="prov-apikey" type="password" value="${escHtml(p.api_key || '')}" placeholder="sk-..." />
+      </div>
+      <div class="form-group">
         <label>Description</label>
         <input id="prov-desc" value="${escHtml(p.description || '')}" />
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Max Tokens</label>
+        <input id="prov-max-tokens" type="number" value="${p.max_tokens || ''}" placeholder="4096" />
       </div>
       <div class="form-group">
         <label>Base URL</label>
@@ -1622,21 +1632,12 @@ function editProvider(id) {
 }
 
 async function saveProvider(originalId) {
-  const id = document.getElementById('prov-id').value.trim();
-  const type = document.getElementById('prov-type').value;
-  const model = document.getElementById('prov-model').value.trim();
-  const env_key = document.getElementById('prov-envkey').value.trim();
-  const description = document.getElementById('prov-desc').value.trim();
-  if (!id || !model) { toast('ID et modele requis', 'error'); return; }
-  const base_url = (document.getElementById('prov-base-url')?.value || '').trim();
-  const body = { id, type, model, env_key, description, base_url, azure_endpoint: '', azure_deployment: '', api_version: '' };
-  if (type === 'azure') {
-    body.azure_endpoint = (document.getElementById('prov-azure-endpoint')?.value || '').trim();
-    body.azure_deployment = (document.getElementById('prov-azure-deployment')?.value || '').trim();
-    body.api_version = (document.getElementById('prov-api-version')?.value || '').trim();
-  }
+  const { id, prov } = _readProviderForm();
+  if (!id || !prov.model) { toast('ID et modele requis', 'error'); return; }
+  const api_key = (document.getElementById('prov-apikey')?.value || '').trim();
+  if (api_key) prov.api_key = api_key;
   try {
-    await api(`/api/llm/providers/provider/${originalId}`, { method: 'PUT', body });
+    await api(`/api/llm/providers/provider/${encodeURIComponent(originalId)}`, { method: 'PUT', body: { id, ...prov } });
     toast('Provider mis a jour', 'success');
     closeModal();
     loadLLM();
@@ -4816,10 +4817,9 @@ async function generateProjectWorkflow(projectId) {
     _projActiveWf = name;
     _projReload();
   } catch (e) {
-    btns.forEach(b => { b.disabled = false; b.style.opacity = ''; });
-    if (genBtn) genBtn.innerHTML = '&#10024; Generer';
-    _projWfToggleGen();
-    toast(e.message, 'error');
+    closeModal();
+    toast(e.message || 'Erreur de generation', 'error');
+    _projReload();
   }
 }
 

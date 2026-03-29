@@ -371,7 +371,9 @@
     "tab_prompt": "Orchestrator Prompt",
     "tab_files": "Files",
     "no_prompt": "No prompt available",
-    "no_files": "No phase files"
+    "no_files": "No phase files",
+    "select_chat": "Onboarding chat",
+    "select_workflows": "Workflows"
   },
   "multi_workflow": {
     "active_workflows": "Active workflows",

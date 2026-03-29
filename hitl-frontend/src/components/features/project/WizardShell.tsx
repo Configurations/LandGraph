@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Stepper } from '../../ui/Stepper';
@@ -46,7 +46,23 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [selectedTypeId, setSelectedTypeId] = useState<string | null>(null);
   const [selectedWorkflowFilename, setSelectedWorkflowFilename] = useState<string>('');
+  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
+  const [selectedWorkflowIds, setSelectedWorkflowIds] = useState<string[]>([]);
   const updateWizardData = useProjectStore((s) => s.updateWizardData);
+
+  // Restore step 3 selections from wizard data on resume
+  useEffect(() => {
+    if (!wizardData.slug) return;
+    wizardDataApi.getWizardData(wizardData.slug).then((steps) => {
+      const step3 = steps.find((s) => s.step_id === 3)?.data;
+      if (step3) {
+        if (step3.selectedTypeId) setSelectedTypeId(step3.selectedTypeId as string);
+        if (step3.selectedChatId) setSelectedChatId(step3.selectedChatId as string);
+        if (step3.selectedWorkflowIds) setSelectedWorkflowIds(step3.selectedWorkflowIds as string[]);
+        if (step3.workflowFilename) setSelectedWorkflowFilename(step3.workflowFilename as string);
+      }
+    }).catch(() => {});
+  }, [wizardData.slug]);
 
   const steps = useMemo(
     () => STEP_KEYS.map((key, idx) => ({ labelKey: key, completed: completed.has(idx) })),
@@ -125,6 +141,8 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
         updateWizardData({ orchestratorPrompt: result.orchestrator_prompt });
         void wizardDataApi.saveWizardStep(wizardData.slug, 3, {
           selectedTypeId,
+          selectedChatId,
+          selectedWorkflowIds,
           workflowFilename: selectedWorkflowFilename,
           orchestratorPrompt: result.orchestrator_prompt,
         });
@@ -150,7 +168,7 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
       resetWizard();
       navigate('/projects');
     }
-  }, [wizardStep, wizardData, completed, selectedTypeId, selectedWorkflowFilename, markComplete, setWizardStep, navigate, resetWizard, loadProjects, updateWizardData, activeTeamId, teams]);
+  }, [wizardStep, wizardData, completed, selectedTypeId, selectedChatId, selectedWorkflowIds, selectedWorkflowFilename, markComplete, setWizardStep, navigate, resetWizard, loadProjects, updateWizardData, activeTeamId, teams]);
 
   const handlePrevious = useCallback(() => {
     if (wizardStep > 0) setWizardStep(wizardStep - 1);
@@ -173,9 +191,13 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
         {wizardStep === 3 && (
           <ProjectTypeSelector
             selectedTypeId={selectedTypeId}
-            onSelect={(typeId, workflowFilename) => {
+            selectedChatId={selectedChatId}
+            selectedWorkflowIds={selectedWorkflowIds}
+            onSelect={(typeId, chatId, workflowIds, workflowFilename) => {
               setSelectedTypeId(typeId);
-              setSelectedWorkflowFilename(workflowFilename ?? '');
+              setSelectedChatId(chatId ?? null);
+              setSelectedWorkflowIds(workflowIds ?? []);
+              if (workflowFilename) setSelectedWorkflowFilename(workflowFilename);
             }}
           />
         )}
