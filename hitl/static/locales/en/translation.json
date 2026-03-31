@@ -158,7 +158,8 @@
     "result_failure": "Analysis failed. You can retry or skip.",
     "relaunch": "Relaunch analysis",
     "conversation_empty": "The conversation will appear here once the analysis starts",
-    "reconnecting": "Reconnecting..."
+    "reconnecting": "Reconnecting...",
+    "ctrl_enter_hint": "Ctrl+Enter to send"
   },
   "wizard": {
     "step_setup": "Setup",

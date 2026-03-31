@@ -80,6 +80,7 @@ services:
       DATABASE_URI: ${DATABASE_URI}
       REDIS_URI: ${REDIS_URI}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      HITL_INTERNAL_URL: http://langgraph-hitl:8090
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

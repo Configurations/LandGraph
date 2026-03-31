@@ -231,8 +231,8 @@ class BaseAgent:
                 logger.info(f"[{self.agent_id}] Prompt (shared): {shared_path}")
                 return open(shared_path).read()
 
-        # Fallback minimal
-        logger.warning(f"[{self.agent_id}] No prompt file found — using fallback")
+        # Fallback minimal — prompt will be overridden at runtime (onboarding, deliverable dispatch)
+        logger.debug(f"[{self.agent_id}] No prompt file found — using fallback (will be overridden at runtime)")
         return f"Tu es {self.agent_name}. JSON: {{agent_id, status, confidence, deliverables}}"
 
     def get_llm(self):
@@ -272,7 +272,7 @@ class BaseAgent:
 
         @tool
         def ask_human(question: str, context: str = "") -> str:
-            """Pose une question a l'humain via Discord et attend sa reponse.
+            """Pose une question a l'humain et attend sa reponse.
             Utilise ce tool quand tu as besoin d'une clarification, d'un choix,
             ou d'une information que seul l'humain peut fournir.
             Args:
@@ -281,13 +281,38 @@ class BaseAgent:
             Returns:
                 La reponse de l'humain ou un message de timeout
             """
+            current_state = getattr(agent_ref, '_current_state', {})
+            thread_id = current_state.get("_thread_id", "")
+            team_id = current_state.get("_team_id", "default")
+
+            # Onboarding mode: write to hitl_requests in DB for HITL console
+            if thread_id.startswith("onboarding-"):
+                import psycopg
+                db_uri = os.getenv("DATABASE_URI", "")
+                if db_uri:
+                    try:
+                        with psycopg.connect(db_uri, autocommit=True) as conn:
+                            with conn.cursor() as cur:
+                                cur.execute(
+                                    """INSERT INTO project.hitl_requests
+                                       (thread_id, agent_id, team_id, request_type, prompt, context, channel, status)
+                                       VALUES (%s, %s, %s, 'question', %s, %s::jsonb, 'hitl-console', 'pending')
+                                       RETURNING id""",
+                                    (thread_id, agent_ref.agent_id, team_id, question, json.dumps({"context": context}) if context else "{}"),
+                                )
+                                row = cur.fetchone()
+                                request_id = str(row[0]) if row else ""
+                        logger.info(f"[{agent_ref.agent_id}] ask_human via HITL: {request_id}")
+                        return f"Question posee a l'utilisateur (request {request_id}). En attente de reponse."
+                    except Exception as e:
+                        logger.error(f"[{agent_ref.agent_id}] ask_human HITL error: {e}")
+
+            # Default: use Discord/Email channel
             from agents.shared.agent_conversation import ask_human_sync
             channel_id = os.getenv("DISCORD_CHANNEL_COMMANDS", "")
-            current_state = getattr(agent_ref, '_current_state', {})
             result = ask_human_sync(
                 agent_ref.agent_name, question, channel_id, context, timeout=1800,
-                thread_id=current_state.get("_thread_id", ""),
-                team_id=current_state.get("_team_id", "default"),
+                thread_id=thread_id, team_id=team_id,
             )
             if result["answered"]:
                 return f"Reponse de {result['author']}: {result['response']}"
@@ -397,6 +422,17 @@ class BaseAgent:
 
     # ── Appels LLM ───────────────────────────────────────────────────────────
 
+    def _get_callbacks(self):
+        """Get Langfuse callbacks with session_id from current state."""
+        from agents.shared.langfuse_setup import get_langfuse_callbacks
+        state = getattr(self, "_current_state", None) or {}
+        thread_id = state.get("_thread_id", "") or ""
+        # Try configurable thread_id from LangGraph
+        if not thread_id and isinstance(state, dict):
+            for m in state.get("messages", []):
+                break  # just need the state reference
+        return get_langfuse_callbacks(session_id=thread_id, trace_name=self.agent_id)
+
     def _call_llm(self, instruction, context, previous_results=None, _state=None):
         from agents.shared.rate_limiter import throttled_invoke
         llm = self.get_llm()
@@ -417,8 +453,7 @@ class BaseAgent:
         bus.emit(Event("llm_call_start", agent_id=self.agent_id,
                         thread_id=st.get("_thread_id", ""), team_id=st.get("_team_id", ""),
                         data={"provider": self.llm_provider, "model": self.model, "messages_count": len(msgs)}))
-        from agents.shared.langfuse_setup import get_langfuse_callbacks
-        r = throttled_invoke(llm, msgs, provider_name=self.llm_provider, model=self.model, callbacks=get_langfuse_callbacks())
+        r = throttled_invoke(llm, msgs, provider_name=self.llm_provider, model=self.model, callbacks=self._get_callbacks())
         raw = r.content if isinstance(r.content, str) else str(r.content)
         tokens = {}
         if hasattr(r, "usage_metadata") and r.usage_metadata:
@@ -471,7 +506,7 @@ class BaseAgent:
                             data={"provider": self.llm_provider, "model": self.model,
                                   "messages_count": len(msgs), "iteration": iteration + 1}))
             from agents.shared.langfuse_setup import get_langfuse_callbacks
-            resp = throttled_invoke(use_llm, msgs, provider_name=self.llm_provider, model=self.model, callbacks=get_langfuse_callbacks())
+            resp = throttled_invoke(use_llm, msgs, provider_name=self.llm_provider, model=self.model, callbacks=self._get_callbacks())
             tokens = {}
             if hasattr(resp, "usage_metadata") and resp.usage_metadata:
                 tokens = {"input_tokens": getattr(resp.usage_metadata, "input_tokens", 0),
@@ -487,10 +522,11 @@ class BaseAgent:
             if not resp.tool_calls:
                 raw = resp.content if isinstance(resp.content, str) else str(resp.content)
                 # If response is empty or not JSON-like, retry up to 2 times
+                # But accept rich text responses (>200 chars) — they contain useful content
                 needs_retry = False
                 if not raw.strip():
                     needs_retry = True
-                elif not raw.strip().startswith('{') and not raw.strip().startswith('[') and '```json' not in raw:
+                elif len(raw.strip()) < 200 and not raw.strip().startswith('{') and not raw.strip().startswith('[') and '```json' not in raw:
                     needs_retry = True
                 if needs_retry and iteration < max_iters - 1:
                     retry_count = sum(1 for m in msgs if isinstance(m, dict) and m.get("role") == "user" and "JSON" in m.get("content", ""))
@@ -542,7 +578,7 @@ class BaseAgent:
         msgs.append({"role": "user", "content": "Tu as atteint la limite d'iterations. Produis MAINTENANT le JSON final avec toutes les informations collectees. JSON brut uniquement, commencant par { et finissant par }."})
         try:
             from agents.shared.langfuse_setup import get_langfuse_callbacks
-            final_resp = throttled_invoke(llm, msgs, provider_name=self.llm_provider, model=self.model, callbacks=get_langfuse_callbacks())
+            final_resp = throttled_invoke(llm, msgs, provider_name=self.llm_provider, model=self.model, callbacks=self._get_callbacks())
             raw = final_resp.content if isinstance(final_resp.content, str) else str(final_resp.content)
             if raw.strip():
                 logger.info(f"[{self.agent_id}] Final extraction: {len(raw)}c")
@@ -712,7 +748,7 @@ class BaseAgent:
         else:
             llm = self.get_llm()
             r = throttled_invoke(llm, msgs, provider_name=self.llm_provider,
-                                 model=self.model, callbacks=get_langfuse_callbacks())
+                                 model=self.model, callbacks=self._get_callbacks())
             raw = r.content if isinstance(r.content, str) else str(r.content)
 
         try:
@@ -741,6 +777,40 @@ class BaseAgent:
     def __call__(self, state):
         try:
             self._current_state = state
+
+            # Override system prompt if onboarding agent_prompts are provided
+            agent_prompts = state.get("_agent_prompts", {})
+            if agent_prompts and self.agent_id in agent_prompts:
+                override = agent_prompts[self.agent_id]
+                if override:
+                    logger.info(f"[{self.agent_id}] Using onboarding prompt override ({len(override)} chars)")
+                    self.system_prompt = override
+
+            # Set project_slug for RAG tools context
+            slug = state.get("project_slug", "")
+            if slug:
+                try:
+                    from agents.shared.rag_service import set_project_slug
+                    set_project_slug(slug)
+                except ImportError:
+                    pass
+
+            # Filter tools based on chat config (agent_tools) or inject_rag mode
+            agent_tools_map = state.get("_agent_tools", {})
+            allowed_tool_names = agent_tools_map.get(self.agent_id)  # None = no restriction
+
+            if allowed_tool_names is not None and self._tools:
+                # Keep only allowed MCP tools + rag_search + ask_human (always available)
+                always_allowed = {"rag_search", "rag_index", "ask_human"}
+                allowed_set = set(allowed_tool_names) | always_allowed
+                before = len(self._tools)
+                self._tools = [t for t in self._tools if t.name in allowed_set]
+                logger.info(f"[{self.agent_id}] Chat tools filter: {before} -> {len(self._tools)} tools (allowed: {sorted(allowed_set)})")
+            elif state.get("_inject_rag") and self._tools:
+                # inject_rag without agent_tools: keep only ask_human + rag
+                before = len(self._tools)
+                self._tools = [t for t in self._tools if t.name in ("ask_human", "rag_search", "rag_index")]
+                logger.info(f"[{self.agent_id}] inject_rag mode — kept rag + ask_human ({before} -> {len(self._tools)} tools)")
 
             # Deliverable-based dispatch: run a single step
             dispatch_info = state.get("_deliverable_dispatch")

@@ -27,14 +27,14 @@ export function ChatInput({
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       handleSend();
     }
   };
 
   return (
-    <div className={`flex items-end gap-2 border-t border-border p-3 ${className}`}>
+    <div className={`relative flex items-end gap-2 border-t border-border p-3 pb-5 ${className}`}>
       <textarea
         ref={textareaRef}
         value={value}
@@ -52,6 +52,9 @@ export function ChatInput({
       >
         {t('chat.send')}
       </Button>
+      <span className="absolute bottom-0.5 left-3 text-[10px] text-content-quaternary">
+        {t('analysis.ctrl_enter_hint')}
+      </span>
     </div>
   );
 }

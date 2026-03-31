@@ -158,7 +158,8 @@
     "result_failure": "L'analyse a echoue. Vous pouvez relancer ou passer.",
     "relaunch": "Relancer l'analyse",
     "conversation_empty": "La conversation apparaitra ici une fois l'analyse lancee",
-    "reconnecting": "Reconnexion en cours..."
+    "reconnecting": "Reconnexion en cours...",
+    "ctrl_enter_hint": "Ctrl+Enter pour envoyer"
   },
   "wizard": {
     "step_setup": "Configuration",

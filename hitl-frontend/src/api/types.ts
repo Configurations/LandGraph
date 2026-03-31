@@ -189,6 +189,8 @@ export interface AnalysisMessage {
   sender: 'agent' | 'user' | 'system';
   type: 'progress' | 'question' | 'reply' | 'artifact' | 'result' | 'system';
   content: string;
+  agent_id?: string;
+  agent_avatar?: string;
   request_id?: string;
   status?: string;
   artifact_key?: string;

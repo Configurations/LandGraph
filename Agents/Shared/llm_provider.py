@@ -120,8 +120,10 @@ def create_llm(provider_name=None, temperature=0.3, max_tokens=32768):
     factory = FACTORIES.get(provider_type, _create_anthropic)
     env_key = conf.get("env_key", "")
     logger.info(f"LLM: {resolved} -> {provider_type}/{model} (env_key={env_key})")
-    skip = {"type", "model", "description"}
+    skip = {"type", "model", "description", "max_tokens", "temperature"}
     extra = {k: v for k, v in conf.items() if k not in skip}
-    llm = factory(model=model, temperature=temperature, max_tokens=max_tokens, **extra)
+    actual_max_tokens = conf.get("max_tokens", max_tokens)
+    actual_temperature = conf.get("temperature", temperature)
+    llm = factory(model=model, temperature=actual_temperature, max_tokens=actual_max_tokens, **extra)
     llm._provider_name = resolved
     return llm

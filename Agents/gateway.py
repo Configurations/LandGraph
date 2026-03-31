@@ -260,6 +260,53 @@ async def run_single_agent(agent_id, agent_callable, state, channel_id, thread_i
             await _persist_deliverable_to_fs(state, agent_id, output)
             # Auto-publish to Outline if enabled
             await _maybe_publish_to_outline(state, agent_id, output)
+
+        # Store agent output as event for onboarding chat visibility
+        if thread_id and thread_id.startswith("onboarding-"):
+            content = ""
+            if isinstance(output, dict):
+                # Extract readable content from deliverables
+                dels = output.get("deliverables", {})
+                if dels:
+                    parts = []
+                    for k, v in dels.items():
+                        text = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False, default=str)
+                        parts.append(text[:3000])
+                    content = "\n\n".join(parts)
+                if not content:
+                    # Fallback: all non-meta fields
+                    parts = []
+                    for k, v in output.items():
+                        if k in ("status", "confidence", "agent_id"):
+                            continue
+                        text = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False, default=str)
+                        if text:
+                            parts.append(f"**{k}**\n{text[:3000]}")
+                    content = "\n\n".join(parts)
+            elif isinstance(output, str):
+                content = output
+            if content.strip():
+                try:
+                    _db = psycopg.connect(os.getenv("DATABASE_URI"), autocommit=True)
+                    try:
+                        with _db.cursor() as cur:
+                            cur.execute("""
+                                INSERT INTO project.dispatcher_task_events (task_id, event_type, data)
+                                SELECT t.id, 'artifact', %s::jsonb
+                                FROM project.dispatcher_tasks t
+                                WHERE t.thread_id = %s
+                                ORDER BY t.created_at DESC LIMIT 1
+                            """, (json.dumps({
+                                "data": content[:4000],
+                                "agent_id": agent_id,
+                                "status": output.get("status", "complete") if isinstance(output, dict) else "complete",
+                            }), thread_id))
+                    finally:
+                        _db.close()
+                    logger.info(f"[onboarding] Stored artifact for {agent_id}")
+                except Exception as e:
+                    logger.error(f"[onboarding] Failed to store artifact: {e}")
+
         return result
     except asyncio.TimeoutError:
         logger.error(f"[bg] {agent_id} timeout")
@@ -341,6 +388,11 @@ async def run_deliverables_parallel(deliverables_to_run, state, channel_id, thre
         await post_to_channel(channel_id, f"📋 **Recap livrables** : {' | '.join(names)}", thread_id)
 
     # Auto-dispatch next group
+    # Skip in onboarding mode
+    if state.get("_allowed_agents"):
+        logger.info("[onboarding] Skipping deliverable auto-dispatch — onboarding mode")
+        return
+
     if _depth >= MAX_CHAIN_DEPTH:
         logger.warning(f"[workflow] Max chain depth ({MAX_CHAIN_DEPTH}) reached")
         return
@@ -466,6 +518,11 @@ async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="defau
         await post_to_channel(channel_id, f"📋 **Recap** : {' | '.join(names)}", thread_id)
 
     # ── Auto-dispatch : le workflow engine decide s'il y a un groupe suivant ──
+    # Skip workflow auto-dispatch in onboarding mode (chat-only, no workflow)
+    if state.get("_allowed_agents"):
+        logger.info("[onboarding] Skipping workflow auto-dispatch — onboarding mode")
+        return
+
     if _depth >= MAX_CHAIN_DEPTH:
         logger.warning(f"[workflow] Max chain depth ({MAX_CHAIN_DEPTH}) reached, stopping auto-dispatch")
         await post_to_channel(channel_id, f"⚠️ Profondeur max atteinte ({MAX_CHAIN_DEPTH} groupes). Relancez si nécessaire.", thread_id)
@@ -575,6 +632,7 @@ async def _create_hitl_phase_request(thread_id: str, team_id: str,
 async def run_orchestrated(state, decisions, channel_id, thread_id="default", canonical_agents=None):
     if canonical_agents is None:
         canonical_agents, _, _ = resolve_agents(channel_id)
+    allowed = state.get("_allowed_agents", [])
     agents = []
     for d in decisions:
         dtype = d.get("decision_type", "")
@@ -585,6 +643,9 @@ async def run_orchestrated(state, decisions, channel_id, thread_id="default", ca
                 # Dispatch agent
                 if action == "dispatch_agent":
                     t = a.get("target", "")
+                    if allowed and t not in allowed:
+                        logger.info(f"[onboarding] Skipping {t} — not in allowed agents {allowed}")
+                        continue
                     if t in canonical_agents:
                         agents.append({"agent_id": t, "agent": canonical_agents[t]})
 
@@ -1103,6 +1164,10 @@ class InvokeRequest(BaseModel):
     direct_agent: str = ""
     deliverable_step: str = ""  # If set, run only this step (for remark re-invocation)
     system_prompt: str = ""  # Optional system prompt injected by HITL chat
+    agent_prompts: dict[str, str] = {}  # Per-agent prompts from onboarding chat
+    inject_rag: bool = False  # If true, RAG is injected in prompts — don't load rag_search tool
+    agent_tools: dict[str, list[str]] = {}  # Per-agent allowed MCP tools from chat config
+    allowed_agents: list[str] = []  # If set, only these agents can be dispatched
 
 class InvokeResponse(BaseModel):
     output: str
@@ -1178,6 +1243,15 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
 
         # ── Mode orchestrateur ───────────────
         state = await load_or_create_state_async(request.thread_id, msgs, request.project_id, channel_id, team_id, request.project_slug)
+        state["_thread_id"] = request.thread_id
+        if request.agent_prompts:
+            state["_agent_prompts"] = request.agent_prompts
+        if request.inject_rag:
+            state["_inject_rag"] = True
+        if request.agent_tools:
+            state["_agent_tools"] = request.agent_tools
+        if request.allowed_agents:
+            state["_allowed_agents"] = request.allowed_agents
 
         graph = get_orchestrator_graph()
         config = {"configurable": {"thread_id": request.thread_id}}
@@ -1192,23 +1266,39 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
 
         existing_outputs = list(result.get("agent_outputs", {}).keys())
         if existing_outputs:
-            output_parts.append(f"📦 Contexte charge : {', '.join(existing_outputs)}")
+            logger.info(f"Context loaded: {', '.join(existing_outputs)}")
 
         for i, d in enumerate(decisions, 1):
             dtype = d.get("decision_type", "unknown")
             conf = d.get("confidence", 0)
             reasoning = d.get("reasoning", "")
-            output_parts.append(f"**Decision** : {dtype} (confiance: {conf})\n{reasoning}")
+            # Log full reasoning for debug, show only summary to user
+            logger.info(f"Decision: {dtype} conf={conf} reasoning={reasoning[:300]}")
             for a in d.get("actions", []):
-                if isinstance(a, dict) and a.get("action") == "dispatch_agent":
-                    t = a.get("target", "")
-                    task = a.get("task") or ""
-                    if t:
-                        agents_dispatched.append(t)
-                        output_parts.append(f"  ⏳ {t} : {task}")
+                if isinstance(a, dict):
+                    action_type = a.get("action", "")
+                    if action_type == "dispatch_agent":
+                        t = a.get("target", "")
+                        task = a.get("task") or ""
+                        if t:
+                            agents_dispatched.append(t)
+                            output_parts.append(f"⏳ **{t}** : {task}")
+                    elif action_type in ("escalate_human", "ask_human"):
+                        msg = a.get("message") or a.get("task") or reasoning
+                        output_parts.append(f"💬 {msg}")
+                    elif action_type in ("notify_discord", "notify_channel"):
+                        msg = a.get("message") or ""
+                        if msg:
+                            output_parts.append(msg)
 
         if agents_dispatched:
             output_parts.append("\nResultats dans ce channel.")
+
+        # Add confidence warning if low
+        if decisions:
+            conf = decisions[-1].get("confidence", 1.0)
+            if conf < 0.7:
+                output_parts.append(f"\n⚠️ LOW_CONFIDENCE ({conf})")
 
         output_text = "\n\n".join(output_parts) if output_parts else "Orchestrateur en attente."
 

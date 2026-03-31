@@ -1427,9 +1427,10 @@ function renderLLM() {
           </td>
           <td><span class="tag tag-blue">${escHtml(p.type)}</span></td>
           <td><code style="font-size:0.8rem">${escHtml(p.model)}</code></td>
-          <td>${p.env_key ? `<code style="font-size:0.75rem">${escHtml(p.env_key)}</code>` : '<span style="color:var(--text-secondary)">—</span>'}${p.api_key ? ' <span class="tag tag-green" style="font-size:0.6rem">direct</span>' : ''}</td>
+          <td>${p.env_key ? `<code style="font-size:0.75rem">${escHtml(p.env_key)}</code>` : '<span style="color:var(--text-secondary)">—</span>'}${p.api_key ? ' <span class="tag tag-green" style="font-size:0.6rem">direct</span>' : ''}${p.embedding ? ' <span class="tag tag-green" style="font-size:0.6rem">emb:' + (p.embedding_dimension || '?') + '</span>' : ''}</td>
           <td style="font-size:0.8rem;color:var(--text-secondary)">${escHtml(p.description || '')}</td>
           <td>
+            <button class="btn-icon" onclick="testEmbedding('${escHtml(id)}')" title="Tester embedding">🧲</button>
             <button class="btn-icon" onclick="editProvider('${escHtml(id)}')" title="Modifier">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
             </button>
@@ -1497,6 +1498,42 @@ function _providerTypeFields(type, values = {}) {
     extra = '<div id="llm-extra-fields"></div>';
   }
   return extra;
+}
+
+async function testEmbedding(id) {
+  try {
+    const res = await api('/api/llm/providers/test-embedding/' + encodeURIComponent(id), { method: 'POST' });
+    if (res.ok) {
+      toast('Embedding OK — dimension: ' + res.dimension, 'success');
+    } else {
+      toast('Embedding non supporte: ' + (res.error || ''), 'error');
+    }
+    loadLLM();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function testCfgEmbedding(id) {
+  try {
+    const res = await api('/api/llm/providers/test-embedding/' + encodeURIComponent(id), { method: 'POST' });
+    if (res.ok) {
+      toast('Embedding OK — dimension: ' + res.dimension, 'success');
+    } else {
+      toast('Embedding non supporte: ' + (res.error || ''), 'error');
+    }
+    loadCfgLLM();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function testTplEmbedding(id) {
+  try {
+    const res = await api('/api/templates/llm/test-embedding/' + encodeURIComponent(id), { method: 'POST' });
+    if (res.ok) {
+      toast('Embedding OK — dimension: ' + res.dimension, 'success');
+    } else {
+      toast('Embedding non supporte: ' + (res.error || ''), 'error');
+    }
+    loadTplLLM();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 function _updateProviderTypeFields() {
@@ -1621,6 +1658,13 @@ function editProvider(id) {
       <div class="form-group">
         <label>Base URL</label>
         <input id="prov-base-url" value="${escHtml(p.base_url || '')}" placeholder="https://..." />
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group" style="display:flex;align-items:center;gap:0.5rem;">
+        <input id="prov-inject-rag" type="checkbox" ${p.inject_rag ? 'checked' : ''} />
+        <label for="prov-inject-rag" style="margin:0">Injecter le RAG</label>
+        <span class="btn-icon" onclick="toast('Quand actif, le contenu des documents est injecte dans le prompt de l\\'agent au lieu de lui donner un outil de recherche. Recommande pour les modeles locaux (Ollama).','info')" title="Aide" style="cursor:help;font-size:0.8rem;">&#9432;</span>
       </div>
     </div>
     ${_providerTypeFields(p.type, p)}
@@ -3268,9 +3312,10 @@ function renderCfgLLM() {
           <td><span class="tag tag-blue">${escHtml(p.type)}</span></td>
           <td><code style="font-size:0.8rem">${escHtml(p.model)}</code></td>
           <td>${url ? `<code style="font-size:0.75rem">${escHtml(url)}</code>` : '<span style="color:var(--text-secondary)">—</span>'}</td>
-          <td>${p.env_key ? `<code style="font-size:0.75rem">${escHtml(p.env_key)}</code>` : '<span style="color:var(--text-secondary)">—</span>'}</td>
+          <td>${p.env_key ? `<code style="font-size:0.75rem">${escHtml(p.env_key)}</code>` : '<span style="color:var(--text-secondary)">—</span>'}${p.embedding ? ' <span class="tag tag-green" style="font-size:0.6rem">emb:' + (p.embedding_dimension || '?') + '</span>' : ''}</td>
           <td style="font-size:0.8rem;color:var(--text-secondary)">${escHtml(p.description || '')}</td>
           <td>
+            <button class="btn-icon" onclick="testCfgEmbedding('${escHtml(id)}')" title="Tester embedding">🧲</button>
             <button class="btn-icon" onclick="cloneCfgProvider('${escHtml(id)}')" title="Cloner">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
             </button>
@@ -3368,6 +3413,7 @@ function cloneCfgProvider(id) {
     </div>
     <div class="form-row">
       <div class="form-group"><label>Max Tokens</label><input id="prov-max-tokens" type="number" value="${p.max_tokens || ''}" placeholder="4096" /></div>
+      <div class="form-group" style="display:flex;align-items:center;gap:0.5rem;"><input id="prov-inject-rag" type="checkbox" ${p.inject_rag ? 'checked' : ''} /><label for="prov-inject-rag" style="margin:0">Injecter le RAG</label><span class="btn-icon" onclick="toast('Quand actif, le contenu des documents est injecte dans le prompt de l\\'agent au lieu de lui donner un outil de recherche. Recommande pour les modeles locaux (Ollama).','info')" title="Aide" style="cursor:help;font-size:0.8rem;">&#9432;</span></div>
       <div class="form-group"></div>
     </div>
     ${_providerTypeFields(p.type, p)}
@@ -3448,6 +3494,7 @@ function editCfgProvider(id) {
     </div>
     <div class="form-row">
       <div class="form-group"><label>Max Tokens</label><input id="prov-max-tokens" type="number" value="${p.max_tokens || ''}" placeholder="4096" /></div>
+      <div class="form-group" style="display:flex;align-items:center;gap:0.5rem;"><input id="prov-inject-rag" type="checkbox" ${p.inject_rag ? 'checked' : ''} /><label for="prov-inject-rag" style="margin:0">Injecter le RAG</label><span class="btn-icon" onclick="toast('Quand actif, le contenu des documents est injecte dans le prompt de l\\'agent au lieu de lui donner un outil de recherche. Recommande pour les modeles locaux (Ollama).','info')" title="Aide" style="cursor:help;font-size:0.8rem;">&#9432;</span></div>
       <div class="form-group"></div>
     </div>
     ${_providerTypeFields(p.type, p)}
@@ -4734,6 +4781,22 @@ async function createTplProject() {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+function _projEmbeddingOptions(selected) {
+  // Build embedding provider dropdown from the current scope's LLM data
+  var llmData = _projApiBase.includes('/prod-') ? (typeof cfgLlmData !== 'undefined' ? cfgLlmData : {}) : (typeof tplLlmData !== 'undefined' ? tplLlmData : {});
+  if (!llmData.providers) {
+    // Fallback: try loading from Production LLM
+    llmData = typeof llmProviders !== 'undefined' ? llmProviders : {};
+  }
+  var opts = '<option value="">-- Aucun (global) --</option>';
+  for (var [id, p] of Object.entries(llmData.providers || {})) {
+    if (p.embedding) {
+      opts += '<option value="' + escHtml(id) + '"' + (id === selected ? ' selected' : '') + '>' + escHtml(id) + ' (' + (p.embedding_dimension || '?') + 'dim)</option>';
+    }
+  }
+  return opts;
+}
+
 function _projEditSelected() {
   const p = _tplProjects.find(x => x.id === _projSelectedId);
   if (!p) return;
@@ -4742,6 +4805,7 @@ function _projEditSelected() {
     '<div class="form-group"><label>Nom</label><input id="proj-edit-name" value="' + escHtml(p.name || '') + '" /></div>' +
     '<div class="form-group"><label>Description</label><textarea id="proj-edit-desc" rows="3">' + escHtml(p.description || '') + '</textarea></div>' +
     '<div class="form-group"><label>Equipe</label><select id="proj-edit-team">' + _projTeamOptions(p.team || '') + '</select></div>' +
+    '<div class="form-group"><label>Modele d\'embedding (vectorisation)</label><select id="proj-edit-embedding">' + _projEmbeddingOptions(p.embedding_provider || '') + '</select></div>' +
     '<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="_projSaveEdit()">Sauvegarder</button></div>');
 }
 
@@ -4750,9 +4814,10 @@ async function _projSaveEdit() {
   const name = (document.getElementById('proj-edit-name').value || '').trim();
   const description = (document.getElementById('proj-edit-desc').value || '').trim();
   const team = (document.getElementById('proj-edit-team').value || '').trim();
+  const embedding_provider = (document.getElementById('proj-edit-embedding')?.value || '').trim();
   if (!name) { toast('Nom requis', 'error'); return; }
   try {
-    await api(_projApiBase + '/' + encodeURIComponent(id), { method: 'PUT', body: { name, description, team } });
+    await api(_projApiBase + '/' + encodeURIComponent(id), { method: 'PUT', body: { name, description, team, embedding_provider } });
     closeModal();
     toast('Projet mis a jour', 'success');
     _projReload();
@@ -5009,11 +5074,16 @@ async function _projShowChatModal(idx) {
       var sc = (cfg.skills || []).indexOf(s) >= 0 ? ' checked' : '';
       return '<label class="chat-sub-check"><input type="checkbox" class="proj-chat-skill-cb" data-agent="' + escHtml(a.id) + '" value="' + escHtml(s) + '"' + sc + '> ' + escHtml(s) + '</label>';
     }).join('');
-    var hasDetail = rolesHtml || missionsHtml || skillsHtml;
+    var toolsHtml = (a.mcp_access || []).map(function(t) {
+      var tc = (cfg.tools || a.mcp_access || []).indexOf(t) >= 0 ? ' checked' : '';
+      return '<label class="chat-sub-check"><input type="checkbox" class="proj-chat-tool-cb" data-agent="' + escHtml(a.id) + '" value="' + escHtml(t) + '"' + tc + '> ' + escHtml(t) + '</label>';
+    }).join('');
+    var hasDetail = rolesHtml || missionsHtml || skillsHtml || toolsHtml;
     var detailHtml = hasDetail ? '<div class="chat-agent-detail" id="chat-agent-detail-' + escHtml(a.id) + '" style="' + detailStyle + 'margin-left:1.2rem;margin-top:0.2rem;font-size:0.7rem;">' +
       (rolesHtml ? '<div style="margin-bottom:0.2rem;"><span style="font-weight:600;color:var(--accent);font-size:0.65rem;">Roles</span><div style="display:flex;flex-wrap:wrap;gap:0.15rem 0.5rem;">' + rolesHtml + '</div></div>' : '') +
       (missionsHtml ? '<div style="margin-bottom:0.2rem;"><span style="font-weight:600;color:var(--accent);font-size:0.65rem;">Missions</span><div style="display:flex;flex-wrap:wrap;gap:0.15rem 0.5rem;">' + missionsHtml + '</div></div>' : '') +
       (skillsHtml ? '<div style="margin-bottom:0.2rem;"><span style="font-weight:600;color:var(--accent);font-size:0.65rem;">Skills</span><div style="display:flex;flex-wrap:wrap;gap:0.15rem 0.5rem;">' + skillsHtml + '</div></div>' : '') +
+      (toolsHtml ? '<div style="margin-bottom:0.2rem;"><span style="font-weight:600;color:var(--accent);font-size:0.65rem;">Tools</span><div style="display:flex;flex-wrap:wrap;gap:0.15rem 0.5rem;">' + toolsHtml + '</div></div>' : '') +
     '</div>' : '';
     var wandStyle = isSelected ? 'font-size:0.85rem;opacity:0.6;' : 'font-size:0.85rem;opacity:0.6;display:none;';
     var wandBtn = hasDetail ? '<button class="btn-icon chat-wand-btn" id="chat-wand-' + escHtml(a.id) + '" title="SkillMatcher" onclick="event.stopPropagation();_chatSkillMatch(\'' + escHtml(a.id) + '\')" style="' + wandStyle + '">&#10024;</button>' : '';
@@ -5097,7 +5167,9 @@ async function _projSaveChatModal(idx) {
     document.querySelectorAll('.proj-chat-mission-cb[data-agent="' + aid + '"]:checked').forEach(function(m) { missions.push(m.value); });
     var skills = [];
     document.querySelectorAll('.proj-chat-skill-cb[data-agent="' + aid + '"]:checked').forEach(function(s) { skills.push(s.value); });
-    agent_config[aid] = { roles: roles, missions: missions, skills: skills };
+    var tools = [];
+    document.querySelectorAll('.proj-chat-tool-cb[data-agent="' + aid + '"]:checked').forEach(function(t) { tools.push(t.value); });
+    agent_config[aid] = { roles: roles, missions: missions, skills: skills, tools: tools };
   });
   if (!id) { toast('Identifiant requis', 'error'); return; }
   if (!source_prompt) { toast('Prompt source requis', 'error'); return; }
@@ -6810,9 +6882,10 @@ function renderTplLLM() {
           <td><span class="tag tag-blue">${escHtml(p.type)}</span></td>
           <td><code style="font-size:0.8rem">${escHtml(p.model)}</code></td>
           <td>${url ? `<code style="font-size:0.75rem">${escHtml(url)}</code>` : '<span style="color:var(--text-secondary)">—</span>'}</td>
-          <td>${p.env_key ? `<code style="font-size:0.75rem">${escHtml(p.env_key)}</code>` : '<span style="color:var(--text-secondary)">—</span>'}</td>
+          <td>${p.env_key ? `<code style="font-size:0.75rem">${escHtml(p.env_key)}</code>` : '<span style="color:var(--text-secondary)">—</span>'}${p.embedding ? ' <span class="tag tag-green" style="font-size:0.6rem">emb:' + (p.embedding_dimension || '?') + '</span>' : ''}</td>
           <td style="font-size:0.8rem;color:var(--text-secondary)">${escHtml(p.description || '')}</td>
           <td>
+            <button class="btn-icon" onclick="testTplEmbedding('${escHtml(id)}')" title="Tester embedding">🧲</button>
             <button class="btn-icon" onclick="cloneTplProvider('${escHtml(id)}')" title="Cloner">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
             </button>
@@ -6929,6 +7002,7 @@ function cloneTplProvider(id) {
     </div>
     <div class="form-row">
       <div class="form-group"><label>Max Tokens</label><input id="prov-max-tokens" type="number" value="${p.max_tokens || ''}" placeholder="4096" /></div>
+      <div class="form-group" style="display:flex;align-items:center;gap:0.5rem;"><input id="prov-inject-rag" type="checkbox" ${p.inject_rag ? 'checked' : ''} /><label for="prov-inject-rag" style="margin:0">Injecter le RAG</label><span class="btn-icon" onclick="toast('Quand actif, le contenu des documents est injecte dans le prompt de l\\'agent au lieu de lui donner un outil de recherche. Recommande pour les modeles locaux (Ollama).','info')" title="Aide" style="cursor:help;font-size:0.8rem;">&#9432;</span></div>
       <div class="form-group"></div>
     </div>
     ${_providerTypeFields(p.type, p)}
@@ -6977,10 +7051,12 @@ function _readProviderForm() {
   const description = document.getElementById('prov-desc').value.trim();
   const base_url = (document.getElementById('prov-base-url')?.value || '').trim();
   const max_tokens = parseInt(document.getElementById('prov-max-tokens')?.value) || 0;
+  const inject_rag = document.getElementById('prov-inject-rag')?.checked || false;
   const prov = { type, model, description };
   if (env_key) prov.env_key = env_key;
   if (base_url) prov.base_url = base_url;
   if (max_tokens > 0) prov.max_tokens = max_tokens;
+  prov.inject_rag = inject_rag;
   if (type === 'azure') {
     const ae = (document.getElementById('prov-azure-endpoint')?.value || '').trim();
     const ad = (document.getElementById('prov-azure-deployment')?.value || '').trim();
@@ -7032,6 +7108,7 @@ function editTplProvider(id) {
     </div>
     <div class="form-row">
       <div class="form-group"><label>Max Tokens</label><input id="prov-max-tokens" type="number" value="${p.max_tokens || ''}" placeholder="4096" /></div>
+      <div class="form-group" style="display:flex;align-items:center;gap:0.5rem;"><input id="prov-inject-rag" type="checkbox" ${p.inject_rag ? 'checked' : ''} /><label for="prov-inject-rag" style="margin:0">Injecter le RAG</label><span class="btn-icon" onclick="toast('Quand actif, le contenu des documents est injecte dans le prompt de l\\'agent au lieu de lui donner un outil de recherche. Recommande pour les modeles locaux (Ollama).','info')" title="Aide" style="cursor:help;font-size:0.8rem;">&#9432;</span></div>
       <div class="form-group"></div>
     </div>
     ${_providerTypeFields(p.type, p)}

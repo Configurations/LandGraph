@@ -135,15 +135,16 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
       setCreating(true);
       setError(null);
       try {
+        const firstWf = selectedWorkflowIds[0] || selectedWorkflowFilename;
         const result = await projectTypesApi.applyProjectType(
-          wizardData.slug, selectedTypeId, selectedWorkflowFilename,
+          wizardData.slug, selectedTypeId, firstWf,
         );
         updateWizardData({ orchestratorPrompt: result.orchestrator_prompt });
         void wizardDataApi.saveWizardStep(wizardData.slug, 3, {
           selectedTypeId,
           selectedChatId,
           selectedWorkflowIds,
-          workflowFilename: selectedWorkflowFilename,
+          workflowFilename: selectedWorkflowIds[0] || selectedWorkflowFilename,
           orchestratorPrompt: result.orchestrator_prompt,
         });
       } catch (err) {

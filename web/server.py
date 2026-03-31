@@ -1319,6 +1319,70 @@ async def delete_llm_provider(provider_id: str):
     return {"ok": True}
 
 
+async def _test_embedding_for_file(provider_id: str, llm_file: Path) -> dict:
+    """Test if a provider supports embeddings, update config, return result."""
+    data = _read_json(llm_file)
+    providers = data.get("providers", {})
+    if provider_id not in providers:
+        raise HTTPException(404, f"Provider '{provider_id}' introuvable")
+    p = providers[provider_id]
+    ptype = p.get("type", "")
+    model = p.get("model", "")
+    base_url = p.get("base_url", "")
+    api_key = p.get("api_key", "") or (os.environ.get(p.get("env_key", ""), "") if p.get("env_key") else "")
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            if ptype == "ollama":
+                url = f"{base_url.rstrip('/')}/api/embeddings"
+                resp = await client.post(url, json={"model": model, "prompt": "test embedding"})
+                resp.raise_for_status()
+                vector = resp.json().get("embedding", [])
+            else:
+                # OpenAI-compatible (openai, azure, mistral, deepseek, groq, etc.)
+                url = f"{base_url.rstrip('/')}/embeddings" if base_url else "https://api.openai.com/v1/embeddings"
+                headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+                resp = await client.post(url, json={"model": model, "input": "test embedding"}, headers=headers)
+                resp.raise_for_status()
+                resp_data = resp.json()
+                vector = resp_data.get("data", [{}])[0].get("embedding", [])
+
+        if not vector:
+            p["embedding"] = False
+            p.pop("embedding_dimension", None)
+            _write_json(llm_file, data)
+            return {"ok": False, "error": "Empty embedding vector returned"}
+
+        dimension = len(vector)
+        p["embedding"] = True
+        p["embedding_dimension"] = dimension
+        _write_json(llm_file, data)
+        return {"ok": True, "dimension": dimension}
+
+    except httpx.HTTPStatusError as e:
+        p["embedding"] = False
+        p.pop("embedding_dimension", None)
+        _write_json(llm_file, data)
+        status = e.response.status_code
+        detail = e.response.text[:200]
+        return {"ok": False, "error": f"HTTP {status}: {detail}"}
+    except Exception as e:
+        p["embedding"] = False
+        p.pop("embedding_dimension", None)
+        _write_json(llm_file, data)
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/llm/providers/test-embedding/{provider_id}")
+async def test_embedding_provider(provider_id: str):
+    return await _test_embedding_for_file(provider_id, LLM_PROVIDERS_FILE)
+
+
+@app.post("/api/templates/llm/test-embedding/{provider_id}")
+async def test_embedding_template(provider_id: str):
+    return await _test_embedding_for_file(provider_id, SHARED_LLM_FILE)
+
+
 class LLMDefaultUpdate(BaseModel):
     provider_id: str
 
@@ -3372,7 +3436,7 @@ def _list_projects(base_dir: Path) -> list:
                 cfg_file = d / "project.json"
                 cfg = json.loads(cfg_file.read_text(encoding="utf-8")) if cfg_file.exists() else {}
                 workflows = [f.stem.removesuffix(".wrk") for f in sorted(d.glob("*.wrk.json"))]
-                projects.append({"id": d.name, "name": cfg.get("name", d.name), "description": cfg.get("description", ""), "team": cfg.get("team", ""), "workflows": workflows})
+                projects.append({"id": d.name, "name": cfg.get("name", d.name), "description": cfg.get("description", ""), "team": cfg.get("team", ""), "embedding_provider": cfg.get("embedding_provider", ""), "workflows": workflows})
     return projects
 
 
@@ -3387,6 +3451,7 @@ class ProjectUpdate(BaseModel):
     name: str
     description: str = ""
     team: str = ""
+    embedding_provider: str = ""
 
 
 def _create_project(base_dir: Path, entry: ProjectCreate):
@@ -3413,6 +3478,10 @@ def _update_project(base_dir: Path, project_id: str, entry: ProjectUpdate):
     cfg["name"] = entry.name.strip()
     cfg["description"] = entry.description.strip()
     cfg["team"] = entry.team.strip()
+    if entry.embedding_provider:
+        cfg["embedding_provider"] = entry.embedding_provider.strip()
+    elif "embedding_provider" in cfg and not entry.embedding_provider:
+        del cfg["embedding_provider"]
     cfg_file.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
     return {"ok": True}
 

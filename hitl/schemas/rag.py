@@ -51,6 +51,8 @@ class AnalysisMessage(BaseModel):
     sender: Literal["agent", "user", "system"]
     type: Literal["progress", "question", "reply", "artifact", "result", "system"]
     content: str
+    agent_id: Optional[str] = None
+    agent_avatar: Optional[str] = None
     request_id: Optional[str] = None
     status: Optional[str] = None
     artifact_key: Optional[str] = None

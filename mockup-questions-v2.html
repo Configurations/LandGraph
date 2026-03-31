@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Maquette V2 — Questions Agent (fermees + ouvertes)</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Inter', -apple-system, sans-serif; background: #0a0a0c; color: #e4e4e7; min-height: 100vh; display: flex; justify-content: center; padding: 2rem; }
+.chat-container { width: 100%; max-width: 900px; display: flex; flex-direction: column; gap: 1.5rem; }
+h2 { font-size: 0.85rem; color: #71717a; margin-bottom: 0.3rem; border-bottom: 1px solid #1a1b23; padding-bottom: 0.5rem; }
+
+/* Message agent */
+.msg-agent { display: flex; gap: 0.75rem; align-self: flex-start; max-width: 85%; }
+.avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.7rem; font-weight: 700; color: white; flex-shrink: 0; }
+.av-ra { background: linear-gradient(135deg, #6366f1, #818cf8); }
+.av-ux { background: linear-gradient(135deg, #ec4899, #f472b6); }
+.av-ar { background: linear-gradient(135deg, #f59e0b, #fbbf24); }
+.bubble { background: #1a1b23; border: 1px solid #2a2b35; border-radius: 12px; padding: 0.75rem 1rem; }
+.agent-name { font-size: 0.65rem; font-weight: 600; margin-bottom: 0.25rem; }
+.name-ra { color: #818cf8; }
+.name-ux { color: #ec4899; }
+.name-ar { color: #f59e0b; }
+.bubble p { font-size: 0.85rem; line-height: 1.5; color: #d4d4d8; }
+.time { font-size: 0.6rem; color: #52525b; margin-top: 0.25rem; }
+
+/* Question card */
+.question-card { background: #111114; border: 1px solid #2a2b35; border-left: 3px solid #f59e0b; border-radius: 10px; margin-top: 0.4rem; overflow: hidden; }
+.question-text { padding: 0.6rem 0.75rem; font-size: 0.8rem; color: #e4e4e7; line-height: 1.4; }
+
+/* Chips (closed question) */
+.chips-wrap { padding: 0.3rem 0.75rem 0.6rem; display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.chip {
+  background: #1a1b23; border: 1.5px solid #3f3f46; border-radius: 20px;
+  padding: 0.35rem 0.85rem; font-size: 0.75rem; color: #a1a1aa;
+  cursor: pointer; transition: all 0.2s; user-select: none;
+}
+.chip:hover { border-color: #6366f1; color: #c4b5fd; }
+.chip.selected { background: rgba(99, 102, 241, 0.15); border-color: #6366f1; color: #c4b5fd; }
+.chip.selected::before { content: '✓ '; font-size: 0.65rem; }
+
+/* Open question input */
+.question-input { padding: 0 0.75rem 0.6rem; }
+.question-input textarea {
+  width: 100%; background: #0a0a0c; border: 1px solid #2a2b35; border-radius: 8px;
+  color: #e4e4e7; font-family: inherit; font-size: 0.8rem; padding: 0.5rem 0.6rem;
+  resize: vertical; min-height: 38px; outline: none; transition: border-color 0.2s;
+}
+.question-input textarea:focus { border-color: #6366f1; }
+.question-input textarea.answered { border-color: #22c55e; background: rgba(34, 197, 94, 0.05); }
+
+/* Multi-select hint */
+.hint { font-size: 0.6rem; color: #52525b; padding: 0 0.75rem 0.4rem; font-style: italic; }
+
+/* Questions group */
+.questions-group { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.5rem; }
+.questions-group-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.15rem; }
+.question-badge { background: #f59e0b; color: #000; font-size: 0.6rem; font-weight: 700; padding: 0.15rem 0.4rem; border-radius: 4px; }
+
+/* Progress */
+.progress-bar { display: flex; align-items: center; gap: 0.4rem; }
+.progress-dots { display: flex; gap: 0.2rem; }
+.progress-dot { width: 7px; height: 7px; border-radius: 50%; background: #2a2b35; transition: background 0.3s; }
+.progress-dot.filled { background: #22c55e; }
+.progress-label { font-size: 0.6rem; color: #71717a; }
+
+/* Buttons */
+.send-btn {
+  margin-top: 0.5rem; align-self: flex-end;
+  background: linear-gradient(135deg, #6366f1, #818cf8); color: white;
+  border: none; border-radius: 8px; padding: 0.45rem 1.1rem;
+  font-size: 0.78rem; font-weight: 600; cursor: pointer; transition: all 0.2s;
+}
+.send-btn:hover { opacity: 0.9; }
+.send-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.send-btn.sent { background: #22c55e; pointer-events: none; }
+
+/* User response */
+.msg-user { align-self: flex-end; max-width: 70%; }
+.msg-user .bubble { background: rgba(99, 102, 241, 0.15); border-color: rgba(99, 102, 241, 0.3); }
+
+.divider { text-align: center; font-size: 0.6rem; color: #3f3f46; padding: 0.75rem 0; }
+</style>
+</head>
+<body>
+<div class="chat-container">
+
+  <!-- ════════════════════════════════════════════ -->
+  <h2>Cas 1 — Mix questions fermees (chips) + ouvertes (texte)</h2>
+
+  <div class="msg-agent">
+    <div class="avatar av-ra">RA</div>
+    <div style="flex:1;">
+      <div class="bubble">
+        <div class="agent-name name-ra">Requirements Analyst</div>
+        <p>J'ai analyse les documents du projet. Pour structurer les specs, je dois clarifier :</p>
+      </div>
+
+      <div class="questions-group" id="group1">
+        <div class="questions-group-header">
+          <span class="question-badge">3 questions</span>
+          <div class="progress-bar">
+            <div class="progress-dots">
+              <div class="progress-dot" id="g1-d1"></div>
+              <div class="progress-dot" id="g1-d2"></div>
+              <div class="progress-dot" id="g1-d3"></div>
+            </div>
+            <span class="progress-label" id="g1-label">0/3</span>
+          </div>
+        </div>
+
+        <!-- Q1: Closed (single select) -->
+        <div class="question-card">
+          <div class="question-text">1. Quel est votre objectif pour la phase actuelle ?</div>
+          <div class="chips-wrap" id="g1-q1-chips">
+            <div class="chip" onclick="selectChip(this, 'g1-q1', false)">MVP</div>
+            <div class="chip" onclick="selectChip(this, 'g1-q1', false)">Feature specifique</div>
+            <div class="chip" onclick="selectChip(this, 'g1-q1', false)">Correction de bugs</div>
+            <div class="chip" onclick="selectChip(this, 'g1-q1', false)">Refonte complete</div>
+          </div>
+        </div>
+
+        <!-- Q2: Closed (multi select) -->
+        <div class="question-card">
+          <div class="question-text">2. Quelles fonctionnalites sante prioriser ?</div>
+          <div class="hint">Plusieurs choix possibles</div>
+          <div class="chips-wrap" id="g1-q2-chips">
+            <div class="chip" onclick="selectChip(this, 'g1-q2', true)">Suivi sommeil</div>
+            <div class="chip" onclick="selectChip(this, 'g1-q2', true)">Analyse nutritionnelle</div>
+            <div class="chip" onclick="selectChip(this, 'g1-q2', true)">Frequence cardiaque</div>
+            <div class="chip" onclick="selectChip(this, 'g1-q2', true)">GPS tracking</div>
+            <div class="chip" onclick="selectChip(this, 'g1-q2', true)">Gamification</div>
+          </div>
+        </div>
+
+        <!-- Q3: Open -->
+        <div class="question-card">
+          <div class="question-text">3. Quelle differenciation par rapport aux plateformes existantes (Wyzeha, CoachUp) ?</div>
+          <div class="question-input">
+            <textarea id="g1-q3" rows="2" placeholder="Votre reponse..." oninput="updateGroup1()"></textarea>
+          </div>
+        </div>
+
+        <button class="send-btn" id="g1-send" disabled onclick="sendGroup('g1')">Envoyer les reponses</button>
+      </div>
+      <div class="time">19:04</div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════ -->
+  <div class="divider">───</div>
+  <h2>Cas 2 — Question fermee unique (oui/non)</h2>
+
+  <div class="msg-agent">
+    <div class="avatar av-ux">UX</div>
+    <div style="flex:1;">
+      <div class="bubble">
+        <div class="agent-name name-ux">UX Designer</div>
+        <p>J'ai une question sur l'architecture des interfaces :</p>
+      </div>
+
+      <div class="questions-group" id="group2">
+        <div class="question-card">
+          <div class="question-text">Les coachs et les athletes doivent-ils avoir des interfaces completement separees ?</div>
+          <div class="chips-wrap" id="g2-q1-chips">
+            <div class="chip" onclick="selectChip(this, 'g2-q1', false)">Oui, completement separees</div>
+            <div class="chip" onclick="selectChip(this, 'g2-q1', false)">Non, tableau de bord commun</div>
+            <div class="chip" onclick="selectChip(this, 'g2-q1', false)">Mix : base commune + vues specifiques</div>
+          </div>
+        </div>
+
+        <button class="send-btn" id="g2-send" disabled onclick="sendGroup('g2')">Repondre</button>
+      </div>
+      <div class="time">19:05</div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════ -->
+  <div class="divider">───</div>
+  <h2>Cas 3 — Question ouverte pure</h2>
+
+  <div class="msg-agent">
+    <div class="avatar av-ar">AR</div>
+    <div style="flex:1;">
+      <div class="bubble">
+        <div class="agent-name name-ar">Architect</div>
+        <p>Pour definir l'architecture technique :</p>
+      </div>
+
+      <div class="questions-group" id="group3">
+        <div class="question-card">
+          <div class="question-text">Decrivez les systemes existants avec lesquels l'application doit s'integrer (APIs, bases de donnees, services tiers).</div>
+          <div class="question-input">
+            <textarea id="g3-q1" rows="3" placeholder="Votre reponse..." oninput="updateGroup3()"></textarea>
+          </div>
+        </div>
+
+        <button class="send-btn" id="g3-send" disabled onclick="sendGroup('g3')">Repondre</button>
+      </div>
+      <div class="time">19:06</div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════ -->
+  <div class="divider">───</div>
+  <h2>Cas 4 — Apres envoi (resultat)</h2>
+
+  <div class="msg-agent">
+    <div class="avatar av-ra">RA</div>
+    <div style="flex:1;">
+      <div class="bubble">
+        <div class="agent-name name-ra">Requirements Analyst</div>
+        <p>J'ai analyse les documents du projet. Pour structurer les specs, je dois clarifier :</p>
+      </div>
+      <div class="questions-group">
+        <div class="question-card" style="border-left-color: #22c55e; opacity: 0.7;">
+          <div class="question-text">1. Quel est votre objectif pour la phase actuelle ?</div>
+          <div class="chips-wrap">
+            <div class="chip selected" style="pointer-events:none;">MVP</div>
+          </div>
+        </div>
+        <div class="question-card" style="border-left-color: #22c55e; opacity: 0.7;">
+          <div class="question-text">2. Quelles fonctionnalites sante prioriser ?</div>
+          <div class="chips-wrap">
+            <div class="chip selected" style="pointer-events:none;">Frequence cardiaque</div>
+            <div class="chip selected" style="pointer-events:none;">GPS tracking</div>
+          </div>
+        </div>
+        <div class="question-card" style="border-left-color: #22c55e; opacity: 0.7;">
+          <div class="question-text">3. Quelle differenciation ?</div>
+          <div style="padding: 0.3rem 0.75rem 0.5rem; font-size: 0.8rem; color: #a1a1aa; font-style: italic;">"IA personnalisee + integration objets connectes sante"</div>
+        </div>
+        <div class="send-btn sent" style="pointer-events:none;">Envoye ✓</div>
+      </div>
+      <div class="time">19:04</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// Track answers per group
+var answers = {};
+
+function selectChip(el, questionId, multiSelect) {
+  if (el.closest('.questions-group')?.querySelector('.send-btn.sent')) return;
+
+  if (!multiSelect) {
+    // Single select: deselect siblings
+    el.parentElement.querySelectorAll('.chip').forEach(c => c.classList.remove('selected'));
+  }
+  el.classList.toggle('selected');
+
+  // Store answer
+  var selected = [];
+  el.parentElement.querySelectorAll('.chip.selected').forEach(c => selected.push(c.textContent.replace('✓ ', '')));
+  answers[questionId] = selected;
+
+  // Update progress
+  var groupId = questionId.split('-')[0] + '-' + questionId.split('-')[0].replace('g','group');
+  updateGroupProgress(questionId.split('-')[0]);
+}
+
+function updateGroupProgress(gid) {
+  if (gid === 'g1') updateGroup1();
+  if (gid === 'g2') updateGroup2();
+  if (gid === 'g3') updateGroup3();
+}
+
+function updateGroup1() {
+  var q1 = (answers['g1-q1'] || []).length > 0;
+  var q2 = (answers['g1-q2'] || []).length > 0;
+  var q3 = (document.getElementById('g1-q3')?.value || '').trim().length > 0;
+  var count = (q1?1:0) + (q2?1:0) + (q3?1:0);
+
+  document.getElementById('g1-d1').className = 'progress-dot' + (q1 ? ' filled' : '');
+  document.getElementById('g1-d2').className = 'progress-dot' + (q2 ? ' filled' : '');
+  document.getElementById('g1-d3').className = 'progress-dot' + (q3 ? ' filled' : '');
+  document.getElementById('g1-label').textContent = count + '/3';
+  document.getElementById('g1-send').disabled = count === 0;
+}
+
+function updateGroup2() {
+  var q1 = (answers['g2-q1'] || []).length > 0;
+  document.getElementById('g2-send').disabled = !q1;
+}
+
+function updateGroup3() {
+  var q1 = (document.getElementById('g3-q1')?.value || '').trim().length > 0;
+  document.getElementById('g3-send').disabled = !q1;
+}
+
+function sendGroup(gid) {
+  var btn = document.getElementById(gid + '-send');
+  btn.textContent = 'Envoye ✓';
+  btn.className = 'send-btn sent';
+
+  // Disable all inputs in this group
+  var group = btn.closest('.questions-group');
+  group.querySelectorAll('textarea').forEach(t => t.disabled = true);
+  group.querySelectorAll('.chip').forEach(c => c.style.pointerEvents = 'none');
+
+  // Dim answered cards
+  group.querySelectorAll('.question-card').forEach(card => {
+    card.style.borderLeftColor = '#22c55e';
+    card.style.opacity = '0.7';
+  });
+}
+</script>
+</body>
+</html>

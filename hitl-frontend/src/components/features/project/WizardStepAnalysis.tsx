@@ -182,8 +182,21 @@ export function WizardStepAnalysis({ className = '' }: WizardStepAnalysisProps):
   const isActive = status === 'running' || status === 'starting';
   const inputDisabled = status === 'completed' || status === 'failed' || status === 'idle' || status === 'starting';
 
+  // Extract indexation progress from messages
+  const indexProgress = (() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.sender !== 'agent') continue;
+      const match = m.content.match(/Indexation documents\s*:\s*(\d+)\/(\d+)\s*chunks\s*\((\d+)%\)/);
+      if (match) return { done: Number(match[1]), total: Number(match[2]), pct: Number(match[3]) };
+      // If we see the synthesis (📄), indexation is done
+      if (m.content.startsWith('📄')) return null;
+    }
+    return null;
+  })();
+
   return (
-    <div className={`flex flex-col max-w-2xl h-[500px] ${className}`}>
+    <div className={`flex flex-col max-w-5xl h-[calc(100vh-12rem)] ${className}`}>
       <h3 className="text-sm font-semibold text-content-primary mb-2">{t('analysis.title')}</h3>
 
       {status === 'idle' && (
@@ -202,9 +215,33 @@ export function WizardStepAnalysis({ className = '' }: WizardStepAnalysisProps):
 
       {status !== 'idle' && (status !== 'starting' || messages.length > 0) && (
         <>
+          {indexProgress && (
+            <div className="mb-3">
+              <div className="flex items-center justify-between text-xs text-content-tertiary mb-1">
+                <span>Indexation documents</span>
+                <span>{indexProgress.done}/{indexProgress.total} chunks ({indexProgress.pct}%)</span>
+              </div>
+              <div className="w-full h-2 bg-surface-tertiary rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-accent-blue rounded-full transition-all duration-300"
+                  style={{ width: `${indexProgress.pct}%` }}
+                />
+              </div>
+            </div>
+          )}
           <div className="flex-1 overflow-y-auto flex flex-col gap-2 rounded-lg border border-border bg-surface-primary p-4">
             {messages.map((msg) => (
-              <AnalysisChatMessage key={msg.id} message={msg} />
+              <AnalysisChatMessage
+                key={msg.id}
+                message={msg}
+                onReply={(requestId, response) => {
+                  void analysisApi.reply(slug, requestId, response).then(() => {
+                    setPendingQuestion(null);
+                    setStatus('running');
+                    analysisApi.getConversation(slug).then(setMessages).catch(() => {});
+                  });
+                }}
+              />
             ))}
             {isActive && <ChatTypingIndicator agentName="Orchestrateur" />}
             <div ref={bottomRef} />

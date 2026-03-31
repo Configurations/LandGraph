@@ -18,13 +18,20 @@ log = structlog.get_logger(__name__)
 # ── Embedding provider resolution ─────────────────
 
 
-def _find_embedding_provider() -> Optional[dict[str, Any]]:
-    """Find the first embedding-capable provider in llm_providers.json."""
-    data = load_json_config("llm_providers.json")
-    providers = data.get("providers", data)
-    if isinstance(providers, dict):
-        providers = list(providers.values())
+def _find_embedding_provider(provider_id: str = "") -> Optional[dict[str, Any]]:
+    """Find an embedding-capable provider in llm_providers.json.
 
+    If provider_id is given, return that specific provider.
+    Otherwise, return the first provider with embedding: true.
+    """
+    data = load_json_config("llm_providers.json")
+    providers_dict = data.get("providers", {})
+
+    # If a specific provider is requested, return it directly
+    if provider_id and isinstance(providers_dict, dict) and provider_id in providers_dict:
+        return providers_dict[provider_id]
+
+    providers = list(providers_dict.values()) if isinstance(providers_dict, dict) else providers_dict
     for p in providers:
         if not isinstance(p, dict):
             continue
@@ -36,22 +43,21 @@ def _find_embedding_provider() -> Optional[dict[str, Any]]:
     return None
 
 
-async def get_embedding(text: str) -> list[float]:
-    """Get an embedding vector for the given text."""
-    provider = _find_embedding_provider()
+async def get_embedding(text: str, provider_id: str = "") -> list[float]:
+    """Get an embedding vector for the given text (single attempt, no retry)."""
+    provider = _find_embedding_provider(provider_id)
     if not provider:
         raise RuntimeError("rag.no_embedding_provider")
 
     ptype = provider.get("type", "openai")
     model = provider.get("model", "text-embedding-3-small")
     env_key = provider.get("env_key", "")
-    api_key = os.getenv(env_key, "") if env_key else ""
+    api_key = provider.get("api_key", "") or (os.getenv(env_key, "") if env_key else "")
 
     if ptype in ("openai", "azure_openai"):
         return await _embed_openai(provider, model, api_key, text)
     if ptype == "ollama":
         return await _embed_ollama(provider, model, text)
-
     raise RuntimeError(f"rag.unsupported_embedding_type:{ptype}")
 
 
@@ -91,8 +97,8 @@ async def _embed_ollama(
 
 def chunk_text(
     text: str,
-    max_tokens: int = 1000,
-    overlap: int = 100,
+    max_tokens: int = 128,
+    overlap: int = 20,
 ) -> list[str]:
     """Split text into overlapping chunks for embedding."""
     if not text.strip():
@@ -128,10 +134,11 @@ def chunk_text(
     if current:
         chunks.append("\n\n".join(current))
 
-    # Merge tiny chunks (< 200 tokens) with previous
+    # Merge tiny chunks with previous (only if combined stays under max)
+    merge_threshold = max_tokens // 4
     merged: list[str] = []
     for chunk in chunks:
-        if merged and _approx_tokens(chunk) < 200:
+        if merged and _approx_tokens(chunk) < merge_threshold and _approx_tokens(merged[-1] + "\n\n" + chunk) <= max_tokens:
             merged[-1] = merged[-1] + "\n\n" + chunk
         else:
             merged.append(chunk)
@@ -140,8 +147,8 @@ def chunk_text(
 
 
 def _approx_tokens(text: str) -> int:
-    """Rough token count (words * 1.3)."""
-    return int(len(text.split()) * 1.3)
+    """Rough token count (~4 chars per token)."""
+    return len(text) // 4 + 1
 
 
 def _take_tail_tokens(parts: list[str], token_limit: int) -> str:
@@ -187,6 +194,7 @@ async def index_document(
     filename: str,
     content: str,
     content_type: str,
+    embedding_provider: str = "",
 ) -> int:
     """Chunk text, compute embeddings, store in rag_documents."""
     # Remove old entries for this file
@@ -203,7 +211,7 @@ async def index_document(
     count = 0
     for idx, chunk in enumerate(chunks):
         try:
-            vec = await get_embedding(chunk)
+            vec = await get_embedding(chunk, provider_id=embedding_provider)
         except Exception as exc:
             log.error("embedding_failed", chunk_index=idx, error=str(exc))
             continue
@@ -225,10 +233,11 @@ async def search(
     project_slug: str,
     query: str,
     top_k: int = 5,
+    embedding_provider: str = "",
 ) -> list[RagSearchResult]:
     """Semantic similarity search over project documents."""
     try:
-        query_vec = await get_embedding(query)
+        query_vec = await get_embedding(query, provider_id=embedding_provider)
     except Exception as exc:
         log.error("rag_search_embedding_failed", error=str(exc))
         return []

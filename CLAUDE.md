@@ -1,20 +1,36 @@
 # LandGraph — Instructions Claude Code
 
-## Projet 
+## Projet
 
 Plateforme multi-agent (Python/LangGraph) orchestrant 13 agents IA pour le cycle de vie logiciel.
 Stack : FastAPI + PostgreSQL (pgvector) + Redis + Docker Compose, sur Proxmox LXC 110 (Ubuntu 24).
 
+**Standard de qualité** : on privilégie le code propre et bien fait, jamais la rapidité au détriment de la rigueur. Pas de raccourcis, pas de "c'est pas grave", pas de "on simplifiera plus tard". Chaque tâche est faite correctement ou pas du tout.
+
 ## Commandes essentielles
 
 ```bash
+# Build & Deploy
+docker compose build                           # Build tous les services
+docker compose build langgraph-api              # Build un seul service
+docker compose up -d                            # Lancer la stack
+docker compose down                             # Stopper la stack
+./restart.sh                                    # Restart rapide (stop + up)
+./build.sh                                      # Full rebuild + restart
+./update.sh                                     # Git pull + rebuild
 
-# Deploy & Build
-bash deploy.sh
+# Logs & Debug
+docker compose logs -f langgraph-api            # Logs API (gateway + agents)
+docker compose logs -f discord-bot              # Logs bot Discord
+docker compose logs -f hitl-console             # Logs console HITL
+docker compose exec langgraph-api bash          # Shell dans le container API
 
-# Build
-bash build.sh
+# Tests
+docker compose exec langgraph-api python -m pytest          # Tests unitaires
+docker compose exec langgraph-api python -m pytest -x -v    # Verbose, stop au 1er fail
 
+# Base de données
+docker compose exec langgraph-postgres psql -U langgraph -d langgraph
 ```
 
 ## Navigation du code
@@ -99,23 +115,35 @@ web/                 → Dashboard admin (server.py + static/)
 - **Refactor cross-module / nouveau système** : analyse les fichiers concernés, propose un plan détaillé avec la liste des fichiers à modifier, attends ma validation
 - **Doute sur l'intention ou le scope** : demande une clarification AVANT de planifier
 
+### Règle fondamentale : conversation d'abord, code ensuite
+- **Ne commence JAMAIS à coder tant que je n'ai pas explicitement validé le plan ou donné un feu vert**
+- Si je pose une question, je veux une réponse — pas du code. On discute d'abord, on code quand on est alignés
+- Si je décris un problème ou une idée, c'est une discussion, pas une commande d'exécution
+- Demande "On est bons ? Je code ?" avant de passer à l'implémentation
+- Le seul cas où tu codes directement : un fix mineur évident (typo, une ligne) ou si je dis explicitement "fais-le" / "vas-y" / "code"
+
 ### Vérification avant validation
-Avant de déclarer une tâche terminée :
+Avant de déclarer une tâche terminée, **toutes** ces étapes sont obligatoires, quelle que soit la taille du changement :
 1. Le code s'exécute sans erreur (lance le build ou le linter)
 2. Le cas nominal fonctionne (teste manuellement ou via test)
 3. Les imports ajoutés existent réellement dans le projet
 4. Pas de régression sur les fichiers modifiés (lance les tests liés)
 5. Si modification frontend (hitl/static, web/static) : vérifie que la page charge sans erreur console
 
-Curseur : fix mineur → étapes 1-2 | feature → toutes | refactor → + vérifier les modules dépendants.
-**Ne dis jamais "c'est fait" sans avoir exécuté au moins les étapes 1-3.**
+**Ne dis jamais "c'est fait" sans avoir exécuté ces vérifications. Aucune exception.**
+Si une vérification échoue, corrige AVANT de me présenter le résultat.
 
 ### Gestion du contexte
 - Avant une exploration large (>5 fichiers) : utilise un subagent Task() et renvoie un résumé structuré
 - Après chaque tâche complétée : /clear avant de passer à la suivante
 - Si la conversation dépasse ~50% du contexte : /compact manuellement
-- N'explique pas les étapes intermédiaires. Exécute directement et rapporte uniquement ce qui a changé.
-- Termine toutes les étapes avant de faire un résumé » et « Ne t'arrête pas tant que le plan n'est pas entièrement exécuté. 
+
+### Discipline d'exécution
+- Exécute directement, ne décris pas ce que tu vas faire — fais-le
+- N'explique pas les étapes intermédiaires. Rapporte uniquement ce qui a changé et le résultat final
+- Termine TOUTES les étapes d'un plan avant de faire un résumé. Ne t'arrête pas au milieu
+- Ne prends jamais de raccourci "pour simplifier" — si le plan prévoit 5 étapes, fais les 5
+- Si tu rencontres un problème en cours de route, signale-le et propose une solution — ne l'ignore pas silencieusement
 
 ## Auto-amélioration
 
