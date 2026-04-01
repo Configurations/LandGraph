@@ -1257,57 +1257,37 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
         config = {"configurable": {"thread_id": request.thread_id}}
         result = await asyncio.to_thread(graph.invoke, state, config)
 
-        all_decisions = result.get("decision_history", [])
-        # Only act on the LAST decision (current invoke), not the full history
-        decisions = all_decisions[-1:] if all_decisions else []
-
-        agents_dispatched = []
-        output_parts = []
-
         existing_outputs = list(result.get("agent_outputs", {}).keys())
         if existing_outputs:
             logger.info(f"Context loaded: {', '.join(existing_outputs)}")
 
-        for i, d in enumerate(decisions, 1):
-            dtype = d.get("decision_type", "unknown")
-            conf = d.get("confidence", 0)
-            reasoning = d.get("reasoning", "")
-            # Log full reasoning for debug, show only summary to user
-            logger.info(f"Decision: {dtype} conf={conf} reasoning={reasoning[:300]}")
-            for a in d.get("actions", []):
-                if isinstance(a, dict):
-                    action_type = a.get("action", "")
-                    if action_type == "dispatch_agent":
-                        t = a.get("target", "")
-                        task = a.get("task") or ""
-                        if t:
-                            agents_dispatched.append(t)
-                            output_parts.append(f"⏳ **{t}** : {task}")
-                    elif action_type in ("escalate_human", "ask_human"):
-                        msg = a.get("message") or a.get("task") or reasoning
-                        output_parts.append(f"💬 {msg}")
-                    elif action_type in ("notify_discord", "notify_channel"):
-                        msg = a.get("message") or ""
-                        if msg:
-                            output_parts.append(msg)
+        # Read results from orchestrator state
+        output_text = result.get("_orchestrator_output", "")
+        agents_dispatched = result.get("_agents_dispatched", [])
+        has_question = result.get("_has_question", False)
+        dispatched_tasks = result.get("_dispatched_tasks", [])
 
-        if agents_dispatched:
-            output_parts.append("\nResultats dans ce channel.")
+        # Build output for display
+        output_parts = []
+        if output_text:
+            output_parts.append(output_text)
+        for d in dispatched_tasks:
+            output_parts.append("⏳ **{}** : {}".format(d["agent_id"], d["task"][:200]))
+        if agents_dispatched and not output_parts:
+            output_parts.append("Agents dispatches.")
 
-        # Add confidence warning if low
-        if decisions:
-            conf = decisions[-1].get("confidence", 1.0)
-            if conf < 0.7:
-                output_parts.append(f"\n⚠️ LOW_CONFIDENCE ({conf})")
+        final_output = "\n\n".join(output_parts) if output_parts else "Orchestrateur en attente."
 
-        output_text = "\n\n".join(output_parts) if output_parts else "Orchestrateur en attente."
+        # Keep backward compat: pass decisions for run_orchestrated
+        all_decisions = result.get("decision_history", [])
+        decisions = all_decisions[-1:] if all_decisions else []
 
         if agents_dispatched:
             result["_discord_channel_id"] = channel_id
             background_tasks.add_task(run_orchestrated, result, decisions, channel_id, request.thread_id, canonical_agents)
 
         return InvokeResponse(
-            output=output_text, thread_id=request.thread_id,
+            output=final_output, thread_id=request.thread_id,
             decisions=decisions, agents_dispatched=agents_dispatched)
 
     except Exception as e:

@@ -183,7 +183,7 @@ export function AnalysisChatMessage({ message, onReply, className = '' }: Analys
             {/* Question cards */}
             {parsed.questions.map((q, i) => {
               const a = answers[i];
-              const selectedChips = Array.isArray(a) ? a : (typeof a === 'string' && q.choices.includes(a) ? [a] : []);
+              const selectedChips = Array.isArray(a) ? a : (typeof a === 'string' && (q.choices.includes(a) || a === 'Autre') ? [a] : []);
               const isMulti = q.text.toLowerCase().includes('plusieurs') || q.text.toLowerCase().includes('prioriser');
 
               return (
@@ -221,7 +221,7 @@ export function AnalysisChatMessage({ message, onReply, className = '' }: Analys
                       </div>
                       {selectedChips.includes('Autre') && (
                         <textarea
-                          rows={2}
+                          rows={4}
                           placeholder="Precisez..."
                           value={otherText[i] || ''}
                           onChange={e => setOtherText(prev => ({ ...prev, [i]: e.target.value }))}
@@ -232,7 +232,7 @@ export function AnalysisChatMessage({ message, onReply, className = '' }: Analys
                   ) : (
                     <div className="px-3 pb-2">
                       <textarea
-                        rows={2}
+                        rows={4}
                         placeholder="Votre reponse..."
                         value={typeof a === 'string' ? a : ''}
                         onChange={e => handleTextAnswer(i, e.target.value)}

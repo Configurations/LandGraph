@@ -694,45 +694,28 @@ async def _run_analysis_pipeline(
             )
             return
 
-        # Process orchestrator decisions
-        decisions = data.get("decisions", [])
-        agents_dispatched = data.get("agents_dispatched", [])
+        # Store output as progress event (questions are created by ask_human tool directly)
         output_text = data.get("output", "")
+        agents_dispatched = data.get("agents_dispatched", [])
+        has_question = any(
+            tc.get("name") in ("ask_human", "human_gate")
+            for d in data.get("decisions", [])
+            for tc in d.get("tool_calls", [])
+        )
 
-        # Check if the orchestrator wants to ask the user a question
-        has_question = False
-        for decision in decisions:
-            for action in decision.get("actions", []):
-                if not isinstance(action, dict):
-                    continue
-                action_type = action.get("action", "")
-                if action_type in ("escalate_human", "ask_human"):
-                    has_question = True
-                    question = action.get("message") or action.get("task") or output_text
-                    row = await fetch_one(
-                        """INSERT INTO project.hitl_requests
-                           (thread_id, agent_id, team_id, request_type, prompt, context, channel, status)
-                           VALUES ($1, $2, $3, 'question', $4, $5::jsonb, 'hitl-console', 'pending')
-                           RETURNING id""",
-                        thread_id, "orchestrator", team_id, question,
-                        json.dumps({"type": "onboarding", "project_slug": project_slug, "task_id": task_id}),
-                    )
-                    request_id = str(row["id"]) if row else ""
-                    await execute(
-                        "UPDATE project.dispatcher_tasks SET status = 'waiting_input' WHERE id = $1::uuid",
-                        task_id,
-                    )
-                    log.info("onboarding_question_created", slug=project_slug,
-                             request_id=request_id, question=question[:100])
-
-        # Store as progress event only if no question (questions go via hitl_requests)
-        if not has_question and output_text:
+        if output_text and not has_question:
             await execute(
                 """INSERT INTO project.dispatcher_task_events (task_id, event_type, data)
                    VALUES ($1::uuid, 'progress', $2::jsonb)""",
                 task_id,
                 json.dumps({"data": output_text, "agents_dispatched": agents_dispatched},
                             ensure_ascii=False),
+            )
+
+        if has_question:
+            await execute(
+                "UPDATE project.dispatcher_tasks SET status = 'waiting_input' WHERE id = $1::uuid",
+                task_id,
             )
 
         log.info("analysis_pipeline_complete", slug=project_slug, task_id=task_id,
