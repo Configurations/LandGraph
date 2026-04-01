@@ -171,10 +171,20 @@ def parse_llm_decision(raw: str, project_id: str) -> RoutingDecision:
     import re as _re
 
     clean = raw.strip()
+    # Extract text after the JSON block (LLM may add a user-facing message after the routing JSON)
+    trailing_text = ""
     if "```json" in clean:
-        clean = clean.split("```json")[1].split("```")[0].strip()
+        parts = clean.split("```json", 1)[1].split("```", 1)
+        clean = parts[0].strip()
+        trailing_text = parts[1].strip() if len(parts) > 1 else ""
     elif "```" in clean:
-        clean = clean.split("```")[1].split("```")[0].strip()
+        parts = clean.split("```", 1)[1].split("```", 1)
+        clean = parts[0].strip()
+        trailing_text = parts[1].strip() if len(parts) > 1 else ""
+    # Strip leading markers like "**Réponse à l'utilisateur :**"
+    if trailing_text:
+        import re as _re2
+        trailing_text = _re2.sub(r'^\s*\*\*[^*]+\*\*\s*:?\s*', '', trailing_text).strip()
 
     # Try to find JSON in the response (LLM may wrap in text)
     data = None

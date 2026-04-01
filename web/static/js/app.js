@@ -4980,7 +4980,8 @@ async function _projRenderChats() {
         '</div>' +
       '</div>' +
       '<div class="chat-body">' +
-        '<div class="chat-body-row">Prompt: <strong>' + escHtml((promptFile || c.source_prompt || '(aucun)').replace(/\.md$/, '')) + '</strong>' + promptLink + '</div>' +
+        '<div class="chat-body-row">Orchestrateur: <strong>' + escHtml((promptFile || c.source_prompt || '(aucun)').replace(/\.md$/, '')) + '</strong>' + promptLink + '</div>' +
+        '<div class="chat-body-row">Agent: <strong>' + escHtml((c.source_agent_prompt || '(aucun)').replace(/\.md$/, '')) + '</strong></div>' +
         '<div id="' + escHtml(collapseId) + '" class="wf-group-prompt-panel" style="display:none"></div>' +
         '<div class="chat-agents">' + agentsHtml + '</div>' +
       '</div>' +
@@ -5044,18 +5045,25 @@ async function _projShowChatModal(idx) {
     var agRes = await api('/api/shared-agents');
     _chatAgentsData = agRes.agents || [];
   } catch {}
-  // Load prompts
-  var promptsData = [];
+  // Load models
+  var modelsData = [];
   try {
-    var pmRes = await api('/api/templates/prompts?culture=' + encodeURIComponent('fr-fr'));
-    promptsData = pmRes.prompts || [];
+    var modelsEndpoint = _projApiBase.includes('/prod-') ? '/api/prod-models' : '/api/templates/models';
+    var mdRes = await api(modelsEndpoint + '?culture=' + encodeURIComponent('fr-fr'));
+    modelsData = mdRes.models || [];
   } catch {}
   var chatTypes = ['onboarding'];
   var typeOptions = chatTypes.map(function(t) {
     return '<option value="' + escHtml(t) + '"' + (chat.type === t ? ' selected' : '') + '>' + escHtml(t) + '</option>';
   }).join('');
-  var promptOptions = '<option value="">(aucun)</option>' + promptsData.map(function(p) {
-    return '<option value="' + escHtml(p.name) + '"' + (chat.source_prompt === p.name ? ' selected' : '') + '>' + escHtml(p.name.replace(/\.md$/, '')) + '</option>';
+  var chatType = chat.type || 'onboarding';
+  var orchestratorModels = modelsData.filter(function(m) { return m.name.startsWith(chatType + '-'); });
+  var agentModels = modelsData.filter(function(m) { return m.name.startsWith(chatType + '-'); });
+  var promptOptions = '<option value="">(aucun)</option>' + orchestratorModels.map(function(m) {
+    return '<option value="' + escHtml(m.name) + '"' + (chat.source_prompt === m.name ? ' selected' : '') + '>' + escHtml(m.name.replace(/\.md$/, '')) + '</option>';
+  }).join('');
+  var agentPromptOptions = '<option value="">(aucun)</option>' + agentModels.map(function(m) {
+    return '<option value="' + escHtml(m.name) + '"' + (chat.source_agent_prompt === m.name ? ' selected' : '') + '>' + escHtml(m.name.replace(/\.md$/, '')) + '</option>';
   }).join('');
   var agentChecks = _chatAgentsData.map(function(a) {
     var isSelected = (chat.agents || []).indexOf(a.id) >= 0;
@@ -5103,7 +5111,8 @@ async function _projShowChatModal(idx) {
     '<div class="modal-header"><h3>' + (isNew ? 'Nouveau chat' : 'Editer chat') + '</h3><button class="btn-icon" onclick="closeModal()">&times;</button></div>' +
     '<div class="form-group"><label>Identifiant</label><input id="proj-chat-id" value="' + escHtml(chat.id) + '" placeholder="ex: onboarding-discovery" /></div>' +
     '<div class="form-group"><label>Type</label><select id="proj-chat-type">' + typeOptions + '</select></div>' +
-    '<div class="form-group"><label>Prompt source</label><select id="proj-chat-source-prompt">' + promptOptions + '</select></div>' +
+    '<div class="form-group"><label>Prompt orchestrateur</label><select id="proj-chat-source-prompt">' + promptOptions + '</select></div>' +
+    '<div class="form-group"><label>Prompt agent</label><select id="proj-chat-source-agent-prompt">' + agentPromptOptions + '</select></div>' +
     generatedPromptHtml +
     '<div class="form-group"><label>Agents</label><div style="max-height:350px;overflow-y:auto;display:flex;flex-direction:column;gap:0.1rem;" id="proj-chat-agents">' + agentChecks + '</div></div>' +
     '<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Annuler</button>' +
@@ -5156,6 +5165,7 @@ async function _projSaveChatModal(idx) {
   var id = (document.getElementById('proj-chat-id').value || '').trim();
   var type = document.getElementById('proj-chat-type').value;
   var source_prompt = document.getElementById('proj-chat-source-prompt').value;
+  var source_agent_prompt = document.getElementById('proj-chat-source-agent-prompt').value;
   var agents = [];
   var agent_config = {};
   document.querySelectorAll('.proj-chat-agent-cb:checked').forEach(function(cb) {
@@ -5173,7 +5183,7 @@ async function _projSaveChatModal(idx) {
   });
   if (!id) { toast('Identifiant requis', 'error'); return; }
   if (!source_prompt) { toast('Prompt source requis', 'error'); return; }
-  var chat = { id: id, type: type, source_prompt: source_prompt, agents: agents, agent_config: agent_config };
+  var chat = { id: id, type: type, source_prompt: source_prompt, source_agent_prompt: source_agent_prompt, agents: agents, agent_config: agent_config };
   if (idx < 0) {
     _projChats.push(chat);
   } else {

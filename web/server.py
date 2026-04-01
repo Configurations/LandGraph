@@ -3486,7 +3486,7 @@ def _update_project(base_dir: Path, project_id: str, entry: ProjectUpdate):
     return {"ok": True}
 
 
-def _update_project_chats(base_dir: Path, project_id: str, chats: list):
+def _update_project_chats(base_dir: Path, project_id: str, chats: list, models_base: Path = MODELS_BASE):
     if ".." in project_id or "/" in project_id or "\\" in project_id:
         raise HTTPException(400, "ID invalide")
     project_dir = base_dir / project_id
@@ -3505,9 +3505,9 @@ def _update_project_chats(base_dir: Path, project_id: str, chats: list):
         if not chat_id or not source_prompt:
             continue
         # Load source prompt template
-        prompt_path = SHARED_DIR / "Prompts" / culture / source_prompt
+        prompt_path = models_base / culture / source_prompt
         if not prompt_path.exists():
-            errors.append(f"Prompt introuvable : Shared/Prompts/{culture}/{source_prompt}")
+            errors.append(f"Prompt introuvable : Shared/Models/{culture}/{source_prompt}")
             continue
         template = prompt_path.read_text(encoding="utf-8")
         # Build {agents} from orch_{agent_id}.md
@@ -3526,9 +3526,10 @@ def _update_project_chats(base_dir: Path, project_id: str, chats: list):
         (project_dir / local_name).write_text(content, encoding="utf-8")
         chat["prompt"] = local_name
         # ── Generate per-agent prompt files ──
-        deliv_template_path = SHARED_DIR / "Models" / culture / "prompt-delivrable.md"
+        source_agent_prompt = chat.get("source_agent_prompt", "prompt-delivrable.md")
+        deliv_template_path = models_base / culture / source_agent_prompt
         if not deliv_template_path.exists():
-            errors.append(f"Template introuvable : Shared/Models/{culture}/prompt-delivrable.md")
+            errors.append(f"Model introuvable : Shared/Models/{culture}/{source_agent_prompt}")
         else:
             deliv_template = deliv_template_path.read_text(encoding="utf-8")
             agent_config = chat.get("agent_config", {})
@@ -3554,11 +3555,12 @@ def _update_project_chats(base_dir: Path, project_id: str, chats: list):
                     if sp.exists():
                         card_parts.append(sp.read_text(encoding="utf-8"))
                 agent_card = "\n\n".join(card_parts) if card_parts else "(aucune carte agent)"
-                deliverable_content = "## Interaction utilisateur\nInteraction avec l'utilisateur pour developper l'idee du projet"
+                mission_content = "Conversation avec l'utilisateur pour explorer et structurer son projet dans ton domaine d'expertise."
                 project_context = f"{chat_id}\n{chat_type}"
                 out = deliv_template.replace("{project_context}", project_context)
                 out = out.replace("{agent_card}", agent_card)
-                out = out.replace("{deliverable}", deliverable_content)
+                out = out.replace("{mission}", mission_content)
+                out = out.replace("{deliverable}", mission_content)
                 agent_fname = f"{chat_id}.{chat_type}.{aid}.md"
                 (project_dir / agent_fname).write_text(out, encoding="utf-8")
                 agent_prompts[aid] = agent_fname
@@ -3633,7 +3635,7 @@ async def delete_prod_project(project_id: str):
 @app.put("/api/prod-projects/{project_id}/chats")
 async def update_prod_project_chats(project_id: str, request: Request):
     data = await request.json()
-    return _update_project_chats(CFG_PROJECTS_DIR, project_id, data.get("chats", []))
+    return _update_project_chats(CFG_PROJECTS_DIR, project_id, data.get("chats", []), models_base=CFG_MODELS_BASE)
 
 @app.get("/api/prod-projects/{project_id}/chat-prompt/{filename}")
 async def read_prod_chat_prompt(project_id: str, filename: str):

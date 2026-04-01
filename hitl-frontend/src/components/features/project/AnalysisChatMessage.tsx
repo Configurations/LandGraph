@@ -11,35 +11,41 @@ interface AnalysisChatMessageProps {
   className?: string;
 }
 
-/** Parse numbered questions from agent text and detect closed choices in parentheses. */
+/** Parse numbered questions from a ```? ... ``` block, with fallback to inline numbered lines. */
 function parseQuestions(text: string): { intro: string; questions: { text: string; choices: string[] }[] } | null {
-  // Split inline numbered items onto their own lines: "blah 1) foo 2) bar" → separate lines
-  const normalized = text.replace(/\s+(\d+)[.)]\s+/g, '\n$1) ');
-  const lines = normalized.split('\n');
+  // Priority 1: explicit (((?  ... ))) block
+  const blockMatch = text.match(/\(\(\(\?\s*\n([\s\S]*?)\)\)\)/);
+  if (blockMatch) {
+    const intro = text.slice(0, text.indexOf('(((?')).trim();
+    return parseNumberedLines(intro, blockMatch[1]);
+  }
+
+  // Priority 2: fallback — numbered lines anywhere in the text
+  const normalized = text.replace(/\s+(\d+)[.)]\s+/g, '\n$1. ');
+  const firstNum = normalized.search(/^\s*\d+[.)]\s+/m);
+  if (firstNum < 0) return null;
+  const intro = normalized.slice(0, firstNum).trim();
+  const body = normalized.slice(firstNum);
+  return parseNumberedLines(intro, body);
+}
+
+function parseNumberedLines(intro: string, body: string): { intro: string; questions: { text: string; choices: string[] }[] } | null {
+  const lines = body.split('\n');
   const questions: { text: string; choices: string[] }[] = [];
-  let intro = '';
   let currentQ = '';
-  let inQuestion = false;
 
   for (const line of lines) {
     const match = line.match(/^\s*(\d+)[.)]\s+(.+)/);
     if (match) {
-      if (currentQ) {
-        questions.push(parseChoices(currentQ));
-      }
+      if (currentQ) questions.push(parseChoices(currentQ));
       currentQ = match[2];
-      inQuestion = true;
-    } else if (inQuestion && line.trim()) {
+    } else if (currentQ && line.trim()) {
       currentQ += ' ' + line.trim();
-    } else if (!inQuestion) {
-      intro += (intro ? '\n' : '') + line;
     }
   }
-  if (currentQ) {
-    questions.push(parseChoices(currentQ));
-  }
+  if (currentQ) questions.push(parseChoices(currentQ));
 
-  return questions.length > 0 ? { intro: intro.trim(), questions } : null;
+  return questions.length > 0 ? { intro, questions } : null;
 }
 
 function parseChoices(text: string): { text: string; choices: string[] } {
@@ -60,6 +66,7 @@ export function AnalysisChatMessage({ message, onReply, className = '' }: Analys
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const [answers, setAnswers] = useState<Record<number, string | string[]>>({});
+  const [otherText, setOtherText] = useState<Record<number, string>>({});
   const [sent, setSent] = useState(false);
   const time = new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -109,17 +116,33 @@ export function AnalysisChatMessage({ message, onReply, className = '' }: Analys
     const parts: string[] = [];
     parsed.questions.forEach((_q, i) => {
       const a = answers[i];
-      const text = Array.isArray(a) ? a.join(', ') : (a || '');
+      let text = Array.isArray(a) ? a.join(', ') : (a || '');
+      // Replace "Autre" chip with the custom text
+      if (text === 'Autre' || (Array.isArray(a) && a.includes('Autre'))) {
+        const custom = otherText[i] || '';
+        if (Array.isArray(a)) {
+          const withoutAutre = a.filter(v => v !== 'Autre');
+          if (custom) withoutAutre.push(custom);
+          text = withoutAutre.join(', ');
+        } else {
+          text = custom;
+        }
+      }
       if (text) parts.push(`${i + 1}. ${text}`);
     });
     if (parts.length > 0) {
       onReply(message.request_id, parts.join('\n'));
       setSent(true);
     }
-  }, [parsed, answers, onReply, message.request_id]);
+  }, [parsed, answers, otherText, onReply, message.request_id]);
 
-  const hasAnswers = Object.values(answers).some(a => {
-    if (Array.isArray(a)) return a.length > 0;
+  const hasAnswers = Object.entries(answers).some(([key, a]) => {
+    const idx = Number(key);
+    if (Array.isArray(a)) {
+      if (a.length === 1 && a[0] === 'Autre') return !!(otherText[idx] || '').trim();
+      return a.length > 0;
+    }
+    if (a === 'Autre') return !!(otherText[idx] || '').trim();
     return typeof a === 'string' && a.trim().length > 0;
   });
 
@@ -167,22 +190,44 @@ export function AnalysisChatMessage({ message, onReply, className = '' }: Analys
                 <div key={i} className="bg-surface-primary border border-border border-l-2 border-l-accent-orange rounded-lg overflow-hidden">
                   <div className="px-3 py-2 text-xs text-content-primary">{i + 1}. {q.text}</div>
                   {q.choices.length > 0 ? (
-                    <div className="px-3 pb-2 flex flex-wrap gap-1.5">
-                      {isMulti && <div className="w-full text-[9px] text-content-quaternary italic mb-0.5">Plusieurs choix possibles</div>}
-                      {q.choices.map(choice => (
+                    <div className="px-3 pb-2 flex flex-col gap-1.5">
+                      <div className="flex flex-wrap gap-1.5">
+                        {isMulti && <div className="w-full text-[9px] text-content-quaternary italic mb-0.5">Plusieurs choix possibles</div>}
+                        {q.choices.map(choice => (
+                          <button
+                            key={choice}
+                            onClick={() => handleChipSelect(i, choice, isMulti)}
+                            className={[
+                              'px-2.5 py-1 rounded-full text-[11px] border transition-all',
+                              selectedChips.includes(choice)
+                                ? 'bg-accent-blue/15 border-accent-blue text-accent-blue'
+                                : 'bg-surface-secondary border-border text-content-tertiary hover:border-accent-blue/50',
+                            ].join(' ')}
+                          >
+                            {selectedChips.includes(choice) && '✓ '}{choice}
+                          </button>
+                        ))}
                         <button
-                          key={choice}
-                          onClick={() => handleChipSelect(i, choice, isMulti)}
+                          onClick={() => handleChipSelect(i, 'Autre', isMulti)}
                           className={[
-                            'px-2.5 py-1 rounded-full text-[11px] border transition-all',
-                            selectedChips.includes(choice)
-                              ? 'bg-accent-blue/15 border-accent-blue text-accent-blue'
-                              : 'bg-surface-secondary border-border text-content-tertiary hover:border-accent-blue/50',
+                            'px-2.5 py-1 rounded-full text-[11px] border transition-all italic',
+                            selectedChips.includes('Autre')
+                              ? 'bg-accent-orange/15 border-accent-orange text-accent-orange'
+                              : 'bg-surface-secondary border-border text-content-quaternary hover:border-accent-orange/50',
                           ].join(' ')}
                         >
-                          {selectedChips.includes(choice) && '✓ '}{choice}
+                          {selectedChips.includes('Autre') && '✓ '}Autre
                         </button>
-                      ))}
+                      </div>
+                      {selectedChips.includes('Autre') && (
+                        <textarea
+                          rows={2}
+                          placeholder="Precisez..."
+                          value={otherText[i] || ''}
+                          onChange={e => setOtherText(prev => ({ ...prev, [i]: e.target.value }))}
+                          className="w-full bg-surface-secondary border border-border rounded-lg px-2.5 py-1.5 text-xs text-content-primary resize-y outline-none focus:border-accent-orange"
+                        />
+                      )}
                     </div>
                   ) : (
                     <div className="px-3 pb-2">
