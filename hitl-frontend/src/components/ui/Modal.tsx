@@ -69,7 +69,7 @@ export function Modal({
         aria-modal="true"
         aria-label={t(title)}
         className={[
-          'w-full max-w-lg rounded-xl bg-surface-secondary border border-border',
+          `w-full rounded-xl bg-surface-secondary border border-border ${className.includes('max-w-') ? '' : 'max-w-lg'}`,
           'shadow-xl shadow-black/30',
           className,
         ].join(' ')}
@@ -86,7 +86,7 @@ export function Modal({
             </svg>
           </button>
         </div>
-        <div className="px-6 py-4">{children}</div>
+        <div className="px-6 py-4 max-h-[70vh] overflow-y-auto">{children}</div>
         {actions && (
           <div className="flex justify-end gap-3 border-t border-border px-6 py-4">
             {actions}

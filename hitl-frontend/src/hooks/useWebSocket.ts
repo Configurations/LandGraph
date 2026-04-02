@@ -18,6 +18,7 @@ export function useWebSocket(teamId: string | null): void {
   const setConnected = useWsStore((s) => s.setConnected);
   const setLastEvent = useWsStore((s) => s.setLastEvent);
   const incrementPending = useNotificationStore((s) => s.incrementPending);
+  const decrementPending = useNotificationStore((s) => s.decrementPending);
   const logout = useAuthStore((s) => s.logout);
 
   const connect = useCallback(() => {
@@ -45,6 +46,9 @@ export function useWebSocket(teamId: string | null): void {
         if (parsed.type === 'new_question') {
           incrementPending();
         }
+        if (parsed.type === 'question_answered') {
+          decrementPending();
+        }
       } catch {
         // ignore non-JSON messages
       }
@@ -71,7 +75,7 @@ export function useWebSocket(teamId: string | null): void {
     ws.onerror = () => {
       ws.close();
     };
-  }, [teamId, setConnected, setLastEvent, incrementPending, logout]);
+  }, [teamId, setConnected, setLastEvent, incrementPending, decrementPending, logout]);
 
   useEffect(() => {
     connect();

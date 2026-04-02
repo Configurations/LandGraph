@@ -49,6 +49,10 @@ export function WizardStepAnalysis({ className = '' }: WizardStepAnalysisProps):
         setStatus(mapped);
         if (res.task_id) setTaskId(res.task_id);
         if (res.has_pending_question && res.pending_request_id) {
+          if (res.pending_request_type === 'approval') {
+            setStatus('completed');
+            return;
+          }
           setPendingQuestion({ requestId: res.pending_request_id, prompt: '' });
         }
         analysisApi.getConversation(slug).then(setMessages).catch(() => {});
@@ -84,16 +88,23 @@ export function WizardStepAnalysis({ className = '' }: WizardStepAnalysisProps):
         sender: 'agent',
         type: 'progress',
         content,
+        agent_id: typeof raw === 'object' ? String((raw as Record<string, unknown>)?.agent_id ?? '') : undefined,
         created_at: new Date().toISOString(),
       });
     }
 
     if (ev.type === 'new_question' && d.thread_id === threadId) {
+      // Approval = onboarding complete, show Next button
+      if (d.request_type === 'approval') {
+        setStatus('completed');
+        return;
+      }
       const msg: AnalysisMessage = {
         id: `ws-q-${String(d.id ?? Date.now())}`,
         sender: 'agent',
         type: 'question',
         content: typeof d.prompt === 'string' ? d.prompt : '',
+        agent_id: typeof d.agent_id === 'string' ? d.agent_id : undefined,
         request_id: String(d.id ?? ''),
         status: 'pending',
         created_at: new Date().toISOString(),
@@ -110,6 +121,13 @@ export function WizardStepAnalysis({ className = '' }: WizardStepAnalysisProps):
 
     if (ev.type === 'task_artifact' && d.task_id === taskId && slug) {
       analysisApi.getConversation(slug).then(setMessages).catch(() => {});
+    }
+
+    // Refresh conversation to get avatars for WS messages
+    if ((ev.type === 'task_progress' || ev.type === 'new_question') && slug) {
+      setTimeout(() => {
+        analysisApi.getConversation(slug).then(setMessages).catch(() => {});
+      }, 500);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastEvent]);

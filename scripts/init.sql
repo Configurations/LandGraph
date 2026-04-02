@@ -337,6 +337,7 @@ BEGIN
     IF OLD.status = 'pending' AND NEW.status = 'answered' THEN
         PERFORM pg_notify('hitl_response', json_build_object(
             'request_id', NEW.id,
+            'team_id', NEW.team_id,
             'response', LEFT(NEW.response, 4000),
             'reviewer', NEW.reviewer
         )::text);

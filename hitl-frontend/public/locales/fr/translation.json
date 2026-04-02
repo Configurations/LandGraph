@@ -168,9 +168,17 @@
     "step_documents": "Documents",
     "step_project_type": "Type de projet",
     "step_analysis": "Analyse",
+    "step_summary": "Recapitulatif",
     "next": "Suivant",
     "previous": "Precedent",
-    "skip": "Passer"
+    "skip": "Passer",
+    "summary_title": "Recapitulatif du projet",
+    "validated_facts": "Informations validees",
+    "documents_summary": "Synthese des documents",
+    "loading_summary": "Chargement du recapitulatif...",
+    "summary_error": "Impossible de charger le recapitulatif",
+    "no_summary": "Aucun recapitulatif disponible",
+    "no_data_collected": "Aucune information collectee durant l'analyse"
   },
   "deliverable": {
     "deliverables": "Livrables",

@@ -182,6 +182,7 @@ export interface AnalysisStatusResponse {
   task_id: string | null;
   has_pending_question: boolean;
   pending_request_id: string | null;
+  pending_request_type: string | null;
 }
 
 export interface AnalysisMessage {

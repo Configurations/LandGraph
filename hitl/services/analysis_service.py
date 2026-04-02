@@ -17,7 +17,6 @@ log = structlog.get_logger(__name__)
 
 ONBOARDING_THREAD_PREFIX = "onboarding-"
 _HTTP_TIMEOUT = 30
-_MAX_CONVERSATION_CONTEXT = 20
 
 
 # ── Helpers ──────────────────────────────────────────────────────
@@ -57,34 +56,23 @@ def _build_instruction(
     documents: list[str],
 ) -> str:
     doc_list = "\n".join(f"- {d}" for d in documents) if documents else "(aucun document)"
-    return (
-        f"Tu es l'orchestrateur de l'equipe {team_name}. "
-        f"Un nouveau projet '{project_name}' (slug: {project_slug}) vient d'etre cree.\n\n"
-        f"Documents fournis et indexes dans le RAG :\n{doc_list}\n\n"
-        "Ta mission :\n"
-        "1. Consulte les documents indexes via le RAG pour comprendre le projet\n"
-        "2. Pose des questions pour clarifier le perimetre, les objectifs, les contraintes\n"
-        "3. Delegue aux agents specialises si necessaire\n"
-        "4. Quand le projet est clair, produis une synthese structuree\n"
-    )
+    culture = os.getenv("CULTURE", "fr-fr")
+    for base in ["/app/config", "/app/Shared", "config", "Shared"]:
+        path = os.path.join(base, "Models", culture, "orchestrator-initial-instruction.md")
+        if os.path.isfile(path):
+            with open(path, encoding="utf-8") as f:
+                template = f.read()
+            return template.replace(
+                "{team_name}", team_name
+            ).replace(
+                "{project_name}", project_name
+            ).replace(
+                "{project_slug}", project_slug
+            ).replace(
+                "{doc_list}", doc_list
+            )
+    return f"Nouveau projet '{project_name}' cree. Documents : {doc_list}"
 
-
-def _build_relaunch_instruction(
-    conversation: list[AnalysisMessage],
-    new_message: str,
-) -> str:
-    recent = conversation[-_MAX_CONVERSATION_CONTEXT:]
-    lines = []
-    for m in recent:
-        prefix = "Agent" if m.sender == "agent" else "Utilisateur"
-        lines.append(f"[{prefix}] {m.content[:500]}")
-    history = "\n".join(lines)
-    return (
-        "Voici l'historique de la conversation d'analyse du projet :\n\n"
-        f"{history}\n\n"
-        f"Nouveau message de l'utilisateur : {new_message}\n\n"
-        "Continue l'analyse en tenant compte de ce nouveau message."
-    )
 
 
 def _uploads_dir(slug: str) -> str:
@@ -147,6 +135,7 @@ async def _index_project_documents(
     - On success after error → back to parallel, reset wait to 2s
     """
     import asyncio as _aio
+    from core.i18n import msg as _msg
     from services import rag_service
     from services import upload_service
 
@@ -210,7 +199,7 @@ async def _index_project_documents(
             return
         last_progress_pct = pct
         if task_id:
-            msg = f"Indexation documents : {done}/{total_count} chunks ({pct}%)"
+            msg = _msg("indexation_progress", done=done, total=total_count, pct=pct)
             await execute(
                 """INSERT INTO project.dispatcher_task_events (task_id, event_type, data)
                    VALUES ($1::uuid, 'progress', $2::jsonb)""",
@@ -235,7 +224,7 @@ async def _index_project_documents(
                     """INSERT INTO project.dispatcher_task_events (task_id, event_type, data)
                        VALUES ($1::uuid, 'progress', $2::jsonb)""",
                     task_id,
-                    json.dumps({"data": f"Chargement du modele d'embedding... (tentative {warmup_attempt + 1})"}, ensure_ascii=False),
+                    json.dumps({"data": _msg("embedding_warmup", attempt=warmup_attempt + 1)}, ensure_ascii=False),
                 )
             await _aio.sleep(warmup_wait)
             warmup_wait = min(warmup_wait * 1.5, 30.0)
@@ -273,14 +262,15 @@ async def _generate_documents_synthesis(
     embedding_provider: str = "",
 ) -> str:
     """Generate a max 30-line synthesis of indexed documents via RAG search."""
+    from core.i18n import msg as _msg
     from services import rag_service
 
     results = await rag_service.search(project_slug, "project description overview objectives features", top_k=10, embedding_provider=embedding_provider)
     if not results:
-        return f"📄 {len(filenames)} documents indexes ({total_chunks} chunks). Aucun contenu extractible."
+        return _msg("documents_no_content", file_count=len(filenames), chunk_count=total_chunks)
 
     synthesis_lines = [
-        f"📄 **{len(filenames)} documents indexes** ({total_chunks} chunks)",
+        _msg("documents_indexed", file_count=len(filenames), chunk_count=total_chunks),
         "",
     ]
     for r in results[:8]:
@@ -714,7 +704,7 @@ async def _run_analysis_pipeline(
 
         if has_question:
             await execute(
-                "UPDATE project.dispatcher_tasks SET status = 'waiting_input' WHERE id = $1::uuid",
+                "UPDATE project.dispatcher_tasks SET status = 'waiting_hitl' WHERE id = $1::uuid",
                 task_id,
             )
 
@@ -740,7 +730,7 @@ async def _sync_status(project_slug: str, task_id: str) -> str:
     )
     if pending:
         await execute(
-            "UPDATE project.pm_projects SET analysis_status = 'waiting_input' WHERE slug = $1",
+            "UPDATE project.pm_projects SET analysis_status = 'waiting_hitl' WHERE slug = $1",
             project_slug,
         )
         return "waiting_input"
@@ -789,7 +779,7 @@ async def get_analysis_status(project_slug: str) -> dict[str, Any]:
 
     thread_id = f"{ONBOARDING_THREAD_PREFIX}{project_slug}"
     pending = await fetch_one(
-        "SELECT id FROM project.hitl_requests WHERE thread_id = $1 AND status = 'pending' LIMIT 1",
+        "SELECT id, request_type FROM project.hitl_requests WHERE thread_id = $1 AND status = 'pending' LIMIT 1",
         thread_id,
     )
 
@@ -798,6 +788,7 @@ async def get_analysis_status(project_slug: str) -> dict[str, Any]:
         "task_id": task_id,
         "has_pending_question": pending is not None,
         "pending_request_id": str(pending["id"]) if pending else None,
+        "pending_request_type": pending["request_type"] if pending else None,
     }
 
 
@@ -805,6 +796,18 @@ async def get_conversation(project_slug: str) -> list[AnalysisMessage]:
     """Merge dispatcher events + HITL requests + rag_conversations."""
     thread_id = f"{ONBOARDING_THREAD_PREFIX}{project_slug}"
     messages: list[AnalysisMessage] = []
+
+    # Resolve orchestrator ID from team config
+    proj_team = await fetch_one(
+        "SELECT team_id FROM project.pm_projects WHERE slug = $1", project_slug,
+    )
+    default_agent_id = ""
+    if proj_team:
+        teams_data = load_teams()
+        for t in teams_data:
+            if t.get("id") == proj_team["team_id"]:
+                default_agent_id = t.get("orchestrator", "")
+                break
 
     # 1. Dispatcher events via thread_id
     event_rows = await fetch_all(
@@ -828,7 +831,7 @@ async def get_conversation(project_slug: str) -> list[AnalysisMessage]:
             continue  # skip empty events
 
         msg_type = etype if etype in ("progress", "artifact", "result") else "progress"
-        evt_agent_id = data.get("agent_id", "")
+        evt_agent_id = data.get("agent_id", "") or default_agent_id
 
         messages.append(AnalysisMessage(
             id=f"evt-{r['id']}",
@@ -843,7 +846,7 @@ async def get_conversation(project_slug: str) -> list[AnalysisMessage]:
     # 2. HITL requests (questions + answers)
     hitl_rows = await fetch_all(
         """
-        SELECT id, agent_id, prompt, response, status, created_at, answered_at
+        SELECT id, agent_id, prompt, response, status, request_type, created_at, answered_at
         FROM project.hitl_requests
         WHERE thread_id = $1
         ORDER BY created_at ASC
@@ -851,6 +854,9 @@ async def get_conversation(project_slug: str) -> list[AnalysisMessage]:
         thread_id,
     )
     for r in hitl_rows:
+        # Skip approval requests — they are not chat messages
+        if r.get("request_type") == "approval":
+            continue
         messages.append(AnalysisMessage(
             id=f"q-{r['id']}",
             sender="agent",
@@ -938,9 +944,11 @@ async def get_conversation(project_slug: str) -> list[AnalysisMessage]:
             if team_id:
                 for m in messages:
                     if m.agent_id:
-                        m.agent_avatar = resolve_agent_avatar(team_id, m.agent_id)
-        except Exception:
-            pass
+                        avatar = resolve_agent_avatar(team_id, m.agent_id)
+                        m.agent_avatar = avatar
+                        log.info("avatar_resolved", agent_id=m.agent_id, avatar=avatar)
+        except Exception as exc:
+            log.error("avatar_resolution_error", error=str(exc))
 
     messages.sort(key=lambda m: m.created_at)
     return messages
@@ -981,19 +989,182 @@ async def reply_to_question(
         project_slug,
     )
 
-    return {"ok": True}
+    # Relaunch the pipeline with the user's response
+    try:
+        result = await send_free_message(project_slug, response, reviewer, skip_store=True)
+        log.info("onboarding_relaunched_from_reply", slug=project_slug)
+        return result
+    except Exception as exc:
+        log.error("onboarding_relaunch_from_reply_failed", slug=project_slug, error=str(exc))
+        return {"ok": True}
+
+
+def _load_recap_template() -> str:
+    """Load onboarding-recap.md from Models/{culture}/."""
+    culture = os.getenv("CULTURE", "fr-fr")
+    for base in ["/app/config", "/app/Shared", "config", "Shared"]:
+        path = os.path.join(base, "Models", culture, "onboarding-recap.md")
+        if os.path.isfile(path):
+            with open(path, encoding="utf-8") as f:
+                return f.read()
+    return ""
+
+
+async def _invoke_mcp_tool_async(tool, args: dict) -> Any:
+    """Invoke an MCP tool that may be async-only."""
+    import asyncio as _aio
+    try:
+        return tool.invoke(args)
+    except NotImplementedError:
+        try:
+            loop = _aio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    return pool.submit(_aio.run, tool.ainvoke(args)).result()
+            else:
+                return _aio.run(tool.ainvoke(args))
+        except RuntimeError:
+            return _aio.run(tool.ainvoke(args))
+
+
+async def get_project_summary(project_slug: str) -> dict[str, Any]:
+    """Generate a project summary using LLM + MCP Memory + RAG + conversation."""
+
+    # 1. Get facts from MCP Memory
+    facts: list[dict[str, Any]] = []
+    memory_text = "(aucun fait enregistre)"
+    try:
+        from agents.shared.orchestrator_tools import _load_mcp_memory_tools
+        memory_tools = _load_mcp_memory_tools()
+        read_graph_tool = next((t for t in memory_tools if t.name == "read_graph"), None)
+        if read_graph_tool:
+            graph_result = await _invoke_mcp_tool_async(read_graph_tool, {})
+            if isinstance(graph_result, str):
+                try:
+                    graph_data = json.loads(graph_result)
+                except (json.JSONDecodeError, ValueError):
+                    graph_data = {}
+            else:
+                graph_data = graph_result if isinstance(graph_result, dict) else {}
+
+            for entity in graph_data.get("entities", []):
+                facts.append({
+                    "name": entity.get("name", ""),
+                    "type": entity.get("entityType", ""),
+                    "observations": entity.get("observations", []),
+                })
+            if facts:
+                lines = []
+                for f in facts:
+                    obs = ", ".join(f["observations"]) if f["observations"] else ""
+                    lines.append("- {} ({}): {}".format(f["name"], f["type"], obs))
+                memory_text = "\n".join(lines)
+    except Exception as exc:
+        log.warning("summary_memory_error", slug=project_slug, error=str(exc))
+
+    # 2. Get RAG documents
+    rag_text = "(aucun document)"
+    try:
+        embedding_provider = await _resolve_embedding_provider_async(project_slug)
+        from services import rag_service
+        results = await rag_service.search(
+            project_slug, "project summary objectives features users constraints architecture",
+            top_k=15, embedding_provider=embedding_provider,
+        )
+        if results:
+            lines = []
+            for r in results[:10]:
+                lines.append("[{}]\n{}".format(r.filename, r.content[:400]))
+            rag_text = "\n\n---\n\n".join(lines)
+    except Exception as exc:
+        log.warning("summary_rag_error", slug=project_slug, error=str(exc))
+
+    # 3. Get conversation history
+    conversation = await get_conversation(project_slug)
+    conv_lines = []
+    for m in conversation[-30:]:
+        prefix = "Agent" if m.sender == "agent" else "Utilisateur"
+        conv_lines.append("[{}] {}".format(prefix, m.content[:300]))
+    conversation_text = "\n".join(conv_lines) if conv_lines else "(aucune conversation)"
+
+    # 4. Load recap template and inject variables
+    template = _load_recap_template()
+    if not template:
+        return {"project_name": project_slug, "summary": "", "facts": facts, "rag_summary": rag_text}
+
+    prompt = template.replace(
+        "{memory_facts}", memory_text
+    ).replace(
+        "{rag_documents}", rag_text
+    ).replace(
+        "{conversation_history}", conversation_text
+    )
+
+    # 5. Call LLM to generate the summary
+    summary = ""
+    try:
+        gateway_url = settings.langgraph_api_url or "http://langgraph-api:8000"
+        # Use the gateway's LLM via a direct agent call
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                "{}/invoke".format(gateway_url),
+                json={
+                    "messages": [{"role": "user", "content": prompt}],
+                    "team_id": (await fetch_one(
+                        "SELECT team_id FROM project.pm_projects WHERE slug = $1", project_slug,
+                    ) or {}).get("team_id", ""),
+                    "thread_id": "summary-{}".format(project_slug),
+                    "direct_agent": "Documentaliste",
+                    "system_prompt": prompt,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            summary = data.get("output", "")
+    except Exception as exc:
+        log.error("summary_llm_error", slug=project_slug, error=str(exc))
+        # Fallback: return raw data
+        summary = "# Recapitulatif {}\n\n## Faits valides\n{}\n\n## Documents\n{}".format(
+            project_slug, memory_text, rag_text,
+        )
+
+    # 6. Store in project docs
+    try:
+        docs_dir = os.path.join(settings.ag_flow_root, "projects", project_slug, "docs")
+        os.makedirs(docs_dir, exist_ok=True)
+        doc_path = os.path.join(docs_dir, "onboarding.md")
+        with open(doc_path, "w", encoding="utf-8") as f:
+            f.write(summary)
+        log.info("summary_saved", slug=project_slug, path=doc_path)
+    except Exception as exc:
+        log.warning("summary_save_error", slug=project_slug, error=str(exc))
+
+    proj_row = await fetch_one(
+        "SELECT name FROM project.pm_projects WHERE slug = $1", project_slug,
+    )
+    project_name = proj_row["name"] if proj_row else project_slug
+
+    return {
+        "project_name": project_name,
+        "summary": summary,
+        "facts": facts,
+        "rag_summary": rag_text,
+    }
 
 
 async def send_free_message(
     project_slug: str,
     content: str,
     user_email: str,
+    skip_store: bool = False,
 ) -> dict[str, Any]:
     """Send a free message — cancel current task and relaunch agent."""
-    await execute(
-        "INSERT INTO project.rag_conversations (project_slug, sender, content) VALUES ($1, $2, $3)",
-        project_slug, "user", content,
-    )
+    if not skip_store:
+        await execute(
+            "INSERT INTO project.rag_conversations (project_slug, sender, content) VALUES ($1, $2, $3)",
+            project_slug, "user", content,
+        )
 
     proj = await fetch_one(
         "SELECT team_id, analysis_task_id FROM project.pm_projects WHERE slug = $1",
@@ -1004,16 +1175,12 @@ async def send_free_message(
 
     team_id = proj["team_id"]
     old_task_id = proj["analysis_task_id"]
-
-    conversation = await get_conversation(project_slug)
-    instruction = _build_relaunch_instruction(conversation, content)
-
     thread_id = f"{ONBOARDING_THREAD_PREFIX}{project_slug}"
 
     # Load onboarding config (system prompt + agent prompts)
     onboarding = await _load_onboarding_config(project_slug)
 
-    # Resolve placeholders in prompts (same as _run_analysis_pipeline)
+    # Resolve placeholders in prompts
     embedding_provider = await _resolve_embedding_provider_async(project_slug)
     from services import rag_service
     rag_results = await rag_service.search(project_slug, "project description objectives features architecture requirements", top_k=20, embedding_provider=embedding_provider)
@@ -1046,10 +1213,11 @@ async def send_free_message(
                 "\n\n--- DOCUMENTS DU PROJET (extraits RAG) ---\n" + rag_context + "\n--- FIN ---\n"
             )
 
-    # Call gateway /invoke (full multi-agent orchestration)
+    # Send the user's response as a simple message on the existing thread
+    # LangGraph keeps the full conversation context via checkpoints
     gateway_url = settings.langgraph_api_url or "http://langgraph-api:8000"
     invoke_payload: dict[str, Any] = {
-        "messages": [{"role": "user", "content": instruction}],
+        "messages": [{"role": "user", "content": content}],
         "team_id": team_id,
         "thread_id": thread_id,
         "project_slug": project_slug,
@@ -1071,13 +1239,24 @@ async def send_free_message(
         log.error("analysis_relaunch_failed", slug=project_slug, error=str(exc))
         return {"error": "gateway_unavailable"}
 
-    # Store progress event
-    if old_task_id:
+    # Store progress event only if no question was asked (questions go via hitl_requests)
+    has_question = any(
+        tc.get("name") in ("ask_human", "human_gate")
+        for d in data.get("decisions", [])
+        for tc in d.get("tool_calls", [])
+    )
+    output_text = data.get("output", "")
+    if old_task_id and output_text and not has_question:
         await execute(
             """INSERT INTO project.dispatcher_task_events (task_id, event_type, data)
                VALUES ($1::uuid, 'progress', $2::jsonb)""",
             old_task_id,
-            json.dumps({"data": data.get("output", "")}, ensure_ascii=False),
+            json.dumps({"data": output_text}, ensure_ascii=False),
+        )
+    if has_question and old_task_id:
+        await execute(
+            "UPDATE project.dispatcher_tasks SET status = 'waiting_hitl' WHERE id = $1::uuid",
+            old_task_id,
         )
 
     await execute(

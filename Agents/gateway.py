@@ -36,7 +36,9 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 def _default_team() -> str:
     """Return first configured team ID (avoids 'default' fallback errors)."""
     ids = get_all_team_ids()
-    return ids[0] if ids else "team1"
+    if not ids:
+        raise ValueError("Aucune equipe configuree dans teams.json")
+    return ids[0]
 
 
 # Aliases — charges depuis discord.json ou fallback
@@ -214,7 +216,7 @@ def load_or_create_state(thread_id, msgs, project_id, channel_id, team_id="", pr
 
     try:
         existing = graph.get_state(config)
-        if existing and existing.values and existing.values.get("agent_outputs"):
+        if existing and existing.values:
             state = dict(existing.values)
             old_msgs = list(state.get("messages", []))
             old_msgs.extend(msgs)
@@ -356,7 +358,7 @@ async def run_deliverables_parallel(deliverables_to_run, state, channel_id, thre
     from agents.shared.workflow_engine import set_disk_check_context
     slug = state.get("project_slug", "")
     if slug:
-        set_disk_check_context(slug, state.get("_team_id", "team1"),
+        set_disk_check_context(slug, state["_team_id"],
                                state.get("_workflow", "main"),
                                state.get("_iteration", 1),
                                state.get("project_phase", ""))
@@ -399,7 +401,7 @@ async def run_deliverables_parallel(deliverables_to_run, state, channel_id, thre
 
     try:
         from agents.shared.workflow_engine import get_deliverables_to_dispatch, can_transition
-        team_id = state.get("_team_id", "team1")
+        team_id = state["_team_id"]
         current_phase = state.get("project_phase", "discovery")
 
         next_deliverables = get_deliverables_to_dispatch(current_phase, merged, team_id)
@@ -481,7 +483,7 @@ async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="defau
     from agents.shared.workflow_engine import set_disk_check_context
     slug = state.get("project_slug", "")
     if slug:
-        set_disk_check_context(slug, state.get("_team_id", "team1"),
+        set_disk_check_context(slug, state["_team_id"],
                                state.get("_workflow", "main"),
                                state.get("_iteration", 1),
                                state.get("project_phase", ""))
@@ -530,7 +532,7 @@ async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="defau
 
     try:
         from agents.shared.workflow_engine import get_deliverables_to_dispatch, can_transition
-        team_id = state.get("_team_id", "team1")
+        team_id = state["_team_id"]
         current_phase = state.get("project_phase", "discovery")
 
         # Try deliverable-based dispatch first (new flow)
@@ -580,6 +582,8 @@ async def _create_hitl_phase_request(thread_id: str, team_id: str,
                                       current_phase: str, next_phase: str,
                                       agent_outputs: dict):
     """Insert a phase validation request into hitl_requests for the HITL console."""
+    from agents.shared.team_resolver import get_team_info
+    orch_id = get_team_info(team_id).get("orchestrator", "orchestrator")
     try:
         uri = os.getenv("DATABASE_URI")
         if not uri:
@@ -620,9 +624,9 @@ async def _create_hitl_phase_request(thread_id: str, team_id: str,
                     INSERT INTO project.hitl_requests
                     (thread_id, agent_id, team_id, request_type, prompt, context, channel, status)
                     VALUES (%s, %s, %s, 'approval', %s, %s::jsonb, 'web', 'pending')
-                """, (thread_id, "orchestrator", team_id, prompt, json.dumps(context)))
+                """, (thread_id, orch_id, team_id, prompt, json.dumps(context)))
         logger.info(f"[hitl] Phase validation request created: {current_phase} → {next_phase}")
-        bus.emit(Event("human_gate_requested", agent_id="orchestrator",
+        bus.emit(Event("human_gate_requested", agent_id=orch_id,
                         thread_id=thread_id, team_id=team_id,
                         data={"phase": current_phase, "next_phase": next_phase}))
     except Exception as e:
@@ -635,33 +639,27 @@ async def run_orchestrated(state, decisions, channel_id, thread_id="default", ca
     allowed = state.get("_allowed_agents", [])
     agents = []
     for d in decisions:
-        dtype = d.get("decision_type", "")
+        # New format: tool_calls with name/args
+        for tc in d.get("tool_calls", []):
+            if tc.get("name") == "dispatch_agent":
+                t = tc.get("args", {}).get("agent_id", "")
+                if allowed and t not in allowed:
+                    logger.info(f"[onboarding] Skipping {t} — not in allowed agents {allowed}")
+                    continue
+                if t in canonical_agents:
+                    agents.append({"agent_id": t, "agent": canonical_agents[t]})
+
+        # Legacy format: actions with action/target
         for a in d.get("actions", []):
-            if isinstance(a, dict):
-                action = a.get("action", "")
-
-                # Dispatch agent
-                if action == "dispatch_agent":
-                    t = a.get("target", "")
-                    if allowed and t not in allowed:
-                        logger.info(f"[onboarding] Skipping {t} — not in allowed agents {allowed}")
-                        continue
-                    if t in canonical_agents:
-                        agents.append({"agent_id": t, "agent": canonical_agents[t]})
-
-                # Phase transition — mettre a jour le state
-                if action == "human_gate" and dtype == "phase_transition":
-                    from_phase = a.get("from_phase", state.get("project_phase", ""))
-                    to_phase = a.get("to_phase", "")
-                    if to_phase:
-                        await post_to_channel(channel_id,
-                            f"🚦 **HUMAN GATE** — {from_phase} → {to_phase}\n"
-                            f"Repondez `approve` pour continuer ou `revise` pour corriger.", thread_id)
+            if isinstance(a, dict) and a.get("action") == "dispatch_agent":
+                t = a.get("target", "")
+                if allowed and t not in allowed:
+                    continue
+                if t in canonical_agents:
+                    agents.append({"agent_id": t, "agent": canonical_agents[t]})
 
     if agents:
         await run_agents_parallel(agents, state, channel_id, thread_id)
-    elif not any(d.get("decision_type") == "phase_transition" for d in decisions):
-        await post_to_channel(channel_id, "Aucun agent dispatche.", thread_id)
 
 
 # ── Phase synthesis generation ────────────────
@@ -672,7 +670,7 @@ async def _maybe_generate_synthesis(state: dict, phase: str, agent_outputs: dict
         return
     try:
         from agents.shared.project_store import read_synthesis, write_synthesis, _phase_dir, _legacy_deliverables_dir
-        team_id = state.get("_team_id", "team1")
+        team_id = state["_team_id"]
         workflow = state.get("_workflow", "main")
         iteration = state.get("_iteration")
         # Skip if synthesis already exists for this phase
@@ -799,7 +797,7 @@ async def _persist_deliverable_to_fs(state: dict, agent_id: str, output: dict):
         if not slug:
             return
         phase = state.get("project_phase", "discovery")
-        team_id = state.get("_team_id", "team1")
+        team_id = state["_team_id"]
         workflow = state.get("_workflow", "main")
         iteration = state.get("_iteration")
         from agents.shared.project_store import persist_deliverable
@@ -883,8 +881,11 @@ async def health():
 async def status():
     teams = get_all_team_ids()
     default_agents, _, _ = resolve_agents()
+    from agents.shared.team_resolver import get_team_info
+    first_team = teams[0] if teams else ""
+    orch_status_id = get_team_info(first_team).get("orchestrator", "orchestrator") if first_team else "orchestrator"
     return {
-        "agents": list(default_agents) + ["orchestrator"],
+        "agents": list(default_agents) + [orch_status_id],
         "total_agents": len(default_agents) + 1,
         "teams": teams,
     }
@@ -1039,7 +1040,7 @@ class PhaseResetRequest(BaseModel):
 class CheckPhaseRequest(BaseModel):
     thread_id: str
     phase: str
-    team_id: str = "team1"
+    team_id: str = ""
 
 
 @app.post("/workflow/check-phase")

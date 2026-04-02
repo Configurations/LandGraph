@@ -206,6 +206,16 @@ async def search_rag(
     return RagSearchResponse(results=results)
 
 
+@router.get("/{slug}/summary")
+async def get_project_summary(
+    slug: str,
+    user: TokenData = Depends(get_current_user),
+) -> dict:
+    """Get project summary from MCP Memory facts + RAG documents."""
+    await _require_project(slug, user)
+    return await analysis_service.get_project_summary(slug)
+
+
 @router.post("/{slug}/analysis/start")
 async def start_analysis(
     slug: str,

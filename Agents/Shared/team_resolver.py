@@ -78,6 +78,21 @@ def get_team_info(team_id: str) -> dict:
     return {}
 
 
+def require_team_id(state: dict) -> str:
+    """Extract team_id from state. Raises ValueError if missing.
+
+    This is the single entry point for getting the current team_id
+    from a LangGraph state dict. Never fallback to a hardcoded value.
+    """
+    team_id = state.get("_team_id", "")
+    if not team_id:
+        raise ValueError(
+            "team_id absent du state. Le state doit contenir '_team_id' "
+            "initialise par la gateway lors du load_or_create_state."
+        )
+    return team_id
+
+
 def get_team_dir(team_id: str) -> str:
     """Retourne le chemin absolu du dossier d'une equipe."""
     teams_dir = get_teams_dir()

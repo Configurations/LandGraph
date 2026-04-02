@@ -30,13 +30,25 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelna
 # CONFIGURATION — depuis agents_registry.json
 # ══════════════════════════════════════════════
 
-def _load_orchestrator_config(team_id: str = "team1") -> dict:
+def _load_orchestrator_config(team_id: str = "") -> dict:
     """Charge la config de l'orchestrateur depuis le registry de l'equipe."""
-    from agents.shared.team_resolver import load_team_json
+    from agents.shared.team_resolver import load_team_json, get_team_info
+    if not team_id:
+        from agents.shared.team_resolver import get_teams_config
+        teams = get_teams_config().get("teams", [])
+        team_id = teams[0]["id"] if teams else ""
+    # Get orchestrator ID from teams.json
+    orch_id = get_team_info(team_id).get("orchestrator", "")
     registry = load_team_json(team_id, "agents_registry.json")
-    conf = registry.get("agents", {}).get("orchestrator", {})
+    # Lookup by ID first, fallback to type search
+    conf = registry.get("agents", {}).get(orch_id, {}) if orch_id else {}
+    if not conf:
+        for aid, acfg in registry.get("agents", {}).items():
+            if acfg.get("type") == "orchestrator":
+                conf = acfg
+                break
     if conf:
-        logger.info(f"Orchestrator config [{team_id}]: llm={conf.get('llm', 'default')}")
+        logger.info("Orchestrator config [%s]: llm=%s", team_id, conf.get("llm", "default"))
     return conf
 
 _orch_config = _load_orchestrator_config()
@@ -49,7 +61,7 @@ CONFIG = {
 }
 
 
-def _load_agent_ids(team_id: str = "team1") -> list[str]:
+def _load_agent_ids(team_id: str = "") -> list[str]:
     """Charge la liste des agents depuis le registry de l'equipe (hors orchestrator)."""
     from agents.shared.team_resolver import load_team_json
     registry = load_team_json(team_id, "agents_registry.json")
@@ -60,7 +72,7 @@ def _load_agent_ids(team_id: str = "team1") -> list[str]:
 # SYSTEM PROMPT
 # ══════════════════════════════════════════════
 
-def load_system_prompt(team_id: str = "team1") -> str:
+def load_system_prompt(team_id: str = "") -> str:
     """Charge le system prompt depuis le dossier de l'equipe. Pas de cache : le prompt
     est recalcule a chaque phase (il integre le contexte workflow courant)."""
     from agents.shared.team_resolver import find_team_file
@@ -116,6 +128,18 @@ def has_critical_legal_alert(alerts: list[dict]) -> bool:
 
 
 
+def _load_context_template(team_id: str, filename: str) -> str:
+    """Load a context template from Models/{culture}/ via team_resolver."""
+    culture = os.getenv("CULTURE", "fr-fr")
+    # Try config/Models/{culture}/ first, then Shared/Models/{culture}/
+    for base in ["/app/config", "/app/Shared", "config", "Shared"]:
+        path = os.path.join(base, "Models", culture, filename)
+        if os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+    logger.warning("Context template not found: %s/%s", culture, filename)
+    return ""
+
 
 # ══════════════════════════════════════════════
 # STATE DEFINITION
@@ -150,6 +174,11 @@ class ProjectState(TypedDict, total=False):
     # DevOps
     deploy_status: dict  # {environment, status, url}
 
+    # Routing (injected by gateway)
+    _team_id: str
+    _discord_channel_id: str
+    _project_slug: str
+
     # Humain
     human_feedback_log: list  # Reponses aux human gates
 
@@ -166,8 +195,9 @@ def orchestrator_node(state: dict) -> dict:
     Noeud principal de l'orchestrateur.
     Recoit un evenement, raisonne, produit une decision de routing.
     """
+    from agents.shared.team_resolver import require_team_id
     project_id = state.get("project_id", "default")
-    team_id = state.get("_team_id", "team1")
+    team_id = require_team_id(state)
     messages = state.get("messages", [])
 
     if not messages:
@@ -261,11 +291,15 @@ def orchestrator_node(state: dict) -> dict:
             system_prompt = base_prompt
 
             # Build context for tools
+            from agents.shared.team_resolver import get_team_info
+            team_info = get_team_info(team_id)
+            orchestrator_id = team_info.get("orchestrator", "orchestrator")
             tool_ctx = {
                 "thread_id": state.get("_thread_id", ""),
                 "team_id": team_id,
+                "orchestrator_id": orchestrator_id,
                 "channel_id": state.get("_discord_channel_id", ""),
-                "project_slug": state.get("_project_slug", ""),
+                "project_slug": state.get("project_slug", ""),
                 "task_id": "",
                 "allowed_agents": allowed_agents,
                 "decision_history": state.get("decision_history", []),
@@ -278,31 +312,63 @@ def orchestrator_node(state: dict) -> dict:
             llm = get_llm()
             llm_t = llm.bind_tools(tools)
 
-            # Build user message with workflow context
+            # Build user message from template
             suggested_ids = [a["agent_id"] for a in suggested_agents]
             if override_prompt:
+                template = _load_context_template(team_id, "orchestrator-context-onboarding.md")
                 agents_list = ", ".join(allowed_agents) if allowed_agents else ", ".join(suggested_ids) or "aucun"
                 constraint = ""
                 if allowed_agents:
-                    constraint = "\nATTENTION : Tu ne peux dispatcher QUE ces agents : {}. Aucun autre.".format(", ".join(allowed_agents))
-                user_content = (
-                    "Message utilisateur : {}\n\n"
-                    "Phase : {}. "
-                    "Agents disponibles : {}.{}\n"
-                ).format(last_content[:500], current_phase, agents_list, constraint)
+                    constraint = "ATTENTION : Tu ne peux dispatcher QUE ces agents : {}. Aucun autre.".format(", ".join(allowed_agents))
+                # Count past tool calls from decision history
+                history = state.get("decision_history", [])
+                question_count = sum(
+                    1 for d in history
+                    for tc in d.get("tool_calls", [])
+                    if tc.get("name") == "ask_human"
+                )
+                dispatch_count = sum(
+                    1 for d in history
+                    for tc in d.get("tool_calls", [])
+                    if tc.get("name") == "dispatch_agent"
+                )
+                if dispatch_count >= 6:
+                    phase_instruction = "Tu as dispatche {} agents et pose {} questions. Le cadrage est TERMINE. Utilise human_gate maintenant pour passer a la phase suivante.".format(dispatch_count, question_count)
+                elif question_count >= 5:
+                    phase_instruction = "Tu as pose {} questions. Dispatche des agents ou utilise human_gate.".format(question_count)
+                elif question_count >= 3:
+                    phase_instruction = "Tu as pose {} questions. Envisage de dispatcher un agent.".format(question_count)
+                else:
+                    phase_instruction = ""
+                user_content = template.replace(
+                    "{user_message}", last_content[:500]
+                ).replace(
+                    "{phase}", current_phase
+                ).replace(
+                    "{agents_list}", agents_list
+                ).replace(
+                    "{agents_constraint}", constraint
+                ).replace(
+                    "{question_count}", str(question_count)
+                ).replace(
+                    "{dispatch_count}", str(dispatch_count)
+                ).replace(
+                    "{phase_instruction}", phase_instruction
+                )
             else:
+                template = _load_context_template(team_id, "orchestrator-context-workflow.md")
                 suggested_str = ", ".join(a["agent_id"] for a in suggested_agents) or "aucun"
-                phase_complete = "oui" if phase_check["complete"] else "non"
+                phase_complete_str = "oui" if phase_check["complete"] else "non"
                 transition_str = "oui -> {}".format(transition_check.get("next_phase", "")) if transition_check["allowed"] else "non"
-                user_content = (
-                    "Contexte du projet :\n"
-                    "```json\n{}\n```\n\n"
-                    "Le workflow engine te recommande de dispatcher : {}.\n"
-                    "Phase complete : {}. "
-                    "Transition possible : {}.\n\n"
-                    "IMPORTANT : Respecte les recommandations du workflow engine. "
-                    "Si la phase est complete et la transition possible, utilise human_gate.\n"
-                ).format(json.dumps(context, indent=2, default=str), suggested_str, phase_complete, transition_str)
+                user_content = template.replace(
+                    "{context_json}", json.dumps(context, indent=2, default=str)
+                ).replace(
+                    "{suggested_agents}", suggested_str
+                ).replace(
+                    "{phase_complete}", phase_complete_str
+                ).replace(
+                    "{transition}", transition_str
+                )
 
             msgs = [
                 {"role": "system", "content": system_prompt},
@@ -310,7 +376,7 @@ def orchestrator_node(state: dict) -> dict:
             ]
 
             # ReAct loop
-            max_iters = 5
+            max_iters = 8
             final_text = ""
             from agents.shared.langfuse_setup import get_langfuse_callbacks
             _thread = state.get("_thread_id", "") or config.get("configurable", {}).get("thread_id", "")
@@ -339,7 +405,21 @@ def orchestrator_node(state: dict) -> dict:
                     for t in tools:
                         if t.name == tn:
                             try:
-                                result = t.invoke(ta)
+                                # Try sync first, fallback to async for MCP tools
+                                try:
+                                    result = t.invoke(ta)
+                                except NotImplementedError:
+                                    import asyncio as _aio
+                                    try:
+                                        loop = _aio.get_event_loop()
+                                        if loop.is_running():
+                                            import concurrent.futures
+                                            with concurrent.futures.ThreadPoolExecutor() as pool:
+                                                result = pool.submit(_aio.run, t.ainvoke(ta)).result()
+                                        else:
+                                            result = _aio.run(t.ainvoke(ta))
+                                    except RuntimeError:
+                                        result = _aio.run(t.ainvoke(ta))
                                 if isinstance(result, (dict, list)):
                                     result = json.dumps(result, ensure_ascii=False, default=str)
                                 result = str(result)[:5000]
@@ -422,7 +502,8 @@ def _append_error_decision(state: dict, project_id: str, error_msg: str):
 
 def route_after_orchestrator(state: dict) -> str:
     """Determine le prochain noeud apres l'orchestrateur."""
-    team_id = state.get("_team_id", "team1")
+    from agents.shared.team_resolver import require_team_id
+    team_id = require_team_id(state)
     agent_ids = _load_agent_ids(team_id)
 
     dispatched = state.get("_agents_dispatched", [])
@@ -523,7 +604,7 @@ def placeholder_agent_node(state: dict) -> dict:
 # GRAPH BUILDER
 # ══════════════════════════════════════════════
 
-def build_graph(team_id: str = "team1"):
+def build_graph(team_id: str = ""):
     """Construit le graphe LangGraph complet avec les agents du registry."""
     agent_ids = _load_agent_ids(team_id)
     logger.info(f"Building graph [{team_id}]: {len(agent_ids)} agents: {agent_ids}")

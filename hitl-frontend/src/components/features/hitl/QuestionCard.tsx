@@ -3,6 +3,7 @@ import { Avatar } from '../../ui/Avatar';
 import { Badge } from '../../ui/Badge';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
+import { stripQuestionMarkers } from '../../../utils/questionParser';
 import type { QuestionResponse } from '../../../api/types';
 
 interface QuestionCardProps {
@@ -67,7 +68,7 @@ export function QuestionCard({
             )}
           </div>
           <p className="mt-1 text-sm text-content-secondary line-clamp-2">
-            {question.prompt}
+            {stripQuestionMarkers(question.prompt)}
           </p>
           <div className="mt-2 flex items-center gap-3 text-xs text-content-tertiary">
             <span>{relativeTime}</span>

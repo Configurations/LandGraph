@@ -2834,7 +2834,7 @@ async def config_check():
                     tr_to = tr.get("to", "?")
                     issues.append({"level": "error", "category": "workflow", "message": f"Transition to='{tr_to}' (equipe {tid}) : phase cible inconnue"})
         else:
-            issues.append({"level": "warning", "category": "workflow", "message": f"Equipe '{tid}' : Workflow.json introuvable"})
+            pass  # Workflow.json is optional — workflows are now defined per project type
 
     # 4a. Check docker_mode agents have valid docker_image
     for sa_dir in sorted(SHARED_AGENTS_DIR.iterdir()) if SHARED_AGENTS_DIR.exists() else []:
@@ -3555,7 +3555,8 @@ def _update_project_chats(base_dir: Path, project_id: str, chats: list, models_b
                     if sp.exists():
                         card_parts.append(sp.read_text(encoding="utf-8"))
                 agent_card = "\n\n".join(card_parts) if card_parts else "(aucune carte agent)"
-                mission_content = "Conversation avec l'utilisateur pour explorer et structurer son projet dans ton domaine d'expertise."
+                mission_path = models_base / culture / "default-mission.md"
+                mission_content = mission_path.read_text(encoding="utf-8").strip() if mission_path.exists() else ""
                 project_context = f"{chat_id}\n{chat_type}"
                 out = deliv_template.replace("{project_context}", project_context)
                 out = out.replace("{agent_card}", agent_card)

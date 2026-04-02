@@ -33,6 +33,21 @@ class RagSearchResponse(BaseModel):
     results: list[RagSearchResult]
 
 
+class RagIndexRequest(BaseModel):
+    """RAG index request — index a piece of content."""
+
+    project_slug: str
+    content: str
+    source_type: str = "validated_fact"
+    source_agent: str = "orchestrator"
+
+
+class RagIndexResponse(BaseModel):
+    """RAG index response."""
+
+    chunks: int
+
+
 class ConversationMessage(BaseModel):
     """A message in a project analysis conversation."""
 

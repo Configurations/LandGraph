@@ -9,6 +9,7 @@ import { WizardStepCulture } from './WizardStepCulture';
 import { ProjectTypeSelector } from './ProjectTypeSelector';
 import { WizardStepDocuments } from './WizardStepDocuments';
 import { WizardStepAnalysis } from './WizardStepAnalysis';
+import { WizardStepSummary } from './WizardStepSummary';
 import { useProjectStore } from '../../../stores/projectStore';
 import { useTeamStore } from '../../../stores/teamStore';
 import * as projectsApi from '../../../api/projects';
@@ -26,6 +27,7 @@ const STEP_KEYS = [
   'wizard.step_project_type',
   'wizard.step_documents',
   'wizard.step_analysis',
+  'wizard.step_summary',
 ] as const;
 
 const SKIPPABLE_STEPS = new Set([1, 3, 4, 5]);
@@ -204,6 +206,7 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
         )}
         {wizardStep === 4 && <WizardStepDocuments />}
         {wizardStep === 5 && <WizardStepAnalysis />}
+        {wizardStep === 6 && <WizardStepSummary />}
       </div>
 
       {error && <p className="text-xs text-accent-red">{error}</p>}

@@ -69,7 +69,7 @@ async def list_questions(
     query = (
         "SELECT * FROM project.hitl_requests"
         " WHERE {}"
-        " ORDER BY created_at DESC"
+        " ORDER BY (CASE WHEN status = 'pending' THEN 0 ELSE 1 END), created_at DESC"
         " OFFSET ${} LIMIT ${}"
     ).format(where, idx, idx + 1)
     params.extend([offset, limit])
@@ -98,7 +98,7 @@ async def answer_question(
 ) -> SuccessResponse:
     """Answer, approve, or reject a HITL question."""
     row = await fetch_one(
-        "SELECT id, status FROM project.hitl_requests WHERE id = $1",
+        "SELECT id, status, thread_id, request_type FROM project.hitl_requests WHERE id = $1",
         question_id,
     )
     if not row:
@@ -133,6 +133,19 @@ async def answer_question(
         action=action,
         reviewer=reviewer,
     )
+
+    # Relaunch onboarding pipeline if this was an onboarding question (not an approval)
+    thread_id = row["thread_id"] or ""
+    request_type = row.get("request_type", "question")
+    if thread_id.startswith("onboarding-") and request_type != "approval":
+        project_slug = thread_id.replace("onboarding-", "", 1)
+        try:
+            from services.analysis_service import send_free_message
+            await send_free_message(project_slug, final_response, reviewer, skip_store=True)
+            log.info("onboarding_relaunched", slug=project_slug)
+        except Exception as exc:
+            log.error("onboarding_relaunch_failed", slug=project_slug, error=str(exc))
+
     return SuccessResponse(ok=True)
 
 

@@ -4,6 +4,8 @@ import { Modal } from '../../ui/Modal';
 import { Button } from '../../ui/Button';
 import { Avatar } from '../../ui/Avatar';
 import { Badge } from '../../ui/Badge';
+import { InteractiveQuestions } from './InteractiveQuestions';
+import { parseQuestions, stripQuestionMarkers } from '../../../utils/questionParser';
 import type { QuestionResponse } from '../../../api/types';
 
 interface AnswerModalProps {
@@ -29,6 +31,7 @@ export function AnswerModal({
 
   const isApproval = question.request_type === 'approval';
   const isPending = question.status === 'pending';
+  const parsed = isPending && !isApproval ? parseQuestions(question.prompt) : null;
 
   const handleAction = async (action: 'approve' | 'reject' | 'answer') => {
     setLoading(true);
@@ -41,7 +44,12 @@ export function AnswerModal({
     }
   };
 
-  const actions = isPending ? (
+  const handleInteractiveSubmit = (text: string) => {
+    onSubmit(question.id, text, 'answer');
+    onClose();
+  };
+
+  const actions = isPending && !parsed ? (
     <>
       <Button variant="ghost" onClick={onClose}>
         {t('common.cancel')}
@@ -69,46 +77,55 @@ export function AnswerModal({
       onClose={onClose}
       title="hitl.answer"
       actions={actions}
-      className={className}
+      className={`max-w-3xl ${className}`}
     >
       <div className="flex items-center gap-3 mb-4">
-        <Avatar name={question.agent_id} />
+        <Avatar name={question.agent_id} imageUrl={question.agent_avatar_url} size="md" />
         <div>
           <p className="font-medium text-sm">{question.agent_id}</p>
           <Badge color="purple" size="sm">{question.team_id}</Badge>
         </div>
       </div>
 
-      <div className="rounded-lg bg-surface-tertiary p-3 mb-4">
-        <p className="text-sm whitespace-pre-wrap">{question.prompt}</p>
-      </div>
-
-      {question.context && (
-        <details className="mb-4">
-          <summary className="cursor-pointer text-xs text-content-tertiary hover:text-content-secondary">
-            Context
-          </summary>
-          <pre className="mt-2 rounded-lg bg-surface-primary p-3 text-xs text-content-secondary font-mono overflow-x-auto">
-            {JSON.stringify(question.context, null, 2)}
-          </pre>
-        </details>
-      )}
-
-      {isPending && (
-        <textarea
-          value={response}
-          onChange={(e) => setResponse(e.target.value)}
-          placeholder={t('hitl.answer_placeholder')}
-          rows={4}
-          className="w-full rounded-lg border border-border bg-surface-tertiary px-3 py-2 text-sm resize-none focus:border-accent-blue focus:outline-none focus:ring-1 focus:ring-accent-blue"
+      {parsed && isPending ? (
+        <InteractiveQuestions
+          parsed={parsed}
+          onSubmit={handleInteractiveSubmit}
         />
-      )}
+      ) : (
+        <>
+          <div className="rounded-lg bg-surface-tertiary p-3 mb-4">
+            <p className="text-sm whitespace-pre-wrap">{stripQuestionMarkers(question.prompt)}</p>
+          </div>
 
-      {question.response && !isPending && (
-        <div className="rounded-lg bg-surface-primary border border-border p-3">
-          <p className="text-xs text-content-tertiary mb-1">{question.reviewer}</p>
-          <p className="text-sm">{question.response}</p>
-        </div>
+          {question.context && (
+            <details className="mb-4">
+              <summary className="cursor-pointer text-xs text-content-tertiary hover:text-content-secondary">
+                Context
+              </summary>
+              <pre className="mt-2 rounded-lg bg-surface-primary p-3 text-xs text-content-secondary font-mono overflow-x-auto">
+                {JSON.stringify(question.context, null, 2)}
+              </pre>
+            </details>
+          )}
+
+          {isPending && !isApproval && (
+            <textarea
+              value={response}
+              onChange={(e) => setResponse(e.target.value)}
+              placeholder={t('hitl.answer_placeholder')}
+              rows={4}
+              className="w-full rounded-lg border border-border bg-surface-tertiary px-3 py-2 text-sm resize-none focus:border-accent-blue focus:outline-none focus:ring-1 focus:ring-accent-blue"
+            />
+          )}
+
+          {question.response && !isPending && (
+            <div className="rounded-lg bg-surface-primary border border-border p-3">
+              <p className="text-xs text-content-tertiary mb-1">{question.reviewer}</p>
+              <p className="text-sm">{question.response}</p>
+            </div>
+          )}
+        </>
       )}
     </Modal>
   );

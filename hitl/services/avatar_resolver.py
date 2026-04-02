@@ -68,10 +68,18 @@ def resolve_agent_avatar(team_id: str, agent_id: str) -> str | None:
     if not avatar_theme:
         return None
 
-    # Find agent's avatar field in registry
+    # Find agent's avatar field in registry (case-insensitive fallback)
     registry = registries.get(team_id, {})
     agents = registry.get("agents", {})
-    agent_cfg = agents.get(agent_id, {})
+    agent_cfg = agents.get(agent_id)
+    if agent_cfg is None:
+        agent_id_lower = agent_id.lower()
+        for aid, cfg in agents.items():
+            if aid.lower() == agent_id_lower:
+                agent_cfg = cfg
+                break
+    if not agent_cfg:
+        return None
     avatar_file = agent_cfg.get("avatar", "")
     if not avatar_file:
         return None
