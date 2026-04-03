@@ -366,20 +366,21 @@ def _parse_mcp_catalog() -> list[dict]:
         if not line or line.startswith("#"):
             continue
         parts = line.split("|")
-        if len(parts) >= 7:
+        if len(parts) >= 8:
             env_vars = []
-            if len(parts) > 7 and parts[7].strip():
-                for ev in parts[7].split(","):
+            if len(parts) > 8 and parts[8].strip():
+                for ev in parts[8].split(","):
                     kv = ev.split(":", 1)
                     env_vars.append({"var": kv[0].strip(), "desc": kv[1].strip() if len(kv) > 1 else ""})
             items.append({
                 "deprecated": parts[0].strip() == "1",
-                "id": parts[1].strip(),
-                "label": parts[2].strip(),
-                "description": parts[3].strip(),
-                "command": parts[4].strip(),
-                "args": parts[5].strip(),
-                "transport": parts[6].strip(),
+                "type": parts[1].strip(),
+                "id": parts[2].strip(),
+                "label": parts[3].strip(),
+                "description": parts[4].strip(),
+                "command": parts[5].strip(),
+                "args": parts[6].strip(),
+                "transport": parts[7].strip(),
                 "env_vars": env_vars,
             })
     return items
@@ -483,8 +484,9 @@ def _write_mcp_catalog(items: list[dict]):
             f"{v['var']}:{v['desc']}" for v in item.get("env_vars", [])
         )
         dep = "1" if item.get("deprecated") else "0"
+        itype = item.get("type", item.get("command", "npx"))
         lines.append(
-            f"{dep}|{item['id']}|{item['label']}|{item['description']}"
+            f"{dep}|{itype}|{item['id']}|{item['label']}|{item['description']}"
             f"|{item['command']}|{item['args']}|{item['transport']}|{env_str}"
         )
     MCP_CATALOG_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
