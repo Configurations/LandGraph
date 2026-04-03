@@ -195,6 +195,7 @@ export interface AnalysisMessage {
   request_id?: string;
   status?: string;
   artifact_key?: string;
+  in_reply_to?: string;
   created_at: string;
 }
 

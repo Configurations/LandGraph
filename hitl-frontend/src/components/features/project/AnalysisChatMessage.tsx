@@ -69,6 +69,11 @@ export function AnalysisChatMessage({ message, onReply, className = '' }: Analys
               sent ? 'border border-green-500/30' : '',
             ].join(' ')}
           >
+            {isUser && message.in_reply_to && (
+              <div className="text-[10px] text-content-quaternary italic mb-1 border-l-2 border-border pl-2 line-clamp-2">
+                {message.in_reply_to}
+              </div>
+            )}
             {isQuestion && !sent && (
               <div className="flex items-center gap-1.5 mb-1">
                 <Badge size="sm" color="orange">{t('analysis.question_badge')}</Badge>

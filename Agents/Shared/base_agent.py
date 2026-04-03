@@ -263,6 +263,14 @@ class BaseAgent:
             except Exception as e:
                 logger.warning(f"[{self.agent_id}] ask_human tool failed: {e}")
 
+            # Ajouter le tool save_deliverable
+            try:
+                from agents.shared.deliverable_tools import save_deliverable
+                self._tools.append(save_deliverable)
+                logger.info(f"[{self.agent_id}] save_deliverable tool added")
+            except Exception as e:
+                logger.warning(f"[{self.agent_id}] save_deliverable tool failed: {e}")
+
         return self._tools or []
 
     def _create_ask_human_tool(self):
@@ -293,6 +301,14 @@ class BaseAgent:
                     try:
                         with psycopg.connect(db_uri, autocommit=True) as conn:
                             with conn.cursor() as cur:
+                                # Skip if the final validation question is pending
+                                cur.execute(
+                                    "SELECT EXISTS(SELECT 1 FROM project.hitl_requests WHERE thread_id = %s AND status = 'pending' AND context::text LIKE '%%onboarding_final%%')",
+                                    (thread_id,),
+                                )
+                                if cur.fetchone()[0]:
+                                    logger.info(f"[{agent_ref.agent_id}] ask_human skipped — final validation pending")
+                                    return "Question de validation finale en attente."
                                 cur.execute(
                                     """INSERT INTO project.hitl_requests
                                        (thread_id, agent_id, team_id, request_type, prompt, context, channel, status)
@@ -777,6 +793,18 @@ class BaseAgent:
     def __call__(self, state):
         try:
             self._current_state = state
+
+            # Set deliverable context for save_deliverable tool
+            try:
+                from agents.shared.deliverable_tools import set_deliverable_context
+                set_deliverable_context({
+                    "project_slug": state.get("project_slug", ""),
+                    "team_id": state.get("_team_id", ""),
+                    "agent_id": self.agent_id,
+                    "current_phase": state.get("project_phase", "discovery"),
+                })
+            except Exception:
+                pass
 
             # Override system prompt if onboarding agent_prompts are provided
             agent_prompts = state.get("_agent_prompts", {})

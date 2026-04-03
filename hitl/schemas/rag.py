@@ -71,6 +71,7 @@ class AnalysisMessage(BaseModel):
     request_id: Optional[str] = None
     status: Optional[str] = None
     artifact_key: Optional[str] = None
+    in_reply_to: Optional[str] = None
     created_at: str
 
 

@@ -298,8 +298,10 @@ def orchestrator_node(state: dict) -> dict:
                 "thread_id": state.get("_thread_id", ""),
                 "team_id": team_id,
                 "orchestrator_id": orchestrator_id,
+                "agent_id": orchestrator_id,
                 "channel_id": state.get("_discord_channel_id", ""),
                 "project_slug": state.get("project_slug", ""),
+                "current_phase": current_phase or "discovery",
                 "task_id": "",
                 "allowed_agents": allowed_agents,
                 "decision_history": state.get("decision_history", []),
@@ -307,6 +309,10 @@ def orchestrator_node(state: dict) -> dict:
                 "has_question": False,
             }
             set_context(tool_ctx)
+
+            # Set deliverable context for save_deliverable tool
+            from agents.shared.deliverable_tools import set_deliverable_context
+            set_deliverable_context(tool_ctx)
 
             tools = get_orchestrator_tools()
             llm = get_llm()

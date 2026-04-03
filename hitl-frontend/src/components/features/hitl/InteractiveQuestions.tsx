@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { Badge } from '../../ui/Badge';
+import { MarkdownRenderer } from '../deliverable/MarkdownRenderer';
 import type { ParsedQuestions } from '../../../utils/questionParser';
 
 interface InteractiveQuestionsProps {
@@ -74,7 +75,7 @@ export function InteractiveQuestions({ parsed, onSubmit, intro = true, className
     <div className={`flex flex-col gap-1.5 ${className}`}>
       {intro && parsed.intro && (
         <div className="rounded-lg px-3 py-2 text-sm bg-surface-tertiary">
-          {parsed.intro}
+          <MarkdownRenderer content={parsed.intro} />
         </div>
       )}
 

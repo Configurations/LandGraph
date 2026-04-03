@@ -869,12 +869,14 @@ async def get_conversation(project_slug: str) -> list[AnalysisMessage]:
         ))
         if r["status"] == "answered" and r["response"]:
             ts = r["answered_at"] or r["created_at"]
+            prompt_summary = (r["prompt"] or "")[:200].replace("(((?", "").replace(")))", "").strip()
             messages.append(AnalysisMessage(
                 id=f"a-{r['id']}",
                 sender="user",
                 type="reply",
                 content=r["response"],
                 request_id=str(r["id"]),
+                in_reply_to=prompt_summary,
                 created_at=ts.isoformat(),
             ))
 
@@ -964,7 +966,7 @@ async def reply_to_question(
     thread_id = f"{ONBOARDING_THREAD_PREFIX}{project_slug}"
 
     row = await fetch_one(
-        "SELECT id, thread_id, status FROM project.hitl_requests WHERE id = $1::uuid",
+        "SELECT id, thread_id, status, context FROM project.hitl_requests WHERE id = $1::uuid",
         request_id,
     )
     if not row:
@@ -984,6 +986,36 @@ async def reply_to_question(
         response, reviewer, request_id,
     )
 
+    # Check if this is the onboarding final validation
+    ctx = row.get("context") or {}
+    if isinstance(ctx, str):
+        try:
+            ctx = json.loads(ctx)
+        except (json.JSONDecodeError, ValueError):
+            ctx = {}
+    is_final = ctx.get("onboarding_final", False)
+    response_lower = response.strip().lower()
+    user_says_yes = response_lower.startswith("oui") or response_lower.startswith("1. oui") or "recapitulatif" in response_lower
+
+    if is_final and user_says_yes:
+        await execute(
+            "UPDATE project.pm_projects SET analysis_status = 'completed' WHERE slug = $1",
+            project_slug,
+        )
+        # Store completion event for frontend
+        proj_row = await fetch_one(
+            "SELECT analysis_task_id FROM project.pm_projects WHERE slug = $1", project_slug,
+        )
+        if proj_row and proj_row.get("analysis_task_id"):
+            await execute(
+                """INSERT INTO project.dispatcher_task_events (task_id, event_type, data)
+                   VALUES ($1::uuid, 'result', $2::jsonb)""",
+                proj_row["analysis_task_id"],
+                json.dumps({"data": "ONBOARDING_COMPLETE"}),
+            )
+        log.info("onboarding_completed", slug=project_slug)
+        return {"ok": True, "status": "completed"}
+
     await execute(
         "UPDATE project.pm_projects SET analysis_status = 'in_progress' WHERE slug = $1",
         project_slug,
@@ -1000,10 +1032,10 @@ async def reply_to_question(
 
 
 def _load_recap_template() -> str:
-    """Load onboarding-recap.md from Models/{culture}/."""
+    """Load onboarding-recap.md from Prompts/{culture}/."""
     culture = os.getenv("CULTURE", "fr-fr")
     for base in ["/app/config", "/app/Shared", "config", "Shared"]:
-        path = os.path.join(base, "Models", culture, "onboarding-recap.md")
+        path = os.path.join(base, "Prompts", culture, "onboarding-recap.md")
         if os.path.isfile(path):
             with open(path, encoding="utf-8") as f:
                 return f.read()
@@ -1101,21 +1133,23 @@ async def get_project_summary(project_slug: str) -> dict[str, Any]:
         "{conversation_history}", conversation_text
     )
 
-    # 5. Call LLM to generate the summary
+    # 5. Call orchestrator with recap prompt to generate the summary
     summary = ""
     try:
         gateway_url = settings.langgraph_api_url or "http://langgraph-api:8000"
-        # Use the gateway's LLM via a direct agent call
+        proj_team = await fetch_one(
+            "SELECT team_id FROM project.pm_projects WHERE slug = $1", project_slug,
+        )
+        team_id_for_summary = proj_team["team_id"] if proj_team else ""
+
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
                 "{}/invoke".format(gateway_url),
                 json={
-                    "messages": [{"role": "user", "content": prompt}],
-                    "team_id": (await fetch_one(
-                        "SELECT team_id FROM project.pm_projects WHERE slug = $1", project_slug,
-                    ) or {}).get("team_id", ""),
+                    "messages": [{"role": "user", "content": "Produis le recapitulatif complet du projet."}],
+                    "team_id": team_id_for_summary,
                     "thread_id": "summary-{}".format(project_slug),
-                    "direct_agent": "Documentaliste",
+                    "project_slug": project_slug,
                     "system_prompt": prompt,
                 },
             )
@@ -1129,16 +1163,7 @@ async def get_project_summary(project_slug: str) -> dict[str, Any]:
             project_slug, memory_text, rag_text,
         )
 
-    # 6. Store in project docs
-    try:
-        docs_dir = os.path.join(settings.ag_flow_root, "projects", project_slug, "docs")
-        os.makedirs(docs_dir, exist_ok=True)
-        doc_path = os.path.join(docs_dir, "onboarding.md")
-        with open(doc_path, "w", encoding="utf-8") as f:
-            f.write(summary)
-        log.info("summary_saved", slug=project_slug, path=doc_path)
-    except Exception as exc:
-        log.warning("summary_save_error", slug=project_slug, error=str(exc))
+    # The orchestrator saves the recap via save_deliverable tool during the ReAct loop
 
     proj_row = await fetch_one(
         "SELECT name FROM project.pm_projects WHERE slug = $1", project_slug,
@@ -1172,6 +1197,16 @@ async def send_free_message(
     )
     if not proj:
         raise ValueError("Project not found")
+
+    # Don't relaunch if there's a pending approval (onboarding complete)
+    thread_id_check = f"{ONBOARDING_THREAD_PREFIX}{project_slug}"
+    has_approval = await fetch_one(
+        "SELECT id FROM project.hitl_requests WHERE thread_id = $1 AND request_type = 'approval' AND status = 'pending' LIMIT 1",
+        thread_id_check,
+    )
+    if has_approval:
+        log.info("skip_relaunch_approval_pending", slug=project_slug)
+        return {"ok": True, "status": "approval_pending"}
 
     team_id = proj["team_id"]
     old_task_id = proj["analysis_task_id"]

@@ -16,6 +16,24 @@ interface AnswerModalProps {
   className?: string;
 }
 
+function formatContext(ctx: Record<string, unknown>): string {
+  const labels: Record<string, string> = {
+    type: 'Type',
+    phase: 'Phase actuelle',
+    next_phase: 'Phase suivante',
+    project_slug: 'Projet',
+    task_id: 'Tache',
+    context: 'Contexte',
+  };
+  const lines: string[] = [];
+  for (const [key, value] of Object.entries(ctx)) {
+    if (!value || (typeof value === 'string' && !value.trim())) continue;
+    const label = labels[key] || key;
+    lines.push(`${label} : ${typeof value === 'string' ? value : JSON.stringify(value)}`);
+  }
+  return lines.join('\n');
+}
+
 export function AnswerModal({
   question,
   open,
@@ -32,6 +50,7 @@ export function AnswerModal({
   const isApproval = question.request_type === 'approval';
   const isPending = question.status === 'pending';
   const parsed = isPending && !isApproval ? parseQuestions(question.prompt) : null;
+  const modalTitle = isApproval ? 'hitl.validation' : 'hitl.answer';
 
   const handleAction = async (action: 'approve' | 'reject' | 'answer') => {
     setLoading(true);
@@ -75,7 +94,7 @@ export function AnswerModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="hitl.answer"
+      title={modalTitle}
       actions={actions}
       className={`max-w-3xl ${className}`}
     >
@@ -98,15 +117,10 @@ export function AnswerModal({
             <p className="text-sm whitespace-pre-wrap">{stripQuestionMarkers(question.prompt)}</p>
           </div>
 
-          {question.context && (
-            <details className="mb-4">
-              <summary className="cursor-pointer text-xs text-content-tertiary hover:text-content-secondary">
-                Context
-              </summary>
-              <pre className="mt-2 rounded-lg bg-surface-primary p-3 text-xs text-content-secondary font-mono overflow-x-auto">
-                {JSON.stringify(question.context, null, 2)}
-              </pre>
-            </details>
+          {question.context && Object.keys(question.context).length > 0 && (
+            <div className="rounded-lg bg-surface-primary border border-border p-3 mb-4 text-xs text-content-secondary whitespace-pre-wrap">
+              {formatContext(question.context as Record<string, unknown>)}
+            </div>
           )}
 
           {isPending && !isApproval && (

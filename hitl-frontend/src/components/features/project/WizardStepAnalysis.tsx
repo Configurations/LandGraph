@@ -49,10 +49,6 @@ export function WizardStepAnalysis({ className = '' }: WizardStepAnalysisProps):
         setStatus(mapped);
         if (res.task_id) setTaskId(res.task_id);
         if (res.has_pending_question && res.pending_request_id) {
-          if (res.pending_request_type === 'approval') {
-            setStatus('completed');
-            return;
-          }
           setPendingQuestion({ requestId: res.pending_request_id, prompt: '' });
         }
         analysisApi.getConversation(slug).then(setMessages).catch(() => {});
@@ -80,9 +76,16 @@ export function WizardStepAnalysis({ className = '' }: WizardStepAnalysisProps):
     const ev: WebSocketEvent = lastEvent;
     const d = ev.data ?? {};
 
-    if (ev.type === 'task_progress' && d.task_id === taskId) {
+    if ((ev.type === 'task_progress' || ev.type === 'task_artifact') && d.task_id === taskId) {
       const raw = d.data as string | Record<string, unknown>;
       const content = typeof raw === 'string' ? raw : (String((raw as Record<string, unknown>)?.data ?? JSON.stringify(raw)));
+
+      // Detect onboarding complete marker
+      if (content === 'ONBOARDING_COMPLETE') {
+        setStatus('completed');
+        return;
+      }
+
       addMessage({
         id: `ws-prog-${Date.now()}`,
         sender: 'agent',
@@ -94,11 +97,6 @@ export function WizardStepAnalysis({ className = '' }: WizardStepAnalysisProps):
     }
 
     if (ev.type === 'new_question' && d.thread_id === threadId) {
-      // Approval = onboarding complete, show Next button
-      if (d.request_type === 'approval') {
-        setStatus('completed');
-        return;
-      }
       const msg: AnalysisMessage = {
         id: `ws-q-${String(d.id ?? Date.now())}`,
         sender: 'agent',
@@ -150,10 +148,12 @@ export function WizardStepAnalysis({ className = '' }: WizardStepAnalysisProps):
     return () => clearInterval(interval);
   }, [wsConnected, slug, status, taskId, setMessages, setStatus, setPendingQuestion, setTaskId]);
 
-  // ── Auto-scroll ──
+  // ── Auto-scroll — only if no pending question being answered ──
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    if (!pendingQuestion) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, pendingQuestion]);
 
   // ── Send handler ──
   const handleSend = useCallback(async (text: string) => {

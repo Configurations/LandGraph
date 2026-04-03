@@ -56,7 +56,7 @@ export function WizardStepSummary({ className = '' }: WizardStepSummaryProps): J
 
       {/* LLM-generated summary */}
       {data.summary && (
-        <div className="rounded-lg border border-border bg-surface-primary p-4 text-sm">
+        <div className="rounded-lg border border-border bg-surface-primary p-6 text-sm min-h-[400px] max-h-[70vh] overflow-y-auto">
           <MarkdownRenderer content={data.summary} />
         </div>
       )}

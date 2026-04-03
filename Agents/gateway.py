@@ -638,6 +638,7 @@ async def run_orchestrated(state, decisions, channel_id, thread_id="default", ca
         canonical_agents, _, _ = resolve_agents(channel_id)
     allowed = state.get("_allowed_agents", [])
     agents = []
+    dispatched_tasks = state.get("_dispatched_tasks", [])
     for d in decisions:
         # New format: tool_calls with name/args
         for tc in d.get("tool_calls", []):
@@ -647,7 +648,13 @@ async def run_orchestrated(state, decisions, channel_id, thread_id="default", ca
                     logger.info(f"[onboarding] Skipping {t} — not in allowed agents {allowed}")
                     continue
                 if t in canonical_agents:
-                    agents.append({"agent_id": t, "agent": canonical_agents[t]})
+                    # Find task_row_id from dispatched_tasks
+                    task_row_id = ""
+                    for dt in dispatched_tasks:
+                        if dt.get("agent_id") == t:
+                            task_row_id = dt.get("task_row_id", "")
+                            break
+                    agents.append({"agent_id": t, "agent": canonical_agents[t], "task_row_id": task_row_id})
 
         # Legacy format: actions with action/target
         for a in d.get("actions", []):
@@ -656,10 +663,74 @@ async def run_orchestrated(state, decisions, channel_id, thread_id="default", ca
                 if allowed and t not in allowed:
                     continue
                 if t in canonical_agents:
-                    agents.append({"agent_id": t, "agent": canonical_agents[t]})
+                    agents.append({"agent_id": t, "agent": canonical_agents[t], "task_row_id": ""})
 
     if agents:
         await run_agents_parallel(agents, state, channel_id, thread_id)
+
+        # Mark each dispatched agent as completed in DB
+        uri = os.getenv("DATABASE_URI", "")
+        if uri:
+            try:
+                import psycopg
+                with psycopg.connect(uri, autocommit=True) as conn:
+                    with conn.cursor() as cur:
+                        for a in agents:
+                            rid = a.get("task_row_id", "")
+                            if rid:
+                                cur.execute(
+                                    "UPDATE project.dispatcher_tasks SET status = 'success', completed_at = NOW() WHERE id = %s::uuid AND completed_at IS NULL",
+                                    (rid,),
+                                )
+                        # Check if any pending agents remain for this thread
+                        cur.execute(
+                            "SELECT EXISTS(SELECT 1 FROM project.dispatcher_tasks WHERE thread_id = %s AND status = 'running' AND completed_at IS NULL AND phase = 'onboarding')",
+                            (thread_id,),
+                        )
+                        has_pending = cur.fetchone()[0]
+            except Exception as e:
+                logger.warning(f"[run_orchestrated] DB update failed: {e}")
+                has_pending = False
+        else:
+            has_pending = False
+
+        # All agents done — relaunch orchestrator to process results
+        if not has_pending:
+            logger.info(f"[run_orchestrated] All agents done for {thread_id}, relaunching orchestrator")
+            try:
+                graph = get_orchestrator_graph()
+                config = {"configurable": {"thread_id": thread_id}}
+                result = await asyncio.to_thread(graph.invoke, state, config)
+
+                # Process orchestrator result (same as /invoke endpoint)
+                output_text = result.get("_orchestrator_output", "")
+                has_question = result.get("_has_question", False)
+                new_dispatched = result.get("_agents_dispatched", [])
+
+                if output_text and not has_question:
+                    # Store as progress event
+                    import psycopg
+                    with psycopg.connect(uri, autocommit=True) as conn:
+                        with conn.cursor() as cur:
+                            # Find the main task for this thread
+                            cur.execute(
+                                "SELECT analysis_task_id FROM project.pm_projects WHERE slug = %s",
+                                (state.get("project_slug", ""),),
+                            )
+                            row = cur.fetchone()
+                            if row and row[0]:
+                                cur.execute(
+                                    """INSERT INTO project.dispatcher_task_events (task_id, event_type, data)
+                                       VALUES (%s::uuid, 'progress', %s::jsonb)""",
+                                    (str(row[0]), json.dumps({"data": output_text}, ensure_ascii=False)),
+                                )
+
+                if new_dispatched:
+                    # Recursively handle new dispatches
+                    new_decisions = result.get("decision_history", [])[-1:]
+                    await run_orchestrated(result, new_decisions, channel_id, thread_id, canonical_agents)
+            except Exception as e:
+                logger.error(f"[run_orchestrated] Relaunch failed: {e}")
 
 
 # ── Phase synthesis generation ────────────────
@@ -1194,11 +1265,17 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
 
         # ── Mode direct ──────────────────────
         if request.direct_agent:
-            agent_id = request.direct_agent.lower().strip()
+            agent_id = request.direct_agent.strip()
+            # Case-insensitive lookup
             if agent_id not in agent_map:
-                return InvokeResponse(
-                    output=f"Agent inconnu : {agent_id}\nDisponibles : {', '.join(canonical_agents.keys())}",
-                    thread_id=request.thread_id)
+                agent_id_lower = agent_id.lower()
+                matched = next((k for k in agent_map if k.lower() == agent_id_lower), None)
+                if matched:
+                    agent_id = matched
+                else:
+                    return InvokeResponse(
+                        output="Agent inconnu : {}\nDisponibles : {}".format(agent_id, ", ".join(canonical_agents.keys())),
+                        thread_id=request.thread_id)
 
             agent_callable = agent_map[agent_id]
             canonical_id = agent_id
@@ -1415,3 +1492,101 @@ async def startup():
         logger.info("Gateway v0.6.0 ready — persistence + direct + parallel + MCP")
     except Exception as e:
         logger.error(f"Init error: {e}")
+
+    # Re-dispatch stale agent tasks after restart
+    uri = os.getenv("DATABASE_URI", "")
+    if uri:
+        try:
+            import psycopg
+            with psycopg.connect(uri, autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT id, agent_id, team_id, thread_id, project_slug, instruction "
+                        "FROM project.dispatcher_tasks "
+                        "WHERE status = 'running' AND completed_at IS NULL AND phase = 'onboarding'"
+                    )
+                    stale = cur.fetchall()
+            if stale:
+                logger.info("Found %d stale agent tasks — scheduling re-dispatch", len(stale))
+                asyncio.get_event_loop().create_task(_redispatch_stale_tasks(stale))
+        except Exception as e:
+            logger.warning("Stale task check failed: %s", e)
+
+
+async def _redispatch_stale_tasks(tasks):
+    """Re-dispatch agent tasks that were interrupted by API restart."""
+    for row in tasks:
+        task_id, agent_id, team_id, thread_id, project_slug, instruction = row
+        logger.info("Re-dispatching stale task %s for agent %s", task_id, agent_id)
+        try:
+            canonical_agents, _, _ = resolve_agents_by_team(team_id)
+            if agent_id not in canonical_agents:
+                logger.warning("Agent %s not found for re-dispatch, marking failed", agent_id)
+                _mark_task_failed(str(task_id), "Agent not found after restart")
+                continue
+
+            agent_callable = canonical_agents[agent_id]
+            state = await load_or_create_state_async(
+                thread_id, [("user", instruction[:500])], "",
+                "", team_id, project_slug,
+            )
+            state["_thread_id"] = thread_id
+
+            agents = [{"agent_id": agent_id, "agent": agent_callable, "task_row_id": str(task_id)}]
+            await run_agents_parallel(agents, state, "", thread_id)
+
+            # Mark completed
+            uri = os.getenv("DATABASE_URI", "")
+            import psycopg
+            with psycopg.connect(uri, autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE project.dispatcher_tasks SET status = 'success', completed_at = NOW() WHERE id = %s::uuid",
+                        (str(task_id),),
+                    )
+                    # Check if all agents done for this thread
+                    cur.execute(
+                        "SELECT EXISTS(SELECT 1 FROM project.dispatcher_tasks WHERE thread_id = %s AND status = 'running' AND completed_at IS NULL AND phase = 'onboarding')",
+                        (thread_id,),
+                    )
+                    has_pending = cur.fetchone()[0]
+
+            if not has_pending:
+                logger.info("All stale agents done for %s, relaunching orchestrator", thread_id)
+                graph = get_orchestrator_graph()
+                config = {"configurable": {"thread_id": thread_id}}
+                result = await asyncio.to_thread(graph.invoke, state, config)
+                # Store output if any
+                output_text = result.get("_orchestrator_output", "")
+                if output_text:
+                    with psycopg.connect(uri, autocommit=True) as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "SELECT analysis_task_id FROM project.pm_projects WHERE slug = %s",
+                                (project_slug,),
+                            )
+                            main_row = cur.fetchone()
+                            if main_row and main_row[0]:
+                                cur.execute(
+                                    """INSERT INTO project.dispatcher_task_events (task_id, event_type, data)
+                                       VALUES (%s::uuid, 'progress', %s::jsonb)""",
+                                    (str(main_row[0]), json.dumps({"data": output_text}, ensure_ascii=False)),
+                                )
+        except Exception as e:
+            logger.error("Re-dispatch failed for task %s: %s", task_id, e)
+            _mark_task_failed(str(task_id), str(e))
+
+
+def _mark_task_failed(task_id: str, error: str):
+    uri = os.getenv("DATABASE_URI", "")
+    if uri:
+        try:
+            import psycopg
+            with psycopg.connect(uri, autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE project.dispatcher_tasks SET status = 'failure', completed_at = NOW(), error_message = %s WHERE id = %s::uuid",
+                        (error[:500], task_id),
+                    )
+        except Exception:
+            pass

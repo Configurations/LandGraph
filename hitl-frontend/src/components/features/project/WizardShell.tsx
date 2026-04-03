@@ -184,10 +184,10 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
   }, [wizardStep, setWizardStep]);
 
   return (
-    <div className={`flex flex-col gap-6 ${className}`}>
+    <div className={`flex flex-col ${className}`}>
       <Stepper steps={steps} activeStep={wizardStep} onStepClick={setWizardStep} />
 
-      <div className="min-h-[300px]">
+      <div className="flex-1 overflow-y-auto min-h-0 py-4">
         {wizardStep === 0 && <WizardStepSetup />}
         {wizardStep === 1 && <WizardStepGit />}
         {wizardStep === 2 && <WizardStepCulture />}
@@ -211,18 +211,18 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
 
       {error && <p className="text-xs text-accent-red">{error}</p>}
 
-      <div className="flex items-center justify-between border-t border-border pt-4">
-        <Button variant="ghost" size="sm" onClick={handlePrevious} disabled={wizardStep === 0}>
+      <div className="sticky bottom-0 flex items-center justify-between border-t border-border px-4 py-4 bg-surface-secondary">
+        <Button variant="ghost" onClick={handlePrevious} disabled={wizardStep === 0}>
           {t('wizard.previous')}
         </Button>
-        <div className="flex gap-2">
+        <div className="flex gap-3">
           {SKIPPABLE_STEPS.has(wizardStep) && (
-            <Button variant="secondary" size="sm" onClick={handleSkip}>
+            <Button variant="secondary" onClick={handleSkip}>
               {t('wizard.skip')}
             </Button>
           )}
-          <Button size="sm" onClick={() => void handleNext()} disabled={!canAdvance} loading={creating}>
-            {wizardStep === 2 && !completed.has(2) ? t('project.create') : t('wizard.next')}
+          <Button onClick={() => void handleNext()} disabled={!canAdvance} loading={creating}>
+            {wizardStep === 2 && !completed.has(2) ? t('project.create') : wizardStep === STEP_KEYS.length - 1 ? t('wizard.finalize') : t('wizard.next')}
           </Button>
         </div>
       </div>
