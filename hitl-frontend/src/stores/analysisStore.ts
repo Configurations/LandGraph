@@ -11,12 +11,14 @@ interface PendingQuestion {
 interface AnalysisState {
   status: AnalysisUiStatus;
   taskId: string | null;
+  workflowId: number | null;
   threadId: string | null;
   messages: AnalysisMessage[];
   pendingQuestion: PendingQuestion | null;
 
   setStatus: (s: AnalysisUiStatus) => void;
   setTaskId: (id: string | null) => void;
+  setWorkflowId: (id: number | null) => void;
   setThreadId: (id: string | null) => void;
   addMessage: (msg: AnalysisMessage) => void;
   setMessages: (msgs: AnalysisMessage[]) => void;
@@ -27,12 +29,14 @@ interface AnalysisState {
 export const useAnalysisStore = create<AnalysisState>((set) => ({
   status: 'idle',
   taskId: null,
+  workflowId: null,
   threadId: null,
   messages: [],
   pendingQuestion: null,
 
   setStatus: (status) => set({ status }),
   setTaskId: (taskId) => set({ taskId }),
+  setWorkflowId: (workflowId) => set({ workflowId }),
   setThreadId: (threadId) => set({ threadId }),
   addMessage: (msg) =>
     set((s) => {
@@ -42,5 +46,5 @@ export const useAnalysisStore = create<AnalysisState>((set) => ({
   setMessages: (messages) => set({ messages }),
   setPendingQuestion: (pendingQuestion) => set({ pendingQuestion }),
   reset: () =>
-    set({ status: 'idle', taskId: null, threadId: null, messages: [], pendingQuestion: null }),
+    set({ status: 'idle', taskId: null, workflowId: null, threadId: null, messages: [], pendingQuestion: null }),
 }));

@@ -488,8 +488,6 @@ async def start_analysis(
     if os.path.isdir(uploads):
         documents = [f for f in os.listdir(uploads) if not f.startswith(".")]
 
-    thread_id = f"{ONBOARDING_THREAD_PREFIX}{project_slug}"
-
     # Load onboarding chat config (orchestrator prompt + agent prompts)
     onboarding = await _load_onboarding_config(project_slug)
     if onboarding.error:
@@ -500,19 +498,47 @@ async def start_analysis(
     deduced_prompt = await _load_deduced_prompt(project_slug, project_name, documents)
     instruction = deduced_prompt or _build_instruction(project_slug, project_name, team_name, documents)
 
+    # Create onboarding workflow + first phase
+    wf_row = await fetch_one(
+        """INSERT INTO project.project_workflows
+           (project_slug, team_id, workflow_name, workflow_type, workflow_json_path, status, iteration)
+           VALUES ($1, $2, 'onboarding', 'onboarding', '', 'active', 1)
+           RETURNING id""",
+        project_slug, team_id,
+    )
+    workflow_id = wf_row["id"] if wf_row else None
+
+    phase_row = None
+    if workflow_id:
+        phase_row = await fetch_one(
+            """INSERT INTO project.workflow_phases
+               (workflow_id, phase_key, phase_name, group_key, phase_order, group_order, iteration, status)
+               VALUES ($1, 'discovery', 'Comprendre le besoin', 'A', 0, 0, 1, 'running')
+               RETURNING id""",
+            workflow_id,
+        )
+        if phase_row:
+            await execute(
+                "UPDATE project.project_workflows SET current_phase_id = $1 WHERE id = $2",
+                phase_row["id"], workflow_id,
+            )
+
+    phase_id = phase_row["id"] if phase_row else None
+    thread_id = "workflow-{}".format(workflow_id) if workflow_id else "onboarding-{}".format(project_slug)
+
     # Create tracking task row (so indexation progress can post events immediately)
     task_row = await fetch_one(
         """INSERT INTO project.dispatcher_tasks
-           (agent_id, team_id, thread_id, project_slug, phase, instruction, status, docker_image)
-           VALUES ($1, $2, $3, $4, 'discovery', $5, 'running', 'gateway')
+           (agent_id, team_id, thread_id, project_slug, phase, instruction, status, docker_image, workflow_id, phase_id)
+           VALUES ($1, $2, $3, $4, 'discovery', $5, 'running', 'gateway', $6, $7)
            RETURNING id""",
-        agent_id, team_id, thread_id, project_slug, instruction[:4000],
+        agent_id, team_id, thread_id, project_slug, instruction[:4000], workflow_id, phase_id,
     )
     task_id = str(task_row["id"]) if task_row else ""
 
     await execute(
-        "UPDATE project.pm_projects SET analysis_task_id = $1, analysis_status = 'in_progress' WHERE slug = $2",
-        task_id, project_slug,
+        "UPDATE project.pm_projects SET analysis_task_id = $1, analysis_status = 'in_progress', onboarding_workflow_id = $2 WHERE slug = $3",
+        task_id, workflow_id, project_slug,
     )
 
     # Launch background pipeline: indexation → synthesis → gateway call
@@ -524,13 +550,15 @@ async def start_analysis(
         agent_id=agent_id,
         thread_id=thread_id,
         task_id=task_id,
+        workflow_id=workflow_id,
+        phase_id=phase_id,
         documents=documents,
         instruction=instruction,
         onboarding=onboarding,
     ))
 
     # Return immediately — frontend polls for progress
-    return {"task_id": task_id, "agent_id": agent_id, "status": "started"}
+    return {"task_id": task_id, "workflow_id": workflow_id, "agent_id": agent_id, "status": "started"}
 
 
 async def _run_analysis_pipeline(
@@ -541,6 +569,8 @@ async def _run_analysis_pipeline(
     agent_id: str,
     thread_id: str,
     task_id: str,
+    workflow_id: int | None,
+    phase_id: int | None,
     documents: list[str],
     instruction: str,
     onboarding: OnboardingConfig,
@@ -662,6 +692,8 @@ async def _run_analysis_pipeline(
             "team_id": team_id,
             "thread_id": thread_id,
             "project_slug": project_slug,
+            "workflow_id": workflow_id,
+            "phase_id": phase_id,
             "system_prompt": system_prompt,
             "agent_prompts": resolved_agent_prompts,
             "agent_tools": onboarding.agent_tools,
@@ -760,24 +792,30 @@ async def _sync_status(project_slug: str, task_id: str) -> str:
 async def get_analysis_status(project_slug: str) -> dict[str, Any]:
     """Get analysis status, syncing with dispatcher."""
     row = await fetch_one(
-        "SELECT analysis_task_id, analysis_status FROM project.pm_projects WHERE slug = $1",
+        "SELECT analysis_task_id, analysis_status, onboarding_workflow_id FROM project.pm_projects WHERE slug = $1",
         project_slug,
     )
     if not row or not row.get("analysis_task_id"):
         return {
             "status": "not_started",
             "task_id": None,
+            "workflow_id": None,
             "has_pending_question": False,
             "pending_request_id": None,
         }
 
     task_id = row["analysis_task_id"]
+    workflow_id = row.get("onboarding_workflow_id")
     current = row.get("analysis_status") or "not_started"
 
     if current not in ("completed", "failed", "not_started"):
         current = await _sync_status(project_slug, task_id)
 
-    thread_id = f"{ONBOARDING_THREAD_PREFIX}{project_slug}"
+    # Use workflow-based thread_id if available, fallback to legacy
+    if workflow_id:
+        thread_id = "workflow-{}".format(workflow_id)
+    else:
+        thread_id = "{}{}".format(ONBOARDING_THREAD_PREFIX, project_slug)
     pending = await fetch_one(
         "SELECT id, request_type FROM project.hitl_requests WHERE thread_id = $1 AND status = 'pending' LIMIT 1",
         thread_id,
@@ -786,6 +824,7 @@ async def get_analysis_status(project_slug: str) -> dict[str, Any]:
     return {
         "status": current,
         "task_id": task_id,
+        "workflow_id": workflow_id,
         "has_pending_question": pending is not None,
         "pending_request_id": str(pending["id"]) if pending else None,
         "pending_request_type": pending["request_type"] if pending else None,
@@ -794,13 +833,19 @@ async def get_analysis_status(project_slug: str) -> dict[str, Any]:
 
 async def get_conversation(project_slug: str) -> list[AnalysisMessage]:
     """Merge dispatcher events + HITL requests + rag_conversations."""
-    thread_id = f"{ONBOARDING_THREAD_PREFIX}{project_slug}"
+    # Use workflow-based thread_id if available
+    proj_row = await fetch_one(
+        "SELECT team_id, onboarding_workflow_id FROM project.pm_projects WHERE slug = $1", project_slug,
+    )
+    workflow_id = proj_row.get("onboarding_workflow_id") if proj_row else None
+    if workflow_id:
+        thread_id = "workflow-{}".format(workflow_id)
+    else:
+        thread_id = "{}{}".format(ONBOARDING_THREAD_PREFIX, project_slug)
     messages: list[AnalysisMessage] = []
 
     # Resolve orchestrator ID from team config
-    proj_team = await fetch_one(
-        "SELECT team_id FROM project.pm_projects WHERE slug = $1", project_slug,
-    )
+    proj_team = proj_row
     default_agent_id = ""
     if proj_team:
         teams_data = load_teams()
@@ -1205,25 +1250,39 @@ async def send_free_message(
         )
 
     proj = await fetch_one(
-        "SELECT team_id, analysis_task_id FROM project.pm_projects WHERE slug = $1",
+        "SELECT team_id, analysis_task_id, onboarding_workflow_id FROM project.pm_projects WHERE slug = $1",
         project_slug,
     )
     if not proj:
         raise ValueError("Project not found")
 
-    # Don't relaunch if there's a pending approval (onboarding complete)
-    thread_id_check = f"{ONBOARDING_THREAD_PREFIX}{project_slug}"
-    has_approval = await fetch_one(
-        "SELECT id FROM project.hitl_requests WHERE thread_id = $1 AND request_type = 'approval' AND status = 'pending' LIMIT 1",
-        thread_id_check,
-    )
-    if has_approval:
-        log.info("skip_relaunch_approval_pending", slug=project_slug)
-        return {"ok": True, "status": "approval_pending"}
-
     team_id = proj["team_id"]
     old_task_id = proj["analysis_task_id"]
-    thread_id = f"{ONBOARDING_THREAD_PREFIX}{project_slug}"
+    workflow_id = proj.get("onboarding_workflow_id")
+
+    # Build thread_id from workflow_id if available, fallback to legacy
+    if workflow_id:
+        thread_id = "workflow-{}".format(workflow_id)
+    else:
+        thread_id = "{}{}".format(ONBOARDING_THREAD_PREFIX, project_slug)
+
+    # Don't relaunch if the final validation question is pending
+    has_final = await fetch_one(
+        "SELECT id FROM project.hitl_requests WHERE thread_id = $1 AND status = 'pending' AND context::text LIKE '%%onboarding_final%%' LIMIT 1",
+        thread_id,
+    )
+    if has_final:
+        log.info("skip_relaunch_final_pending", slug=project_slug)
+        return {"ok": True, "status": "final_pending"}
+
+    # Read phase_id from current workflow
+    phase_id = None
+    if workflow_id:
+        wf_row = await fetch_one(
+            "SELECT current_phase_id FROM project.project_workflows WHERE id = $1",
+            workflow_id,
+        )
+        phase_id = wf_row["current_phase_id"] if wf_row else None
 
     # Load onboarding config (system prompt + agent prompts)
     onboarding = await _load_onboarding_config(project_slug)
@@ -1269,6 +1328,8 @@ async def send_free_message(
         "team_id": team_id,
         "thread_id": thread_id,
         "project_slug": project_slug,
+        "workflow_id": workflow_id,
+        "phase_id": phase_id,
         "system_prompt": system_prompt,
         "agent_prompts": resolved_agent_prompts,
         "agent_tools": onboarding.agent_tools,

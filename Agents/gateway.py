@@ -1240,6 +1240,8 @@ class InvokeRequest(BaseModel):
     inject_rag: bool = False  # If true, RAG is injected in prompts — don't load rag_search tool
     agent_tools: dict[str, list[str]] = {}  # Per-agent allowed MCP tools from chat config
     allowed_agents: list[str] = []  # If set, only these agents can be dispatched
+    workflow_id: int | None = None  # Workflow tracking ID
+    phase_id: int | None = None  # Current phase tracking ID
 
 class InvokeResponse(BaseModel):
     output: str
@@ -1330,6 +1332,10 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
             state["_agent_tools"] = request.agent_tools
         if request.allowed_agents:
             state["_allowed_agents"] = request.allowed_agents
+        if request.workflow_id:
+            state["_workflow_id"] = request.workflow_id
+        if request.phase_id:
+            state["_phase_id"] = request.phase_id
 
         graph = get_orchestrator_graph()
         config = {"configurable": {"thread_id": request.thread_id}}

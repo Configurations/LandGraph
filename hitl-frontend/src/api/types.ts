@@ -180,6 +180,7 @@ export interface AnalysisStartResponse {
 export interface AnalysisStatusResponse {
   status: AnalysisStatus;
   task_id: string | null;
+  workflow_id: number | null;
   has_pending_question: boolean;
   pending_request_id: string | null;
   pending_request_type: string | null;

@@ -133,6 +133,16 @@ REMOTE_CLEAN
     tar cf - -C "$LOCAL_DIR" "${TAR_EXCLUDES[@]}" . \
         | ssh $SSH_OPTS "${SSH_TARGET}" "tar xf - -C ${REMOTE_DIR}"
 
+    # Use docker-compose.test.yml on test servers (contains test volume mounts)
+    ssh $SSH_OPTS "${SSH_TARGET}" "test -f ${REMOTE_DIR}/docker-compose.test.yml && mv -f ${REMOTE_DIR}/docker-compose.test.yml ${REMOTE_DIR}/docker-compose.yml && echo 'test compose applied' || true"
+
+    # Upload test files if docker-compose.test.yml was present
+    if [ -d "$LOCAL_DIR/hitl/tests" ]; then
+        log "Uploading test files ..."
+        ssh $SSH_OPTS "${SSH_TARGET}" "mkdir -p ${REMOTE_DIR}/hitl/tests"
+        scp $SCP_OPTS "$LOCAL_DIR"/hitl/tests/*.py "${SSH_TARGET}:${REMOTE_DIR}/hitl/tests/" 2>/dev/null || true
+    fi
+
     # Copy mcp_catalog.csv into Shared/ (not included in tar since Shared/ is excluded)
     log "Uploading Shared/mcp_catalog.csv ..."
     scp $SCP_OPTS "$LOCAL_DIR/Shared/Teams/mcp_catalog.csv" "${SSH_TARGET}:${REMOTE_DIR}/Shared/Teams/mcp_catalog.csv"

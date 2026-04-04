@@ -90,7 +90,9 @@ async def test_get_stats(app_client: AsyncClient, mock_pool: AsyncMock):
 @pytest.mark.asyncio
 async def test_answer_question_success(app_client: AsyncClient, mock_pool: AsyncMock):
     qid = uuid.uuid4()
-    mock_pool.fetchrow.return_value = make_record(id=qid, status="pending")
+    mock_pool.fetchrow.return_value = make_record(
+        id=qid, status="pending", thread_id="test-thread", request_type="question",
+    )
 
     resp = await app_client.post(f"/api/questions/{qid}/answer", json={
         "response": "Looks good", "action": "approve",
@@ -103,7 +105,9 @@ async def test_answer_question_success(app_client: AsyncClient, mock_pool: Async
 @pytest.mark.asyncio
 async def test_answer_already_answered(app_client: AsyncClient, mock_pool: AsyncMock):
     qid = uuid.uuid4()
-    mock_pool.fetchrow.return_value = make_record(id=qid, status="answered")
+    mock_pool.fetchrow.return_value = make_record(
+        id=qid, status="answered", thread_id="test-thread", request_type="question",
+    )
 
     resp = await app_client.post(f"/api/questions/{qid}/answer", json={
         "response": "too late", "action": "answer",
@@ -123,3 +127,98 @@ async def test_get_question_not_found(app_client: AsyncClient, mock_pool: AsyncM
         "Authorization": f"Bearer {MEMBER_TOKEN}",
     })
     assert resp.status_code == 404
+
+
+# ── answer_question — onboarding relaunch detection ───────────
+
+
+@pytest.mark.asyncio
+async def test_answer_question_relaunches_onboarding_by_workflow_type():
+    """thread_id='workflow-42', DB returns workflow_type='onboarding' → relaunch."""
+    from unittest.mock import patch, AsyncMock as _AM
+
+    qid = uuid.uuid4()
+    wf_row = make_record(workflow_type="onboarding", project_slug="my-project")
+
+    with (
+        patch("services.hitl_service.fetch_one", new_callable=_AM, side_effect=[
+            # 1st call: SELECT hitl_requests
+            make_record(id=qid, status="pending", thread_id="workflow-42", request_type="question"),
+            # 2nd call: SELECT project_workflows
+            wf_row,
+        ]),
+        patch("services.hitl_service.execute", new_callable=_AM),
+        patch("services.analysis_service.send_free_message", new_callable=_AM) as mock_send,
+    ):
+        from services.hitl_service import answer_question
+        result = await answer_question(qid, "Looks good", "answer", "alice@test.com")
+
+    assert result.ok is True
+    assert mock_send.called
+
+
+@pytest.mark.asyncio
+async def test_answer_question_relaunches_onboarding_by_legacy_thread():
+    """thread_id='onboarding-my-project' → relaunch via legacy detection."""
+    from unittest.mock import patch, AsyncMock as _AM
+
+    qid = uuid.uuid4()
+
+    with (
+        patch("services.hitl_service.fetch_one", new_callable=_AM, return_value=make_record(
+            id=qid, status="pending", thread_id="onboarding-my-project", request_type="question",
+        )),
+        patch("services.hitl_service.execute", new_callable=_AM),
+        patch("services.analysis_service.send_free_message", new_callable=_AM) as mock_send,
+    ):
+        from services.hitl_service import answer_question
+        result = await answer_question(qid, "50k EUR", "answer", "alice@test.com")
+
+    assert result.ok is True
+    mock_send.assert_called_once()
+    call_args = mock_send.call_args
+    assert call_args[0][0] == "my-project"  # project_slug extracted from thread_id
+
+
+@pytest.mark.asyncio
+async def test_answer_question_skips_relaunch_for_non_onboarding():
+    """thread_id='workflow-42', DB returns workflow_type='development' → no relaunch."""
+    from unittest.mock import patch, AsyncMock as _AM
+
+    qid = uuid.uuid4()
+    wf_row = make_record(workflow_type="development", project_slug="my-project")
+
+    with (
+        patch("services.hitl_service.fetch_one", new_callable=_AM, side_effect=[
+            make_record(id=qid, status="pending", thread_id="workflow-42", request_type="question"),
+            wf_row,
+        ]),
+        patch("services.hitl_service.execute", new_callable=_AM),
+        patch("services.analysis_service.send_free_message", new_callable=_AM) as mock_send,
+    ):
+        from services.hitl_service import answer_question
+        result = await answer_question(qid, "Done", "answer", "alice@test.com")
+
+    assert result.ok is True
+    mock_send.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_answer_question_skips_relaunch_for_approval():
+    """request_type='approval' → should NOT relaunch even if onboarding thread."""
+    from unittest.mock import patch, AsyncMock as _AM
+
+    qid = uuid.uuid4()
+
+    with (
+        patch("services.hitl_service.fetch_one", new_callable=_AM, return_value=make_record(
+            id=qid, status="pending", thread_id="onboarding-my-project", request_type="approval",
+        )),
+        patch("services.hitl_service.execute", new_callable=_AM),
+        patch("services.analysis_service.send_free_message", new_callable=_AM) as mock_send,
+    ):
+        from services.hitl_service import answer_question
+        result = await answer_question(qid, "approved", "approve", "alice@test.com")
+
+    assert result.ok is True
+    mock_send.assert_not_called()

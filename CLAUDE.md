@@ -62,6 +62,8 @@ web/                 → Dashboard admin (server.py + static/)
 - **Logs** : utiliser `logging.getLogger(__name__)`, pas de print()
 - **Prompts/messages** : jamais de texte utilisateur dans le code Python — les prompts vont dans `Shared/Models/{culture}/` ou `Shared/Prompts/{culture}/`, les messages i18n dans `messages.json`
 - **Règles Python** : voir @docs/python-dev-rules.md pour les règles détaillées (SOLID, classes, méthodes, récursivité, nommage)
+- **Tests** : voir @docs/tests-python.md pour les règles de couverture, quoi tester, quand tester
+- **SonarQube** : voir @docs/sonarQube.md — contrôle qualité automatique, sessions de correction sur demande explicite uniquement
 
 ## Utilisation des outils
 

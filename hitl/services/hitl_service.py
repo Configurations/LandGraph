@@ -137,8 +137,27 @@ async def answer_question(
     # Relaunch onboarding pipeline if this was an onboarding question (not an approval)
     thread_id = row["thread_id"] or ""
     request_type = row.get("request_type", "question")
-    if thread_id.startswith("onboarding-") and request_type != "approval":
+    # Detect onboarding by workflow-{id} thread format or legacy onboarding-{slug}
+    project_slug = ""
+    is_onboarding = False
+    if thread_id.startswith("workflow-"):
+        try:
+            wf_id = int(thread_id.replace("workflow-", ""))
+            wf_row = await fetch_one(
+                "SELECT workflow_type, project_slug FROM project.project_workflows WHERE id = $1",
+                wf_id,
+            )
+            if wf_row and wf_row["workflow_type"] == "onboarding":
+                is_onboarding = True
+                project_slug = wf_row["project_slug"]
+        except (ValueError, Exception):
+            pass
+    elif thread_id.startswith("onboarding-"):
+        # Legacy format
+        is_onboarding = True
         project_slug = thread_id.replace("onboarding-", "", 1)
+
+    if is_onboarding and project_slug and request_type != "approval":
         try:
             from services.analysis_service import send_free_message
             await send_free_message(project_slug, final_response, reviewer, skip_store=True)

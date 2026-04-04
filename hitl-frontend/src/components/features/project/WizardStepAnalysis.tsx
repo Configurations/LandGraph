@@ -26,7 +26,7 @@ export function WizardStepAnalysis({ className = '' }: WizardStepAnalysisProps):
 
   const {
     status, taskId, threadId, messages, pendingQuestion,
-    setStatus, setTaskId, setThreadId, addMessage, setMessages, setPendingQuestion, reset,
+    setStatus, setTaskId, setWorkflowId, setThreadId, addMessage, setMessages, setPendingQuestion, reset,
   } = useAnalysisStore();
 
   const wsConnected = useWsStore((s) => s.connected);
@@ -36,9 +36,16 @@ export function WizardStepAnalysis({ className = '' }: WizardStepAnalysisProps):
   useEffect(() => {
     if (!slug) return;
     reset();
-    setThreadId(`${THREAD_PREFIX}${slug}`);
 
     analysisApi.getStatus(slug).then((res) => {
+      // Set thread ID from workflow_id if available, fallback to legacy
+      if (res.workflow_id) {
+        setWorkflowId(res.workflow_id);
+        setThreadId(`workflow-${res.workflow_id}`);
+      } else {
+        setThreadId(`${THREAD_PREFIX}${slug}`);
+      }
+
       if (res.status === 'not_started') {
         setStatus('idle');
       } else {

@@ -561,4 +561,7 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='project' AND table_name='project_workflows' AND column_name='team_id') THEN
         ALTER TABLE project.project_workflows ADD COLUMN team_id TEXT NOT NULL DEFAULT '';
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='project' AND table_name='pm_projects' AND column_name='onboarding_workflow_id') THEN
+        ALTER TABLE project.pm_projects ADD COLUMN onboarding_workflow_id INTEGER REFERENCES project.project_workflows(id);
+    END IF;
 END $$;
