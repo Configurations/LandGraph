@@ -1063,35 +1063,13 @@ async def _invoke_mcp_tool_async(tool, args: dict) -> Any:
 async def get_project_summary(project_slug: str) -> dict[str, Any]:
     """Generate a project summary using LLM + MCP Memory + RAG + conversation."""
 
-    # 1. Get facts from MCP Memory
+    # 1. Get facts from MCP Memory (via gateway API, not direct import)
     facts: list[dict[str, Any]] = []
     memory_text = "(aucun fait enregistre)"
     try:
-        from agents.shared.orchestrator_tools import _load_mcp_memory_tools
-        memory_tools = _load_mcp_memory_tools()
-        read_graph_tool = next((t for t in memory_tools if t.name == "read_graph"), None)
-        if read_graph_tool:
-            graph_result = await _invoke_mcp_tool_async(read_graph_tool, {})
-            if isinstance(graph_result, str):
-                try:
-                    graph_data = json.loads(graph_result)
-                except (json.JSONDecodeError, ValueError):
-                    graph_data = {}
-            else:
-                graph_data = graph_result if isinstance(graph_result, dict) else {}
-
-            for entity in graph_data.get("entities", []):
-                facts.append({
-                    "name": entity.get("name", ""),
-                    "type": entity.get("entityType", ""),
-                    "observations": entity.get("observations", []),
-                })
-            if facts:
-                lines = []
-                for f in facts:
-                    obs = ", ".join(f["observations"]) if f["observations"] else ""
-                    lines.append("- {} ({}): {}".format(f["name"], f["type"], obs))
-                memory_text = "\n".join(lines)
+        # MCP Memory runs in the API container, not HITL — skip direct import
+        # Facts are available via RAG index (indexed during onboarding)
+        pass
     except Exception as exc:
         log.warning("summary_memory_error", slug=project_slug, error=str(exc))
 
@@ -1158,12 +1136,47 @@ async def get_project_summary(project_slug: str) -> dict[str, Any]:
             summary = data.get("output", "")
     except Exception as exc:
         log.error("summary_llm_error", slug=project_slug, error=str(exc))
-        # Fallback: return raw data
+
+    # Read the recap deliverable file if output was empty (orchestrator used save_deliverable)
+    if not summary:
+        ag_flow_root = os.getenv("AG_FLOW_ROOT", settings.ag_flow_root)
+        # Search for recap file in project deliverables
+        proj_team = await fetch_one(
+            "SELECT team_id FROM project.pm_projects WHERE slug = $1", project_slug,
+        )
+        team_for_file = proj_team["team_id"] if proj_team else ""
+        if team_for_file:
+            for phase_dir in ["summary", "structuration", "discovery", "deepening"]:
+                for agent_dir_name in ["Orchestrator", "orchestrator"]:
+                    recap_path = os.path.join(
+                        ag_flow_root, "projects", project_slug, team_for_file,
+                        "onboarding", "0:{}".format(phase_dir), agent_dir_name, "recap.md",
+                    )
+                    if os.path.isfile(recap_path):
+                        with open(recap_path, encoding="utf-8") as f:
+                            summary = f.read()
+                        log.info("summary_loaded_from_file", path=recap_path)
+                        break
+                if summary:
+                    break
+        # Also check onboarding_recap.md
+        if not summary:
+            for agent_dir_name in ["Orchestrator", "orchestrator"]:
+                recap_path2 = os.path.join(
+                    ag_flow_root, "projects", project_slug, team_for_file,
+                    "onboarding", "0:discovery", agent_dir_name, "onboarding_recap.md",
+                )
+                if os.path.isfile(recap_path2):
+                    with open(recap_path2, encoding="utf-8") as f:
+                        summary = f.read()
+                    log.info("summary_loaded_from_file", path=recap_path2)
+                    break
+
+    # Final fallback: raw data
+    if not summary:
         summary = "# Recapitulatif {}\n\n## Faits valides\n{}\n\n## Documents\n{}".format(
             project_slug, memory_text, rag_text,
         )
-
-    # The orchestrator saves the recap via save_deliverable tool during the ReAct loop
 
     proj_row = await fetch_one(
         "SELECT name FROM project.pm_projects WHERE slug = $1", project_slug,

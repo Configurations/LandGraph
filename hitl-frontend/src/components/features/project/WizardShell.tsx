@@ -184,7 +184,7 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
   }, [wizardStep, setWizardStep]);
 
   return (
-    <div className={`flex flex-col ${className}`}>
+    <div className={`flex flex-col h-[calc(100vh-5rem)] ${className}`}>
       <Stepper steps={steps} activeStep={wizardStep} onStepClick={setWizardStep} />
 
       <div className="flex-1 overflow-y-auto min-h-0 py-4">
@@ -211,7 +211,7 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
 
       {error && <p className="text-xs text-accent-red">{error}</p>}
 
-      <div className="sticky bottom-0 flex items-center justify-between border-t border-border px-4 py-4 bg-surface-secondary">
+      <div className="flex-shrink-0 flex items-center justify-between border-t border-border px-4 py-3 bg-surface-secondary">
         <Button variant="ghost" onClick={handlePrevious} disabled={wizardStep === 0}>
           {t('wizard.previous')}
         </Button>
@@ -222,7 +222,7 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
             </Button>
           )}
           <Button onClick={() => void handleNext()} disabled={!canAdvance} loading={creating}>
-            {wizardStep === 2 && !completed.has(2) ? t('project.create') : wizardStep === STEP_KEYS.length - 1 ? t('wizard.finalize') : t('wizard.next')}
+            {wizardStep === STEP_KEYS.length - 1 ? t('wizard.finalize') : t('wizard.next')}
           </Button>
         </div>
       </div>

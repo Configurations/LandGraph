@@ -475,6 +475,7 @@ END $$;
 CREATE TABLE IF NOT EXISTS project.project_workflows (
     id SERIAL PRIMARY KEY,
     project_slug TEXT NOT NULL,
+    team_id TEXT NOT NULL DEFAULT '',
     workflow_name TEXT NOT NULL,
     workflow_type TEXT NOT NULL DEFAULT 'custom'
         CHECK (workflow_type IN ('onboarding', 'development', 'audit', 'evolution', 'custom')),
@@ -524,5 +525,40 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='project' AND table_name='hitl_requests' AND column_name='workflow_id') THEN
         ALTER TABLE project.hitl_requests ADD COLUMN workflow_id INTEGER REFERENCES project.project_workflows(id);
+    END IF;
+END $$;
+
+-- ── Workflow phases tracking ──
+CREATE TABLE IF NOT EXISTS project.workflow_phases (
+    id SERIAL PRIMARY KEY,
+    workflow_id INTEGER NOT NULL REFERENCES project.project_workflows(id),
+    phase_key TEXT NOT NULL,
+    phase_name TEXT,
+    group_key TEXT DEFAULT 'A',
+    phase_order INTEGER DEFAULT 0,
+    group_order INTEGER DEFAULT 0,
+    iteration INTEGER DEFAULT 1,
+    depends_on_workflow_id INTEGER REFERENCES project.project_workflows(id),
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'running', 'completed', 'failed')),
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_wf_phases_wf ON project.workflow_phases(workflow_id);
+CREATE INDEX IF NOT EXISTS idx_wf_phases_status ON project.workflow_phases(workflow_id, status);
+
+-- Add current_phase_id and phase_id columns
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='project' AND table_name='project_workflows' AND column_name='current_phase_id') THEN
+        ALTER TABLE project.project_workflows ADD COLUMN current_phase_id INTEGER REFERENCES project.workflow_phases(id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='project' AND table_name='dispatcher_tasks' AND column_name='phase_id') THEN
+        ALTER TABLE project.dispatcher_tasks ADD COLUMN phase_id INTEGER REFERENCES project.workflow_phases(id);
+        CREATE INDEX idx_disp_tasks_phase ON project.dispatcher_tasks(phase_id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='project' AND table_name='project_workflows' AND column_name='team_id') THEN
+        ALTER TABLE project.project_workflows ADD COLUMN team_id TEXT NOT NULL DEFAULT '';
     END IF;
 END $$;

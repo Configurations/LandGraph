@@ -214,7 +214,7 @@ export function WizardStepAnalysis({ className = '' }: WizardStepAnalysisProps):
   })();
 
   return (
-    <div className={`flex flex-col max-w-5xl h-[calc(100vh-12rem)] ${className}`}>
+    <div className={`flex flex-col max-w-5xl h-full ${className}`}>
       <h3 className="text-sm font-semibold text-content-primary mb-2">{t('analysis.title')}</h3>
 
       {status === 'idle' && (

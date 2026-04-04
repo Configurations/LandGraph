@@ -60,6 +60,8 @@ web/                 → Dashboard admin (server.py + static/)
 - **State** : tout le state LangGraph passe par `state.py`, pas de globals
 - **Imports** : les modules shared s'importent avec `from agents.shared.xxx import ...`
 - **Logs** : utiliser `logging.getLogger(__name__)`, pas de print()
+- **Prompts/messages** : jamais de texte utilisateur dans le code Python — les prompts vont dans `Shared/Models/{culture}/` ou `Shared/Prompts/{culture}/`, les messages i18n dans `messages.json`
+- **Règles Python** : voir @docs/python-dev-rules.md pour les règles détaillées (SOLID, classes, méthodes, récursivité, nommage)
 
 ## Utilisation des outils
 
@@ -115,12 +117,14 @@ web/                 → Dashboard admin (server.py + static/)
 - **Refactor cross-module / nouveau système** : analyse les fichiers concernés, propose un plan détaillé avec la liste des fichiers à modifier, attends ma validation
 - **Doute sur l'intention ou le scope** : demande une clarification AVANT de planifier
 
-### Règle fondamentale : conversation d'abord, code ensuite
-- **Ne commence JAMAIS à coder tant que je n'ai pas explicitement validé le plan ou donné un feu vert**
-- Si je pose une question, je veux une réponse — pas du code. On discute d'abord, on code quand on est alignés
-- Si je décris un problème ou une idée, c'est une discussion, pas une commande d'exécution
-- Demande "On est bons ? Je code ?" avant de passer à l'implémentation
-- Le seul cas où tu codes directement : un fix mineur évident (typo, une ligne) ou si je dis explicitement "fais-le" / "vas-y" / "code"
+### Règle fondamentale : suivre le cycle de l'architecte
+L'utilisateur est architecte. Son mode de fonctionnement est : **Cadrer → Comprendre → Planifier → Agir**.
+- **Cadrer** : quand il pose une question ou soulève un sujet, c'est du cadrage. Répondre à la question, pas coder.
+- **Comprendre** : quand il creuse un sujet, c'est de la compréhension. Expliquer, proposer des options, discuter.
+- **Planifier** : quand il valide la direction, on fait le plan ensemble. Proposer, attendre sa validation.
+- **Agir** : quand il dit "fais-le" / "vas-y" / "code" / "implémente" / "déploie", là on code.
+
+**Ne JAMAIS sauter d'étape.** Une question n'est pas une commande d'exécution. Une discussion n'est pas un feu vert. Si tu as un doute sur l'étape en cours, demande.
 
 ### Vérification avant validation
 Avant de déclarer une tâche terminée, **toutes** ces étapes sont obligatoires, quelle que soit la taille du changement :
