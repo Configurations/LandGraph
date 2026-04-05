@@ -184,7 +184,7 @@ export function WizardShell({ className = '' }: WizardShellProps): JSX.Element {
   }, [wizardStep, setWizardStep]);
 
   return (
-    <div className={`flex flex-col h-[calc(100vh-5rem)] ${className}`}>
+    <div className={`flex flex-col ${className}`}>
       <Stepper steps={steps} activeStep={wizardStep} onStepClick={setWizardStep} />
 
       <div className="flex-1 overflow-y-auto min-h-0 py-4">

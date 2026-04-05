@@ -244,6 +244,31 @@ async function reloadGatewayConfig() {
   }
 }
 
+async function downloadBackup(btn) {
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '&#9203; Backup...';
+  try {
+    const resp = await fetch('/api/backup');
+    if (!resp.ok) throw new Error('Erreur ' + resp.status);
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = resp.headers.get('Content-Disposition')?.split('filename=')[1] || 'backup.zip';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast('Backup telecharge', 'success');
+  } catch (e) {
+    toast('Erreur backup: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = orig;
+  }
+}
+
 // ── Modal helpers ──────────────────────────────────
 function showModal(html, cssClass = '') {
   document.getElementById('modal-container').innerHTML = `
@@ -5416,18 +5441,19 @@ function _dfRender(scope) {
         '<button class="btn btn-outline btn-sm" onclick="dfDelete(\'' + scope + '\',' + s.sel + ')" style="align-self:flex-end;margin-bottom:2px;color:#ef4444;border-color:#ef4444">Supprimer</button>' +
       '</div>' +
       '<div class="prompt-tabs" style="margin-bottom:0.5rem">' +
-        '<div class="prompt-tab' + (isDockerTab ? ' active' : '') + '" onclick="_dfScopes.' + scope + '.tab=\'dockerfile\';_dfRender(\'' + scope + '\')">Dockerfile</div>' +
-        '<div class="prompt-tab' + (!isDockerTab ? ' active' : '') + '" onclick="_dfScopes.' + scope + '.tab=\'entrypoint\';_dfRender(\'' + scope + '\')">Entrypoint</div>' +
+        '<div class="prompt-tab' + (s.tab === 'dockerfile' ? ' active' : '') + '" onclick="_dfScopes.' + scope + '.tab=\'dockerfile\';_dfRender(\'' + scope + '\')">Dockerfile</div>' +
+        '<div class="prompt-tab' + (s.tab === 'entrypoint' ? ' active' : '') + '" onclick="_dfScopes.' + scope + '.tab=\'entrypoint\';_dfRender(\'' + scope + '\')">Entrypoint</div>' +
+        '<div class="prompt-tab' + (s.tab === 'run' ? ' active' : '') + '" onclick="_dfScopes.' + scope + '.tab=\'run\';_dfRender(\'' + scope + '\')">Run</div>' +
       '</div>' +
       '<div id="' + cmId + '" style="flex:1;min-height:300px;border:1px solid var(--border);border-radius:4px;overflow:hidden"></div>';
     const cmEl = document.getElementById(cmId);
     if (cmEl && typeof CodeMirror !== 'undefined') {
-      const mode = isDockerTab ? 'dockerfile' : 'shell';
-      const val = isDockerTab ? (p.content || '') : (p.entrypoint_content || '');
+      const mode = s.tab === 'dockerfile' ? 'dockerfile' : s.tab === 'run' ? 'text/plain' : 'shell';
+      const val = s.tab === 'dockerfile' ? (p.content || '') : s.tab === 'run' ? (p.run_content || '') : (p.entrypoint_content || '');
       const cm = CodeMirror(cmEl, { value: val, mode, theme: 'material-darker', lineNumbers: true, lineWrapping: true, tabSize: 2, indentWithTabs: false });
       cm.setSize('100%', '100%');
       const sel = s.sel;
-      const key = isDockerTab ? 'content' : 'entrypoint_content';
+      const key = s.tab === 'dockerfile' ? 'content' : s.tab === 'run' ? 'run_content' : 'entrypoint_content';
       cm.on('change', () => { s.files[sel][key] = cm.getValue(); s.dirty[sel] = true; _dfRenderList(scope); });
       window['_dfCM_' + scope] = cm;
     }
@@ -5474,13 +5500,13 @@ async function dfSave(scope) {
   if (!p) return;
   const name = (document.getElementById(scope + '-dockerfile-name')?.value || p.name).trim();
   const cm = window['_dfCM_' + scope];
-  if (cm) { const t = cm.getValue(); if (s.tab === 'dockerfile') p.content = t; else p.entrypoint_content = t; }
+  if (cm) { const t = cm.getValue(); if (s.tab === 'dockerfile') p.content = t; else if (s.tab === 'run') p.run_content = t; else p.entrypoint_content = t; }
   if (!name) { toast('Nom requis', 'error'); return; }
   try {
-    await api(s.api + '/' + encodeURIComponent(name), { method: 'PUT', body: { content: p.content || '', entrypoint_content: p.entrypoint_content || '' } });
+    await api(s.api + '/' + encodeURIComponent(name), { method: 'PUT', body: { content: p.content || '', entrypoint_content: p.entrypoint_content || '', run_content: p.run_content || '' } });
     p.name = name; delete p._new; delete s.dirty[s.sel];
     _dfRender(scope);
-    toast((s.tab === 'entrypoint' ? 'Entrypoint' : 'Dockerfile') + ' sauvegarde', 'success');
+    toast((s.tab === 'run' ? 'Run' : s.tab === 'entrypoint' ? 'Entrypoint' : 'Dockerfile') + ' sauvegarde', 'success');
   } catch (e) { toast('Erreur: ' + e.message, 'error'); }
 }
 
@@ -5590,7 +5616,7 @@ async function _execCopyDockerfiles() {
     for (const f of tplFiles) {
       if (!selected.has(f.name)) continue;
       await api('/api/dockerfiles/' + encodeURIComponent(f.name), {
-        method: 'PUT', body: { content: f.content || '', entrypoint_content: f.entrypoint_content || '' }
+        method: 'PUT', body: { content: f.content || '', entrypoint_content: f.entrypoint_content || '', run_content: f.run_content || '' }
       });
       count++;
     }
@@ -5854,19 +5880,19 @@ function _renderSaLeft() {
       // Roles
       html += '<div class="sa-section-title">\uD83D\uDCCB Roles</div>';
       for (const r of (saAgentData.roles || [])) {
-        html += _saSubItem('role:' + r.name, r.name, sec);
+        html += _saSubItem('role:' + r.name, r.name, sec, r.locked);
       }
       html += '<div class="sa-add-item" onclick="_saAddDynamic(\'role\')">+ Ajouter</div>';
       // Missions
       html += '<div class="sa-section-title">\uD83C\uDFAF Missions</div>';
       for (const m of (saAgentData.missions || [])) {
-        html += _saSubItem('mission:' + m.name, m.name, sec);
+        html += _saSubItem('mission:' + m.name, m.name, sec, m.locked);
       }
       html += '<div class="sa-add-item" onclick="_saAddDynamic(\'mission\')">+ Ajouter</div>';
       // Skills
       html += '<div class="sa-section-title">\uD83E\uDDE0 Competences</div>';
       for (const s of (saAgentData.skills || [])) {
-        html += _saSubItem('skill:' + s.name, s.name, sec);
+        html += _saSubItem('skill:' + s.name, s.name, sec, s.locked);
       }
       html += '<div class="sa-add-item" onclick="_saAddDynamic(\'skill\')">+ Ajouter</div>';
     }
@@ -5881,14 +5907,32 @@ function _saMenuItem(key, icon, label, active) {
   return '<div class="sa-menu-item' + (active === key ? ' active' : '') + dirty + '" onclick="_saSetSection(\'' + key + '\')">' + icon + ' ' + escHtml(label) + '</div>';
 }
 
-function _saSubItem(key, label, active) {
+function _saSubItem(key, label, active, locked) {
   const type = key.split(':')[0];
   const name = key.split(':').slice(1).join(':');
   const dirty = _saDirty[key] ? ' dirty' : '';
+  const lockIcon = locked ? '\uD83D\uDD12' : '\uD83D\uDD13';
+  const lockTitle = locked ? 'Deverrouiller' : 'Verrouiller';
+  const lockStyle = locked ? 'opacity:1;color:#f59e0b' : 'opacity:0.3';
   return '<div class="sa-sub-item' + (active === key ? ' active' : '') + dirty + '" onclick="_saSetSection(\'' + escHtml(key) + '\')">' +
-    '<span>' + escHtml(label) + '</span>' +
-    '<span class="sa-sub-delete" onclick="event.stopPropagation();_saDeleteDynamic(\'' + type + '\',\'' + escHtml(name) + '\')" title="Supprimer">\u2716</span>' +
+    '<span>' + (locked ? '\uD83D\uDD12 ' : '') + escHtml(label) + '</span>' +
+    '<span style="display:flex;gap:0.3rem;align-items:center">' +
+      '<span class="sa-sub-lock" onclick="event.stopPropagation();_saToggleLock(\'' + type + '\',\'' + escHtml(name) + '\',' + (locked ? 'true' : 'false') + ')" title="' + lockTitle + '" style="cursor:pointer;font-size:0.7rem;' + lockStyle + '">' + lockIcon + '</span>' +
+      (locked ? '' : '<span class="sa-sub-delete" onclick="event.stopPropagation();_saDeleteDynamic(\'' + type + '\',\'' + escHtml(name) + '\')" title="Supprimer">\u2716</span>') +
+    '</span>' +
     '</div>';
+}
+
+async function _saToggleLock(type, name, isLocked) {
+  var filename = type + '_' + name + (isLocked ? '.md_' : '.md');
+  var action = isLocked ? 'unlock' : 'lock';
+  try {
+    await api('/api/shared-agents/' + encodeURIComponent(saSelectedId) + '/' + action + '/' + encodeURIComponent(filename), { method: 'POST' });
+    toast(name + (isLocked ? ' deverrouille' : ' verrouille'), 'success');
+    await selectSharedAgent(saSelectedId);
+  } catch (e) {
+    toast(e.message || 'Erreur', 'error');
+  }
 }
 
 function _saSetSection(section) {
@@ -5950,8 +5994,9 @@ function _renderSaRight() {
   else { right.innerHTML = ''; return; }
   const item = list.find(i => i.name === name);
   const content = item ? item.content : '';
+  const isLocked = item ? !!item.locked : false;
   const filename = prefix + name;
-  right.innerHTML = _renderSaDynamicEditor(type, name, content, filename);
+  right.innerHTML = _renderSaDynamicEditor(type, name, content, filename, isLocked);
   _saBindMdDirty(sec, content);
 }
 
@@ -6224,10 +6269,13 @@ function _renderSaMdEditor(title, content, saveFn, hasGenerate) {
     '<textarea id="sa-md-editor">' + escHtml(content) + '</textarea></div>';
 }
 
-function _renderSaDynamicEditor(type, name, content, filename) {
+function _renderSaDynamicEditor(type, name, content, filename, locked) {
   const typeLabels = { role: 'Role', mission: 'Mission', skill: 'Competence' };
-  return '<div class="sa-editor-wrap"><div class="sa-right-header"><h3>' + (typeLabels[type] || type) + ' — ' + escHtml(name) + '</h3><button class="btn btn-primary btn-sm" onclick="_saSaveDynamic(\'' + escHtml(filename) + '\')">Sauvegarder</button></div>' +
-    '<textarea id="sa-dyn-editor">' + escHtml(content) + '</textarea></div>';
+  const lockBadge = locked ? ' <span style="color:#f59e0b;font-size:0.75rem">\uD83D\uDD12 verrouille</span>' : '';
+  const saveBtn = locked ? '' : '<button class="btn btn-primary btn-sm" onclick="_saSaveDynamic(\'' + escHtml(filename) + '\')">Sauvegarder</button>';
+  const readonlyAttr = locked ? ' readonly style="opacity:0.7;cursor:not-allowed;background:var(--surface-tertiary)"' : '';
+  return '<div class="sa-editor-wrap"><div class="sa-right-header"><h3>' + (typeLabels[type] || type) + ' — ' + escHtml(name) + lockBadge + '</h3>' + saveBtn + '</div>' +
+    '<textarea id="sa-dyn-editor"' + readonlyAttr + '>' + escHtml(content) + '</textarea></div>';
 }
 
 // ── Save functions ──
@@ -7695,7 +7743,7 @@ async function editTplAgent(dir, agentId) {
     <div class="prompt-tabs" style="margin-bottom:0.5rem">
       <div class="prompt-tab active" id="tpl-modal-tab-info" onclick="switchTplModalTab('info')">Identite</div>
       <div class="prompt-tab" id="tpl-modal-tab-prompt" onclick="switchTplModalTab('prompt')">Prompt</div>
-      ${curType === 'manager' ? `<div class="prompt-tab" id="tpl-modal-tab-manager" onclick="switchTplModalTab('manager')">Manager</div>` : ''}
+      <div class="prompt-tab" id="tpl-modal-tab-manager" onclick="switchTplModalTab('manager')" style="${curType === 'manager' ? '' : 'display:none'}">Manager</div>
     </div>
     <div id="tpl-modal-pane-info">
       <div class="form-row">
@@ -10482,12 +10530,28 @@ async function wfSave() {
     if (warnings.length > 0) {
       if (!confirm('Avertissements :\n\n' + warnings.map(w => '- ' + w).join('\n') + '\n\nSauvegarder quand meme ?')) return;
     }
-    await Promise.all([
+    var [wfResult] = await Promise.all([
       api(`${_wf.apiBase}/${encodeURIComponent(_wf.dir)}`, { method: 'PUT', body: _wf.data }),
       api(`${_wf.designBase}/${encodeURIComponent(_wf.dir)}`, { method: 'PUT', body: { positions: _wf.positions } })
     ]);
     if (_wf) _wf._savedSnapshot = JSON.stringify(_wf.data);
-    toast('Workflow sauvegarde', 'success');
+    var serverWarnings = (wfResult && wfResult.warnings) || [];
+    if (serverWarnings.length > 0) {
+      showModal(`
+        <div class="modal-header">
+          <h3>Workflow sauvegarde avec avertissements</h3>
+          <button class="btn-icon" onclick="closeModal()">&times;</button>
+        </div>
+        <div style="max-height:400px;overflow:auto;padding:1rem;background:var(--bg-secondary);border-radius:0.5rem">
+          <ul style="margin:0;padding-left:1.2rem;font-size:0.85rem;color:var(--text-error,#f87171)">${serverWarnings.map(w => '<li>' + escHtml(w) + '</li>').join('')}</ul>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-outline" onclick="closeModal()">Fermer</button>
+        </div>
+      `);
+    } else {
+      toast('Workflow sauvegarde', 'success');
+    }
   } catch (e) { toast(e.message, 'error'); }
 }
 

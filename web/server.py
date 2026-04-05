@@ -973,7 +973,7 @@ def _generate_phase_files(workflow_data: dict, workflow_filename: str, output_di
     culture = os.getenv("CULTURE", "fr-fr")
     template_path = SHARED_DIR / "Models" / culture / "prompt-phase-orchestrator.md"
     if not template_path.exists():
-        raise HTTPException(400, f"Template introuvable : {template_path.relative_to(SHARED_DIR)}")
+        return [f"Template introuvable : Models/{culture}/prompt-phase-orchestrator.md — creez-le dans l'onglet Models"]
     template = template_path.read_text(encoding="utf-8")
     errors = []
     generated = 0
@@ -1054,23 +1054,41 @@ def _generate_phase_files(workflow_data: dict, workflow_filename: str, output_di
                     if not agent_id:
                         continue
                     agent_dir = SHARED_AGENTS_DIR / agent_id
-                    # Clean roles/missions/skills: remove items without matching files
-                    d["roles"] = [r for r in d.get("roles", []) if (agent_dir / f"role_{r}.md").exists()]
-                    d["missions"] = [m for m in d.get("missions", []) if (agent_dir / f"mission_{m}.md").exists()]
-                    d["skills"] = [s for s in d.get("skills", []) if (agent_dir / f"skill_{s}.md").exists()]
+                    # Resolve .md or .md_ (locked) files
+                    def _resolve_md(directory, name):
+                        p = directory / f"{name}.md"
+                        if p.exists():
+                            return p
+                        p_ = directory / f"{name}.md_"
+                        return p_ if p_.exists() else None
+                    # Check roles/missions/skills: warn on missing files
+                    d_label = d.get("Name") or d.get("name") or d.get("id", "?")
+                    ctx = f"Phase '{phase_name}' / Groupe {group_id} / Livrable '{d_label}'"
+                    for r in d.get("roles", []):
+                        if not _resolve_md(agent_dir, f"role_{r}"):
+                            errors.append(f"{ctx} : role '{r}' introuvable pour {agent_id}")
+                    for m in d.get("missions", []):
+                        if not _resolve_md(agent_dir, f"mission_{m}"):
+                            errors.append(f"{ctx} : mission '{m}' introuvable pour {agent_id}")
+                    for s in d.get("skills", []):
+                        if not _resolve_md(agent_dir, f"skill_{s}"):
+                            errors.append(f"{ctx} : skill '{s}' introuvable pour {agent_id}")
+                    d["roles"] = [r for r in d.get("roles", []) if _resolve_md(agent_dir, f"role_{r}")]
+                    d["missions"] = [m for m in d.get("missions", []) if _resolve_md(agent_dir, f"mission_{m}")]
+                    d["skills"] = [s for s in d.get("skills", []) if _resolve_md(agent_dir, f"skill_{s}")]
                     # Build {agent_card}: identity + roles + missions + skills
                     card_parts = []
-                    identity_path = agent_dir / "identity.md"
-                    if not identity_path.exists():
+                    identity_path = _resolve_md(agent_dir, "identity")
+                    if not identity_path:
                         errors.append(f"Fichier manquant : Shared/Agents/{agent_id}/identity.md")
                     else:
                         card_parts.append(identity_path.read_text(encoding="utf-8"))
                     for r in d["roles"]:
-                        card_parts.append((agent_dir / f"role_{r}.md").read_text(encoding="utf-8"))
+                        card_parts.append(_resolve_md(agent_dir, f"role_{r}").read_text(encoding="utf-8"))
                     for m in d["missions"]:
-                        card_parts.append((agent_dir / f"mission_{m}.md").read_text(encoding="utf-8"))
+                        card_parts.append(_resolve_md(agent_dir, f"mission_{m}").read_text(encoding="utf-8"))
                     for s in d["skills"]:
-                        card_parts.append((agent_dir / f"skill_{s}.md").read_text(encoding="utf-8"))
+                        card_parts.append(_resolve_md(agent_dir, f"skill_{s}").read_text(encoding="utf-8"))
                     agent_card = "\n\n".join(card_parts) if card_parts else "(aucune carte agent)"
                     deliverable_content = f"## {d_name}\n{d_desc}"
                     # Resolve template
@@ -1080,9 +1098,8 @@ def _generate_phase_files(workflow_data: dict, workflow_filename: str, output_di
                     fname = f"{livr_prefix}{phase_id}.{group_id}.{d_id}.{agent_id}.md"
                     (output_dir / fname).write_text(out, encoding="utf-8")
                     generated += 1
-    if errors:
-        raise HTTPException(400, "\n".join(errors))
-    _log.info("Generated %d phase files in %s", generated, output_dir)
+    _log.info("Generated %d phase files in %s (%d warnings)", generated, output_dir, len(errors))
+    return errors
 
 
 # ── Orchestrator prompt generation per group ──────
@@ -1571,7 +1588,10 @@ def _list_shared_agents() -> list[dict]:
                 cfg["mission_names"] = []
                 cfg["skill_names"] = []
                 for f in sorted(d.iterdir()):
-                    if not f.is_file() or f.suffix != ".md":
+                    if not f.is_file():
+                        continue
+                    locked = f.suffix == ".md_"
+                    if f.suffix not in (".md", ".md_"):
                         continue
                     stem = f.stem
                     if stem.startswith("role_"):
@@ -1604,7 +1624,7 @@ def _list_agents(base_dir: Path) -> list[dict]:
                 cfg["mission_names"] = []
                 cfg["skill_names"] = []
                 for f in sorted(d.iterdir()):
-                    if not f.is_file() or f.suffix != ".md":
+                    if not f.is_file() or f.suffix not in (".md", ".md_"):
                         continue
                     stem = f.stem
                     if stem.startswith("role_"):
@@ -1631,17 +1651,24 @@ def _get_agent_detail(base_dir: Path, agent_id: str) -> dict:
     cfg["roles"] = []
     cfg["missions"] = []
     cfg["skills"] = []
+    # Also check identity lock
+    cfg["identity_locked"] = (agent_dir / "identity.md_").exists()
+    if cfg["identity_locked"] and not cfg.get("identity_content"):
+        cfg["identity_content"] = (agent_dir / "identity.md_").read_text(encoding="utf-8")
     if agent_dir.exists():
         for f in sorted(agent_dir.iterdir()):
-            if not f.is_file() or f.suffix != ".md":
+            if not f.is_file():
+                continue
+            locked = f.suffix == ".md_"
+            if f.suffix not in (".md", ".md_"):
                 continue
             stem = f.stem
             if stem.startswith("role_"):
-                cfg["roles"].append({"name": stem[5:], "content": f.read_text(encoding="utf-8")})
+                cfg["roles"].append({"name": stem[5:], "content": f.read_text(encoding="utf-8"), "locked": locked})
             elif stem.startswith("mission_"):
-                cfg["missions"].append({"name": stem[8:], "content": f.read_text(encoding="utf-8")})
+                cfg["missions"].append({"name": stem[8:], "content": f.read_text(encoding="utf-8"), "locked": locked})
             elif stem.startswith("skill_"):
-                cfg["skills"].append({"name": stem[6:], "content": f.read_text(encoding="utf-8")})
+                cfg["skills"].append({"name": stem[6:], "content": f.read_text(encoding="utf-8"), "locked": locked})
     return cfg
 
 
@@ -1775,6 +1802,35 @@ async def put_shared_agent_file(agent_id: str, filename: str, request: Request):
 async def delete_shared_agent_file(agent_id: str, filename: str):
     r = _delete_agent_file(SHARED_AGENTS_DIR, agent_id, filename)
     return {"ok": True}
+
+
+@app.post("/api/shared-agents/{agent_id}/lock/{filename}")
+async def lock_shared_agent_file(agent_id: str, filename: str):
+    """Lock a file by renaming .md → .md_ (invisible to chat LLM)."""
+    agent_dir = SHARED_AGENTS_DIR / agent_id
+    src = agent_dir / filename
+    if not src.exists():
+        raise HTTPException(404, "Fichier introuvable")
+    if not filename.endswith(".md"):
+        raise HTTPException(400, "Seuls les fichiers .md peuvent etre verrouilles")
+    dst = agent_dir / (filename + "_")
+    src.rename(dst)
+    return {"ok": True, "locked": True, "new_name": dst.name}
+
+
+@app.post("/api/shared-agents/{agent_id}/unlock/{filename}")
+async def unlock_shared_agent_file(agent_id: str, filename: str):
+    """Unlock a file by renaming .md_ → .md."""
+    agent_dir = SHARED_AGENTS_DIR / agent_id
+    src = agent_dir / filename
+    if not src.exists():
+        raise HTTPException(404, "Fichier introuvable")
+    if not filename.endswith(".md_"):
+        raise HTTPException(400, "Ce fichier n'est pas verrouille")
+    dst = agent_dir / filename[:-1]  # remove trailing _
+    src.rename(dst)
+    return {"ok": True, "locked": False, "new_name": dst.name}
+
 
 def _parse_chat_blocks(raw: str) -> dict:
     """Parse structured XML blocks from LLM chat response."""
@@ -2207,6 +2263,32 @@ def _zip_directory(dir_path: Path) -> io.BytesIO:
                 zf.write(file, arcname)
     buf.seek(0)
     return buf
+
+
+_BACKUP_EXCLUDE = {'.git', '__pycache__', 'node_modules', '.pytest_cache', '*.egg-info', '.claude'}
+
+
+@app.get("/api/backup")
+async def backup_project():
+    """Archive the entire project directory as a downloadable zip."""
+    src = PROJECT_DIR if DOCKER_MODE else GIT_DIR
+    if not src.exists():
+        raise HTTPException(404, "Project directory not found")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for file in sorted(src.rglob('*')):
+            if not file.is_file():
+                continue
+            if any(part in _BACKUP_EXCLUDE for part in file.relative_to(src).parts):
+                continue
+            zf.write(file, file.relative_to(src))
+    buf.seek(0)
+    ts = datetime.now().strftime("%Y%m%d-%H%M")
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename=langgraph-backup-{ts}.zip"},
+    )
 
 
 @app.get("/api/export/shared")
@@ -3284,6 +3366,8 @@ def _list_dockerfiles(base_dir: Path) -> list:
             ep_path = base_dir / f"entrypoint.{label}.sh"
             df_content = f.read_text(encoding="utf-8")
             ep_content = ep_path.read_text(encoding="utf-8") if ep_path.exists() else ""
+            run_path = base_dir / f"run.{label}.md"
+            run_content = run_path.read_text(encoding="utf-8") if run_path.exists() else ""
             content_hash = hashlib.sha256((df_content + ep_content).encode("utf-8")).hexdigest()[:8]
             image_tag = f"agflow-{label.lower()}:{content_hash}"
             try:
@@ -3291,7 +3375,7 @@ def _list_dockerfiles(base_dir: Path) -> list:
                 image_built = r.returncode == 0
             except Exception:
                 image_built = False
-            files.append({"name": f.name, "content": df_content, "entrypoint_name": f"entrypoint.{label}.sh", "entrypoint_content": ep_content, "image_tag": image_tag, "image_built": image_built})
+            files.append({"name": f.name, "content": df_content, "entrypoint_name": f"entrypoint.{label}.sh", "entrypoint_content": ep_content, "run_name": f"run.{label}.md", "run_content": run_content, "image_tag": image_tag, "image_built": image_built})
     return files
 
 
@@ -3306,6 +3390,7 @@ def _get_dockerfile(base_dir: Path, name: str) -> dict:
 class DockerfileUpdate(BaseModel):
     content: str
     entrypoint_content: str | None = None
+    run_content: str | None = None
 
 
 def _put_dockerfile(base_dir: Path, name: str, body: DockerfileUpdate):
@@ -3320,6 +3405,9 @@ def _put_dockerfile(base_dir: Path, name: str, body: DockerfileUpdate):
         ep_path.write_text("#!/bin/bash\nset -e\n\nexec \"$@\"\n", encoding="utf-8")
     if body.entrypoint_content is not None:
         ep_path.write_text(body.entrypoint_content, encoding="utf-8")
+    if body.run_content is not None:
+        run_path = base_dir / f"run.{label}.md"
+        run_path.write_text(body.run_content, encoding="utf-8")
     return {"ok": True}
 
 
@@ -3335,6 +3423,9 @@ def _delete_dockerfile(base_dir: Path, name: str):
         ep_path = base_dir / f"entrypoint.{label}.sh"
         if ep_path.exists():
             ep_path.unlink()
+        run_path = base_dir / f"run.{label}.md"
+        if run_path.exists():
+            run_path.unlink()
     return {"ok": True}
 
 
@@ -3959,28 +4050,35 @@ def _wf_get(project_dir: Path, wf_name: str):
 async def _wf_put(project_dir: Path, wf_name: str, request: Request):
     """Write a {name}.wrk.json workflow file with validation."""
     name = _wf_name_safe(wf_name)
-    data = await request.json()
+    try:
+        data = await request.json()
+    except Exception as e:
+        _log.error("_wf_put JSON parse error: %s", e)
+        raise HTTPException(400, f"JSON invalide: {e}")
     # Strip positions — they belong in the design file
     data.pop("positions", None)
     current_file = f"{name}.wrk.json"
     # Validate external phases
     phases = data.get("phases", {})
     phase_list = list(phases.values()) if isinstance(phases, dict) else (phases if isinstance(phases, list) else [])
+    warnings = []
     for phase in phase_list:
         if phase.get("type") == "external":
             ext_wf = phase.get("external_workflow", "")
             if ext_wf:
                 if ext_wf == current_file:
-                    raise HTTPException(400, f"Phase '{phase.get('name', '?')}' reference le workflow courant")
-                if not (project_dir / ext_wf).exists():
-                    raise HTTPException(400, f"Workflow externe introuvable: {ext_wf}")
-                cycle_errors = _check_external_cycles(project_dir, ext_wf, {current_file})
-                if cycle_errors:
-                    raise HTTPException(400, cycle_errors[0])
+                    warnings.append(f"Phase '{phase.get('name', '?')}' reference le workflow courant")
+                elif not (project_dir / ext_wf).exists():
+                    warnings.append(f"Phase '{phase.get('name', '?')}' : workflow externe introuvable '{ext_wf}'")
+                else:
+                    cycle_errors = _check_external_cycles(project_dir, ext_wf, {current_file})
+                    if cycle_errors:
+                        warnings.append(cycle_errors[0])
     _write_json(project_dir / current_file, data)
     team_id = data.get("team", "")
-    _generate_phase_files(data, f"{name}.wrk", project_dir, team_id)
-    return {"ok": True}
+    gen_warnings = _generate_phase_files(data, f"{name}.wrk", project_dir, team_id) or []
+    warnings.extend(gen_warnings)
+    return {"ok": True, "warnings": warnings}
 
 
 def _wf_get_design(project_dir: Path, wf_name: str):
@@ -4480,7 +4578,7 @@ async def deliverable_skillmatch(project_id: str, req: SkillMatchRequest):
     # Build {agent_profile} from all .md files
     profile_parts = []
     for f in sorted(agent_dir.iterdir()):
-        if f.is_file() and f.suffix == ".md" and not f.name.endswith("_assign.md") and not f.name.endswith("_unassign.md"):
+        if f.is_file() and f.suffix in (".md", ".md_") and not f.name.endswith("_assign.md") and not f.name.endswith("_unassign.md"):
             if f.parent.name == "chat":
                 continue
             content = f.read_text(encoding="utf-8")
@@ -4521,9 +4619,9 @@ async def deliverable_skillmatch(project_id: str, req: SkillMatchRequest):
         try:
             parsed = json.loads(json_match.group())
             # Extract role/mission/skill names from selected_files
-            roles = [e["file"].removeprefix("role_").removesuffix(".md") for e in (parsed.get("selected_files", {}).get("roles", []))]
-            missions = [e["file"].removeprefix("mission_").removesuffix(".md") for e in (parsed.get("selected_files", {}).get("missions", []))]
-            skills = [e["file"].removeprefix("skill_").removesuffix(".md") for e in (parsed.get("selected_files", {}).get("skills", []))]
+            roles = [e["file"].removeprefix("role_").removesuffix(".md_").removesuffix(".md") for e in (parsed.get("selected_files", {}).get("roles", []))]
+            missions = [e["file"].removeprefix("mission_").removesuffix(".md_").removesuffix(".md") for e in (parsed.get("selected_files", {}).get("missions", []))]
+            skills = [e["file"].removeprefix("skill_").removesuffix(".md_").removesuffix(".md") for e in (parsed.get("selected_files", {}).get("skills", []))]
             full_profile = parsed.get("full_profile", False)
             return {"roles": roles, "missions": missions, "skills": skills, "full_profile": full_profile}
         except (json.JSONDecodeError, KeyError):
@@ -4545,7 +4643,7 @@ async def prod_deliverable_skillmatch(project_id: str, req: SkillMatchRequest):
     system_prompt = meta_path.read_text(encoding="utf-8")
     profile_parts = []
     for f in sorted(agent_dir.iterdir()):
-        if f.is_file() and f.suffix == ".md" and not f.name.endswith("_assign.md") and not f.name.endswith("_unassign.md"):
+        if f.is_file() and f.suffix in (".md", ".md_") and not f.name.endswith("_assign.md") and not f.name.endswith("_unassign.md"):
             if f.parent.name == "chat":
                 continue
             content = f.read_text(encoding="utf-8")
@@ -4573,9 +4671,9 @@ async def prod_deliverable_skillmatch(project_id: str, req: SkillMatchRequest):
     if json_match:
         try:
             parsed = json.loads(json_match.group())
-            roles = [e["file"].removeprefix("role_").removesuffix(".md") for e in (parsed.get("selected_files", {}).get("roles", []))]
-            missions = [e["file"].removeprefix("mission_").removesuffix(".md") for e in (parsed.get("selected_files", {}).get("missions", []))]
-            skills = [e["file"].removeprefix("skill_").removesuffix(".md") for e in (parsed.get("selected_files", {}).get("skills", []))]
+            roles = [e["file"].removeprefix("role_").removesuffix(".md_").removesuffix(".md") for e in (parsed.get("selected_files", {}).get("roles", []))]
+            missions = [e["file"].removeprefix("mission_").removesuffix(".md_").removesuffix(".md") for e in (parsed.get("selected_files", {}).get("missions", []))]
+            skills = [e["file"].removeprefix("skill_").removesuffix(".md_").removesuffix(".md") for e in (parsed.get("selected_files", {}).get("skills", []))]
             full_profile = parsed.get("full_profile", False)
             return {"roles": roles, "missions": missions, "skills": skills, "full_profile": full_profile}
         except (json.JSONDecodeError, KeyError):
@@ -5420,7 +5518,7 @@ def _check_orchestrator_prompt_staleness(tdir: Path) -> bool:
         if not agent_dir.is_dir():
             continue
         for f in agent_dir.iterdir():
-            if f.is_file() and f.suffix == ".md" and f.stat().st_mtime > prompt_mtime:
+            if f.is_file() and f.suffix in (".md", ".md_") and f.stat().st_mtime > prompt_mtime:
                 log.info("Stale orchestrator_prompt.md for %s (source %s newer)", tdir.name, f.name)
                 return True
     return False
@@ -5534,11 +5632,11 @@ async def _build_orchestrator_prompt_old(tdir: Path, team_dir: str):
                 agent_catalog_dir = cat_dir
                 break
 
-        # Build agent_profile from all .md files in agent catalog dir
+        # Build agent_profile from all .md/.md_ files in agent catalog dir
         profile_parts = []
         if agent_catalog_dir and agent_catalog_dir.is_dir():
             for f in sorted(agent_catalog_dir.iterdir()):
-                if f.is_file() and f.suffix == ".md":
+                if f.is_file() and f.suffix in (".md", ".md_"):
                     content = f.read_text(encoding="utf-8").strip()
                     if content:
                         label = f.stem.split("_")[0]
@@ -5701,7 +5799,7 @@ async def _build_orchestrator_prompt(tdir: Path, team_dir: str):
         profile_parts = []
         if agent_catalog_dir and agent_catalog_dir.is_dir():
             for f in sorted(agent_catalog_dir.iterdir()):
-                if f.is_file() and f.suffix == ".md":
+                if f.is_file() and f.suffix in (".md", ".md_"):
                     content = f.read_text(encoding="utf-8").strip()
                     if content:
                         label = f.stem.split("_")[0]
@@ -5859,7 +5957,7 @@ def _get_repo_cfg(repo_key: str) -> dict:
     cfg_file = _git_file_for(repo_key)
     if cfg_file.exists():
         data = _read_json(cfg_file)
-        if data.get("path"):
+        if data:
             return data
     # Fallback: derive from git_service.json
     if SHARED_GIT_FILE.exists():
@@ -6371,6 +6469,11 @@ async def git_commit(repo_key: str, req: GitCommitRequest):
         repo_path = cfg.get("path", "").strip()
         login = cfg.get("login", "").strip()
         password = cfg.get("password", "").strip()
+        # Derive path from repo_name + login if not explicitly set
+        if not repo_path:
+            repo_name = cfg.get("repo_name", "").strip()
+            if repo_name and login:
+                repo_path = f"github.com/{login}/{repo_name}.git"
 
         _ensure_gitignore(target_dir)
         branch = _git_detect_branch(target_dir)

@@ -176,6 +176,8 @@
     "finalize": "Finalize",
     "summary_title": "Project summary",
     "validated_facts": "Validated information",
+    "deliverables": "Deliverables",
+    "agent_syntheses": "Expert syntheses",
     "documents_summary": "Documents summary",
     "loading_summary": "Loading summary...",
     "summary_error": "Unable to load summary",

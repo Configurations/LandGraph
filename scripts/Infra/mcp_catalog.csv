@@ -1,359 +1,56 @@
 # MCP Catalog
 # Format : deprecated|type|id|label|description|cmd|args|transport|env_vars
 # deprecated : 0=actif, 1=deprecie (fonctionne mais remplace par une version plus recente)
-# type : npx, uvx, docker, sse
 # env_vars : var1:desc1,var2:desc2 (vide si aucune)
-# For type=sse : cmd is empty, args contains the URL
-# For type=docker : cmd=docker, args=run --rm -i image:tag
 #
 # == Reference MCP (modelcontextprotocol) ==
 0|npx|everything|Everything|Serveur test avec prompts resources et tools|npx|-y @modelcontextprotocol/server-everything|stdio|
 0|uvx|fetch|Fetch|Recuperer et convertir le contenu web pour LLM|uvx|mcp-server-fetch|stdio|
 0|npx|filesystem|Filesystem|Operations fichiers securisees lecture ecriture creation|npx|-y @modelcontextprotocol/server-filesystem /app /tmp/workspace|stdio|
-0|npx|s3|AWS S3|Buckets objets upload download|npx|-y @anthropic/mcp-server-s3|stdio|AWS_ACCESS_KEY_ID:Cle AWS,AWS_SECRET_ACCESS_KEY:Secret AWS,AWS_REGION:Region
 0|uvx|git|Git|Lire chercher manipuler des repos Git locaux|uvx|mcp-server-git|stdio|
 0|npx|memory|Memory|Memoire persistante knowledge graph entre sessions|npx|-y @modelcontextprotocol/server-memory|stdio|
 0|npx|sequential-thinking|Sequential Thinking|Raisonnement par etapes reflexion structuree|npx|-y @modelcontextprotocol/server-sequential-thinking|stdio|
 0|npx|time|Time|Fuseaux horaires conversions date heure|npx|-y @modelcontextprotocol/server-time|stdio|
-0|npx|desktop-commander|Desktop Commander|Fichiers terminal apps controle local|npx|-y @anthropic/mcp-server-desktop-commander|stdio|
 #
 # == Code et Repositories ==
-0|npx|github|GitHub|Repos PRs issues branches commits code search|npx|-y @modelcontextprotocol/server-github|stdio|GITHUB_PERSONAL_ACCESS_TOKEN:GitHub PAT (scopes repo read:org)
-1|npx|github-legacy|GitHub (legacy)|Repos PRs issues branches commits code search|npx|-y @modelcontextprotocol/server-github|stdio|GITHUB_PERSONAL_ACCESS_TOKEN:GitHub PAT (scopes repo read:org)
-1|uvx|gitlab-legacy|GitLab (legacy)|Projets merge requests issues pipelines|uvx|mcp-server-gitlab|stdio|GITLAB_PERSONAL_ACCESS_TOKEN:GitLab PAT,GITLAB_API_URL:URL API GitLab
-0|npx|gitlab|GitLab|Projets merge requests issues pipelines CI/CD|npx|-y @gitlab-org/gitlab-mcp-server|stdio|GITLAB_PERSONAL_ACCESS_TOKEN:GitLab PAT,GITLAB_API_URL:URL API GitLab
-0|npx|gitlab-mcp|gitlab-mcp|Advanced GitLab MCP server|npx|-y @structured-world/gitlab-mcp|stdio|
-0|npx|gitlab-server|gitlab-server|GitLab MCP Server - A Model Context Protocol server for GitLab integration|npx|-y @yoda.digital/gitlab-mcp-server|stdio|
+0|npx|github|GitHub|Repos PRs issues branches commits code search|npx|-y @modelcontextprotocol/server-github|stdio|PERSONAL_ACCESS_TOKEN:GitHub PAT (scopes repo read:org)
+1|npx|github-legacy|GitHub (legacy)|Repos PRs issues branches commits code search|npx|-y @modelcontextprotocol/server-github|stdio|PERSONAL_ACCESS_TOKEN:GitHub PAT (scopes repo read:org)
+1|uvx|gitlab-legacy|GitLab (legacy)|Projets merge requests issues pipelines|uvx|mcp-server-gitlab|stdio|PERSONAL_ACCESS_TOKEN:GitLab PAT,GITLAB_API_URL:URL API GitLab
+0|npx|gitlab|GitLab|Projets merge requests issues pipelines CI/CD|npx|-y @gitlab-org/gitlab-mcp-server|stdio|PERSONAL_ACCESS_TOKEN:GitLab PAT,GITLAB_API_URL:URL API GitLab
 #
 # == Communication et Productivite ==
-1|uvx|slack-legacy|Slack (legacy)|Messages channels recherche reactions|uvx|mcp-server-slack|stdio|SLACK_BOT_TOKEN:Token bot Slack (xoxb-...),SLACK_TEAM_ID:ID equipe Slack
-0|npx|slack|Slack|Messages channels users recherche conversations|npx|-y @anthropic/mcp-server-slack|stdio|BOT_TOKEN:Token bot Slack (xoxb-...),TEAM_ID:ID equipe Slack
-0|npx|notion|Notion|Pages bases de donnees blocs recherche CRUD|npx|-y @notionhq/notion-mcp-server|stdio|NOTION_API_KEY:Cle API Notion (secret_...)
-0|npx|notion-server|notion-server|MCP for Notion|npx|-y notion-mcp-server|stdio|
-0|npx|notion-server|notion-server|MCP server for interacting with Notion API based on Node|npx|-y @suekou/mcp-notion-server|stdio|
-0|npx|better-notion-mcp|better-notion-mcp|Better MCP server for Notion API with composite tools optimized for AI agents|npx|-y @n24q02m/better-notion-mcp|stdio|
+1|uvx|slack-legacy|Slack (legacy)|Messages channels recherche reactions|uvx|mcp-server-slack|stdio|BOT_TOKEN:Token bot Slack (xoxb-...),SLACK_TEAM_ID:ID equipe Slack
+0|npx|notion|Notion|Pages bases de donnees blocs recherche CRUD|npx|-y @notionhq/notion-mcp-server|stdio|API_KEY:Cle API Notion (secret_...)
 0|npx|outline|Outline|Wiki collaboratif documents collections recherche publication|npx|-y @punkpeye/outline-mcp-server|stdio|OUTLINE_API_KEY:Cle API Outline,OUTLINE_URL:URL instance Outline
-0|uvx|linear|Linear|Issues projets cycles equipes labels|uvx|mcp-server-linear|stdio|LINEAR_API_KEY:Cle API Linear
-0|npx|jira|Jira/Confluence|Issues projets sprints pages Confluence|npx|-y @anthropic/mcp-server-atlassian|stdio|ATLASSIAN_API_TOKEN:Token API,ATLASSIAN_EMAIL:Email,DOMAIN:Domaine (xxx.atlassian.net)
-0|npx|asana|Asana|Taches projets equipes workspaces|npx|-y @anthropic/mcp-server-asana|stdio|PERSONAL_ACCESS_TOKEN:Token API Asana
+0|uvx|linear|Linear|Issues projets cycles equipes labels|uvx|mcp-server-linear|stdio|API_KEY:Cle API Linear
 #
 # == Bases de donnees ==
 1|npx|postgres-legacy|PostgreSQL (legacy)|Acces lecture seule schemas queries SQL|npx|-y @modelcontextprotocol/server-postgres|stdio|
-0|npx|postgres|PostgreSQL|Queries SQL schemas tables PostgreSQL|npx|-y @anthropic/mcp-server-postgres|stdio|DATABASE_URL:URI PostgreSQL
-0|npx|enhanced-postgres-server|enhanced-postgres-server|Enhanced PostgreSQL MCP server with read and write capabilities. Based on @modelcontextprotocol/server-postgres by Anthr|npx|-y enhanced-postgres-mcp-server|stdio|
-0|npx|postgrest|postgrest|MCP server for PostgREST|npx|-y @supabase/mcp-server-postgrest|stdio|
-0|npx|mongodb|MongoDB|Collections documents queries aggregation|npx|-y @anthropic/mcp-server-mongodb|stdio|MONGODB_URI:URI MongoDB
-0|npx|supabase|Supabase|Database auth storage edge functions|npx|-y @supabase/mcp-server-supabase|stdio|ACCESS_TOKEN:Token Supabase,PROJECT_REF:Ref projet
-0|npx|supabase-server|supabase-server|An MCP server for using the Supabase API|npx|-y @joshuarileydev/supabase-mcp-server|stdio|
-0|npx|supabase-mcp|supabase-mcp|MCP server for Supabase CRUD operations|npx|-y supabase-mcp|stdio|
-0|npx|supabase-server|supabase-server|MCP (Model Context Protocol) server for self-hosted Supabase instances. Allows AI assistants to interact with your self-|npx|-y @aliyun-rds/supabase-mcp-server|stdio|
 0|uvx|sqlite|SQLite|Queries SQL sur fichiers SQLite locaux|uvx|mcp-server-sqlite|stdio|
-1|uvx|redis-legacy|Redis (legacy)|GET SET DEL KEYS operations Redis|uvx|mcp-server-redis|stdio|REDIS_URL:URI Redis (redis://host:6379)
+1|uvx|redis-legacy|Redis (legacy)|GET SET DEL KEYS operations Redis|uvx|mcp-server-redis|stdio|URL:URI Redis (redis://host:6379)
 #
 # == Cloud et Infrastructure ==
-0|npx|cloudflare|Cloudflare|Workers KV R2 D1 DNS Pages|npx|-y @cloudflare/mcp-server-cloudflare|stdio|CLOUDFLARE_API_TOKEN:Token API Cloudflare
-0|npx|cloudflare-cli|cloudflare-cli|CLI wrapper for the Cloudflare MCP server|npx|-y cloudflare-mcp-cli|stdio|
-0|npx|cloudflare-lite|cloudflare-lite|Lightweight Cloudflare MCP server with multi-account support|npx|-y @dots_software/mcp-cloudflare-lite|stdio|
-0|npx|docker|Docker|Containers images volumes networks|npx|-y @anthropic/mcp-server-docker|stdio|
-0|npx|kubernetes|Kubernetes|Pods services deployments namespaces|npx|-y @anthropic/mcp-server-kubernetes|stdio|KUBECONFIG:Chemin kubeconfig
+0|npx|cloudflare|Cloudflare|Workers KV R2 D1 DNS Pages|npx|-y @cloudflare/mcp-server-cloudflare|stdio|API_TOKEN:Token API Cloudflare
 #
 # == Monitoring ==
-1|uvx|sentry-legacy|Sentry (legacy)|Issues erreurs performance releases|uvx|mcp-server-sentry|stdio|SENTRY_AUTH_TOKEN:Token authentification Sentry
-0|npx|sentry|Sentry|Issues erreurs performance releases projets|npx|-y @sentry/mcp-server-sentry|stdio|SENTRY_AUTH_TOKEN:Token authentification Sentry
-0|npx|server|server|Sentry MCP Server|npx|-y @sentry/mcp-server|stdio|
-0|npx|sentry-server|sentry-server|Sentry MCP Server|npx|-y @kyirespike/sentry-mcp-server|stdio|
-0|npx|sentry-mcp|sentry-mcp|sentry MCP Server|npx|-y sentry-mcp|stdio|
+1|uvx|sentry-legacy|Sentry (legacy)|Issues erreurs performance releases|uvx|mcp-server-sentry|stdio|AUTH_TOKEN:Token authentification Sentry
+0|npx|sentry|Sentry|Issues erreurs performance releases projets|npx|-y @sentry/mcp-server-sentry|stdio|AUTH_TOKEN:Token authentification Sentry
 #
 # == Test et Qualite ==
 0|npx|playwright|Playwright|Tests E2E screenshots navigation web automatisee|npx|-y @playwright/mcp|stdio|
-0|npx|playwright-parallel|playwright-parallel|Playwright MCP with parallel multi-instance browser support. Drop-in enhancement over @playwright/mcp.|npx|-y playwright-mcp-parallel|stdio|
-0|npx|playwright-server|playwright-server|Model Context Protocol servers for Playwright|npx|-y @executeautomation/playwright-mcp-server|stdio|
-0|npx|playwright-mcp|playwright-mcp|Playwright integration for ModelContext|npx|-y playwright-mcp|stdio|
-0|npx|rae-playwright-mcp|rae-playwright-mcp|Rae Playwright MCP - Enhanced Playwright Tools for MCP|npx|-y rae-playwright-mcp|stdio|
-0|npx|playwright-enhanced|playwright-enhanced|Multi-agent Playwright MCP server with tab isolation via targetId|npx|-y playwright-mcp-enhanced|stdio|
-0|npx|playwright-camoufox|playwright-camoufox|Camoufox browser support for Playwright MCP — fingerprint spoofing, proxy credentials, human-like cursor|npx|-y playwright-mcp-camoufox|stdio|
-0|npx|ultimate-playwright-mcp|ultimate-playwright-mcp|Multi-agent Playwright MCP server with tab isolation via targetId|npx|-y ultimate-playwright-mcp|stdio|
-0|npx|playwright-hosts|playwright-hosts|Playwright MCP with custom hosts mapping, like SwitchHosts for browser automation|npx|-y playwright-mcp-hosts|stdio|
-0|npx|mcp_playwright|mcp_playwright|Playwright MCP (Model Context Protocol) tools for browser automation|npx|-y @cotestdev/mcp_playwright|stdio|
-0|npx|better-playwright-mcp3|better-playwright-mcp3|Better Playwright MCP v3 - High-performance browser automation with intelligent content search|npx|-y better-playwright-mcp3|stdio|
-0|npx|playwright-automation|playwright-automation|Lightweight Playwright MCP automation - zero config, works with all AI IDEs|npx|-y playwright-mcp-automation|stdio|
-0|npx|playwright-mcp|playwright-mcp|Cloudflare Playwright Tools for MCP|npx|-y @cloudflare/playwright-mcp|stdio|
-0|npx|playwright-multi|playwright-multi|Playwright MCP server with multi-session support|npx|-y playwright-mcp-multi|stdio|
-0|npx|playwright-browser-mcp|playwright-browser-mcp|A lightweight wrapper around [`@playwright/mcp`](https://github.com/nicholasgriffintn/playwright-mcp) that automatically|npx|-y playwright-browser-mcp|stdio|
-0|npx|playwright-server|playwright-server|MCP server for generating Playwright tests|npx|-y playwright-mcp-server|stdio|
-0|npx|playwright-enhanced-filtering|playwright-enhanced-filtering|Enhanced Playwright MCP with intelligent browser console message filtering|npx|-y playwright-mcp-enhanced-filtering|stdio|
 1|npx|puppeteer-legacy|Puppeteer (legacy)|Automatisation navigateur web scraping|npx|-y @modelcontextprotocol/server-puppeteer|stdio|
-0|npx|puppeteer-server|puppeteer-server|Experimental MCP server for browser automation using Puppeteer (inspired by @modelcontextprotocol/server-puppeteer)|npx|-y puppeteer-mcp-server|stdio|
-0|npx|onestep-puppeteer-server|onestep-puppeteer-server|Experimental MCP server for browser automation using Puppeteer (inspired by @modelcontextprotocol/server-puppeteer)|npx|-y onestep-puppeteer-mcp-server|stdio|
-0|npx|puppeteer-server|puppeteer-server|Experimental MCP server for browser automation using Puppeteer (inspired by @modelcontextprotocol/server-puppeteer)|npx|-y @todoforai/puppeteer-mcp-server|stdio|
-0|npx|browser|Browser|Controle navigateur web navigation screenshots|npx|-y @anthropic/mcp-server-browser|stdio|
 #
 # == Design ==
-0|npx|figma|Figma|Fichiers design composants styles variables|npx|-y figma-developer-mcp --stdio|stdio|FIGMA_API_KEY:Cle API Figma
-0|npx|figma-mcp|figma-mcp|ModelContextProtocol server for Figma|npx|-y figma-mcp|stdio|
-0|npx|figma-mcp|figma-mcp|ModelContextProtocol server for Figma|npx|-y @iflow-mcp/figma-mcp|stdio|
-0|npx|excalidraw|Excalidraw|Diagrammes schemas style hand-drawn|npx|-y @anthropic/mcp-server-excalidraw|stdio|
+0|npx|figma|Figma|Fichiers design composants styles variables|npx|-y figma-developer-mcp --stdio|stdio|API_KEY:Cle API Figma
 #
 # == Recherche ==
-1|uvx|brave-search-legacy|Brave Search (legacy)|Recherche web et locale via Brave|uvx|mcp-server-brave-search|stdio|BRAVE_API_KEY:Cle API Brave Search
-0|npx|brave-search|Brave Search|Recherche web et locale via Brave API|npx|-y @anthropic/mcp-server-brave-search|stdio|BRAVE_API_KEY:Cle API Brave Search
+1|uvx|brave-search-legacy|Brave Search (legacy)|Recherche web et locale via Brave|uvx|mcp-server-brave-search|stdio|API_KEY:Cle API Brave Search
+0|npx|brave-search|Brave Search|Recherche web et locale via Brave API|npx|-y @anthropic/mcp-server-brave-search|stdio|API_KEY:Cle API Brave Search
 0|npx|context7|Context7|Documentation live des frameworks et librairies|npx|-y @upstash/context7-mcp|stdio|
-0|npx|context7-server|context7-server|MCP server for Context7|npx|-y context7-mcp-server|stdio|
-0|npx|context7-mcp|context7-mcp|MCP server for Context7|npx|-y @iflow-mcp/context7-mcp|stdio|
 #
 # == Google ==
-1|uvx|google-drive-legacy|Google Drive (legacy)|Fichiers recherche partage dossiers|uvx|mcp-server-google-drive|stdio|GOOGLE_CLIENT_ID:Client ID Google OAuth,GOOGLE_CLIENT_SECRET:Client Secret Google OAuth
-0|npx|google-drive|Google Drive|Fichiers dossiers recherche partage|npx|-y @anthropic/mcp-server-google-drive|stdio|GOOGLE_CLIENT_ID:Client ID OAuth,GOOGLE_CLIENT_SECRET:Secret OAuth
-1|npx|google-maps-legacy|Google Maps (legacy)|Geocoding directions places details|npx|-y @modelcontextprotocol/server-google-maps|stdio|GOOGLE_MAPS_API_KEY:Cle API Google Maps
-0|npx|gmail|Gmail|Lire envoyer chercher emails labels|npx|-y @anthropic/mcp-server-gmail|stdio|GOOGLE_CLIENT_ID:Client ID OAuth,GOOGLE_CLIENT_SECRET:Secret OAuth
+1|uvx|google-drive-legacy|Google Drive (legacy)|Fichiers recherche partage dossiers|uvx|mcp-server-google-drive|stdio|CLIENT_ID:Client ID Google OAuth,GOOGLE_CLIENT_SECRET:Client Secret Google OAuth
+1|npx|google-maps-legacy|Google Maps (legacy)|Geocoding directions places details|npx|-y @modelcontextprotocol/server-google-maps|stdio|MAPS_API_KEY:Cle API Google Maps
 #
 # == Divers ==
-1|uvx|everart-legacy|EverArt (legacy)|Generation images IA avec divers modeles|uvx|mcp-server-everart|stdio|EVERART_API_KEY:Cle API EverArt
-0|npx|firecrawl|Firecrawl|Web scraping extraction donnees structurees|npx|-y @anthropic/mcp-server-firecrawl|stdio|API_KEY:Cle API Firecrawl
-0|npx|tavily|Tavily|Recherche web optimisee pour IA|npx|-y @anthropic/mcp-server-tavily|stdio|API_KEY:Cle API Tavily
-0|npx|ref-tools-mcp|ref-tools-mcp|ModelContextProtocol server for Ref|npx|-y ref-tools-mcp|stdio|
-0|npx|mcp|mcp|ModelContextProtocol server for enhancing JSON Resumes|npx|-y @jsonresume/mcp|stdio|
-0|npx|ref-tools-mcp|ref-tools-mcp|ModelContextProtocol server for Ref|npx|-y @iflow-mcp/ref-tools-mcp|stdio|
-0|npx|smart-crawler|smart-crawler|A command-line tool acting as an MCP (ModelContextProtocol) server, using Playwright to crawl web content for AI models.|npx|-y mcp-smart-crawler|stdio|
-0|npx|terry-mcp|terry-mcp|ModelContextProtocol server for Terry CLI integration|npx|-y terry-mcp|stdio|
-0|npx|ref-cli|y|ModelContextProtocol server for Ref|npx|-y ref-mcp-cli|stdio|
-0|npx|mayar-mcp|y|Mayar API ModelContextProtocol Server|npx|-y mayar-mcp|stdio|
-0|npx|grabon-mcp|grabon-mcp|GrabOn Omnichannel Deal Distribution — Anthropic MCP Server|npx|-y @santhoshramesh/grabon-mcp|stdio|
-0|npx|adapters|adapters|LangChain.js adapters for Model Context Protocol (MCP)|npx|-y @langchain/mcp-adapters|stdio|
-0|npx|proxy|proxy|A TypeScript SSE proxy for MCP servers that use stdio transport.|npx|-y mcp-proxy|stdio|
-0|npx|mcpb|mcpb|Tools for building MCP Bundles|npx|-y @anthropic-ai/mcpb|stdio|
-0|npx|add-mcp|add-mcp|Add MCP servers to your favorite coding agents with a single command.|npx|-y add-mcp|stdio|
-0|npx|ai-assistant|ai-assistant|AI-powered chat and tool execution for Open Mercato, using MCP (Model Context Protocol) for tool discovery and execution|npx|-y @open-mercato/ai-assistant|stdio|
-0|npx|structurize-mcp|structurize-mcp|Anthropic MCP Server for generating structured CSV files from natural language descriptions|npx|-y structurize-mcp|stdio|
-0|npx|agents-mcp|agents-mcp|Model Context Protocol (MCP) Server for the *@inkeep/agents-mcp* API.|npx|-y @inkeep/agents-mcp|stdio|
-0|npx|sdk|sdk|Model Context Protocol implementation for TypeScript|npx|-y @modelcontextprotocol/sdk|stdio|
-0|npx|server|server|mcp-ui Server SDK|npx|-y @mcp-ui/server|stdio|
-0|npx|moltbrowser-server|moltbrowser-server|Playwright MCP with WebMCP Hub integration — dynamic, per-site tools for browser agents|npx|-y moltbrowser-mcp-server|stdio|
-0|npx|theta-health-client|theta-health-client|Theta Health MCP Client for WebSocket connection - Works like @notionhq/notion-mcp-server|npx|-y theta-health-mcp-client|stdio|
-0|npx|test-servers|test-servers|A collection of MCP test servers including working servers (ping, resource, combined, env-echo) and test failure cases (|npx|-y @msfeldstein/mcp-test-servers|stdio|
-0|npx|mcp|mcp|Dynamically generate CLI commands from MCP server tools|npx|-y @goke/mcp|stdio|
-0|npx|utils|utils|MCP utilities|npx|-y @supabase/mcp-utils|stdio|
-0|npx|use-mcp|use-mcp|<div class="oranda-hide">|npx|-y use-mcp|stdio|
-0|npx|fastmcp|fastmcp|A TypeScript framework for building MCP servers.|npx|-y fastmcp|stdio|
-0|npx|server|server|MCP server for Upstash|npx|-y @upstash/mcp-server|stdio|
-0|npx|template|template|ModelContextProtocol server with tools, prompts and resources|npx|-y @ignitionai/mcp-template|stdio|
-0|docker|aws-kb-retrieval-server|aws-kb-retrieval-server|An MCP server implementation for retrieving information from the AWS Knowledge Base using the Bed...|docker|run --rm -i mcp/aws-kb-retrieval-server|stdio|
-0|docker|everart|everart|Image generation server using EverArt's API.|docker|run --rm -i mcp/everart|stdio|
-0|docker|gdrive|gdrive|This MCP server integrates with Google Drive to allow listing, reading, and searching over files.|docker|run --rm -i mcp/gdrive|stdio|
-0|docker|google-maps|google-maps|Tools for interacting with the Google Maps API.|docker|run --rm -i mcp/google-maps|stdio|
-0|docker|puppeteer|puppeteer|Browser automation and web scraping using Puppeteer.|docker|run --rm -i mcp/puppeteer|stdio|
-0|docker|sequentialthinking|sequentialthinking|Dynamic and reflective problem-solving through thought sequences.|docker|run --rm -i mcp/sequentialthinking|stdio|
-0|docker|redis|redis|Access to Redis database operations.|docker|run --rm -i mcp/redis|stdio|
-0|docker|perplexity-ask|perplexity-ask|Connector for Perplexity API, to enable real-time, web-wide research.|docker|run --rm -i mcp/perplexity-ask|stdio|
-0|docker|atlassian|atlassian|Tools for Atlassian products (Confluence and Jira). This integration supports both Atlassian Clou...|docker|run --rm -i mcp/atlassian|stdio|
-0|docker|jetbrains|jetbrains|A model context protocol server to work with JetBrains IDEs: IntelliJ, PyCharm, WebStorm, etc. Al...|docker|run --rm -i mcp/jetbrains|stdio|
-0|docker|stripe|stripe|Interact with Stripe services over the Stripe API.|docker|run --rm -i mcp/stripe|stdio|
-0|docker|youtube-transcript|youtube-transcript|Retrieves transcripts for given YouTube video URLs|docker|run --rm -i mcp/youtube-transcript|stdio|
-0|docker|obsidian|obsidian|MCP server that interacts with Obsidian via the Obsidian rest API community plugin|docker|run --rm -i mcp/obsidian|stdio|
-0|docker|resend|resend|Send emails directly from Cursor with this email sending MCP server|docker|run --rm -i mcp/resend|stdio|
-0|docker|atlas-docs|atlas-docs|Provide LLMs hosted, clean markdown documentation of libraries and frameworks|docker|run --rm -i mcp/atlas-docs|stdio|
-0|docker|audiense-insights|audiense-insights|Audiense Insights MCP Server is a server based on the Model Context Protocol (MCP) that allows Cl...|docker|run --rm -i mcp/audiense-insights|stdio|
-0|docker|basic-memory|basic-memory|Basic Memory is a knowledge management system that allows you to build a persistent semantic grap...|docker|run --rm -i mcp/basic-memory|stdio|
-0|docker|cyreslab-ai-shodan|cyreslab-ai-shodan|A Model Context Protocol server that provides access to Shodan API functionality|docker|run --rm -i mcp/cyreslab-ai-shodan|stdio|
-0|docker|bitrefill|bitrefill|A Model Context Protocol Server connector for Bitrefill public API, to enable AI agents to search...|docker|run --rm -i mcp/bitrefill|stdio|
-0|docker|dart|dart|Dart AI Model Context Protocol (MCP) server|docker|run --rm -i mcp/dart|stdio|
-0|docker|databutton|databutton|Databutton MCP Server|docker|run --rm -i mcp/databutton|stdio|
-0|docker|devhub-cms|devhub-cms|DevHub CMS LLM integration through the Model Context Protocol|docker|run --rm -i mcp/devhub-cms|stdio|
-0|docker|e2b|e2b|Giving Claude ability to run code with E2B via MCP (Model Context Protocol)|docker|run --rm -i mcp/e2b|stdio|
-0|docker|descope|descope|The Descope Model Context Protocol (MCP) server provides an interface to interact with Descope's ...|docker|run --rm -i mcp/descope|stdio|
-0|docker|exa|exa|Exa MCP for web search and web crawling!|docker|run --rm -i mcp/exa|stdio|
-0|docker|chroma|chroma|A Model Context Protocol (MCP) server implementation that provides database capabilities for Chroma|docker|run --rm -i mcp/chroma|stdio|
-0|docker|glif|glif|Easily run glif.app AI workflows inside your LLM: image generators, memes, selfies, and more. Gli...|docker|run --rm -i mcp/glif|stdio|
-0|docker|github-chat|github-chat|A Model Context Protocol (MCP) for analyzing and querying GitHub repositories using the GitHub Ch...|docker|run --rm -i mcp/github-chat|stdio|
-0|docker|handwriting-ocr|handwriting-ocr|Model Context Protocol (MCP) Server for Handwriting OCR |docker|run --rm -i mcp/handwriting-ocr|stdio|
-0|docker|hyperbrowser|hyperbrowser|A MCP server implementation for hyperbrowser|docker|run --rm -i mcp/hyperbrowser|stdio|
-0|docker|iaptic|iaptic| Model Context Protocol server for interacting with iaptic|docker|run --rm -i mcp/iaptic|stdio|
-0|docker|multiversx-mx|multiversx-mx|MCP Server for MultiversX|docker|run --rm -i mcp/multiversx-mx|stdio|
-0|docker|hyperspell|hyperspell|Hyperspell MCP Server|docker|run --rm -i mcp/hyperspell|stdio|
-0|docker|kagisearch|kagisearch|The Official Model Context Protocol (MCP) server for Kagi search & other tools.|docker|run --rm -i mcp/kagisearch|stdio|
-0|docker|neon|neon|MCP server for interacting with Neon Management API and databases|docker|run --rm -i mcp/neon|stdio|
-0|docker|octomind|octomind|An MCP server for octomind tools, resources and prompts|docker|run --rm -i mcp/octomind|stdio|
-0|docker|opik|opik|Model Context Protocol (MCP) implementation for Opik enabling seamless IDE integration and unifie...|docker|run --rm -i mcp/opik|stdio|
-0|docker|oxylabs|oxylabs|A Model Context Protocol (MCP) server that enables AI assistants like Claude to seamlessly access...|docker|run --rm -i mcp/oxylabs|stdio|
-0|docker|osp_marketing_tools|osp_marketing_tools|A Model Context Protocol (MCP) server that empowers LLMs to use some of Open Srategy Partners' co...|docker|run --rm -i mcp/osp_marketing_tools|stdio|
-0|docker|scrapegraph|scrapegraph|ScapeGraph MCP Server|docker|run --rm -i mcp/scrapegraph|stdio|
-0|docker|scrapezy|scrapezy|A Model Context Protocol server for Scrapezy that enables AI models to extract structured data fr...|docker|run --rm -i mcp/scrapezy|stdio|
-0|docker|shopify|shopify|Shopify.dev MCP server|docker|run --rm -i mcp/shopify|stdio|
-0|docker|tembo|tembo|MCP server for Tembo Cloud's platform API|docker|run --rm -i mcp/tembo|stdio|
-0|docker|triplewhale|triplewhale|Triplewhale MCP Server|docker|run --rm -i mcp/triplewhale|stdio|
-0|docker|veyrax|veyrax|VeyraX MCP is the only connection you need to access all your tools in any MCP-compatible environ...|docker|run --rm -i mcp/veyrax|stdio|
-0|docker|box|box|An MCP server capable of interacting with the Box API|docker|run --rm -i mcp/box|stdio|
-0|docker|elasticsearch|elasticsearch|Interact with your Elasticsearch indices through natural language conversations.|docker|run --rm -i mcp/elasticsearch|stdio|
-0|docker|heroku|heroku|Heroku Platform MCP Server using the Heroku CLI|docker|run --rm -i mcp/heroku|stdio|
-0|docker|astra-db|astra-db|An MCP server for Astra DB workloads|docker|run --rm -i mcp/astra-db|stdio|
-0|docker|redis-cloud|redis-cloud|MCP Server for Redis Cloud's API, allowing you to manage your Redis Cloud resources using natural...|docker|run --rm -i mcp/redis-cloud|stdio|
-0|docker|lara|lara|Connect to Lara Translate API, enabling powerful translation capabilities with support for langua...|docker|run --rm -i mcp/lara|stdio|
-0|docker|wolfram-alpha|wolfram-alpha|Connect your chat repl to wolfram alpha computational intelligence|docker|run --rm -i mcp/wolfram-alpha|stdio|
-0|docker|duckduckgo|duckduckgo|Community-maintained server for DuckDuckGo search. Not published by or affiliated with DuckDuckGo.|docker|run --rm -i mcp/duckduckgo|stdio|
-0|docker|edubase|edubase|The EduBase MCP server enables Claude and other LLMs to interact with EduBase's comprehensive e-l...|docker|run --rm -i mcp/edubase|stdio|
-0|docker|webflow|webflow|Model Context Protocol (MCP) server for the Webflow Data API.|docker|run --rm -i mcp/webflow|stdio|
-0|docker|3d-printer|3d-printer|Connects MCP to major 3D printer APIs (Orca, Bambu, OctoPrint, Klipper, Duet, Repetier, Prusa, Cr...|docker|run --rm -i mcp/3d-printer|stdio|
-0|docker|grafana|grafana|MCP server for Grafana|docker|run --rm -i mcp/grafana|stdio|
-0|docker|pulumi|pulumi|Pulumi MCP server enables AI-powered coding assistants to help you codify cloud architectures and...|docker|run --rm -i mcp/pulumi|stdio|
-0|docker|kong|kong|A Model Context Protocol (MCP) server for interacting with Kong Konnect APIs, allowing AI assista...|docker|run --rm -i mcp/kong|stdio|
-0|docker|circleci|circleci|A specialized server implementation for the Model Context Protocol (MCP) designed to integrate wi...|docker|run --rm -i mcp/circleci|stdio|
-0|docker|neo4j-server|neo4j-server||docker|run --rm -i mcp/neo4j-server|stdio|
-0|docker|302_sandbox|302_sandbox|302 Sandbox MCP|docker|run --rm -i mcp/302_sandbox|stdio|
-0|docker|doit|doit|DoiT official MCP Server|docker|run --rm -i mcp/doit|stdio|
-0|docker|elevenlabs|elevenlabs|Official ElevenLabs Model Context Protocol (MCP) server that enables interaction with powerful Te...|docker|run --rm -i mcp/elevenlabs|stdio|
-0|docker|dappier|dappier|Enable fast, free real-time web search and access premium data from trusted media brands—news, ...|docker|run --rm -i mcp/dappier|stdio|
-0|docker|risken|risken|RISKEN's official MCP Server|docker|run --rm -i mcp/risken|stdio|
-0|docker|azure|azure|The Azure MCP Server, bringing the power of Azure to your agents.|docker|run --rm -i mcp/azure|stdio|
-0|docker|openapi-schema|openapi-schema|OpenAPI Schema Model Context Protocol Server|docker|run --rm -i mcp/openapi-schema|stdio|
-0|docker|line|line|MCP server that integrates the LINE Messaging API to connect an AI Agent to the LINE Official Acc...|docker|run --rm -i mcp/line|stdio|
-0|docker|gyazo|gyazo|Official Model Context Protocol server for Gyazo|docker|run --rm -i mcp/gyazo|stdio|
-0|docker|mcp-discord|mcp-discord|Interact with the Discord platform.|docker|run --rm -i mcp/mcp-discord|stdio|
-0|docker|hackle|hackle|Model Context Protocol server for Hackle|docker|run --rm -i mcp/hackle|stdio|
-0|docker|flexprice|flexprice|Official flexprice MCP Server|docker|run --rm -i mcp/flexprice|stdio|
-0|docker|neo4j-memory|neo4j-memory|Provide persistent memory capabilities through Neo4j graph database integration.|docker|run --rm -i mcp/neo4j-memory|stdio|
-0|docker|razorpay|razorpay|Razorpay's Official MCP Server|docker|run --rm -i mcp/razorpay|stdio|
-0|docker|fibery|fibery|Interact with your Fibery workspace.|docker|run --rm -i mcp/fibery|stdio|
-0|docker|signatures|signatures|Repository containing cosign signatures for images in the mcp namespace|docker|run --rm -i mcp/signatures|stdio|
-0|docker|husqvarna-automower|husqvarna-automower|MCP Server for huqsvarna automower|docker|run --rm -i mcp/husqvarna-automower|stdio|
-0|docker|neo4j-cypher|neo4j-cypher|Interact with Neo4j using Cypher graph queries.|docker|run --rm -i mcp/neo4j-cypher|stdio|
-0|docker|neo4j-cloud-aura-api|neo4j-cloud-aura-api|Manage Neo4j Aura database instances through the Neo4j Aura API.|docker|run --rm -i mcp/neo4j-cloud-aura-api|stdio|
-0|docker|wikipedia-mcp|wikipedia-mcp|A Model Context Protocol (MCP) server that retrieves information from Wikipedia to provide contex...|docker|run --rm -i mcp/wikipedia-mcp|stdio|
-0|docker|node-code-sandbox|node-code-sandbox|A Node.js–based Model Context Protocol server that spins up disposable Docker containers to exe...|docker|run --rm -i mcp/node-code-sandbox|stdio|
-0|docker|aws-diagram|aws-diagram|Seamlessly create diagrams using the Python diagrams package DSL. This server allows you to gener...|docker|run --rm -i mcp/aws-diagram|stdio|
-0|docker|aws-documentation|aws-documentation|Tools to access AWS documentation, search for content, and get recommendations.|docker|run --rm -i mcp/aws-documentation|stdio|
-0|docker|aws-cdk-mcp-server|aws-cdk-mcp-server|AWS Cloud Development Kit (CDK) best practices, infrastructure as code patterns, and security com...|docker|run --rm -i mcp/aws-cdk-mcp-server|stdio|
-0|docker|aws-core-mcp-server|aws-core-mcp-server|Starting point for using the awslabs MCP servers.|docker|run --rm -i mcp/aws-core-mcp-server|stdio|
-0|docker|cdata-connectcloud|cdata-connectcloud|This fully functional MCP Server allows you to connect to any data source in Connect Cloud from C...|docker|run --rm -i mcp/cdata-connectcloud|stdio|
-0|docker|novita|novita|Seamless interaction with Novita AI platform resources.|docker|run --rm -i mcp/novita|stdio|
-0|docker|aws-terraform|aws-terraform|Terraform on AWS best practices, infrastructure as code patterns, and security compliance with Ch...|docker|run --rm -i mcp/aws-terraform|stdio|
-0|docker|render|render|Interact with your Render resources via LLMs.|docker|run --rm -i mcp/render|stdio|
-0|docker|vizro|vizro|provides tools and templates to create a functioning Vizro chart or dashboard step by step|docker|run --rm -i mcp/vizro|stdio|
-0|docker|minecraft-wiki|minecraft-wiki|A MCP Server for browsing the official Minecraft Wiki!|docker|run --rm -i mcp/minecraft-wiki|stdio|
-0|docker|paper-search|paper-search|A MCP for searching and downloading academic papers from multiple sources like arXiv, PubMed, bio...|docker|run --rm -i mcp/paper-search|stdio|
-0|docker|pinecone|pinecone|Pinecone Assistant MCP server|docker|run --rm -i mcp/pinecone|stdio|
-0|docker|clickhouse|clickhouse|Official ClickHouse MCP Server|docker|run --rm -i mcp/clickhouse|stdio|
-0|docker|suzieq-mcp|suzieq-mcp|MCP Server to interact with a SuzieQ network observability instance via its REST API|docker|run --rm -i mcp/suzieq-mcp|stdio|
-0|docker|api-gateway|api-gateway|A universal MCP (Model Context Protocol) server to integrate any API with Claude Desktop using on...|docker|run --rm -i mcp/api-gateway|stdio|
-0|docker|keboola-mcp|keboola-mcp|Keboola MCP Server is an open-source bridge between your Keboola project and modern AI tools.|docker|run --rm -i mcp/keboola-mcp|stdio|
-0|docker|openweather|openweather|A simple MCP service that provides current weather and 5-day forecast using the free OpenWeatherM...|docker|run --rm -i mcp/openweather|stdio|
-0|docker|openbnb-airbnb|openbnb-airbnb|MCP Server for searching Airbnb and get listing details.|docker|run --rm -i mcp/openbnb-airbnb|stdio|
-0|docker|sonarqube|sonarqube|Interact with SonarQube Cloud, Server and Community build over the web API. Analyze code to ident...|docker|run --rm -i mcp/sonarqube|stdio|
-0|docker|tigris|tigris|Tigris is a globally distributed S3-compatible object storage service that provides low latency a...|docker|run --rm -i mcp/tigris|stdio|
-0|docker|nasdaq-data-link|nasdaq-data-link|MCP server to interact with the data feeds provided by the Nasdaq Data Link. Developed by the com...|docker|run --rm -i mcp/nasdaq-data-link|stdio|
-0|docker|npm-sentinel|npm-sentinel|MCP server that enables intelligent NPM package analysis powered by AI.|docker|run --rm -i mcp/npm-sentinel|stdio|
-0|docker|pluggedin-mcp-proxy|pluggedin-mcp-proxy|A unified MCP proxy that aggregates multiple MCP servers into one interface, enabling seamless to...|docker|run --rm -i mcp/pluggedin-mcp-proxy|stdio|
-0|docker|pref-editor|pref-editor|Pref Editor is a tool for viewing and editing Android app preferences during development.|docker|run --rm -i mcp/pref-editor|stdio|
-0|docker|sec-edgar|sec-edgar|MCP server to interact with the US SEC EDGAR database, developed by the community and maintained ...|docker|run --rm -i mcp/sec-edgar|stdio|
-0|docker|text-to-graphql|text-to-graphql|Transform natural language queries into GraphQL queries using an AI agent. Provides schema manage...|docker|run --rm -i mcp/text-to-graphql|stdio|
-0|docker|dockerhub|dockerhub|Docker Hub official MCP server|docker|run --rm -i mcp/dockerhub|stdio|
-0|docker|atlan-mcp-server|atlan-mcp-server|MCP server for interacting with Atlan services including asset search, updates, and lineage trave...|docker|run --rm -i mcp/atlan-mcp-server|stdio|
-0|docker|securenote-link-mcp-server|securenote-link-mcp-server|SecureNote.link MCP Server - allowing AI agents to securely share sensitive information through e...|docker|run --rm -i mcp/securenote-link-mcp-server|stdio|
-0|docker|beagle-security-mcp-server|beagle-security-mcp-server|Connects with the Beagle Security backend using a user token to manage applications, run automate...|docker|run --rm -i mcp/beagle-security-mcp-server|stdio|
-0|docker|singlestore|singlestore|MCP server for interacting with SingleStore Management API and services|docker|run --rm -i mcp/singlestore|stdio|
-0|docker|root|root|MCP server that provides container image vulnerability scanning and remediation capabilities thro...|docker|run --rm -i mcp/root|stdio|
-0|docker|needle-mcp|needle-mcp|Production-ready RAG service to search and retrieve data from your documents.|docker|run --rm -i mcp/needle-mcp|stdio|
-0|docker|schogini_mcp_image_border|schogini_mcp_image_border|This adds a border to an image and returns base64 encoded image|docker|run --rm -i mcp/schogini_mcp_image_border|stdio|
-0|docker|arxiv-mcp-server|arxiv-mcp-server|The ArXiv MCP Server provides a comprehensive bridge between AI assistants and arXiv's research r...|docker|run --rm -i mcp/arxiv-mcp-server|stdio|
-0|docker|cockroachdb|cockroachdb|Enable AI agents to manage, monitor, and query CockroachDB using natural language. Perform comple...|docker|run --rm -i mcp/cockroachdb|stdio|
-0|docker|atlan|atlan|MCP server for interacting with Atlan services including asset search, updates, and lineage trave...|docker|run --rm -i mcp/atlan|stdio|
-0|docker|buildkite-mcp-server|buildkite-mcp-server|Buildkite MCP lets agents interact with Buildkite Builds, Jobs, Logs, Packages and Test Suites|docker|run --rm -i mcp/buildkite-mcp-server|stdio|
-0|docker|onlyoffice-docspace|onlyoffice-docspace|ONLYOFFICE DocSpace is a room-based collaborative platform which allows organizing a clear file s...|docker|run --rm -i mcp/onlyoffice-docspace|stdio|
-0|docker|buildkite|buildkite|Buildkite MCP lets agents interact with Buildkite Builds, Jobs, Logs, Packages and Test Suites|docker|run --rm -i mcp/buildkite|stdio|
-0|docker|omi|omi|A Model Context Protocol server for Omi interaction and automation. This server provides tools to...|docker|run --rm -i mcp/omi|stdio|
-0|docker|mcp-playwright|mcp-playwright|Playwright Model Context Protocol Server - Tool to automate Browsers and APIs in Claude Desktop, ...|docker|run --rm -i mcp/mcp-playwright|stdio|
-0|docker|couchbase|couchbase|Couchbase is a distributed document database with a powerful search engine and in-built operation...|docker|run --rm -i mcp/couchbase|stdio|
-0|docker|firewalla-mcp-server|firewalla-mcp-server|Real-time network monitoring, security analysis, and firewall management through 28 specialized t...|docker|run --rm -i mcp/firewalla-mcp-server|stdio|
-0|docker|inspektor-gadget|inspektor-gadget|AI interface to troubleshoot and observe Kubernetes/Container workloads|docker|run --rm -i mcp/inspektor-gadget|stdio|
-0|docker|metabase|metabase|A comprehensive MCP server for Metabase with 70+ tools.|docker|run --rm -i mcp/metabase|stdio|
-0|docker|okta-mcp-fctr|okta-mcp-fctr|Secure Okta identity and access management via Model Context Protocol (MCP). Access Okta users, g...|docker|run --rm -i mcp/okta-mcp-fctr|stdio|
-0|docker|api-mcp-server|api-mcp-server|Interact with Hostinger services over the Hostinger API.|docker|run --rm -i mcp/api-mcp-server|stdio|
-0|docker|smartbear|smartbear|MCP server for AI access to SmartBear tools, including BugSnag, Reflect, API Hub, PactFlow.|docker|run --rm -i mcp/smartbear|stdio|
-0|docker|cloud-run-mcp|cloud-run-mcp|MCP server to deploy apps to Cloud Run|docker|run --rm -i mcp/cloud-run-mcp|stdio|
-0|docker|dynatrace-mcp-server|dynatrace-mcp-server|This MCP Server allows interaction with the Dynatrace observability platform, brining real-time o...|docker|run --rm -i mcp/dynatrace-mcp-server|stdio|
-0|docker|sequa|sequa|Stop stitching context for Copilot and Cursor. With Sequa MCP, your AI tools know your entire cod...|docker|run --rm -i mcp/sequa|stdio|
-0|docker|aks|aks|Azure Kubernetes Service (AKS) official MCP server|docker|run --rm -i mcp/aks|stdio|
-0|docker|pia|pia|An MCP server to help make U.S. Government open datasets AI-friendly.|docker|run --rm -i mcp/pia|stdio|
-0|docker|ramparts|ramparts|A comprehensive security scanner for MCP servers with YARA rules and static analysis capabilities.|docker|run --rm -i mcp/ramparts|stdio|
-0|docker|apify-mcp-server|apify-mcp-server|Apify is the world's largest marketplace of tools for web scraping, data extraction, and web auto...|docker|run --rm -i mcp/apify-mcp-server|stdio|
-0|docker|markdownify|markdownify|A Model Context Protocol server for converting almost anything to Markdown.|docker|run --rm -i mcp/markdownify|stdio|
-0|docker|markitdown|markitdown|A lightweight MCP server for calling MarkItDown.|docker|run --rm -i mcp/markitdown|stdio|
-0|docker|camunda|camunda|Tools to interact with the Camunda 7 Community Edition Engine using the Model Context Protocol (M...|docker|run --rm -i mcp/camunda|stdio|
-0|docker|effect-mcp|effect-mcp|Tools and resources for writing Effect code in Typescript.|docker|run --rm -i mcp/effect-mcp|stdio|
-0|docker|hdx|hdx|HDX MCP Server provides access to humanitarian data through the Humanitarian Data Exchange (HDX) ...|docker|run --rm -i mcp/hdx|stdio|
-0|docker|mapbox|mapbox|Transform any AI agent into a geospatially-aware system with Mapbox APIs. Provides geocoding, POI...|docker|run --rm -i mcp/mapbox|stdio|
-0|docker|mapbox-devkit|mapbox-devkit|Direct access to Mapbox developer APIs for AI assistants. Enables style management, token managem...|docker|run --rm -i mcp/mapbox-devkit|stdio|
-0|docker|mcp-code-interpreter|mcp-code-interpreter|A Python-based execution tool that mimics a Jupyter notebook environment. It accepts code snippet...|docker|run --rm -i mcp/mcp-code-interpreter|stdio|
-0|docker|teamwork|teamwork|Tools for Teamwork.com products.|docker|run --rm -i mcp/teamwork|stdio|
-0|docker|schemacrawler-ai|schemacrawler-ai|The SchemaCrawler AI MCP Server enables natural language interaction with your database schema us...|docker|run --rm -i mcp/schemacrawler-ai|stdio|
-0|docker|ast-grep|ast-grep|ast-grep is a fast and polyglot tool for code structural search, lint, rewriting at large scale.|docker|run --rm -i mcp/ast-grep|stdio|
-0|docker|charmhealth-mcp-server|charmhealth-mcp-server|An MCP server for CharmHealth EHR that allows LLMs and MCP clients to interact with patient recor...|docker|run --rm -i mcp/charmhealth-mcp-server|stdio|
-0|docker|mcp-python-refactoring|mcp-python-refactoring|Educational Python refactoring assistant that provides guided suggestions for AI assistants.
-|docker|run --rm -i mcp/mcp-python-refactoring|stdio|
-0|docker|pomodash|pomodash|Connect your AI assistant to PomoDash for seamless task and project management|docker|run --rm -i mcp/pomodash|stdio|
-0|docker|neo4j-data-modeling|neo4j-data-modeling|MCP server that assists in creating, validating and visualizing graph data models.|docker|run --rm -i mcp/neo4j-data-modeling|stdio|
-0|docker|oracle|oracle|Connect to Oracle databases via MCP, providing secure read-only access with support for schema ex...|docker|run --rm -i mcp/oracle|stdio|
-0|docker|postman|postman|Postman's MCP server connects AI agents, assistants, and chatbots directly to your APIs on Postma...|docker|run --rm -i mcp/postman|stdio|
-0|docker|hackernews-mcp|hackernews-mcp|A Model Context Protocol (MCP) server that provides access to Hacker News stories, comments, and ...|docker|run --rm -i mcp/hackernews-mcp|stdio|
-0|docker|openapi|openapi|Fetch, validate, and generate code or curl from any OpenAPI or Swagger spec - all from a single URL.|docker|run --rm -i mcp/openapi|stdio|
-0|docker|unreal-engine-mcp-server|unreal-engine-mcp-server|A comprehensive Model Context Protocol (MCP) server that enables AI assistants to control Unreal ...|docker|run --rm -i mcp/unreal-engine-mcp-server|stdio|
-0|docker|vuln-nist-mcp-server|vuln-nist-mcp-server|This MCP server exposes tools to query the NVD/CVE REST API and return formatted text results sui...|docker|run --rm -i mcp/vuln-nist-mcp-server|stdio|
-0|docker|ros2|ros2|Python server implementing Model Context Protocol (MCP) for ROS2.|docker|run --rm -i mcp/ros2|stdio|
-0|docker|kubectl-mcp-server|kubectl-mcp-server|MCP Server that enables AI assistants to interact with Kubernetes clusters via kubectl operations.|docker|run --rm -i mcp/kubectl-mcp-server|stdio|
-0|docker|df-mcp|df-mcp|DreamFactory is a REST API generation platform with support for hundreds of data sources, includi...|docker|run --rm -i mcp/df-mcp|stdio|
-0|docker|airtable-mcp-server|airtable-mcp-server|Provides AI assistants with direct access to Airtable bases, allowing them to read schemas, query...|docker|run --rm -i mcp/airtable-mcp-server|stdio|
-0|docker|quantconnect|quantconnect|The QuantConnect MCP Server is a bridge for AIs (such as Claude and OpenAI o3 Pro) to interact wi...|docker|run --rm -i mcp/quantconnect|stdio|
-0|docker|stackhawk|stackhawk|A Model Context Protocol (MCP) server for integrating with StackHawk's security scanning platform...|docker|run --rm -i mcp/stackhawk|stdio|
-0|docker|zerodha-kite|zerodha-kite|MCP server for Zerodha Kite Connect API - India's leading stock broker trading platform. Execute ...|docker|run --rm -i mcp/zerodha-kite|stdio|
-0|docker|explorium|explorium|Discover companies, contacts, and business insights—powered by dozens of trusted external data ...|docker|run --rm -i mcp/explorium|stdio|
-0|docker|maestro-mcp-server|maestro-mcp-server|A Model Context Protocol (MCP) server exposing Bitcoin blockchain data through the Maestro API pl...|docker|run --rm -i mcp/maestro-mcp-server|stdio|
-0|docker|reddit-mcp|reddit-mcp|This server provides AI agents with tools to fetch, post and search on Reddit.|docker|run --rm -i mcp/reddit-mcp|stdio|
-0|docker|google-maps-comprehensive|google-maps-comprehensive|Complete Google Maps integration with 8 tools including geocoding, places search, directions, ele...|docker|run --rm -i mcp/google-maps-comprehensive|stdio|
-0|docker|rust-mcp-filesystem|rust-mcp-filesystem|The Rust MCP Filesystem is a high-performance, asynchronous, and lightweight Model Context Protoc...|docker|run --rm -i mcp/rust-mcp-filesystem|stdio|
-0|docker|browserbase|browserbase|Allow LLMs to control a browser with Browserbase and Stagehand for AI-powered web automation, int...|docker|run --rm -i mcp/browserbase|stdio|
-0|docker|cylera-mcp-server|cylera-mcp-server|Brings context about device inventory, threats, risks and utilization powered by the Cylera Partn...|docker|run --rm -i mcp/cylera-mcp-server|stdio|
-0|docker|next-devtools-mcp|next-devtools-mcp|next-devtools-mcp is a Model Context Protocol (MCP) server that provides Next.js development tool...|docker|run --rm -i mcp/next-devtools-mcp|stdio|
-0|docker|sqlite-mcp-server|sqlite-mcp-server|The SQLite MCP Server transforms SQLite into a powerful, AI-ready database engine. It combines st...|docker|run --rm -i mcp/sqlite-mcp-server|stdio|
-0|docker|thingsboard|thingsboard|Connect your AI workflows to the ThingsBoard IoT Platform through this MCP server. 
-Enables LLMs ...|docker|run --rm -i mcp/thingsboard|stdio|
-0|docker|gemini-api-docs-mcp|gemini-api-docs-mcp|Provides tools to search and retrieve Google Gemini API documentation.|docker|run --rm -i mcp/gemini-api-docs-mcp|stdio|
-0|docker|amazon-neptune-mcp-server|amazon-neptune-mcp-server|Graph database queries with Cypher and Gremlin.|docker|run --rm -i mcp/amazon-neptune-mcp-server|stdio|
-0|docker|amazon-kendra-index-mcp-server|amazon-kendra-index-mcp-server|Enterprise search and RAG enhancement.|docker|run --rm -i mcp/amazon-kendra-index-mcp-server|stdio|
-0|docker|amazon-bedrock-agentcore-mcp-server|amazon-bedrock-agentcore-mcp-server|Documentation on AgentCore platform services.|docker|run --rm -i mcp/amazon-bedrock-agentcore-mcp-server|stdio|
-0|docker|amazon-qbusiness-anonymous-mcp-server|amazon-qbusiness-anonymous-mcp-server|AI assistant for ingested content with anonymous access.|docker|run --rm -i mcp/amazon-qbusiness-anonymous-mcp-server|stdio|
-0|docker|aws-appsync-mcp-server|aws-appsync-mcp-server|Manage applications powered by AWS AppSync.|docker|run --rm -i mcp/aws-appsync-mcp-server|stdio|
-0|docker|aws-bedrock-custom-model-import-mcp-server|aws-bedrock-custom-model-import-mcp-server|Manage custom models in Bedrock.|docker|run --rm -i mcp/aws-bedrock-custom-model-import-mcp-server|stdio|
-0|docker|aws-api-mcp-server|aws-api-mcp-server|Comprehensive AWS API support with command validation and access to all services.|docker|run --rm -i mcp/aws-api-mcp-server|stdio|
-0|docker|aws-bedrock-data-automation-mcp-server|aws-bedrock-data-automation-mcp-server|Analyze documents, images, videos, and audio.|docker|run --rm -i mcp/aws-bedrock-data-automation-mcp-server|stdio|
-0|docker|aws-dataprocessing-mcp-server|aws-dataprocessing-mcp-server|Data processing and transformation services.|docker|run --rm -i mcp/aws-dataprocessing-mcp-server|stdio|
-0|docker|aws-iot-sitewise-mcp-server|aws-iot-sitewise-mcp-server|Industrial IoT asset management.|docker|run --rm -i mcp/aws-iot-sitewise-mcp-server|stdio|
-0|docker|aws-location-mcp-server|aws-location-mcp-server|Place search, geocoding, and route optimization.|docker|run --rm -i mcp/aws-location-mcp-server|stdio|
-0|docker|aws-healthomics-mcp-server|aws-healthomics-mcp-server|Generate, run, debug lifescience workflows.|docker|run --rm -i mcp/aws-healthomics-mcp-server|stdio|
-0|docker|aws-msk-mcp-server|aws-msk-mcp-server|Managed Kafka cluster operations.|docker|run --rm -i mcp/aws-msk-mcp-server|stdio|
-0|docker|aws-pricing-mcp-server|aws-pricing-mcp-server|AWS service pricing and cost estimates.|docker|run --rm -i mcp/aws-pricing-mcp-server|stdio|
-0|docker|billing-cost-management-mcp-server|billing-cost-management-mcp-server|Billing and cost management.|docker|run --rm -i mcp/billing-cost-management-mcp-server|stdio|
-0|docker|ccapi-mcp-server|ccapi-mcp-server|Direct resource management with security scanning.|docker|run --rm -i mcp/ccapi-mcp-server|stdio|
-0|docker|cfn-mcp-server|cfn-mcp-server|CloudFormation resource management via Cloud Control API.|docker|run --rm -i mcp/cfn-mcp-server|stdio|
-0|docker|cloudtrail-mcp-server|cloudtrail-mcp-server|AWS CloudTrail audit logging and monitoring.|docker|run --rm -i mcp/cloudtrail-mcp-server|stdio|
-0|docker|cloudwatch-appsignals-mcp-server|cloudwatch-appsignals-mcp-server|Application performance monitoring and insights.|docker|run --rm -i mcp/cloudwatch-appsignals-mcp-server|stdio|
-0|docker|cloudwatch-mcp-server|cloudwatch-mcp-server|Metrics, alarms, and logs analysis.|docker|run --rm -i mcp/cloudwatch-mcp-server|stdio|
-0|docker|cost-explorer-mcp-server|cost-explorer-mcp-server|Detailed cost analysis and reporting.|docker|run --rm -i mcp/cost-explorer-mcp-server|stdio|
-0|docker|dynamodb-mcp-server|dynamodb-mcp-server|Complete DynamoDB operations and table management.|docker|run --rm -i mcp/dynamodb-mcp-server|stdio|
-0|docker|elasticache-mcp-server|elasticache-mcp-server|ElastiCache control plane operations.|docker|run --rm -i mcp/elasticache-mcp-server|stdio|
-0|docker|iam-mcp-server|iam-mcp-server|IAM user, role, group, and policy management.|docker|run --rm -i mcp/iam-mcp-server|stdio|
-0|docker|memcached-mcp-server|memcached-mcp-server|High-speed caching with Memcached.|docker|run --rm -i mcp/memcached-mcp-server|stdio|
-0|docker|nova-canvas-mcp-server|nova-canvas-mcp-server|AI image generation using Amazon Nova Canvas.|docker|run --rm -i mcp/nova-canvas-mcp-server|stdio|
-0|docker|redshift-mcp-server|redshift-mcp-server|Data warehouse operations and queries.|docker|run --rm -i mcp/redshift-mcp-server|stdio|
-0|docker|s3-tables-mcp-server|s3-tables-mcp-server|Manage S3 Tables for analytics.|docker|run --rm -i mcp/s3-tables-mcp-server|stdio|
-0|docker|valkey-mcp-server|valkey-mcp-server|Advanced data structures with Valkey.|docker|run --rm -i mcp/valkey-mcp-server|stdio|
-0|docker|timestream-for-influxdb-mcp-server|timestream-for-influxdb-mcp-server|Time-series database operations.|docker|run --rm -i mcp/timestream-for-influxdb-mcp-server|stdio|
-0|docker|pica-mcp-server|pica-mcp-server|Provides access to Pica's integrations, actions, execution, and code generation capabilities.|docker|run --rm -i mcp/pica-mcp-server|stdio|
-0|docker|vectra-ai-rux-mcp-server|vectra-ai-rux-mcp-server|Vectra AI MCP Server - An MCP server that connects AI assistants & agents to the Vectra AI secu...|docker|run --rm -i mcp/vectra-ai-rux-mcp-server|stdio|
-0|docker|testkube|testkube|The Testkube MCP Server exposes continuous testing capabilities (test orchestration, execution, t...|docker|run --rm -i mcp/testkube|stdio|
-0|docker|temporal|temporal|MCP support for Temporal. A comprehensive set of tools for interacting with workflows and their a...|docker|run --rm -i mcp/temporal|stdio|
-0|docker|google-flights|google-flights|Interact with Google Flights data to search for one-way, round-trip, and date range flight option...|docker|run --rm -i mcp/google-flights|stdio|
-0|docker|docker-mcp-catalog|docker-mcp-catalog||docker|run --rm -i mcp/docker-mcp-catalog|stdio|
-0|docker|zen|zen|Bridges multiple AI models and CLIs, enabling orchestrated workflows across Claude Code, Gemini C...|docker|run --rm -i mcp/zen|stdio|
-0|docker|n8n|n8n|Bridges n8n's workflow automation platform with AI models, providing access to 543 n8n nodes, wor...|docker|run --rm -i mcp/n8n|stdio|
-0|docker|neo4j|neo4j|Official MCP server for Neo4j. Interact with Neo4j using Cypher graph queries.|docker|run --rm -i mcp/neo4j|stdio|
-0|docker|community-registry|community-registry||docker|run --rm -i mcp/community-registry|stdio|
-0|docker|genai-toolbox|genai-toolbox||docker|run --rm -i mcp/genai-toolbox|stdio|
+1|uvx|everart-legacy|EverArt (legacy)|Generation images IA avec divers modeles|uvx|mcp-server-everart|stdio|API_KEY:Cle API EverArt

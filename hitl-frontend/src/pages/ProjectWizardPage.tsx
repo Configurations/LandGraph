@@ -19,11 +19,11 @@ export function ProjectWizardPage(): JSX.Element {
   }, [resetWizard, resumeSlug]);
 
   return (
-    <PageContainer>
-      <h2 className="text-xl font-semibold mb-6">
+    <PageContainer className="flex flex-col h-[calc(100vh-4rem)]">
+      <h2 className="text-xl font-semibold mb-4 flex-shrink-0">
         {resumeSlug ? t('project.continue_setup') : t('project.new_project')}
       </h2>
-      <WizardShell />
+      <WizardShell className="flex-1 min-h-0" />
     </PageContainer>
   );
 }

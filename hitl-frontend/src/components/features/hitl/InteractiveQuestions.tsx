@@ -110,10 +110,10 @@ export function InteractiveQuestions({ parsed, onSubmit, intro = true, className
                       key={choice}
                       onClick={() => handleChipSelect(i, choice, isMulti)}
                       className={[
-                        'px-2.5 py-1 rounded-full text-[11px] border transition-all',
+                        'px-3 py-1.5 rounded-full text-xs font-medium border transition-all',
                         selectedChips.includes(choice)
                           ? 'bg-accent-blue/15 border-accent-blue text-accent-blue'
-                          : 'bg-surface-secondary border-border text-content-tertiary hover:border-accent-blue/50',
+                          : 'bg-surface-secondary border-border text-content-secondary hover:border-accent-blue/50',
                       ].join(' ')}
                     >
                       {selectedChips.includes(choice) && '✓ '}{choice}
@@ -122,10 +122,10 @@ export function InteractiveQuestions({ parsed, onSubmit, intro = true, className
                   <button
                     onClick={() => handleChipSelect(i, 'Autre', isMulti)}
                     className={[
-                      'px-2.5 py-1 rounded-full text-[11px] border transition-all italic',
+                      'px-3 py-1.5 rounded-full text-xs font-medium border transition-all italic',
                       selectedChips.includes('Autre')
                         ? 'bg-accent-orange/15 border-accent-orange text-accent-orange'
-                        : 'bg-surface-secondary border-border text-content-quaternary hover:border-accent-orange/50',
+                        : 'bg-surface-secondary border-border text-content-secondary hover:border-accent-orange/50',
                     ].join(' ')}
                   >
                     {selectedChips.includes('Autre') && '✓ '}Autre

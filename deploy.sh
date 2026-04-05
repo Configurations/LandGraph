@@ -1,4 +1,4 @@
-claude#!/bin/bash
+#!/bin/bash
 # ─────────────────────────────────────────────────────────────
 # deploy.sh — Push local files to remote host, rebuild & restart
 #
@@ -183,7 +183,7 @@ REMOTE_CLEAN
         [[ -d "$model_dir" ]] || continue
         model=$(basename "$model_dir")
         ssh $SSH_OPTS "${SSH_TARGET}" "mkdir -p ${REMOTE_DIR}/Shared/Models/${model}"
-        for f in "$model_dir"*.md; do
+        for f in "$model_dir"*.md "$model_dir"*.json; do
             [[ -f "$f" ]] || continue
             fname=$(basename "$f")
             ssh $SSH_OPTS "${SSH_TARGET}" "test -f ${REMOTE_DIR}/Shared/Models/${model}/${fname}" \

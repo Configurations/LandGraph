@@ -326,6 +326,25 @@ async def apply_project_type(
         return []
 
     # Remove existing workflows for this project (idempotent re-apply)
+    # Must break FK references and reset analysis state before deleting
+    await execute(
+        "UPDATE project.pm_projects SET onboarding_workflow_id = NULL, analysis_status = NULL, analysis_task_id = NULL WHERE slug = $1",
+        project_slug,
+    )
+    await execute(
+        "UPDATE project.project_workflows SET current_phase_id = NULL WHERE project_slug = $1",
+        project_slug,
+    )
+    await execute(
+        """DELETE FROM project.dispatcher_tasks
+           WHERE workflow_id IN (SELECT id FROM project.project_workflows WHERE project_slug = $1)""",
+        project_slug,
+    )
+    await execute(
+        """DELETE FROM project.workflow_phases
+           WHERE workflow_id IN (SELECT id FROM project.project_workflows WHERE project_slug = $1)""",
+        project_slug,
+    )
     await execute(
         "DELETE FROM project.project_workflows WHERE project_slug = $1",
         project_slug,

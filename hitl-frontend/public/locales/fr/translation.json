@@ -176,6 +176,8 @@
     "finalize": "Finaliser",
     "summary_title": "Recapitulatif du projet",
     "validated_facts": "Informations validees",
+    "deliverables": "Livrables",
+    "agent_syntheses": "Syntheses par expert",
     "documents_summary": "Synthese des documents",
     "loading_summary": "Chargement du recapitulatif...",
     "summary_error": "Impossible de charger le recapitulatif",

@@ -19,6 +19,18 @@ ONBOARDING_THREAD_PREFIX = "onboarding-"
 _HTTP_TIMEOUT = 30
 
 
+async def _resolve_thread_id(project_slug: str) -> str:
+    """Resolve the thread_id for a project: workflow-{id} if available, fallback to onboarding-{slug}."""
+    row = await fetch_one(
+        "SELECT onboarding_workflow_id FROM project.pm_projects WHERE slug = $1",
+        project_slug,
+    )
+    wf_id = row["onboarding_workflow_id"] if row else None
+    if wf_id:
+        return "workflow-{}".format(wf_id)
+    return "{}{}".format(ONBOARDING_THREAD_PREFIX, project_slug)
+
+
 # ── Helpers ──────────────────────────────────────────────────────
 
 
@@ -754,7 +766,7 @@ async def _run_analysis_pipeline(
 
 async def _sync_status(project_slug: str, task_id: str) -> str:
     """Sync analysis_status with dispatcher state and pending questions."""
-    thread_id = f"{ONBOARDING_THREAD_PREFIX}{project_slug}"
+    thread_id = await _resolve_thread_id(project_slug)
 
     pending = await fetch_one(
         "SELECT id FROM project.hitl_requests WHERE thread_id = $1 AND status = 'pending' LIMIT 1",
@@ -1008,7 +1020,7 @@ async def reply_to_question(
     reviewer: str,
 ) -> dict[str, Any]:
     """Reply to an agent HITL question."""
-    thread_id = f"{ONBOARDING_THREAD_PREFIX}{project_slug}"
+    thread_id = await _resolve_thread_id(project_slug)
 
     row = await fetch_one(
         "SELECT id, thread_id, status, context FROM project.hitl_requests WHERE id = $1::uuid",
@@ -1030,6 +1042,20 @@ async def reply_to_question(
         """,
         response, reviewer, request_id,
     )
+
+    # Auto-index conversation exchange into RAG
+    try:
+        prompt_text = row.get("prompt", "") if row else ""
+        exchange = "Q: {}\nR: {}".format(prompt_text[:1000], response[:2000])
+        embedding_provider = await _resolve_embedding_provider_async(project_slug)
+        from services import rag_service
+        await rag_service.index_document(
+            project_slug, "conversation/exchange-{}".format(request_id[:8]),
+            exchange, content_type="conversation", embedding_provider=embedding_provider,
+        )
+        log.info("conversation_indexed", slug=project_slug, request_id=request_id[:8])
+    except Exception as exc:
+        log.warning("conversation_index_failed", slug=project_slug, error=str(exc)[:200])
 
     # Check if this is the onboarding final validation
     ctx = row.get("context") or {}
@@ -1076,15 +1102,120 @@ async def reply_to_question(
         return {"ok": True}
 
 
-def _load_recap_template() -> str:
-    """Load onboarding-recap.md from Prompts/{culture}/."""
+async def _call_llm_simple(system_prompt: str, user_message: str, max_tokens: int = 4096) -> str:
+    """Call the default LLM provider directly (no gateway, no tools, no orchestrator)."""
+    llm_data = load_json_config("llm_providers.json")
+    provider_id = llm_data.get("default", "")
+    provider = llm_data.get("providers", {}).get(provider_id, {})
+    if not provider:
+        log.error("no_llm_provider_configured")
+        return ""
+
+    ptype = provider["type"]
+    model = provider["model"]
+    env_key = provider.get("env_key", "")
+    base_url = provider.get("base_url", "")
+    api_key = provider.get("api_key", "")
+    if not api_key and env_key:
+        api_key = os.environ.get(env_key, "")
+
+    import asyncio as _aio
+    max_retries = 4
+    wait = 5.0
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=90) as client:
+                if ptype == "anthropic":
+                    url = "{}/v1/messages".format(base_url or "https://api.anthropic.com")
+                    resp = await client.post(url, headers={
+                        "x-api-key": api_key,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    }, json={
+                        "model": model, "max_tokens": max_tokens,
+                        "system": system_prompt,
+                        "messages": [{"role": "user", "content": user_message}],
+                    })
+                elif ptype in ("openai", "deepseek", "groq", "moonshot"):
+                    url = "{}/v1/chat/completions".format(base_url or "https://api.openai.com")
+                    resp = await client.post(url, headers={
+                        "Authorization": "Bearer {}".format(api_key),
+                        "Content-Type": "application/json",
+                    }, json={
+                        "model": model, "max_tokens": max_tokens,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_message},
+                        ],
+                    })
+                elif ptype == "ollama":
+                    url = "{}/api/chat".format(base_url or "http://host.docker.internal:11434")
+                    resp = await client.post(url, json={
+                        "model": model, "stream": False,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_message},
+                        ],
+                    })
+                else:
+                    log.warning("unsupported_llm_type", type=ptype)
+                    return ""
+
+                if resp.status_code == 429:
+                    log.warning("_call_llm_rate_limited", attempt=attempt + 1, wait=wait)
+                    await _aio.sleep(wait)
+                    wait = min(wait * 2, 60)
+                    continue
+                resp.raise_for_status()
+
+                if ptype == "anthropic":
+                    return "".join(b.get("text", "") for b in resp.json().get("content", []))
+                elif ptype == "ollama":
+                    return resp.json().get("message", {}).get("content", "")
+                else:
+                    return resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+        except Exception as exc:
+            if "429" in str(exc) and attempt < max_retries - 1:
+                log.warning("_call_llm_rate_limited", attempt=attempt + 1, wait=wait)
+                await _aio.sleep(wait)
+                wait = min(wait * 2, 60)
+                continue
+            log.error("_call_llm_simple_failed", type=ptype, error=str(exc)[:200])
+            return ""
+    return ""
+
+
+def _load_prompt_template(name: str) -> str:
+    """Load a prompt template from Prompts/{culture}/."""
     culture = os.getenv("CULTURE", "fr-fr")
     for base in ["/app/config", "/app/Shared", "config", "Shared"]:
-        path = os.path.join(base, "Prompts", culture, "onboarding-recap.md")
+        path = os.path.join(base, "Prompts", culture, name)
         if os.path.isfile(path):
             with open(path, encoding="utf-8") as f:
                 return f.read()
     return ""
+
+
+def _load_recap_template() -> str:
+    return _load_prompt_template("onboarding-recap.md")
+
+
+def _load_agent_card(agent_id: str) -> str:
+    """Load agent profile (identity + roles/missions/skills) from Shared/Agents/."""
+    for base in ["/app/Shared/Agents", "Shared/Agents"]:
+        agent_dir = os.path.join(base, agent_id)
+        if not os.path.isdir(agent_dir):
+            continue
+        parts = []
+        for f in sorted(os.listdir(agent_dir)):
+            fpath = os.path.join(agent_dir, f)
+            if os.path.isfile(fpath) and (f.endswith(".md") or f.endswith(".md_")) and f != "prompt.md":
+                with open(fpath, encoding="utf-8") as fh:
+                    content = fh.read().strip()
+                if content and len(content) > 20:
+                    parts.append("--- {} ---\n{}".format(f, content))
+        return "\n\n".join(parts) if parts else "(aucun profil)"
+    return "(agent introuvable)"
 
 
 async def _invoke_mcp_tool_async(tool, args: dict) -> Any:
@@ -1118,20 +1249,28 @@ async def get_project_summary(project_slug: str) -> dict[str, Any]:
     except Exception as exc:
         log.warning("summary_memory_error", slug=project_slug, error=str(exc))
 
-    # 2. Get RAG documents
+    # 2. Get RAG documents + conversation facts
     rag_text = "(aucun document)"
+    conversation_facts_text = "(aucun echange indexe)"
     try:
         embedding_provider = await _resolve_embedding_provider_async(project_slug)
         from services import rag_service
         results = await rag_service.search(
             project_slug, "project summary objectives features users constraints architecture",
-            top_k=15, embedding_provider=embedding_provider,
+            top_k=20, embedding_provider=embedding_provider,
         )
         if results:
-            lines = []
-            for r in results[:10]:
-                lines.append("[{}]\n{}".format(r.filename, r.content[:400]))
-            rag_text = "\n\n---\n\n".join(lines)
+            doc_lines = []
+            conv_lines_rag = []
+            for r in results[:15]:
+                if r.filename.startswith("conversation/"):
+                    conv_lines_rag.append(r.content[:500])
+                else:
+                    doc_lines.append("[{}]\n{}".format(r.filename, r.content[:400]))
+            if doc_lines:
+                rag_text = "\n\n---\n\n".join(doc_lines[:10])
+            if conv_lines_rag:
+                conversation_facts_text = "\n\n---\n\n".join(conv_lines_rag[:10])
     except Exception as exc:
         log.warning("summary_rag_error", slug=project_slug, error=str(exc))
 
@@ -1151,77 +1290,111 @@ async def get_project_summary(project_slug: str) -> dict[str, Any]:
     prompt = template.replace(
         "{memory_facts}", memory_text
     ).replace(
+        "{conversation_facts}", conversation_facts_text
+    ).replace(
         "{rag_documents}", rag_text
     ).replace(
         "{conversation_history}", conversation_text
     )
 
-    # 5. Call orchestrator with recap prompt to generate the summary
+    # 5. Call LLM directly with recap prompt to generate the summary
     summary = ""
-    try:
-        gateway_url = settings.langgraph_api_url or "http://langgraph-api:8000"
-        proj_team = await fetch_one(
-            "SELECT team_id FROM project.pm_projects WHERE slug = $1", project_slug,
-        )
-        team_id_for_summary = proj_team["team_id"] if proj_team else ""
+    if prompt:
+        summary = await _call_llm_simple(prompt, "Produis le recapitulatif complet du projet.")
+        if summary:
+            log.info("summary_generated", slug=project_slug, length=len(summary))
 
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                "{}/invoke".format(gateway_url),
-                json={
-                    "messages": [{"role": "user", "content": "Produis le recapitulatif complet du projet."}],
-                    "team_id": team_id_for_summary,
-                    "thread_id": "summary-{}".format(project_slug),
-                    "project_slug": project_slug,
-                    "system_prompt": prompt,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            summary = data.get("output", "")
-    except Exception as exc:
-        log.error("summary_llm_error", slug=project_slug, error=str(exc))
+    # Read deliverable files from project directory
+    ag_flow_root = os.getenv("AG_FLOW_ROOT", settings.ag_flow_root)
+    proj_team = await fetch_one(
+        "SELECT team_id FROM project.pm_projects WHERE slug = $1", project_slug,
+    )
+    team_for_file = proj_team["team_id"] if proj_team else ""
+    deliverables: list[dict[str, str]] = []
+    project_dir = os.path.join(ag_flow_root, "projects", project_slug, team_for_file) if team_for_file else ""
+    if project_dir and os.path.isdir(project_dir):
+        for root, _dirs, files in os.walk(project_dir):
+            for fname in sorted(files):
+                if fname.endswith(".md"):
+                    fpath = os.path.join(root, fname)
+                    try:
+                        with open(fpath, encoding="utf-8") as f:
+                            content = f.read()
+                        rel = os.path.relpath(fpath, project_dir)
+                        deliverables.append({"name": fname, "path": rel, "content": content})
+                    except Exception:
+                        pass
 
-    # Read the recap deliverable file if output was empty (orchestrator used save_deliverable)
-    if not summary:
-        ag_flow_root = os.getenv("AG_FLOW_ROOT", settings.ag_flow_root)
-        # Search for recap file in project deliverables
-        proj_team = await fetch_one(
-            "SELECT team_id FROM project.pm_projects WHERE slug = $1", project_slug,
-        )
-        team_for_file = proj_team["team_id"] if proj_team else ""
-        if team_for_file:
-            for phase_dir in ["summary", "structuration", "discovery", "deepening"]:
-                for agent_dir_name in ["Orchestrator", "orchestrator"]:
-                    recap_path = os.path.join(
-                        ag_flow_root, "projects", project_slug, team_for_file,
-                        "onboarding", "0:{}".format(phase_dir), agent_dir_name, "recap.md",
-                    )
-                    if os.path.isfile(recap_path):
-                        with open(recap_path, encoding="utf-8") as f:
-                            summary = f.read()
-                        log.info("summary_loaded_from_file", path=recap_path)
-                        break
-                if summary:
-                    break
-        # Also check onboarding_recap.md
-        if not summary:
-            for agent_dir_name in ["Orchestrator", "orchestrator"]:
-                recap_path2 = os.path.join(
-                    ag_flow_root, "projects", project_slug, team_for_file,
-                    "onboarding", "0:discovery", agent_dir_name, "onboarding_recap.md",
-                )
-                if os.path.isfile(recap_path2):
-                    with open(recap_path2, encoding="utf-8") as f:
-                        summary = f.read()
-                    log.info("summary_loaded_from_file", path=recap_path2)
-                    break
+    # Use recap deliverable as summary if LLM didn't produce one
+    if not summary and deliverables:
+        _recap_keywords = ("recap", "cadrage", "summary", "synthese")
+        for d in deliverables:
+            if any(kw in d["name"].lower() for kw in _recap_keywords):
+                summary = d["content"]
+                log.info("summary_loaded_from_file", path=d["path"])
+                break
 
     # Final fallback: raw data
     if not summary:
         summary = "# Recapitulatif {}\n\n## Faits valides\n{}\n\n## Documents\n{}".format(
             project_slug, memory_text, rag_text,
         )
+
+    # 7. Generate per-agent syntheses
+    agent_syntheses: list[dict[str, str]] = []
+    synthesis_template = _load_prompt_template("agent-synthesis.md")
+    if synthesis_template and deliverables:
+        # Group deliverables by agent
+        agent_fragments: dict[str, list[str]] = {}
+        for d in deliverables:
+            parts = d["path"].split("/") if "/" in d["path"] else d["path"].split("\\")
+            agent = parts[-2] if len(parts) >= 2 else "unknown"
+            agent_fragments.setdefault(agent, []).append(
+                "--- {} ---\n{}".format(d["name"], d["content"][:2000])
+            )
+
+        # Check for existing syntheses on disk
+        existing_syntheses = {}
+        if project_dir:
+            for d in deliverables:
+                if d["name"].endswith("_synthesis.md"):
+                    agent_name = d["name"].replace("_synthesis.md", "")
+                    existing_syntheses[agent_name] = d["content"]
+
+        async def _generate_one_synthesis(agent_id: str, fragments: list[str]) -> dict[str, str] | None:
+            # Use cached synthesis if available
+            if agent_id in existing_syntheses:
+                return {"agent": agent_id, "content": existing_syntheses[agent_id]}
+            agent_card = _load_agent_card(agent_id)
+            fragments_text = "\n\n".join(fragments[:20])
+            prompt = synthesis_template.replace(
+                "{agent_name}", agent_id
+            ).replace(
+                "{agent_card}", agent_card
+            ).replace(
+                "{conversation}", conversation_text[:5000]
+            ).replace(
+                "{fragments}", fragments_text[:8000]
+            )
+            content = await _call_llm_simple(prompt, "Produis la synthese structuree du projet dans ton domaine d'expertise.")
+            if content and len(content) > 100:
+                # Save to disk for cache
+                if project_dir:
+                    synth_dir = os.path.join(project_dir, "syntheses")
+                    os.makedirs(synth_dir, exist_ok=True)
+                    synth_path = os.path.join(synth_dir, "{}_synthesis.md".format(agent_id))
+                    with open(synth_path, "w", encoding="utf-8") as f:
+                        f.write(content)
+                log.info("agent_synthesis_generated", agent=agent_id, length=len(content))
+                return {"agent": agent_id, "content": content}
+            log.warning("agent_synthesis_empty", agent=agent_id)
+            return None
+
+        # Generate sequentially to avoid rate limiting
+        for aid, frags in agent_fragments.items():
+            r = await _generate_one_synthesis(aid, frags)
+            if r:
+                agent_syntheses.append(r)
 
     proj_row = await fetch_one(
         "SELECT name FROM project.pm_projects WHERE slug = $1", project_slug,
@@ -1233,6 +1406,8 @@ async def get_project_summary(project_slug: str) -> dict[str, Any]:
         "summary": summary,
         "facts": facts,
         "rag_summary": rag_text,
+        "deliverables": [{"name": d["name"], "path": d["path"], "content": d["content"]} for d in deliverables],
+        "agent_syntheses": agent_syntheses,
     }
 
 
@@ -1248,6 +1423,18 @@ async def send_free_message(
             "INSERT INTO project.rag_conversations (project_slug, sender, content) VALUES ($1, $2, $3)",
             project_slug, "user", content,
         )
+        # Auto-index user message into RAG
+        try:
+            embedding_provider = await _resolve_embedding_provider_async(project_slug)
+            from services import rag_service
+            import hashlib as _hl
+            msg_hash = _hl.md5(content[:200].encode()).hexdigest()[:8]
+            await rag_service.index_document(
+                project_slug, "conversation/user-msg-{}".format(msg_hash),
+                content, content_type="conversation", embedding_provider=embedding_provider,
+            )
+        except Exception as exc:
+            log.warning("user_msg_index_failed", slug=project_slug, error=str(exc)[:200])
 
     proj = await fetch_one(
         "SELECT team_id, analysis_task_id, onboarding_workflow_id FROM project.pm_projects WHERE slug = $1",

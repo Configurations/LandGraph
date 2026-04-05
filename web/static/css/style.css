@@ -1257,6 +1257,10 @@ tr:hover { background: rgba(255,255,255,0.02); }
 
 /* CodeMirror integration */
 #tpl-dockerfile-cm .CodeMirror { height: 100%; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
+.CodeMirror-selected { background: rgba(100, 150, 255, 0.35) !important; }
+.CodeMirror-focused .CodeMirror-selected { background: rgba(100, 150, 255, 0.5) !important; }
+.CodeMirror .CodeMirror-line::selection, .CodeMirror .CodeMirror-line > span::selection, .CodeMirror .CodeMirror-line > span > span::selection { background: rgba(100, 150, 255, 0.5); }
+.CodeMirror .CodeMirror-line::-moz-selection, .CodeMirror .CodeMirror-line > span::-moz-selection, .CodeMirror .CodeMirror-line > span > span::-moz-selection { background: rgba(100, 150, 255, 0.5); }
 #tpl-dockerfile-cm { display: flex; flex-direction: column; }
 
 /* Right: editor */
