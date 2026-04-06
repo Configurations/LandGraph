@@ -487,7 +487,12 @@ async def run_agents_parallel(agents_to_run, state, channel_id, thread_id="defau
                                state.get("_workflow", "main"),
                                state.get("_iteration", 1),
                                state.get("project_phase", ""))
-    tasks = [run_single_agent(a["agent_id"], a["agent"], dict(state), channel_id, thread_id) for a in agents_to_run]
+    tasks = []
+    for a in agents_to_run:
+        agent_state = dict(state)
+        if a.get("task_row_id"):
+            agent_state["_task_row_id"] = a["task_row_id"]
+        tasks.append(run_single_agent(a["agent_id"], a["agent"], agent_state, channel_id, thread_id))
     results = await asyncio.gather(*tasks, return_exceptions=True)
     merged = dict(state.get("agent_outputs", {}))
     for r in results:
@@ -861,6 +866,52 @@ def _get_internal_token():
     return jwt.encode({"sub": "system", "email": "system@internal", "role": "admin", "teams": []}, secret, algorithm="HS256")
 
 
+def _register_artifacts(state: dict, agent_id: str, written_files):
+    """Register written deliverable files in dispatcher_task_artifacts."""
+    logger.info("[artifacts] called for %s, files=%d, slug=%s, thread=%s, wf=%s",
+                agent_id, len(written_files) if written_files else 0,
+                state.get("project_slug", ""), state.get("_thread_id", ""), state.get("_workflow_id"))
+    if not written_files:
+        return
+    uri = os.getenv("DATABASE_URI", "")
+    if uri.startswith("postgres://"):
+        uri = uri.replace("postgres://", "postgresql://", 1)
+    if not uri:
+        logger.warning("[artifacts] no DATABASE_URI")
+        return
+    project_slug = state.get("project_slug", "")
+    thread_id = state.get("_thread_id", "")
+    workflow_id = state.get("_workflow_id")
+    try:
+        import psycopg
+        with psycopg.connect(uri, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                # Find task_id for this agent in this workflow
+                task_id = None
+                if thread_id:
+                    cur.execute(
+                        "SELECT id FROM project.dispatcher_tasks WHERE thread_id = %s AND agent_id = %s AND project_slug = %s ORDER BY created_at DESC LIMIT 1",
+                        (thread_id, agent_id, project_slug),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        task_id = str(row[0])
+                if not task_id:
+                    return
+                phase = state.get("project_phase", "discovery")
+                for f in written_files:
+                    cur.execute(
+                        """INSERT INTO project.dispatcher_task_artifacts
+                           (task_id, key, deliverable_type, file_path, category, status, version, workflow_id)
+                           VALUES (%s::uuid, %s, 'document', %s, %s, 'review', 1, %s)
+                           ON CONFLICT DO NOTHING""",
+                        (task_id, f["key"], f["path"], phase, workflow_id),
+                    )
+                logger.info("[artifacts] Registered %d artifacts for %s", len(written_files), agent_id)
+    except Exception as e:
+        logger.warning("[artifacts] Register failed: %s", e)
+
+
 async def _persist_deliverable_to_fs(state: dict, agent_id: str, output: dict):
     """Write agent deliverable to filesystem and index in pgvector."""
     try:
@@ -872,8 +923,11 @@ async def _persist_deliverable_to_fs(state: dict, agent_id: str, output: dict):
         workflow = state.get("_workflow", "main")
         iteration = state.get("_iteration")
         from agents.shared.project_store import persist_deliverable
-        await asyncio.to_thread(persist_deliverable, slug, phase, agent_id, output,
+        written_files = await asyncio.to_thread(persist_deliverable, slug, phase, agent_id, output,
                                 team_id=team_id, workflow=workflow, iteration=iteration)
+        # Register artifacts in dispatcher_task_artifacts for workflow tracking
+        logger.info("[persist] written_files=%s for %s", written_files, agent_id)
+        _register_artifacts(state, agent_id, written_files)
         # Index in pgvector (non-blocking, best-effort)
         await _index_in_rag(state, agent_id, output)
     except Exception as e:

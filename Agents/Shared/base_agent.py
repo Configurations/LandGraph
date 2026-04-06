@@ -802,6 +802,10 @@ class BaseAgent:
                     "team_id": state.get("_team_id", ""),
                     "agent_id": self.agent_id,
                     "current_phase": state.get("project_phase", "discovery"),
+                    "thread_id": state.get("_thread_id", ""),
+                    "workflow_id": state.get("_workflow_id"),
+                    "phase_id": state.get("_phase_id"),
+                    "task_id": state.get("_task_row_id", ""),
                 })
             except Exception:
                 pass
