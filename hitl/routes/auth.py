@@ -43,8 +43,8 @@ async def google_client_id() -> dict:
     """Return the Google OAuth client ID (or null if disabled)."""
     cfg = load_json_config("hitl.json").get("google_oauth", {})
     if cfg.get("enabled", False):
-        return {"client_id": cfg.get("client_id")}
-    return {"client_id": None}
+        return {"enabled": True, "client_id": cfg.get("client_id")}
+    return {"enabled": False, "client_id": None}
 
 
 @router.get("/me", response_model=UserResponse)
