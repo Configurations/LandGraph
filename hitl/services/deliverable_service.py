@@ -246,6 +246,94 @@ async def update_content(artifact_id: int, content: str) -> bool:
         return False
 
 
+async def reset_group(phase_id: int) -> dict:
+    """Reset a workflow group: delete tasks, artifacts, files and revert phase to pending."""
+    # 1. Récupérer le contexte
+    phase = await fetch_one(
+        """SELECT wp.id, wp.workflow_id, wp.phase_key, wp.group_key, wp.status,
+                  pw.project_slug, pw.team_id, pw.workflow_name, pw.iteration,
+                  pw.current_phase_id
+           FROM project.workflow_phases wp
+           JOIN project.project_workflows pw ON wp.workflow_id = pw.id
+           WHERE wp.id = $1""",
+        phase_id,
+    )
+    if not phase:
+        raise ValueError("Phase not found")
+
+    workflow_id = phase["workflow_id"]
+
+    # 2. Supprimer les fichiers disque
+    artifacts = await fetch_all(
+        """SELECT a.file_path
+           FROM project.dispatcher_task_artifacts a
+           JOIN project.dispatcher_tasks t ON a.task_id = t.id
+           WHERE t.phase_id = $1 AND a.file_path IS NOT NULL""",
+        phase_id,
+    )
+    ag_root = settings.ag_flow_root or os.getenv("AG_FLOW_ROOT", "/root/ag.flow")
+    deleted_files = 0
+    for art in artifacts:
+        fp = art["file_path"]
+        full = os.path.join(ag_root, fp) if not os.path.isabs(fp) else fp
+        if os.path.isfile(full):
+            os.remove(full)
+            deleted_files += 1
+            log.info("reset_group_file_deleted", path=full)
+
+    # 3. Nettoyer la DB (cascade: artifacts, events, remarks)
+    result = await execute(
+        "DELETE FROM project.dispatcher_tasks WHERE phase_id = $1",
+        phase_id,
+    )
+    log.info("reset_group_tasks_deleted", phase_id=phase_id, result=result)
+
+    # 4. Remettre la phase en pending
+    await execute(
+        """UPDATE project.workflow_phases
+           SET status = 'pending', started_at = NULL, completed_at = NULL
+           WHERE id = $1""",
+        phase_id,
+    )
+
+    # 5. Reculer current_phase_id vers le groupe précédent
+    if phase["current_phase_id"] == phase_id:
+        prev = await fetch_one(
+            """SELECT id FROM project.workflow_phases
+               WHERE workflow_id = $1 AND id < $2
+               ORDER BY id DESC LIMIT 1""",
+            workflow_id, phase_id,
+        )
+        prev_id = prev["id"] if prev else None
+        await execute(
+            "UPDATE project.project_workflows SET current_phase_id = $1 WHERE id = $2",
+            prev_id, workflow_id,
+        )
+
+    # 6. Annuler les HITL requests pendantes
+    thread_id = "workflow-{}".format(workflow_id)
+    await execute(
+        """UPDATE project.hitl_requests SET status = 'cancelled'
+           WHERE thread_id = $1 AND status = 'pending'""",
+        thread_id,
+    )
+
+    log.info(
+        "group_reset",
+        phase_id=phase_id,
+        phase_key=phase["phase_key"],
+        group_key=phase["group_key"],
+        deleted_files=deleted_files,
+    )
+    return {
+        "ok": True,
+        "phase_id": phase_id,
+        "phase_key": phase["phase_key"],
+        "group_key": phase["group_key"],
+        "deleted_files": deleted_files,
+    }
+
+
 async def revise_deliverable(
     artifact_id: int,
     comment: str,

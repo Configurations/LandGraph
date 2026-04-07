@@ -141,6 +141,22 @@ async def start_workflow_route(
         raise HTTPException(status_code=409, detail=str(exc))
 
 
+@router.post("/{slug}/workflows/{workflow_id}/phases/{phase_id}/reset")
+async def reset_phase_group(
+    slug: str,
+    workflow_id: int,
+    phase_id: int,
+    user: TokenData = Depends(get_current_user),
+) -> dict:
+    """Reset a group within a phase: delete tasks, artifacts, files."""
+    await _require_project(slug, user)
+    from services import deliverable_service
+    try:
+        return await deliverable_service.reset_group(phase_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
 @router.get("/{slug}/workflows/{workflow_id}/phases")
 async def get_workflow_phases(
     slug: str,
