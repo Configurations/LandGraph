@@ -163,7 +163,7 @@ export function InboxPage(): JSX.Element {
               <Select
                 options={[
                   { value: '', label: t('multi_workflow.all_workflows') },
-                  ...projectWorkflows.map((w) => ({ value: w.id, label: w.name })),
+                  ...projectWorkflows.map((w) => ({ value: String(w.id), label: w.workflow_name })),
                 ]}
                 value={workflowFilter}
                 onChange={(e) => updateFilter('workflow', e.target.value)}

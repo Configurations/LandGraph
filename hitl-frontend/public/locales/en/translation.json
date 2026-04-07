@@ -10,7 +10,8 @@
     "search": "Search",
     "no_results": "No results",
     "back": "Back",
-    "logout": "Log out"
+    "logout": "Log out",
+    "refresh": "Refresh"
   },
   "auth": {
     "login": "Sign in",
@@ -356,7 +357,7 @@
   "workflow": {
     "agents": "Agents",
     "deliverables": "Deliverables",
-    "no_content": "No content for this phase",
+    "no_content": "No content produced",
     "phase_status_pending": "Pending",
     "phase_status_active": "Active",
     "phase_status_completed": "Completed",
@@ -373,7 +374,26 @@
     "phase_design": "Design",
     "phase_build": "Build",
     "phase_ship": "Ship",
-    "phase_iterate": "Iterate"
+    "phase_iterate": "Iterate",
+    "human_gate": "Validation required",
+    "gate_response_placeholder": "Your response...",
+    "respond": "Respond",
+    "revisions": "Revisions",
+    "validate": "Validate",
+    "comment": "Comment",
+    "edit": "Edit",
+    "comment_placeholder": "Describe the corrections needed...",
+    "send_revision": "Send revision",
+    "no_deliverables": "No deliverables in this group",
+    "select_deliverable": "Select a deliverable to preview",
+    "click_start": "Click Start to launch this workflow",
+    "no_phases": "No phases",
+    "start": "Start",
+    "validated": "validated",
+    "in_progress": "in progress",
+    "status_pending": "pending",
+    "status_completed": "completed",
+    "status_failed": "failed"
   },
   "project_type": {
     "select_type": "Project type",

@@ -13,10 +13,20 @@ from schemas.workflow import (
     ProjectWorkflowResponse,
 )
 from services import multi_workflow_service
+from services import project_service
 
 log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/api/projects", tags=["workflows"])
+
+
+async def _require_project(slug: str, user: TokenData) -> None:
+    """Validate project exists and user has access."""
+    project = await project_service.get_project(slug)
+    if not project:
+        raise HTTPException(status_code=404, detail="project.not_found")
+    if user.role != "admin" and project.team_id not in user.teams:
+        raise HTTPException(status_code=403, detail="team.access_denied")
 
 
 @router.get("/{slug}/workflows", response_model=list[ProjectWorkflowResponse])
@@ -115,3 +125,32 @@ async def relaunch_workflow(
     if wf is None:
         raise HTTPException(status_code=409, detail="workflow.invalid_transition")
     return wf
+
+
+@router.post("/{slug}/workflows/{workflow_id}/start")
+async def start_workflow_route(
+    slug: str,
+    workflow_id: int,
+    user: TokenData = Depends(get_current_user),
+) -> dict:
+    """Start a workflow: create first phase and dispatch agents."""
+    await _require_project(slug, user)
+    try:
+        return await multi_workflow_service.start_workflow(slug, workflow_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.get("/{slug}/workflows/{workflow_id}/phases")
+async def get_workflow_phases(
+    slug: str,
+    workflow_id: int,
+    user: TokenData = Depends(get_current_user),
+):
+    """Get workflow phases with deliverable content for inline preview."""
+    await _require_project(slug, user)
+    from services import workflow_service
+    result = await workflow_service.get_workflow_phases_detail(slug, workflow_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    return result

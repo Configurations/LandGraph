@@ -10,7 +10,8 @@
     "search": "Rechercher",
     "no_results": "Aucun resultat",
     "back": "Retour",
-    "logout": "Se deconnecter"
+    "logout": "Se deconnecter",
+    "refresh": "Actualiser"
   },
   "auth": {
     "login": "Connexion",
@@ -356,7 +357,7 @@
   "workflow": {
     "agents": "Agents",
     "deliverables": "Livrables",
-    "no_content": "Aucun contenu pour cette phase",
+    "no_content": "Aucun contenu produit",
     "phase_status_pending": "En attente",
     "phase_status_active": "Active",
     "phase_status_completed": "Terminee",
@@ -373,7 +374,26 @@
     "phase_design": "Design",
     "phase_build": "Build",
     "phase_ship": "Ship",
-    "phase_iterate": "Iterate"
+    "phase_iterate": "Iterate",
+    "human_gate": "Validation requise",
+    "gate_response_placeholder": "Votre reponse...",
+    "respond": "Repondre",
+    "revisions": "Revisions",
+    "validate": "Valider",
+    "comment": "Commenter",
+    "edit": "Editer",
+    "comment_placeholder": "Decrivez les corrections a apporter...",
+    "send_revision": "Envoyer correction",
+    "no_deliverables": "Aucun livrable dans ce groupe",
+    "select_deliverable": "Selectionnez un livrable pour le consulter",
+    "click_start": "Cliquez Lancer pour demarrer ce workflow",
+    "no_phases": "Aucune phase",
+    "start": "Lancer",
+    "validated": "valides",
+    "in_progress": "en cours",
+    "status_pending": "en attente",
+    "status_completed": "termine",
+    "status_failed": "echoue"
   },
   "project_type": {
     "select_type": "Type de projet",

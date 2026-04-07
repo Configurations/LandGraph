@@ -570,22 +570,66 @@ export interface ProjectTypeResponse {
   chats: ChatTemplate[];
 }
 
+/* ── Workflow Execution Detail ── */
+
+export interface DeliverableWithContent {
+  id: number;
+  key: string;
+  agent_id: string;
+  agent_name: string;
+  status: 'pending' | 'running' | 'review' | 'revision' | 'approved' | 'rejected';
+  version: number;
+  file_path: string | null;
+  content: string;
+  reviewer: string | null;
+  review_comment: string | null;
+  reviewed_at: string | null;
+  created_at: string | null;
+}
+
+export interface PhaseDetailResponse {
+  id: number;
+  phase_key: string;
+  phase_name: string;
+  group_key: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  deliverables: DeliverableWithContent[];
+}
+
+export interface HumanGateInfo {
+  id: string;
+  prompt: string;
+  agent_id: string;
+  created_at: string;
+}
+
+export interface WorkflowPhasesResponse {
+  workflow_id: number;
+  workflow_name: string;
+  status: string;
+  human_gate: HumanGateInfo | null;
+  phases: PhaseDetailResponse[];
+}
+
 /* ── Project Workflows ── */
 
-export type ProjectWorkflowStatus = 'draft' | 'active' | 'paused' | 'completed';
+export type ProjectWorkflowStatus = 'pending' | 'active' | 'paused' | 'completed' | 'cancelled';
 
 export interface ProjectWorkflowResponse {
-  id: string;
-  project_id: string;
-  workflow_template_id: string;
-  name: string;
-  type: string;
-  mode: 'sequential' | 'parallel';
+  id: number;
+  project_slug: string;
+  workflow_name: string;
+  workflow_type: string;
+  workflow_json_path: string;
   status: ProjectWorkflowStatus;
-  progress: number;
-  depends_on: string[];
-  created_at: string;
-  updated_at: string;
+  mode: string;
+  priority: number;
+  iteration: number;
+  depends_on_workflow_id: number | null;
+  config: Record<string, string>;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at?: string;
 }
 
 export interface ProjectWorkflowCreatePayload {

@@ -3,6 +3,7 @@ import type {
   PhaseStatus,
   ProjectWorkflowCreatePayload,
   ProjectWorkflowResponse,
+  WorkflowPhasesResponse,
   WorkflowStatusResponse,
 } from './types';
 
@@ -66,5 +67,18 @@ export function relaunchWorkflow(slug: string, workflowId: string): Promise<Proj
   return apiFetch<ProjectWorkflowResponse>(
     `/api/projects/${enc(slug)}/workflows/${enc(workflowId)}/relaunch`,
     { method: 'POST' },
+  );
+}
+
+export function startWorkflow(slug: string, workflowId: number): Promise<{ ok: boolean; dispatched: string[] }> {
+  return apiFetch<{ ok: boolean; dispatched: string[] }>(
+    `/api/projects/${encodeURIComponent(slug)}/workflows/${workflowId}/start`,
+    { method: 'POST' },
+  );
+}
+
+export function getWorkflowPhases(slug: string, workflowId: number): Promise<WorkflowPhasesResponse> {
+  return apiFetch<WorkflowPhasesResponse>(
+    `/api/projects/${encodeURIComponent(slug)}/workflows/${workflowId}/phases`,
   );
 }

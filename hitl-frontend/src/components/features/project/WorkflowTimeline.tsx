@@ -8,17 +8,19 @@ interface WorkflowTimelineProps {
 }
 
 const statusColor: Record<ProjectWorkflowStatus, 'blue' | 'green' | 'orange' | 'purple'> = {
-  draft: 'purple',
+  pending: 'purple',
   active: 'blue',
   paused: 'orange',
   completed: 'green',
+  cancelled: 'orange',
 };
 
 const statusDot: Record<ProjectWorkflowStatus, string> = {
-  draft: 'bg-accent-purple',
+  pending: 'bg-accent-purple',
   active: 'bg-accent-blue',
   paused: 'bg-accent-orange',
   completed: 'bg-accent-green',
+  cancelled: 'bg-accent-orange',
 };
 
 export function WorkflowTimeline({
@@ -38,7 +40,7 @@ export function WorkflowTimeline({
   return (
     <div className={`relative flex flex-col gap-0 ${className}`}>
       {workflows.map((wf, idx) => {
-        const hasDeps = wf.depends_on.length > 0;
+        const hasDeps = wf.depends_on_workflow_id != null;
         const isLast = idx === workflows.length - 1;
 
         return (
@@ -50,7 +52,7 @@ export function WorkflowTimeline({
 
             <div className="flex flex-col gap-1 pb-6">
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-content-primary">{wf.name}</span>
+                <span className="text-sm font-medium text-content-primary">{wf.workflow_name}</span>
                 <Badge color={statusColor[wf.status]} size="sm" variant="status">
                   {t(`multi_workflow.status_${wf.status}`)}
                 </Badge>
@@ -59,16 +61,9 @@ export function WorkflowTimeline({
 
               {hasDeps && (
                 <p className="text-xs text-content-quaternary">
-                  {t('multi_workflow.depends_on')}: {wf.depends_on.join(', ')}
+                  {t('multi_workflow.depends_on')}: {wf.depends_on_workflow_id}
                 </p>
               )}
-
-              <div className="w-48 bg-surface-tertiary rounded-full h-1 mt-1">
-                <div
-                  className="bg-accent-blue h-1 rounded-full transition-all"
-                  style={{ width: `${Math.min(wf.progress, 100)}%` }}
-                />
-              </div>
             </div>
           </div>
         );

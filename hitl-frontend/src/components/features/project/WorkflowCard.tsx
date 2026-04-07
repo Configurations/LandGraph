@@ -13,10 +13,11 @@ interface WorkflowCardProps {
 }
 
 const statusColor: Record<ProjectWorkflowStatus, 'blue' | 'green' | 'orange' | 'purple'> = {
-  draft: 'purple',
+  pending: 'purple',
   active: 'blue',
   paused: 'orange',
   completed: 'green',
+  cancelled: 'orange',
 };
 
 export function WorkflowCard({
@@ -37,47 +38,37 @@ export function WorkflowCard({
       ].join(' ')}
     >
       <div className="flex items-center justify-between">
-        <h4 className="text-sm font-semibold text-content-primary">{workflow.name}</h4>
+        <h4 className="text-sm font-semibold text-content-primary">{workflow.workflow_name}</h4>
         <Badge color={statusColor[workflow.status]} variant="status" size="sm">
           {t(`multi_workflow.status_${workflow.status}`)}
         </Badge>
       </div>
 
       <div className="flex items-center gap-2">
-        <Badge color="purple" size="sm">{workflow.type}</Badge>
+        <Badge color="purple" size="sm">{workflow.workflow_type}</Badge>
         <Badge color="blue" size="sm">
           {t(`multi_workflow.mode_${workflow.mode}`)}
         </Badge>
       </div>
 
-      <div className="w-full bg-surface-tertiary rounded-full h-1.5">
-        <div
-          className="bg-accent-blue h-1.5 rounded-full transition-all"
-          style={{ width: `${Math.min(workflow.progress, 100)}%` }}
-        />
-      </div>
-      <span className="text-xs text-content-tertiary">
-        {t('multi_workflow.progress_label', { value: workflow.progress })}
-      </span>
-
       <div className="flex gap-2 mt-auto">
-        {workflow.status === 'draft' && onActivate && (
-          <Button variant="primary" size="sm" onClick={() => onActivate(workflow.id)}>
+        {workflow.status === 'pending' && onActivate && (
+          <Button variant="primary" size="sm" onClick={() => onActivate(String(workflow.id))}>
             {t('multi_workflow.activate')}
           </Button>
         )}
         {workflow.status === 'active' && onPause && (
-          <Button variant="secondary" size="sm" onClick={() => onPause(workflow.id)}>
+          <Button variant="secondary" size="sm" onClick={() => onPause(String(workflow.id))}>
             {t('multi_workflow.pause')}
           </Button>
         )}
         {workflow.status === 'active' && onComplete && (
-          <Button variant="primary" size="sm" onClick={() => onComplete(workflow.id)}>
+          <Button variant="primary" size="sm" onClick={() => onComplete(String(workflow.id))}>
             {t('multi_workflow.complete')}
           </Button>
         )}
         {(workflow.status === 'paused' || workflow.status === 'completed') && onRelaunch && (
-          <Button variant="ghost" size="sm" onClick={() => onRelaunch(workflow.id)}>
+          <Button variant="ghost" size="sm" onClick={() => onRelaunch(String(workflow.id))}>
             {t('multi_workflow.relaunch')}
           </Button>
         )}

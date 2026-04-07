@@ -108,6 +108,19 @@ async def list_remarks(
     return await deliverable_service.list_remarks(artifact_id)
 
 
+@router.post("/api/deliverables/{artifact_id}/revise")
+async def revise_deliverable_route(
+    artifact_id: int,
+    body: RemarkRequest,
+    user: TokenData = Depends(get_current_user),
+) -> dict:
+    """Send a revision comment and re-dispatch the agent for correction."""
+    try:
+        return await deliverable_service.revise_deliverable(artifact_id, body.comment, user.email)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.get("/api/projects/{slug}/branches", response_model=list[BranchInfo])
 async def list_branches(
     slug: str,

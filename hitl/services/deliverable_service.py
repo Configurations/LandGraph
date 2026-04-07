@@ -244,3 +244,75 @@ async def update_content(artifact_id: int, content: str) -> bool:
     except OSError:
         log.error("deliverable_write_failed", artifact_id=artifact_id, path=full)
         return False
+
+
+async def revise_deliverable(
+    artifact_id: int,
+    comment: str,
+    reviewer: str,
+) -> dict:
+    """Send a revision comment — relaunches the agent with the current content + comment."""
+    import httpx
+
+    row = await fetch_one(
+        """SELECT a.id, a.key, a.file_path, a.status, a.version, a.task_id,
+                  t.agent_id, t.project_slug, t.team_id, t.thread_id
+           FROM project.dispatcher_task_artifacts a
+           JOIN project.dispatcher_tasks t ON a.task_id = t.id
+           WHERE a.id = $1""",
+        artifact_id,
+    )
+    if not row:
+        raise ValueError("Deliverable not found")
+
+    await execute(
+        "INSERT INTO project.deliverable_remarks (artifact_id, reviewer, comment) VALUES ($1, $2, $3)",
+        artifact_id, reviewer, comment,
+    )
+
+    await execute(
+        "UPDATE project.dispatcher_task_artifacts SET status = 'revision' WHERE id = $1",
+        artifact_id,
+    )
+
+    content = ""
+    if row["file_path"]:
+        ag_flow_root = os.getenv("AG_FLOW_ROOT", "/root/ag.flow")
+        fpath = os.path.join(ag_flow_root, row["file_path"])
+        if os.path.isfile(fpath):
+            with open(fpath, encoding="utf-8") as f:
+                content = f.read()
+
+    gateway_url = settings.langgraph_api_url or "http://langgraph-api:8000"
+
+    instruction = (
+        "Corrige le livrable '{}' en tenant compte du commentaire de l'utilisateur.\n\n"
+        "--- LIVRABLE ACTUEL ---\n{}\n\n"
+        "--- COMMENTAIRE ---\n{}\n\n"
+        "--- CONSIGNE ---\n"
+        "Produis une version corrigee complete du livrable. "
+        "Utilise save_deliverable avec la meme cle '{}' pour sauvegarder."
+    ).format(row["key"], content[:8000], comment, row["key"])
+
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.post(
+                "{}/invoke".format(gateway_url),
+                json={
+                    "messages": [{"role": "user", "content": instruction}],
+                    "team_id": row["team_id"] or "",
+                    "thread_id": row["thread_id"] or "",
+                    "project_slug": row["project_slug"] or "",
+                    "direct_agent": row["agent_id"],
+                },
+            )
+            resp.raise_for_status()
+    except Exception as exc:
+        log.error("revise_dispatch_failed", artifact_id=artifact_id, error=str(exc)[:200])
+        await execute(
+            "UPDATE project.dispatcher_task_artifacts SET status = 'review' WHERE id = $1",
+            artifact_id,
+        )
+        raise ValueError("Agent dispatch failed: {}".format(str(exc)[:200]))
+
+    return {"ok": True, "status": "revision"}

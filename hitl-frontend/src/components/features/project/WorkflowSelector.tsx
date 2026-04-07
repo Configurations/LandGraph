@@ -1,19 +1,20 @@
 import { useTranslation } from 'react-i18next';
 import { Badge } from '../../ui/Badge';
-import type { ProjectWorkflowResponse, ProjectWorkflowStatus } from '../../../api/types';
+import type { ProjectWorkflowResponse } from '../../../api/types';
 
 interface WorkflowSelectorProps {
   workflows: ProjectWorkflowResponse[];
-  selectedId: string | null;
-  onSelect: (id: string) => void;
+  selectedId: number | string | null;
+  onSelect: (id: number) => void;
   className?: string;
 }
 
-const statusColor: Record<ProjectWorkflowStatus, 'blue' | 'green' | 'orange' | 'purple'> = {
-  draft: 'purple',
+const statusColor: Record<string, 'blue' | 'green' | 'orange' | 'purple'> = {
+  pending: 'purple',
   active: 'blue',
   paused: 'orange',
   completed: 'green',
+  cancelled: 'purple',
 };
 
 export function WorkflowSelector({
@@ -45,7 +46,7 @@ export function WorkflowSelector({
               : 'bg-surface-tertiary text-content-secondary hover:bg-surface-hover',
           ].join(' ')}
         >
-          <span>{wf.name}</span>
+          <span>{wf.workflow_name}</span>
           <Badge color={statusColor[wf.status]} size="sm" variant="status">
             {t(`multi_workflow.status_${wf.status}`)}
           </Badge>

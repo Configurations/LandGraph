@@ -8,9 +8,7 @@ import { ProjectTabs, type ProjectTab } from '../components/features/project/Pro
 import { ProjectOverview } from '../components/features/project/ProjectOverview';
 import { ProjectTeamGrid } from '../components/features/project/ProjectTeamGrid';
 import { DependencyGraphSimple } from '../components/features/project/DependencyGraphSimple';
-import { WorkflowPhaseBar } from '../components/features/workflow/WorkflowPhaseBar';
-import { WorkflowPhaseDetail } from '../components/features/workflow/WorkflowPhaseDetail';
-import { WorkflowSelector } from '../components/features/project/WorkflowSelector';
+import { WorkflowExecutionPanel } from '../components/features/workflow/WorkflowExecutionPanel';
 import { AutomationRuleList } from '../components/features/automation/AutomationRuleList';
 import { AutomationRuleForm } from '../components/features/automation/AutomationRuleForm';
 import { AutomationStats as AutomationStatsPanel } from '../components/features/automation/AutomationStats';
@@ -32,7 +30,6 @@ import type {
   ProjectOverviewData,
   ProjectWorkflowResponse,
   RelationType,
-  WorkflowStatusResponse,
 } from '../api/types';
 
 interface SimpleRelation {
@@ -53,12 +50,9 @@ export function ProjectDetailPage(): JSX.Element {
   const [deleting, setDeleting] = useState(false);
   const [tab, setTab] = useState<ProjectTab>('issues');
   const [overview, setOverview] = useState<ProjectOverviewData | null>(null);
-  const [workflow, setWorkflow] = useState<WorkflowStatusResponse | null>(null);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [relations, setRelations] = useState<SimpleRelation[]>([]);
-  const [selectedPhase, setSelectedPhase] = useState<string | null>(null);
   const [projectWorkflows, setProjectWorkflows] = useState<ProjectWorkflowResponse[]>([]);
-  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
   const [automationRules, setAutomationRules] = useState<AutomationRule[]>([]);
   const [automationStats, setAutomationStats] = useState<AutomationStats | null>(null);
   const [ruleFormOpen, setRuleFormOpen] = useState(false);
@@ -108,19 +102,15 @@ export function ProjectDetailPage(): JSX.Element {
     const encodedSlug = encodeURIComponent(slug);
     Promise.all([
       apiFetch<ProjectOverviewData>(`/api/projects/${encodedSlug}/overview`),
-      workflowApi.getWorkflowStatus(slug),
       apiFetch<AgentInfo[]>(`/api/projects/${encodedSlug}/agents`),
       apiFetch<SimpleRelation[]>(`/api/projects/${encodedSlug}/relations`),
       workflowApi.listProjectWorkflows(slug).catch(() => [] as ProjectWorkflowResponse[]),
     ])
-      .then(([ov, wf, ag, rels, pws]) => {
+      .then(([ov, ag, rels, pws]) => {
         setOverview(ov);
-        setWorkflow(wf);
         setAgents(ag);
         setRelations(rels);
         setProjectWorkflows(pws);
-        if (pws.length > 0) setSelectedWorkflowId(pws[0].id);
-        if (wf.phases.length > 0) setSelectedPhase(wf.current_phase);
       })
       .finally(() => setLoading(false));
     setFilters({ projectId: slug });
@@ -185,9 +175,8 @@ export function ProjectDetailPage(): JSX.Element {
     );
   }
 
-  const activePhase = workflow?.phases.find((p) => p.id === selectedPhase) ?? null;
   const blockedIssues: IssueResponse[] = issues.filter((i) => i.is_blocked);
-  const workflowTypes = [...new Set(projectWorkflows.map((w) => w.type))];
+  const workflowTypes = [...new Set(projectWorkflows.map((w) => w.workflow_type))];
   const deliverableTypes = [...new Set(automationRules.map((r) => r.deliverable_type))];
 
   return (
@@ -211,22 +200,12 @@ export function ProjectDetailPage(): JSX.Element {
         {tab === 'issues' && (
           <IssueList issues={issues} loading={false} onSelect={setSelected} groupBy="status" />
         )}
-        {tab === 'workflow' && workflow && (
-          <div className="flex flex-col gap-4">
-            {projectWorkflows.length > 1 && (
-              <WorkflowSelector
-                workflows={projectWorkflows}
-                selectedId={selectedWorkflowId}
-                onSelect={setSelectedWorkflowId}
-              />
-            )}
-            <WorkflowPhaseBar
-              phases={workflow.phases}
-              selectedPhaseId={selectedPhase}
-              onSelectPhase={setSelectedPhase}
-            />
-            {activePhase && <WorkflowPhaseDetail phase={activePhase} />}
-          </div>
+        {tab === 'workflow' && (
+          <WorkflowExecutionPanel
+            slug={slug!}
+            workflows={projectWorkflows}
+            onRefreshWorkflows={() => workflowApi.listProjectWorkflows(slug!).then(setProjectWorkflows)}
+          />
         )}
         {tab === 'team' && (
           <ProjectTeamGrid agents={agents} members={overview.members} />

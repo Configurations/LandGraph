@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -79,3 +80,41 @@ class ProjectWorkflowResponse(BaseModel):
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     created_at: Optional[str] = None
+
+
+class DeliverableWithContent(BaseModel):
+    """Deliverable with full markdown content for inline preview."""
+
+    id: int
+    key: str
+    agent_id: str
+    agent_name: str = ""
+    status: str
+    version: int = 1
+    file_path: Optional[str] = None
+    content: str = ""
+    reviewer: Optional[str] = None
+    review_comment: Optional[str] = None
+    reviewed_at: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class PhaseDetailResponse(BaseModel):
+    """A single phase/group with its deliverables including content."""
+
+    id: int
+    phase_key: str
+    phase_name: str
+    group_key: str
+    status: str
+    deliverables: list[DeliverableWithContent] = []
+
+
+class WorkflowPhasesResponse(BaseModel):
+    """Full workflow execution state with phases and deliverables."""
+
+    workflow_id: int
+    workflow_name: str
+    status: str
+    human_gate: Optional[dict] = None
+    phases: list[PhaseDetailResponse] = []

@@ -335,6 +335,15 @@ async def apply_project_type(
         "UPDATE project.project_workflows SET current_phase_id = NULL WHERE project_slug = $1",
         project_slug,
     )
+    # Cancel orphan hitl_requests for workflows being deleted
+    await execute(
+        """UPDATE project.hitl_requests SET status = 'cancelled'
+           WHERE status = 'pending'
+             AND thread_id IN (
+               SELECT 'workflow-' || id::text FROM project.project_workflows WHERE project_slug = $1
+             )""",
+        project_slug,
+    )
     await execute(
         """DELETE FROM project.dispatcher_tasks
            WHERE workflow_id IN (SELECT id FROM project.project_workflows WHERE project_slug = $1)""",

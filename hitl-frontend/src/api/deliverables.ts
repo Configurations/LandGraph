@@ -63,3 +63,10 @@ export function getBranchDiff(slug: string, branch: string): Promise<BranchDiffF
     `/api/projects/${encodeURIComponent(slug)}/branches/${encodeURIComponent(branch)}/diff`,
   );
 }
+
+export function reviseDeliverable(id: number, comment: string): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/deliverables/${id}/revise`, {
+    method: 'POST',
+    body: JSON.stringify({ comment }),
+  });
+}

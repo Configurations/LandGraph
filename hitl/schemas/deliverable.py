@@ -19,6 +19,7 @@ class DeliverableResponse(BaseModel):
     git_branch: Optional[str] = None
     category: Optional[str] = None
     status: str = "pending"
+    version: int = 1
     reviewer: Optional[str] = None
     review_comment: Optional[str] = None
     reviewed_at: Optional[datetime] = None
