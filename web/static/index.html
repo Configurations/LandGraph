@@ -213,20 +213,13 @@
         <div class="cfg-tab-content" id="cfg-tab-cfg-mcp">
           <div class="card">
             <div class="card-header">
-              <h3>Services avec parametres</h3>
-              <div style="display:flex;gap:0.5rem">
-                <button class="btn btn-outline btn-sm" onclick="copyCfgMCPFromTemplate()">Copier depuis Configuration</button>
-                <button class="btn btn-primary btn-sm" onclick="showAddCfgCatalogModal()">+ Installer un service</button>
+              <h3>Catalogue MCP</h3>
+              <div style="display:flex;gap:0.5rem;align-items:center">
+                <select id="cfg-mcp-discovery-select" style="min-width:180px"></select>
+                <button class="btn btn-primary btn-sm" onclick="showCfgMcpSearchModal()">Ajouter</button>
               </div>
             </div>
-            <div class="table-container" id="cfg-mcp-configured"></div>
-          </div>
-          <div class="card" style="margin-top:1rem">
-            <div class="card-header">
-              <h3>Services sans parametres</h3>
-              <button id="btn-cfg-show-deprecated" class="btn btn-outline btn-sm" onclick="toggleCfgDeprecated()">Afficher deprecies</button>
-            </div>
-            <div class="mcp-grid" id="cfg-mcp-catalog"></div>
+            <div id="cfg-mcp-list"></div>
           </div>
         </div>
 
@@ -450,20 +443,6 @@
           </div>
         </div>
 
-        <!-- Modal: Copy MCP from Configuration -->
-        <div class="modal-overlay" id="modal-copy-mcp" style="display:none">
-          <div class="modal" style="max-width:700px">
-            <div class="modal-header">
-              <h3>Copier depuis Configuration</h3>
-              <button class="btn-close" onclick="closeModal('modal-copy-mcp')">&times;</button>
-            </div>
-            <div id="modal-copy-mcp-body"></div>
-            <div class="modal-footer">
-              <button class="btn btn-outline" onclick="closeModal('modal-copy-mcp')">Annuler</button>
-              <button class="btn btn-primary" onclick="_execCopyMCPFromTemplate()">Copier la selection</button>
-            </div>
-          </div>
-        </div>
 
         <!-- Sub-tab: Avatars (Production) -->
         <div class="cfg-tab-content" id="cfg-tab-cfg-avatars">

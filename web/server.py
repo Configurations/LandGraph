@@ -358,7 +358,7 @@ def _write_env(path: Path, entries: list[dict]):
 
 
 def _parse_mcp_catalog() -> list[dict]:
-    """Parse mcp_catalog.csv."""
+    """Parse mcp_catalog.csv (format: repo_url|package)."""
     items = []
     if not MCP_CATALOG_FILE.exists():
         return items
@@ -367,22 +367,10 @@ def _parse_mcp_catalog() -> list[dict]:
         if not line or line.startswith("#"):
             continue
         parts = line.split("|")
-        if len(parts) >= 8:
-            env_vars = []
-            if len(parts) > 8 and parts[8].strip():
-                for ev in parts[8].split(","):
-                    kv = ev.split(":", 1)
-                    env_vars.append({"var": kv[0].strip(), "desc": kv[1].strip() if len(kv) > 1 else ""})
+        if len(parts) >= 2:
             items.append({
-                "deprecated": parts[0].strip() == "1",
-                "type": parts[1].strip(),
-                "id": parts[2].strip(),
-                "label": parts[3].strip(),
-                "description": parts[4].strip(),
-                "command": parts[5].strip(),
-                "args": parts[6].strip(),
-                "transport": parts[7].strip(),
-                "env_vars": env_vars,
+                "repo_url": parts[0].strip(),
+                "package": parts[1].strip(),
             })
     return items
 
@@ -472,48 +460,16 @@ async def merge_env_entries(data: EnvMerge):
 # ── MCP helpers ────────────────────────────────────
 
 def _write_mcp_catalog(items: list[dict]):
-    """Write catalog back to CSV, preserving header comments."""
-    lines = []
-    if MCP_CATALOG_FILE.exists():
-        for line in MCP_CATALOG_FILE.read_text(encoding="utf-8").splitlines():
-            if line.strip().startswith("#") or not line.strip():
-                lines.append(line)
-            else:
-                break
+    """Write catalog back to CSV (format: repo_url|package)."""
+    lines = ["# Format : repo_url|package"]
     for item in items:
-        env_str = ",".join(
-            f"{v['var']}:{v['desc']}" for v in item.get("env_vars", [])
-        )
-        dep = "1" if item.get("deprecated") else "0"
-        itype = item.get("type", item.get("command", "npx"))
-        lines.append(
-            f"{dep}|{itype}|{item['id']}|{item['label']}|{item['description']}"
-            f"|{item['command']}|{item['args']}|{item['transport']}|{env_str}"
-        )
+        lines.append("{}|{}".format(item["repo_url"], item["package"]))
     MCP_CATALOG_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _get_mcp_full() -> list[dict]:
-    """Return catalog entries enriched with install status and agent access."""
-    catalog = _parse_mcp_catalog()
-    servers = _read_json(MCP_SERVERS_FILE).get("servers", {})
-    access = _read_json(MCP_ACCESS_FILE)
-    env_entries = {e["key"]: e["value"] for e in _parse_env(ENV_FILE) if e.get("key")}
-
-    for item in catalog:
-        srv = servers.get(item["id"])
-        item["installed"] = srv is not None
-        item["enabled"] = srv.get("enabled", True) if srv else False
-        item["agents"] = [
-            aid for aid, sids in access.items() if item["id"] in sids
-        ]
-        env_map = srv.get("env", {}) if srv else {}
-        for ev in item.get("env_vars", []):
-            mapped_name = env_map.get(ev["var"], ev["var"])
-            ev["mapped_var"] = mapped_name
-            val = env_entries.get(mapped_name, "")
-            ev["configured"] = bool(val) and val != "A_CONFIGURER"
-    return catalog
+    """Return catalog entries (repo_url, package)."""
+    return _parse_mcp_catalog()
 
 
 # ── API: MCP Catalog (pivot central) ──────────────
@@ -524,59 +480,27 @@ async def get_mcp_catalog():
 
 
 class MCPCatalogEntry(BaseModel):
-    id: str
-    label: str
-    description: str
-    command: str
-    args: str
-    transport: str = "stdio"
-    env_vars: list[dict] = []
-    deprecated: bool = False
+    repo_url: str
+    package: str
 
 
 @app.post("/api/mcp/catalog")
 async def add_catalog_entry(entry: MCPCatalogEntry):
     catalog = _parse_mcp_catalog()
-    if any(c["id"] == entry.id for c in catalog):
-        raise HTTPException(409, f"ID '{entry.id}' existe deja dans le catalogue")
+    if any(c["package"] == entry.package for c in catalog):
+        raise HTTPException(409, "Package '{}' existe deja dans le catalogue".format(entry.package))
     catalog.append(entry.model_dump())
     _write_mcp_catalog(catalog)
     return {"ok": True}
 
 
-@app.put("/api/mcp/catalog/{entry_id}")
-async def update_catalog_entry(entry_id: str, entry: MCPCatalogEntry):
+@app.post("/api/mcp/catalog/delete")
+async def delete_catalog_entry(request: Request):
+    data = await request.json()
+    package = data.get("package", "")
     catalog = _parse_mcp_catalog()
-    found = False
-    for i, c in enumerate(catalog):
-        if c["id"] == entry_id:
-            catalog[i] = entry.model_dump()
-            found = True
-            break
-    if not found:
-        raise HTTPException(404, f"ID '{entry_id}' introuvable")
+    catalog = [c for c in catalog if c["package"] != package]
     _write_mcp_catalog(catalog)
-    return {"ok": True}
-
-
-@app.delete("/api/mcp/catalog/{entry_id}")
-async def delete_catalog_entry(entry_id: str):
-    catalog = _parse_mcp_catalog()
-    catalog = [c for c in catalog if c["id"] != entry_id]
-    _write_mcp_catalog(catalog)
-    # Also uninstall
-    data = _read_json(MCP_SERVERS_FILE)
-    if entry_id in data.get("servers", {}):
-        del data["servers"][entry_id]
-        _write_json(MCP_SERVERS_FILE, data)
-    access = _read_json(MCP_ACCESS_FILE)
-    changed = False
-    for aid in access:
-        if entry_id in access[aid]:
-            access[aid].remove(entry_id)
-            changed = True
-    if changed:
-        _write_json(MCP_ACCESS_FILE, access)
     return {"ok": True}
 
 
@@ -5271,23 +5195,8 @@ async def save_template_mcp(request: Request):
 
 
 def _get_mcp_full_shared() -> list[dict]:
-    """Return catalog entries enriched with install status from Shared MCP."""
-    catalog = _parse_mcp_catalog()
-    servers = _read_json(SHARED_MCP_FILE).get("servers", {})
-    env_entries = {e["key"]: e["value"] for e in _parse_env(ENV_FILE) if e.get("key")}
-
-    for item in catalog:
-        srv = servers.get(item["id"])
-        item["installed"] = srv is not None
-        item["enabled"] = srv.get("enabled", True) if srv else False
-        item["agents"] = []
-        env_map = srv.get("env", {}) if srv else {}
-        for ev in item.get("env_vars", []):
-            mapped_name = env_map.get(ev["var"], ev["var"])
-            ev["mapped_var"] = mapped_name
-            val = env_entries.get(mapped_name, "")
-            ev["configured"] = bool(val) and val != "A_CONFIGURER"
-    return catalog
+    """Return catalog entries (repo_url, package)."""
+    return _parse_mcp_catalog()
 
 
 @app.get("/api/templates/mcp/catalog")

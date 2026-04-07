@@ -942,13 +942,6 @@ async function quickInstallMcp(id) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-async function quickInstallCfgMcp(id) {
-  try {
-    await api(`/api/mcp/install/${id}`, { method: 'POST', body: { env_values: {}, env_mapping: {} } });
-    toast(`Service "${id}" installe`, 'success');
-    loadCfgMCP().catch(() => {});
-  } catch (e) { toast(e.message, 'error'); }
-}
 
 async function quickInstallTplMcp(id) {
   try {
@@ -3852,262 +3845,143 @@ async function deleteCfgThrottling(key) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-// ── Config MCP (catalog-based, mirrors Services MCP) ──
+// ── Config MCP (catalog-based) ──
 let cfgMcpCatalog = [];
-let cfgMcpShowDeprecated = false;
 
 async function loadCfgMCP() {
   try {
     const data = await api('/api/mcp/catalog');
     cfgMcpCatalog = data.servers || [];
+    const disc = await api('/api/templates/mcp-discovery');
+    const services = disc.services || [];
+    const select = document.getElementById('cfg-mcp-discovery-select');
+    select.innerHTML = services.length === 0
+      ? '<option value="">Aucun service</option>'
+      : services.map(function(s, i) { return '<option value="' + i + '">' + escHtml(s.name) + '</option>'; }).join('');
     renderCfgMCP();
   } catch (e) { toast(e.message, 'error'); }
 }
 
 function renderCfgMCP() {
-  const withParams = cfgMcpCatalog.filter(c => c.env_vars.length > 0 && c.installed);
-  const noParams = cfgMcpCatalog.filter(c => c.env_vars.length === 0 && (cfgMcpShowDeprecated || !c.deprecated));
-
-  // ── Top: Services with parameters ──
-  const configuredEl = document.getElementById('cfg-mcp-configured');
-  if (withParams.length === 0) {
-    configuredEl.innerHTML = '<p style="color:var(--text-secondary);text-align:center;padding:1rem">Aucun service avec parametres.</p>';
-  } else {
-    configuredEl.innerHTML = `<table>
-      <thead><tr><th>Service</th><th>Commande</th><th>Env</th><th>Agents</th><th>Actif</th><th>Actions</th></tr></thead>
-      <tbody>${withParams.map(c => {
-        const envStatus = c.env_vars.length === 0
-          ? '<span class="tag tag-gray">aucune</span>'
-          : c.env_vars.map(v =>
-              `<span class="tag ${v.configured ? 'tag-green' : 'tag-red'}" title="${escHtml(v.desc)}">${escHtml(v.mapped_var || v.var)}</span>`
-            ).join(' ');
-        const agentTags = c.agents.length
-          ? c.agents.map(a => `<span class="tag tag-blue">${escHtml(a)}</span>`).join(' ')
-          : '<span style="color:var(--text-secondary);font-size:0.75rem">aucun</span>';
-        return `<tr>
-          <td>
-            <strong>${escHtml(c.label)}</strong>
-            <div style="font-size:0.7rem;color:var(--text-secondary)">${escHtml(c.id)}</div>
-          </td>
-          <td><code style="font-size:0.75rem">${escHtml(c.command)} ${escHtml(c.args)}</code></td>
-          <td>${envStatus}</td>
-          <td>${agentTags}</td>
-          <td>
-            ${c.installed
-              ? `<div class="toggle ${c.enabled ? 'active' : ''}" onclick="toggleCfgMcp('${escHtml(c.id)}', ${!c.enabled})"></div>`
-              : '<span class="tag tag-gray">non installe</span>'}
-          </td>
-          <td>
-            ${c.installed
-              ? `<button class="btn-icon" onclick="showCfgMCPEnvModal('${escHtml(c.id)}')" title="Configurer env">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-                </button>
-                <button class="btn-icon danger" onclick="uninstallCfgMcp('${escHtml(c.id)}')" title="Desinstaller">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                </button>`
-              : `<button class="btn btn-sm btn-primary" onclick="showAddCfgCatalogModal('${escHtml(c.id)}')">Installer</button>`}
-          </td>
-        </tr>`;
-      }).join('')}</tbody>
-    </table>`;
-  }
-
-  // ── Bottom: Catalogue with Install / Activé buttons ──
-  const catalogEl = document.getElementById('cfg-mcp-catalog');
-  catalogEl.innerHTML = noParams.map(c => {
-    let statusBtn;
-    if (c.installed) {
-      statusBtn = `<div class="toggle ${c.enabled ? 'active' : ''}" onclick="event.stopPropagation();toggleCfgMcp('${escHtml(c.id)}', ${!c.enabled})" style="cursor:pointer"></div>`;
-    } else {
-      statusBtn = `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();quickInstallCfgMcp('${escHtml(c.id)}')">Installer</button>`;
-    }
-    return `<div class="mcp-card${c.deprecated ? ' deprecated' : ''}">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:0.5rem">
-        <div>
-          <strong>${escHtml(c.label)}</strong>
-          ${c.deprecated ? '<span class="tag tag-red" style="margin-left:0.5rem">deprecie</span>' : ''}
-        </div>
-        ${statusBtn}
-      </div>
-      <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.5rem">${escHtml(c.description)}</p>
-      <code style="font-size:0.7rem;color:var(--text-secondary)">${escHtml(c.command)} ${escHtml(c.args)}</code>
-      ${c.env_vars.length ? `<div style="margin-top:0.5rem">${c.env_vars.map(v =>
-        `<span class="tag ${v.configured ? 'tag-green' : 'tag-yellow'}" style="margin:0.1rem" title="${escHtml(v.desc)}">${escHtml(v.mapped_var || v.var)}</span>`
-      ).join('')}</div>` : ''}
-    </div>`;
-  }).join('');
-}
-
-function showAddCfgCatalogModal(preselectedId) {
-  const available = cfgMcpCatalog.filter(c => !c.installed && c.env_vars.length > 0);
-  if (available.length === 0) {
-    toast('Tous les services du catalogue sont deja installes', 'info');
+  var container = document.getElementById('cfg-mcp-list');
+  if (cfgMcpCatalog.length === 0) {
+    container.innerHTML = '<p style="color:var(--text-secondary);text-align:center;padding:1rem">Aucun service MCP dans le catalogue.</p>';
     return;
   }
-  const selected = preselectedId
-    ? cfgMcpCatalog.find(c => c.id === preselectedId)
-    : available[0];
-  if (!selected) return;
-
-  const options = available.map(c =>
-    `<option value="${escHtml(c.id)}" ${c.id === selected.id ? 'selected' : ''}>${escHtml(c.label)} — ${escHtml(c.description)}</option>`
-  ).join('');
-
-  showModal(`
-    <div class="modal-header">
-      <h3>Installer un service MCP (config)</h3>
-      <button class="btn-icon" onclick="closeModal()">&times;</button>
-    </div>
-    <div class="form-group">
-      <label>Service</label>
-      <select id="mcp-cfg-install-select" onchange="onCfgMCPServiceSelected()">
-        ${options}
-      </select>
-    </div>
-    <div id="mcp-cfg-install-details">${_renderInstallDetails(selected)}</div>
-    <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
-      <button class="btn btn-primary" onclick="installCfgSelectedService()">Enregistrer</button>
-    </div>
-  `, 'modal-wide');
-}
-
-function onCfgMCPServiceSelected() {
-  const id = document.getElementById('mcp-cfg-install-select').value;
-  const item = cfgMcpCatalog.find(c => c.id === id);
-  if (item) {
-    document.getElementById('mcp-cfg-install-details').innerHTML = _renderInstallDetails(item);
-  }
-}
-
-async function installCfgSelectedService() {
-  const id = document.getElementById('mcp-cfg-install-select').value;
-  const envMapping = {};
-  document.querySelectorAll('.mcp-env-computed').forEach(el => {
-    const base = el.getAttribute('data-base');
-    envMapping[base] = el.textContent;
+  var html = '<table><thead><tr><th>Package</th><th>Repo</th><th></th></tr></thead><tbody>';
+  cfgMcpCatalog.forEach(function(c) {
+    html += '<tr><td><code>' + escHtml(c.package) + '</code></td>' +
+      '<td><a href="' + escHtml(c.repo_url) + '" target="_blank" style="font-size:0.8rem;word-break:break-all">' + escHtml(c.repo_url) + '</a></td>' +
+      '<td style="text-align:right"><button class="btn-icon danger" onclick="deleteCfgMcpEntry(\'' + escHtml(c.package).replace(/'/g, "\\'") + '\')" title="Supprimer">' +
+      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></td></tr>';
   });
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
+async function deleteCfgMcpEntry(pkg) {
+  if (!(await confirmModal('Supprimer ' + pkg + ' du catalogue ?'))) return;
   try {
-    await api(`/api/mcp/install/${id}`, { method: 'POST', body: { env_values: {}, env_mapping: envMapping } });
-    toast('Service MCP installe', 'success');
-    closeModal();
+    await api('/api/mcp/catalog/delete', { method: 'POST', body: { package: pkg } });
+    toast('Service supprime', 'success');
     loadCfgMCP();
   } catch (e) { toast(e.message, 'error'); }
 }
 
-async function uninstallCfgMcp(id) {
-  if (!(await confirmModal(`Desinstaller le serveur MCP "${id}" ?`))) return;
-  try {
-    await api(`/api/mcp/uninstall/${id}`, { method: 'POST' });
-    toast('Serveur MCP desinstalle', 'success');
-    loadCfgMCP();
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-async function toggleCfgMcp(id, enabled) {
-  try {
-    await api(`/api/mcp/toggle/${id}`, { method: 'PUT', body: { enabled } });
-    loadCfgMCP();
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-function showCfgMCPEnvModal(id) {
-  const item = cfgMcpCatalog.find(c => c.id === id);
-  if (!item || !item.env_vars.length) {
-    toast('Aucune variable d\'environnement pour ce serveur', 'info');
+function showCfgMcpSearchModal() {
+  var serviceIdx = document.getElementById('cfg-mcp-discovery-select').value;
+  if (serviceIdx === '') {
+    toast('Aucun service de decouverte configure (voir Securite)', 'error');
     return;
   }
-  showModal(`
-    <div class="modal-header">
-      <h3>Env : ${escHtml(item.label)} (config)</h3>
-      <button class="btn-icon" onclick="closeModal()">&times;</button>
-    </div>
-    <div class="env-var-list">
-      ${item.env_vars.map(v => `
-        <div class="env-var-row">
-          <div class="env-var-info">
-            <code>${escHtml(v.mapped_var || v.var)}</code>
-            <span class="env-var-desc">${escHtml(v.desc)}</span>
-            ${v.configured
-              ? '<span class="tag tag-green">configure</span>'
-              : '<span class="tag tag-red">manquant</span>'}
-          </div>
-          <div class="env-var-action">
-            <input class="mcp-env-field" data-var="${escHtml(v.mapped_var || v.var)}" placeholder="Nouvelle valeur..." />
-            <button class="btn btn-sm btn-outline" onclick="setEnvVarFromInstall('${escHtml(v.mapped_var || v.var)}', this)" title="Enregistrer dans .env">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-            </button>
-          </div>
-        </div>
-      `).join('')}
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal()">Fermer</button>
-    </div>
-  `);
+  showModal(
+    '<div class="modal-header">' +
+      '<h3>Rechercher un service MCP</h3>' +
+      '<button class="btn-icon" onclick="closeModal()">&times;</button>' +
+    '</div>' +
+    '<div style="display:flex;gap:0.5rem;align-items:end">' +
+      '<div class="form-group" style="flex:1;margin:0">' +
+        '<label>Recherche</label>' +
+        '<input id="cfg-mcp-search-q" placeholder="Ex: git, playwright, database..." onkeydown="if(event.key===\'Enter\')searchCfgMcpDiscovery()" />' +
+      '</div>' +
+      '<button class="btn btn-primary btn-sm" style="margin-bottom:0" onclick="searchCfgMcpDiscovery()">Rechercher</button>' +
+    '</div>' +
+    '<div id="cfg-mcp-search-results" style="margin-top:1rem;max-height:400px;overflow-y:auto"></div>',
+    'modal-wide'
+  );
+  setTimeout(function() { var el = document.getElementById('cfg-mcp-search-q'); if (el) el.focus(); }, 100);
 }
 
-function toggleCfgDeprecated() {
-  cfgMcpShowDeprecated = !cfgMcpShowDeprecated;
-  const btn = document.getElementById('btn-cfg-show-deprecated');
-  btn.textContent = cfgMcpShowDeprecated ? 'Masquer deprecies' : 'Afficher deprecies';
-  renderCfgMCP();
-}
-
-async function copyCfgMCPFromTemplate() {
+async function searchCfgMcpDiscovery() {
+  var q = document.getElementById('cfg-mcp-search-q').value.trim();
+  var serviceIdx = document.getElementById('cfg-mcp-discovery-select').value;
+  var container = document.getElementById('cfg-mcp-search-results');
+  if (!q) { toast('Entrez un terme de recherche', 'error'); return; }
+  container.innerHTML = '<p style="color:var(--text-secondary)">Recherche en cours...</p>';
   try {
-    const tplData = await api('/api/templates/mcp');
-    const tplServers = tplData.servers || {};
-    const cfgData = await api('/api/mcp/cfg-servers');
-    const cfgServers = cfgData.servers || {};
-
-    if (Object.keys(tplServers).length === 0) {
-      toast('Aucun service MCP dans Configuration', 'info');
-      return;
-    }
-
-    let rows = '';
-    for (const [id, s] of Object.entries(tplServers)) {
-      const exists = cfgServers[id];
-      const status = exists
-        ? '<span class="tag tag-green" style="font-size:0.7rem">existe</span>'
-        : '<span class="tag tag-blue" style="font-size:0.7rem">nouveau</span>';
-      const type = s.type || s.command || '?';
-      const desc = s.description || '';
-      rows += '<tr>' +
-        '<td><label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer">' +
-          '<input type="checkbox" class="copy-mcp-cb" value="' + escHtml(id) + '" ' + (exists ? '' : 'checked') + ' />' +
-          '<strong>' + escHtml(id) + '</strong></label></td>' +
-        '<td><span class="tag tag-blue" style="font-size:0.7rem">' + escHtml(type) + '</span></td>' +
-        '<td style="font-size:0.8rem;color:var(--text-secondary)">' + escHtml(desc) + '</td>' +
-        '<td>' + status + '</td>' +
-      '</tr>';
-    }
-
-    const el = document.getElementById('modal-copy-mcp-body');
-    el.innerHTML =
-      '<p style="font-size:0.85rem;margin-bottom:0.75rem">Selectionnez les services MCP a copier depuis Configuration :</p>' +
-      '<div style="margin-bottom:0.5rem"><label style="cursor:pointer;font-size:0.8rem"><input type="checkbox" id="copy-mcp-toggle-all" onchange="document.querySelectorAll(\'.copy-mcp-cb\').forEach(c=>c.checked=this.checked)" checked /> Tout selectionner</label></div>' +
-      '<div class="table-container" style="max-height:400px;overflow-y:auto"><table><thead><tr><th>Service</th><th>Type</th><th>Description</th><th>Statut</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
-
-    document.getElementById('modal-copy-mcp').style.display = 'flex';
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-async function _execCopyMCPFromTemplate() {
-  const selected = [...document.querySelectorAll('.copy-mcp-cb:checked')].map(c => c.value);
-  if (selected.length === 0) {
-    toast('Aucune selection', 'info');
-    return;
-  }
-  try {
-    await api('/api/mcp/copy-from-template', {
-      method: 'POST',
-      body: { server_ids: selected },
+    var data = await api('/api/mcp-discovery/proxy/search_mcp?q=' + encodeURIComponent(q) + '&service_idx=' + serviceIdx);
+    if (data.error) { container.innerHTML = '<p style="color:var(--danger)">' + escHtml(data.error) + '</p>'; return; }
+    if (!data.items || data.items.length === 0) { container.innerHTML = '<p style="color:var(--text-secondary)">Aucun resultat.</p>'; return; }
+    var html = '<div style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.5rem">' + data.total + ' resultats (page ' + data.page + ')</div>';
+    data.items.forEach(function(item) {
+      var desc = (item.description || '').substring(0, 150);
+      var repoUrl = item.source_url || '';
+      var pkg = _extractMcpPackage(item) || item.name || '';
+      var alreadyAdded = cfgMcpCatalog.some(function(c) { return c.package === pkg; });
+      html += '<div style="border:1px solid var(--border);border-radius:6px;padding:0.75rem;margin-bottom:0.5rem">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center">';
+      html += '<div><strong>' + escHtml(item.name) + '</strong>';
+      if (pkg && pkg !== item.name) html += ' <code style="font-size:0.75rem;margin-left:0.5rem">' + escHtml(pkg) + '</code>';
+      html += '</div>';
+      html += '<div style="display:flex;gap:0.5rem;align-items:center">';
+      if (item.stars) html += '<span style="font-size:0.75rem;color:var(--text-secondary)">' + item.stars + ' stars</span>';
+      if (alreadyAdded) {
+        html += '<span class="tag tag-green">Deja ajoute</span>';
+      } else {
+        html += '<button class="btn btn-primary btn-sm" onclick="addCfgMcpFromSearch(\'' + escHtml(repoUrl).replace(/'/g, "\\'") + '\', \'' + escHtml(pkg).replace(/'/g, "\\'") + '\')">Ajouter</button>';
+      }
+      html += '</div></div>';
+      if (desc) html += '<p style="font-size:0.8rem;color:var(--text-secondary);margin:0.25rem 0">' + escHtml(desc) + (item.description && item.description.length > 150 ? '...' : '') + '</p>';
+      html += '</div>';
     });
-    closeModal('modal-copy-mcp');
-    toast(selected.length + ' service(s) MCP copie(s)', 'success');
-    loadCfgMCP();
+    container.innerHTML = html;
+  } catch (e) { container.innerHTML = '<p style="color:var(--danger)">' + escHtml(e.message) + '</p>'; }
+}
+
+function _extractMcpPackage(item) {
+  var recipes = item.recipes || {};
+  for (var key in recipes) {
+    var r = recipes[key];
+    if (r.action_type === 'cmd' && r.data) {
+      var m = r.data.match(/(?:npx\s+-y\s+|uvx\s+)([@\w\/-]+)/);
+      if (m) return m[1];
+    }
+    if (r.action_type === 'insert_in_file' && r.data) {
+      try {
+        var cfg = JSON.parse(r.data);
+        var servers = cfg.mcpServers || cfg.servers || {};
+        for (var sid in servers) {
+          var args = servers[sid].args || [];
+          for (var j = 0; j < args.length; j++) {
+            if (typeof args[j] === 'string' && (args[j].startsWith('@') || (args[j].indexOf('-') >= 0 && !args[j].startsWith('-')))) return args[j];
+          }
+        }
+      } catch (e) { /* ignore parse errors */ }
+    }
+  }
+  return null;
+}
+
+async function addCfgMcpFromSearch(repoUrl, pkg) {
+  try {
+    await api('/api/mcp/catalog', { method: 'POST', body: { repo_url: repoUrl, package: pkg } });
+    toast('Service ajoute au catalogue', 'success');
+    // Refresh catalog data
+    var data = await api('/api/mcp/catalog');
+    cfgMcpCatalog = data.servers || [];
+    // Re-render search results to update "Deja ajoute" badges
+    var q = document.getElementById('cfg-mcp-search-q');
+    if (q && q.value.trim()) searchCfgMcpDiscovery();
   } catch (e) { toast(e.message, 'error'); }
 }
 
