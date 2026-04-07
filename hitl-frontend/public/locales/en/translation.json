@@ -393,7 +393,12 @@
     "in_progress": "in progress",
     "status_pending": "pending",
     "status_completed": "completed",
-    "status_failed": "failed"
+    "status_failed": "failed",
+    "launch_group": "Launch",
+    "relaunch_group": "Relaunch",
+    "reset_group": "Reset",
+    "pause_group": "Pause",
+    "confirm_reset": "Delete deliverables and revert to pending?"
   },
   "project_type": {
     "select_type": "Project type",

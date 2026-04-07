@@ -77,6 +77,17 @@ export function startWorkflow(slug: string, workflowId: number): Promise<{ ok: b
   );
 }
 
+export function resetPhaseGroup(
+  slug: string,
+  workflowId: number,
+  phaseId: number,
+): Promise<{ ok: boolean; phase_id: number; deleted_files: number }> {
+  return apiFetch<{ ok: boolean; phase_id: number; deleted_files: number }>(
+    `/api/projects/${enc(slug)}/workflows/${workflowId}/phases/${phaseId}/reset`,
+    { method: 'POST' },
+  );
+}
+
 export function getWorkflowPhases(slug: string, workflowId: number): Promise<WorkflowPhasesResponse> {
   return apiFetch<WorkflowPhasesResponse>(
     `/api/projects/${encodeURIComponent(slug)}/workflows/${workflowId}/phases`,

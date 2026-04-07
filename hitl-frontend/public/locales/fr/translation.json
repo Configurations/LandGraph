@@ -393,7 +393,12 @@
     "in_progress": "en cours",
     "status_pending": "en attente",
     "status_completed": "termine",
-    "status_failed": "echoue"
+    "status_failed": "echoue",
+    "launch_group": "Lancer",
+    "relaunch_group": "Relancer",
+    "reset_group": "Reset",
+    "pause_group": "Pause",
+    "confirm_reset": "Supprimer les livrables et revenir en attente ?"
   },
   "project_type": {
     "select_type": "Type de projet",

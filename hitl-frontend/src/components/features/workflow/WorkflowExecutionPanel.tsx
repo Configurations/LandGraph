@@ -185,6 +185,8 @@ export function WorkflowExecutionPanel({ slug, workflows: workflowsProp, onRefre
               <WorkflowPhaseCard
                 key={phase.id}
                 phase={phase}
+                slug={slug}
+                workflowId={wf.id}
                 defaultExpanded={idx === 0}
                 onRefresh={() => void handleRefreshOne(wf.id)}
               />

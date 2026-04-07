@@ -5,6 +5,8 @@ import type { PhaseDetailResponse } from '../../../api/types';
 
 interface Props {
   phase: PhaseDetailResponse;
+  slug: string;
+  workflowId: number;
   defaultExpanded?: boolean;
   onRefresh: () => void;
 }
@@ -18,12 +20,15 @@ const STATUS_DOT: Record<string, string> = {
   rejected: 'bg-accent-red',
 };
 
-export function WorkflowPhaseCard({ phase, defaultExpanded = false, onRefresh }: Props): JSX.Element {
+export function WorkflowPhaseCard({ phase, slug, workflowId, defaultExpanded = false, onRefresh }: Props): JSX.Element {
   const { t } = useTranslation();
   const hasProblems = phase.deliverables.some(d => ['rejected', 'revision', 'review'].includes(d.status));
   const isRunning = phase.status === 'running';
+  const isPending = phase.status === 'pending';
+  const isCompleted = phase.status === 'completed';
   const [expanded, setExpanded] = useState(defaultExpanded || isRunning || hasProblems);
   const [openDeliverableId, setOpenDeliverableId] = useState<number | null>(null);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   const total = phase.deliverables.length;
   const approved = phase.deliverables.filter(d => d.status === 'approved').length;
@@ -34,20 +39,93 @@ export function WorkflowPhaseCard({ phase, defaultExpanded = false, onRefresh }:
       ? `${approved}/${total} — ${t('workflow.in_progress')}`
       : t('workflow.status_' + phase.status);
 
+  const handleAction = async (action: string) => {
+    setActionLoading(action);
+    try {
+      const { apiFetch } = await import('../../../api/client');
+      const base = `/api/projects/${encodeURIComponent(slug)}/workflows/${workflowId}`;
+
+      if (action === 'launch' || action === 'relaunch') {
+        // Reset first if relaunching
+        if (action === 'relaunch') {
+          await apiFetch(`${base}/phases/${phase.id}/reset`, { method: 'POST' });
+        }
+        // Start the workflow (dispatches the current phase)
+        await apiFetch(`${base}/start`, { method: 'POST' });
+      } else if (action === 'reset') {
+        if (!window.confirm(t('workflow.confirm_reset'))) {
+          setActionLoading(null);
+          return;
+        }
+        await apiFetch(`${base}/phases/${phase.id}/reset`, { method: 'POST' });
+      } else if (action === 'pause') {
+        await apiFetch(`${base}/pause`, { method: 'POST' });
+      }
+
+      onRefresh();
+    } catch (err) {
+      console.error(`Phase action ${action} failed:`, err);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   return (
     <div className="rounded-lg border border-border bg-surface-primary mb-2">
       {/* Phase header */}
-      <button
-        className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-surface-secondary transition-colors"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <span className="text-xs">{expanded ? '\u25bc' : '\u25b6'}</span>
-        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${phase.status === 'completed' ? 'bg-accent-green' : phase.status === 'running' ? 'bg-accent-blue animate-pulse' : 'bg-gray-400'}`} />
-        <span className="font-medium text-sm flex-1">
-          {phase.phase_name} <span className="text-content-tertiary font-normal">/ {phase.group_key}</span>
-        </span>
-        <span className="text-xs text-content-tertiary">{summaryText}</span>
-      </button>
+      <div className="flex items-center gap-2 px-4 py-2.5">
+        <button
+          className="flex items-center gap-2 flex-1 text-left hover:bg-surface-secondary transition-colors rounded"
+          onClick={() => setExpanded(!expanded)}
+        >
+          <span className="text-xs">{expanded ? '\u25bc' : '\u25b6'}</span>
+          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${phase.status === 'completed' ? 'bg-accent-green' : phase.status === 'running' ? 'bg-accent-blue animate-pulse' : 'bg-gray-400'}`} />
+          <span className="font-medium text-sm flex-1">
+            {phase.phase_name} <span className="text-content-tertiary font-normal">/ {phase.group_key}</span>
+          </span>
+          <span className="text-xs text-content-tertiary">{summaryText}</span>
+        </button>
+
+        {/* Action buttons */}
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {isPending && (
+            <button
+              className="text-xs px-2 py-1 rounded bg-accent-blue text-white hover:bg-accent-blue/80 disabled:opacity-50"
+              disabled={actionLoading !== null}
+              onClick={() => void handleAction('launch')}
+            >
+              {actionLoading === 'launch' ? '...' : t('workflow.launch_group')}
+            </button>
+          )}
+          {(isRunning || isCompleted) && (
+            <button
+              className="text-xs px-2 py-1 rounded bg-accent-orange text-white hover:bg-accent-orange/80 disabled:opacity-50"
+              disabled={actionLoading !== null}
+              onClick={() => void handleAction('relaunch')}
+            >
+              {actionLoading === 'relaunch' ? '...' : t('workflow.relaunch_group')}
+            </button>
+          )}
+          {isRunning && (
+            <button
+              className="text-xs px-2 py-1 rounded bg-gray-500 text-white hover:bg-gray-400 disabled:opacity-50"
+              disabled={actionLoading !== null}
+              onClick={() => void handleAction('pause')}
+            >
+              {actionLoading === 'pause' ? '...' : t('workflow.pause_group')}
+            </button>
+          )}
+          {(isRunning || isCompleted) && (
+            <button
+              className="text-xs px-2 py-1 rounded bg-accent-red/80 text-white hover:bg-accent-red disabled:opacity-50"
+              disabled={actionLoading !== null}
+              onClick={() => void handleAction('reset')}
+            >
+              {actionLoading === 'reset' ? '...' : t('workflow.reset_group')}
+            </button>
+          )}
+        </div>
+      </div>
 
       {/* Deliverables list */}
       {expanded && (
