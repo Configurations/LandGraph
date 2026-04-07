@@ -11104,10 +11104,14 @@ async function testMcpDiscoveryEntry(idx) {
   const badge = document.getElementById('mcp-disc-status-' + idx);
   badge.textContent = '...'; badge.className = 'tag';
   try {
-    const data = await api('/api/mcp-discovery/proxy/targets?service_idx=' + idx);
-    if (data.error) {
+    const resp = await fetch('/api/mcp-discovery/proxy/targets?service_idx=' + idx);
+    const text = await resp.text();
+    let data;
+    try { data = JSON.parse(text); } catch { data = { error: text }; }
+    if (!resp.ok || data.error) {
+      const errMsg = data.error || data.detail || ('HTTP ' + resp.status + ': ' + text.substring(0, 300));
       badge.textContent = 'Erreur'; badge.className = 'tag tag-red';
-      toast(data.error, 'error');
+      toast(errMsg, 'error');
     } else {
       const count = Array.isArray(data) ? data.length : 0;
       badge.textContent = count + ' cibles'; badge.className = 'tag tag-green';
