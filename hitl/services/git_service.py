@@ -133,9 +133,8 @@ async def ensure_branch_structure(slug: str) -> list[str]:
         else:
             log.error("branch_create_failed", slug=slug, branch="dev", stderr=err[:200])
 
-    # Return to main branch
-    if created:
-        await _run_git(repo, "checkout", main_branch)
+    # Work on dev branch
+    await _run_git(repo, "checkout", "dev")
 
     return created
 

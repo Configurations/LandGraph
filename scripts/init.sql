@@ -564,4 +564,27 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='project' AND table_name='pm_projects' AND column_name='onboarding_workflow_id') THEN
         ALTER TABLE project.pm_projects ADD COLUMN onboarding_workflow_id INTEGER REFERENCES project.project_workflows(id);
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='project' AND table_name='dispatcher_task_artifacts' AND column_name='version') THEN
+        ALTER TABLE project.dispatcher_task_artifacts ADD COLUMN version INTEGER DEFAULT 1;
+    END IF;
+END $$;
+
+-- Add retry_count to dispatcher_tasks
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='project' AND table_name='dispatcher_tasks' AND column_name='retry_count') THEN
+        ALTER TABLE project.dispatcher_tasks ADD COLUMN retry_count INTEGER DEFAULT 0;
+    END IF;
+END $$;
+
+-- Extend artifact status CHECK to include 'review' and 'revision'
+DO $$
+BEGIN
+    ALTER TABLE project.dispatcher_task_artifacts
+      DROP CONSTRAINT IF EXISTS dispatcher_task_artifacts_status_check;
+    ALTER TABLE project.dispatcher_task_artifacts
+      ADD CONSTRAINT dispatcher_task_artifacts_status_check
+        CHECK (status IN ('pending', 'running', 'review', 'revision', 'approved', 'rejected'));
+EXCEPTION WHEN OTHERS THEN
+    NULL;
 END $$;

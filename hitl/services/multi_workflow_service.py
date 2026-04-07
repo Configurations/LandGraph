@@ -246,3 +246,134 @@ async def get_active_workflows(
 ) -> list[ProjectWorkflowResponse]:
     """Return only active workflows for a project."""
     return await list_workflows(project_slug, status="active")
+
+
+async def start_workflow(
+    project_slug: str,
+    workflow_id: int,
+) -> dict:
+    """Start a workflow: activate it, create first phase, dispatch agents for group A."""
+    import json as _json
+    import os
+
+    import httpx
+
+    from core.config import settings
+
+    wf = await fetch_one(
+        "SELECT id, workflow_name, workflow_json_path, status, team_id FROM project.project_workflows WHERE id = $1 AND project_slug = $2",
+        workflow_id, project_slug,
+    )
+    if not wf:
+        raise ValueError("Workflow not found")
+    if wf["status"] not in ("pending", "paused"):
+        raise ValueError("Workflow is already {}".format(wf["status"]))
+
+    await execute(
+        "UPDATE project.project_workflows SET status = 'active', started_at = NOW(), updated_at = NOW() WHERE id = $1",
+        workflow_id,
+    )
+
+    wf_json_path = wf["workflow_json_path"] or ""
+    wf_data = {}
+    if os.path.isfile(wf_json_path):
+        with open(wf_json_path, encoding="utf-8") as f:
+            wf_data = _json.load(f)
+
+    phases = wf_data.get("phases", {})
+    if not phases:
+        return {"ok": True, "workflow_id": workflow_id, "message": "No phases defined"}
+
+    sorted_phases = sorted(phases.items(), key=lambda x: x[1].get("order", 0))
+    # Skip external phases — find first normal phase with groups
+    first_key, first_phase = None, None
+    for pk, pv in sorted_phases:
+        if pv.get("type") == "external":
+            continue
+        if pv.get("groups"):
+            first_key, first_phase = pk, pv
+            break
+    if not first_key or not first_phase:
+        return {"ok": True, "workflow_id": workflow_id, "message": "No actionable phases"}
+    groups = first_phase.get("groups", [{"id": "A"}])
+    first_group = groups[0] if groups else {"id": "A"}
+    group_key = first_group.get("id", "A")
+
+    phase_row = await fetch_one(
+        """INSERT INTO project.workflow_phases
+           (workflow_id, phase_key, phase_name, group_key, phase_order, group_order, iteration, status)
+           VALUES ($1, $2, $3, $4, $5, 0, 1, 'running')
+           RETURNING id""",
+        workflow_id, first_key, first_phase.get("name", first_key), group_key,
+        first_phase.get("order", 0),
+    )
+    phase_id = phase_row["id"] if phase_row else None
+
+    if phase_id:
+        await execute(
+            "UPDATE project.project_workflows SET current_phase_id = $1 WHERE id = $2",
+            phase_id, workflow_id,
+        )
+
+    gateway_url = settings.langgraph_api_url or "http://langgraph-api:8000"
+    team_id = wf["team_id"] or ""
+    thread_id = "workflow-{}".format(workflow_id)
+    dispatched = []
+
+    # Clean up orphaned tasks before dispatching new agents
+    orphaned = await fetch_all(
+        """UPDATE project.dispatcher_tasks
+           SET status = 'timeout', completed_at = NOW(), error_message = 'Orphaned task cleaned before dispatch'
+           WHERE project_slug = $1 AND workflow_id = $2
+             AND status = 'running'
+             AND started_at IS NOT NULL
+             AND (started_at + (timeout_seconds || ' seconds')::interval) < NOW()
+           RETURNING id, agent_id""",
+        project_slug, workflow_id,
+    )
+    if orphaned:
+        log.warning("orphaned_tasks_cleaned_before_dispatch", count=len(orphaned),
+                    tasks=[{"id": str(o["id"]), "agent": o["agent_id"]} for o in orphaned])
+
+    for deliv in first_group.get("deliverables", []):
+        agent_id = deliv.get("agent", "")
+        if not agent_id:
+            continue
+        d_name = deliv.get("Name") or deliv.get("name") or deliv.get("id", "")
+        d_desc = deliv.get("description", "")
+        instruction = (
+            "Produis le livrable '{}'. {}\n\n"
+            "Utilise save_deliverable avec deliverable_key='{}' pour sauvegarder le resultat."
+        ).format(d_name, d_desc[:2000], deliv.get("id", d_name))
+
+        task_row = await fetch_one(
+            """INSERT INTO project.dispatcher_tasks
+               (agent_id, team_id, thread_id, project_slug, phase, instruction, status, docker_image, workflow_id, phase_id, started_at, timeout_seconds)
+               VALUES ($1, $2, $3, $4, $5, $6, 'running', 'gateway', $7, $8, NOW(), 2100)
+               RETURNING id""",
+            agent_id, team_id, thread_id, project_slug, first_key,
+            instruction[:4000], workflow_id, phase_id,
+        )
+
+        if task_row:
+            task_id = str(task_row["id"])
+            try:
+                async with httpx.AsyncClient(timeout=30) as client:
+                    await client.post(
+                        "{}/invoke".format(gateway_url),
+                        json={
+                            "messages": [{"role": "user", "content": instruction}],
+                            "team_id": team_id,
+                            "thread_id": thread_id,
+                            "project_slug": project_slug,
+                            "direct_agent": agent_id,
+                            "workflow_id": workflow_id,
+                            "phase_id": phase_id,
+                            "task_id": task_id,
+                        },
+                    )
+                dispatched.append(agent_id)
+            except Exception as exc:
+                log.error("start_workflow_dispatch_failed", agent=agent_id, error=str(exc)[:200])
+
+    return {"ok": True, "workflow_id": workflow_id, "phase_id": phase_id, "dispatched": dispatched}

@@ -309,13 +309,16 @@ async def run_single_agent(agent_id, agent_callable, state, channel_id, thread_i
                 except Exception as e:
                     logger.error(f"[onboarding] Failed to store artifact: {e}")
 
+        _update_task_status(state.get("_task_row_id"), "success")
         return result
     except asyncio.TimeoutError:
         logger.error(f"[bg] {agent_id} timeout")
+        _update_task_status(state.get("_task_row_id"), "timeout", "Agent timeout (35min)")
         await post_to_channel(channel_id, f"⏰ **{agent_id}** timeout (35min)", thread_id)
         return state
     except Exception as e:
         logger.error(f"[bg] {agent_id} error: {e}")
+        _update_task_status(state.get("_task_row_id"), "failure", str(e)[:500])
         await post_to_channel(channel_id, f"❌ **{agent_id}** erreur : {str(e)[:300]}", thread_id)
         return state
 
@@ -1296,6 +1299,7 @@ class InvokeRequest(BaseModel):
     allowed_agents: list[str] = []  # If set, only these agents can be dispatched
     workflow_id: int | None = None  # Workflow tracking ID
     phase_id: int | None = None  # Current phase tracking ID
+    task_id: str = ""  # dispatcher_tasks row ID for status tracking
 
 class InvokeResponse(BaseModel):
     output: str
@@ -1340,6 +1344,11 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
                     canonical_id = cid; break
 
             state = await load_or_create_state_async(request.thread_id, msgs, request.project_id, channel_id, team_id, request.project_slug)
+            state["_thread_id"] = request.thread_id
+            if request.workflow_id:
+                state["_workflow_id"] = request.workflow_id
+            if request.phase_id:
+                state["_phase_id"] = request.phase_id
 
             # Trouver le nom lisible
             agent_display = getattr(agent_callable, "agent_name", canonical_id)
@@ -1363,9 +1372,12 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
                     run_deliverables_parallel,
                     [deliverable_info], state, channel_id, request.thread_id)
             else:
+                agent_info = {"agent_id": canonical_id, "agent": agent_callable}
+                if request.task_id:
+                    agent_info["task_row_id"] = request.task_id
                 background_tasks.add_task(
                     run_agents_parallel,
-                    [{"agent_id": canonical_id, "agent": agent_callable}],
+                    [agent_info],
                     state, channel_id, request.thread_id)
 
             existing = list(state.get("agent_outputs", {}).keys())
@@ -1553,6 +1565,9 @@ async def startup():
     except Exception as e:
         logger.error(f"Init error: {e}")
 
+    # Start orphan garbage collector (every 10 minutes)
+    asyncio.get_event_loop().create_task(_orphan_garbage_collector())
+
     # Re-dispatch stale agent tasks after restart
     uri = os.getenv("DATABASE_URI", "")
     if uri:
@@ -1637,16 +1652,56 @@ async def _redispatch_stale_tasks(tasks):
             _mark_task_failed(str(task_id), str(e))
 
 
-def _mark_task_failed(task_id: str, error: str):
+def _update_task_status(task_id: str | None, status: str, error: str = ""):
+    """Update dispatcher_tasks status. Called from run_single_agent on success/failure/timeout."""
+    if not task_id:
+        return
     uri = os.getenv("DATABASE_URI", "")
-    if uri:
+    if not uri:
+        return
+    try:
+        import psycopg
+        with psycopg.connect(uri, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE project.dispatcher_tasks SET status = %s, completed_at = NOW(), error_message = %s WHERE id = %s::uuid AND completed_at IS NULL",
+                    (status, error[:500] if error else None, task_id),
+                )
+    except Exception as e:
+        logger.error("_update_task_status failed for %s: %s", task_id, e)
+
+
+def _mark_task_failed(task_id: str, error: str):
+    _update_task_status(task_id, "failure", error)
+
+
+async def _orphan_garbage_collector():
+    """Periodic garbage collector — marks orphaned tasks as timeout every 10 minutes."""
+    await asyncio.sleep(60)  # Wait 1 min after startup before first check
+    uri = os.getenv("DATABASE_URI", "")
+    if not uri:
+        return
+    while True:
         try:
             import psycopg
             with psycopg.connect(uri, autocommit=True) as conn:
                 with conn.cursor() as cur:
-                    cur.execute(
-                        "UPDATE project.dispatcher_tasks SET status = 'failure', completed_at = NOW(), error_message = %s WHERE id = %s::uuid",
-                        (error[:500], task_id),
-                    )
-        except Exception:
-            pass
+                    cur.execute("""
+                        UPDATE project.dispatcher_tasks
+                        SET status = 'timeout', completed_at = NOW(),
+                            error_message = 'Orphaned task detected by garbage collector'
+                        WHERE status = 'running'
+                          AND started_at IS NOT NULL
+                          AND (started_at + (timeout_seconds || ' seconds')::interval) < NOW()
+                        RETURNING id, agent_id, project_slug
+                    """)
+                    orphans = cur.fetchall()
+            if orphans:
+                logger.warning(
+                    "[gc] Marked %d orphaned tasks as timeout: %s",
+                    len(orphans),
+                    ", ".join("{}:{}".format(r[2] or "?", r[1]) for r in orphans),
+                )
+        except Exception as e:
+            logger.error("[gc] Orphan garbage collector error: %s", e)
+        await asyncio.sleep(600)  # 10 minutes

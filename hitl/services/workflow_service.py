@@ -297,3 +297,203 @@ async def get_phase_detail(
         if phase.id == phase_id:
             return phase
     return None
+
+
+async def get_workflow_phases_detail(
+    project_slug: str,
+    workflow_id: int,
+):
+    """Get all phases for a workflow with deliverables including file content.
+
+    Reads the workflow JSON to know what deliverables are expected,
+    then enriches with DB data (artifacts produced, status, content).
+    """
+    import json as _json
+    from schemas.workflow import DeliverableWithContent, PhaseDetailResponse, WorkflowPhasesResponse
+
+    wf = await fetch_one(
+        "SELECT id, workflow_name, workflow_json_path, status FROM project.project_workflows WHERE id = $1 AND project_slug = $2",
+        workflow_id, project_slug,
+    )
+    if not wf:
+        return None
+
+    # Read workflow JSON for expected structure
+    wf_json_path = wf["workflow_json_path"] or ""
+    wf_data = {}
+    if os.path.isfile(wf_json_path):
+        try:
+            with open(wf_json_path, encoding="utf-8") as f:
+                wf_data = _json.load(f)
+        except Exception:
+            pass
+
+    # Get runtime phases from DB
+    db_phases = await fetch_all(
+        """SELECT id, phase_key, phase_name, group_key, status
+           FROM project.workflow_phases
+           WHERE workflow_id = $1
+           ORDER BY phase_order DESC, group_order DESC""",
+        workflow_id,
+    )
+    # Index DB phases by phase_key+group_key
+    db_phase_map = {}
+    for p in db_phases:
+        key = "{}:{}".format(p["phase_key"] or "", p["group_key"] or "A")
+        db_phase_map[key] = p
+
+    # Get all artifacts for this workflow
+    all_artifacts = await fetch_all(
+        """SELECT a.id, a.key, a.status, a.version, a.file_path,
+                  a.reviewer, a.review_comment, a.reviewed_at::text, a.created_at::text,
+                  t.agent_id, t.phase_id
+           FROM project.dispatcher_task_artifacts a
+           JOIN project.dispatcher_tasks t ON a.task_id = t.id
+           WHERE t.project_slug = $1 AND t.workflow_id = $2
+           ORDER BY a.created_at""",
+        project_slug, workflow_id,
+    )
+    # Mark orphaned tasks as timeout (running past their timeout_seconds)
+    orphaned = await fetch_all(
+        """UPDATE project.dispatcher_tasks
+           SET status = 'timeout', completed_at = NOW(), error_message = 'Orphaned task detected by poll'
+           WHERE project_slug = $1 AND workflow_id = $2
+             AND status = 'running'
+             AND started_at IS NOT NULL
+             AND (started_at + (timeout_seconds || ' seconds')::interval) < NOW()
+           RETURNING id, agent_id""",
+        project_slug, workflow_id,
+    )
+    if orphaned:
+        log.warning("orphaned_tasks_detected", count=len(orphaned),
+                    tasks=[{"id": str(o["id"]), "agent": o["agent_id"]} for o in orphaned])
+
+    # Index artifacts by phase_id + key, and also by phase_id + agent_id as fallback
+    artifact_map = {}
+    artifact_by_agent = {}
+    for a in all_artifacts:
+        artifact_map["{}:{}".format(a["phase_id"] or 0, a["key"])] = a
+        artifact_by_agent["{}:{}".format(a["phase_id"] or 0, a["agent_id"])] = a
+
+    # Check for pending human gate
+    thread_id = "workflow-{}".format(workflow_id)
+    gate = await fetch_one(
+        """SELECT id, prompt, agent_id, created_at::text
+           FROM project.hitl_requests
+           WHERE thread_id = $1 AND status = 'pending'
+           ORDER BY created_at DESC LIMIT 1""",
+        thread_id,
+    )
+    human_gate = None
+    if gate:
+        human_gate = {
+            "id": str(gate["id"]),
+            "prompt": gate["prompt"],
+            "agent_id": gate["agent_id"],
+            "created_at": gate["created_at"],
+        }
+
+    ag_flow_root = os.getenv("AG_FLOW_ROOT", "/root/ag.flow")
+
+    def _read_file(file_path):
+        if not file_path:
+            return ""
+        fpath = os.path.join(ag_flow_root, file_path) if not os.path.isabs(file_path) else file_path
+        if os.path.isfile(fpath):
+            try:
+                with open(fpath, encoding="utf-8") as f:
+                    return f.read()
+            except Exception:
+                pass
+        return ""
+
+    # Build phase details from JSON structure
+    phase_details = []
+    json_phases = wf_data.get("phases", {})
+
+    # Current phase from DB
+    current_phase_row = await fetch_one(
+        "SELECT current_phase_id FROM project.project_workflows WHERE id = $1", workflow_id,
+    )
+    current_phase_id = current_phase_row["current_phase_id"] if current_phase_row else None
+
+    for phase_key, phase_def in sorted(json_phases.items(), key=lambda x: x[1].get("order", 0)):
+        phase_type = phase_def.get("type", "normal")
+        if phase_type == "external":
+            continue
+
+        groups = phase_def.get("groups", [])
+        if not groups:
+            continue
+
+        for group in groups:
+            group_key = group.get("id", "A")
+            db_key = "{}:{}".format(phase_key, group_key)
+            db_phase = db_phase_map.get(db_key)
+
+            # Only show phases that exist in DB (running or completed) — not future phases
+            if not db_phase:
+                continue
+
+            phase_status = db_phase["status"]
+            phase_db_id = db_phase["id"]
+
+            # Build deliverables from JSON definition
+            deliverable_list = []
+            for d in group.get("deliverables", []):
+                d_key = d.get("id", "")
+                d_name = d.get("Name") or d.get("name") or d_key
+                agent_id = d.get("agent", "")
+
+                # Check if artifact exists in DB (by key, then fallback by agent_id)
+                art_key = "{}:{}".format(phase_db_id, d_key)
+                art = artifact_map.get(art_key)
+                if not art:
+                    art = artifact_by_agent.get("{}:{}".format(phase_db_id, agent_id))
+
+                if art:
+                    content = _read_file(art["file_path"])
+                    deliverable_list.append(DeliverableWithContent(
+                        id=art["id"],
+                        key=d_name,
+                        agent_id=art["agent_id"] or agent_id,
+                        agent_name=art["agent_id"] or agent_id,
+                        status=art["status"] or "pending",
+                        version=art["version"] or 1,
+                        file_path=art["file_path"],
+                        content=content,
+                        reviewer=art["reviewer"],
+                        review_comment=art["review_comment"],
+                        reviewed_at=art["reviewed_at"],
+                        created_at=art["created_at"],
+                    ))
+                else:
+                    # No artifact yet — show as expected deliverable
+                    deliverable_list.append(DeliverableWithContent(
+                        id=0,
+                        key=d_name,
+                        agent_id=agent_id,
+                        agent_name=agent_id,
+                        status="running" if phase_status == "running" else "pending",
+                        version=0,
+                    ))
+
+            phase_details.append(PhaseDetailResponse(
+                id=phase_db_id,
+                phase_key=phase_key,
+                phase_name=phase_def.get("name", phase_key),
+                group_key=group_key,
+                status=phase_status,
+                deliverables=deliverable_list,
+            ))
+
+    # Sort: running phases first, then by order (already sorted), most recent first
+    phase_details.sort(key=lambda p: (0 if p.status == "running" else 1 if p.status == "completed" else 2))
+
+    return WorkflowPhasesResponse(
+        workflow_id=workflow_id,
+        workflow_name=wf["workflow_name"],
+        status=wf["status"],
+        human_gate=human_gate,
+        phases=phase_details,
+    )
