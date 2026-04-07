@@ -141,6 +141,21 @@ async def start_workflow_route(
         raise HTTPException(status_code=409, detail=str(exc))
 
 
+@router.post("/{slug}/workflows/{workflow_id}/phases/{phase_id}/dispatch")
+async def dispatch_phase_group(
+    slug: str,
+    workflow_id: int,
+    phase_id: int,
+    user: TokenData = Depends(get_current_user),
+) -> dict:
+    """Dispatch agents for a pending phase/group."""
+    await _require_project(slug, user)
+    try:
+        return await multi_workflow_service.dispatch_group(slug, workflow_id, phase_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
 @router.post("/{slug}/workflows/{workflow_id}/phases/{phase_id}/reset")
 async def reset_phase_group(
     slug: str,

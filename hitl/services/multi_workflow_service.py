@@ -377,3 +377,102 @@ async def start_workflow(
                 log.error("start_workflow_dispatch_failed", agent=agent_id, error=str(exc)[:200])
 
     return {"ok": True, "workflow_id": workflow_id, "phase_id": phase_id, "dispatched": dispatched}
+
+
+async def dispatch_group(project_slug: str, workflow_id: int, phase_id: int) -> dict:
+    """Dispatch agents for an existing phase/group (must be pending)."""
+    import json as _json
+    import os
+
+    import httpx
+
+    from core.config import settings
+
+    phase = await fetch_one(
+        """SELECT wp.id, wp.phase_key, wp.group_key, wp.status,
+                  pw.workflow_json_path, pw.team_id, pw.status as wf_status
+           FROM project.workflow_phases wp
+           JOIN project.project_workflows pw ON wp.workflow_id = pw.id
+           WHERE wp.id = $1 AND pw.id = $2 AND pw.project_slug = $3""",
+        phase_id, workflow_id, project_slug,
+    )
+    if not phase:
+        raise ValueError("Phase not found")
+    if phase["status"] != "pending":
+        raise ValueError("Phase is already {}".format(phase["status"]))
+
+    # Load workflow JSON to get deliverables for this group
+    wf_json_path = phase["workflow_json_path"] or ""
+    wf_data = {}
+    if os.path.isfile(wf_json_path):
+        with open(wf_json_path, encoding="utf-8") as f:
+            wf_data = _json.load(f)
+
+    phase_key = phase["phase_key"]
+    group_key = phase["group_key"]
+    phase_def = wf_data.get("phases", {}).get(phase_key, {})
+    target_group = None
+    for g in phase_def.get("groups", []):
+        if g.get("id") == group_key:
+            target_group = g
+            break
+    if not target_group:
+        raise ValueError("Group {} not found in phase {}".format(group_key, phase_key))
+
+    # Mark phase as running
+    await execute(
+        "UPDATE project.workflow_phases SET status = 'running', started_at = NOW() WHERE id = $1",
+        phase_id,
+    )
+    await execute(
+        "UPDATE project.project_workflows SET current_phase_id = $1 WHERE id = $2",
+        phase_id, workflow_id,
+    )
+
+    gateway_url = settings.langgraph_api_url or "http://langgraph-api:8000"
+    team_id = phase["team_id"] or ""
+    thread_id = "workflow-{}".format(workflow_id)
+    dispatched = []
+
+    for deliv in target_group.get("deliverables", []):
+        agent_id = deliv.get("agent", "")
+        if not agent_id:
+            continue
+        d_name = deliv.get("Name") or deliv.get("name") or deliv.get("id", "")
+        d_desc = deliv.get("description", "")
+        instruction = (
+            "Produis le livrable '{}'. {}\n\n"
+            "Utilise save_deliverable avec deliverable_key='{}' pour sauvegarder le resultat."
+        ).format(d_name, d_desc[:2000], deliv.get("id", d_name))
+
+        task_row = await fetch_one(
+            """INSERT INTO project.dispatcher_tasks
+               (agent_id, team_id, thread_id, project_slug, phase, instruction, status, docker_image, workflow_id, phase_id, started_at, timeout_seconds)
+               VALUES ($1, $2, $3, $4, $5, $6, 'running', 'gateway', $7, $8, NOW(), 2100)
+               RETURNING id""",
+            agent_id, team_id, thread_id, project_slug, phase_key,
+            instruction[:4000], workflow_id, phase_id,
+        )
+
+        if task_row:
+            task_id = str(task_row["id"])
+            try:
+                async with httpx.AsyncClient(timeout=30) as client:
+                    await client.post(
+                        "{}/invoke".format(gateway_url),
+                        json={
+                            "messages": [{"role": "user", "content": instruction}],
+                            "team_id": team_id,
+                            "thread_id": thread_id,
+                            "project_slug": project_slug,
+                            "direct_agent": agent_id,
+                            "workflow_id": workflow_id,
+                            "phase_id": phase_id,
+                            "task_id": task_id,
+                        },
+                    )
+                dispatched.append(agent_id)
+            except Exception as exc:
+                log.error("dispatch_group_failed", agent=agent_id, error=str(exc)[:200])
+
+    return {"ok": True, "phase_id": phase_id, "dispatched": dispatched}

@@ -49,7 +49,7 @@ export function WorkflowPhaseCard({ phase, slug, workflowId, defaultExpanded = f
         if (action === 'relaunch') {
           await apiFetch(`${base}/phases/${phase.id}/reset`, { method: 'POST' });
         }
-        await apiFetch(`${base}/start`, { method: 'POST' });
+        await apiFetch(`${base}/phases/${phase.id}/dispatch`, { method: 'POST' });
         // Refresh immediately to show running state
         await onRefresh();
         // Poll until phase is no longer pending (agents dispatched)
