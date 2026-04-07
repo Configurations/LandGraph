@@ -2172,35 +2172,34 @@ async def save_mcp_discovery(request: Request):
     return {"ok": True}
 
 
-@app.get("/api/mcp-discovery/search")
-async def mcp_discovery_search(q: str = "", target: str = "", service_idx: int = 0, per_page: int = 10, page: int = 1):
-    """Proxy search to an external MCP discovery service."""
+@app.get("/api/mcp-discovery/proxy/{endpoint:path}")
+async def mcp_discovery_proxy(endpoint: str, request: Request, service_idx: int = 0):
+    """Proxy any GET request to an external MCP discovery service."""
     import httpx
 
     cfg = _read_json(MCP_DISCOVERY_FILE) if MCP_DISCOVERY_FILE.exists() else {"services": []}
     services = cfg.get("services", [])
     if not services or service_idx >= len(services):
-        return {"items": [], "total": 0, "error": "No MCP discovery service configured"}
+        return {"error": "No MCP discovery service configured"}
 
     svc = services[service_idx]
     url = svc.get("url", "").rstrip("/")
     api_key_env = svc.get("api_key_env", "")
     api_key = os.getenv(api_key_env, "") if api_key_env else ""
 
-    params = {"q": q, "per_page": per_page, "page": page}
-    if target:
-        params["targets"] = target
+    params = dict(request.query_params)
+    params.pop("service_idx", None)
     headers = {}
     if api_key:
         headers["Authorization"] = "Bearer {}".format(api_key)
 
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get("{}/search".format(url), params=params, headers=headers)
+            resp = await client.get("{}/{}".format(url, endpoint), params=params, headers=headers)
             resp.raise_for_status()
             return resp.json()
     except Exception as exc:
-        return {"items": [], "total": 0, "error": str(exc)[:200]}
+        return {"error": str(exc)[:200]}
 
 
 @app.get("/api/templates/others")

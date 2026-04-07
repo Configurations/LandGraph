@@ -11038,9 +11038,12 @@ function renderMcpDiscoveryTable() {
     container.innerHTML = '<p style="color:var(--text-secondary);padding:0.5rem;font-size:0.85rem">Aucun service configure.</p>';
     return;
   }
-  let html = '<table><thead><tr><th>Nom</th><th>URL</th><th>Cle API (.env)</th><th>Actions</th></tr></thead><tbody>';
+  let html = '<table><thead><tr><th>Nom</th><th>URL</th><th>Cle API (.env)</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
   services.forEach((s, i) => {
-    html += '<tr><td>' + escHtml(s.name || '') + '</td><td style="font-size:0.8rem;word-break:break-all">' + escHtml(s.url || '') + '</td><td><code>' + escHtml(s.api_key_env || '') + '</code></td><td style="white-space:nowrap">' +
+    html += '<tr><td>' + escHtml(s.name || '') + '</td><td style="font-size:0.8rem;word-break:break-all">' + escHtml(s.url || '') + '</td><td><code>' + escHtml(s.api_key_env || '') + '</code></td>' +
+      '<td><span class="tag" id="mcp-disc-status-' + i + '">-</span></td>' +
+      '<td style="white-space:nowrap">' +
+      '<button class="btn btn-outline btn-sm" onclick="testMcpDiscoveryEntry(' + i + ')">Tester</button> ' +
       '<button class="btn btn-outline btn-sm" onclick="editMcpDiscoveryEntry(' + i + ')">Editer</button> ' +
       '<button class="btn btn-danger btn-sm" onclick="deleteMcpDiscoveryEntry(' + i + ')">Supprimer</button></td></tr>';
   });
@@ -11097,6 +11100,25 @@ async function deleteMcpDiscoveryEntry(idx) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+async function testMcpDiscoveryEntry(idx) {
+  const badge = document.getElementById('mcp-disc-status-' + idx);
+  badge.textContent = '...'; badge.className = 'tag';
+  try {
+    const data = await api('/api/mcp-discovery/proxy/targets?service_idx=' + idx);
+    if (data.error) {
+      badge.textContent = 'Erreur'; badge.className = 'tag tag-red';
+      toast(data.error, 'error');
+    } else {
+      const count = Array.isArray(data) ? data.length : 0;
+      badge.textContent = count + ' cibles'; badge.className = 'tag tag-green';
+      toast('Connexion OK — ' + count + ' cibles disponibles', 'success');
+    }
+  } catch (e) {
+    badge.textContent = 'Erreur'; badge.className = 'tag tag-red';
+    toast(e.message, 'error');
+  }
+}
+
 async function searchMcpDiscovery() {
   const q = document.getElementById('mcp-disc-search-q').value.trim();
   const target = document.getElementById('mcp-disc-search-target').value;
@@ -11104,7 +11126,9 @@ async function searchMcpDiscovery() {
   if (!q) { toast('Entrez un terme de recherche', 'error'); return; }
   container.innerHTML = '<p style="color:var(--text-secondary)">Recherche en cours...</p>';
   try {
-    const data = await api('/api/mcp-discovery/search?q=' + encodeURIComponent(q) + '&target=' + encodeURIComponent(target));
+    let url = '/api/mcp-discovery/proxy/search_mcp?q=' + encodeURIComponent(q);
+    if (target) url += '&targets=' + encodeURIComponent(target);
+    const data = await api(url);
     if (data.error) { container.innerHTML = '<p style="color:var(--danger)">' + escHtml(data.error) + '</p>'; return; }
     if (!data.items || data.items.length === 0) { container.innerHTML = '<p style="color:var(--text-secondary)">Aucun resultat.</p>'; return; }
     let html = '<div style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.5rem">' + data.total + ' resultats</div>';
