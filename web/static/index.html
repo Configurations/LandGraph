@@ -1061,18 +1061,7 @@
                       <label style="font-size:0.75rem">Recherche</label>
                       <input id="mcp-disc-search-q" placeholder="Ex: git, fetch, database..." />
                     </div>
-                    <div class="form-group" style="flex:1;margin:0">
-                      <label style="font-size:0.75rem">Cible</label>
-                      <select id="mcp-disc-search-target">
-                        <option value="">Toutes</option>
-                        <option value="claude_code">Claude Code</option>
-                        <option value="OpenAI Codex CLI">Codex CLI</option>
-                        <option value="Gemini CLI">Gemini CLI</option>
-                        <option value="Goose">Goose</option>
-                        <option value="langgraph">LangGraph</option>
-                        <option value="docker_stdio">Docker stdio</option>
-                      </select>
-                    </div>
+                    <input type="hidden" id="mcp-disc-search-target" value="" />
                     <button class="btn btn-primary btn-sm" style="margin-bottom:0" onclick="searchMcpDiscovery()">Rechercher</button>
                   </div>
                   <div id="mcp-disc-search-results" style="margin-top:0.75rem;max-height:400px;overflow-y:auto"></div>
