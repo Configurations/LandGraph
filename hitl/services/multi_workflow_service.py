@@ -343,6 +343,8 @@ async def start_workflow(
         d_desc = deliv.get("description", "")
         instruction = (
             "Produis le livrable '{}'. {}\n\n"
+            "IMPORTANT: Le contenu DOIT etre en format Markdown structure (titres, listes, tableaux). "
+            "Ne jamais produire de JSON.\n\n"
             "Utilise save_deliverable avec deliverable_key='{}' pour sauvegarder le resultat."
         ).format(d_name, d_desc[:2000], deliv.get("id", d_name))
 
@@ -442,6 +444,8 @@ async def dispatch_group(project_slug: str, workflow_id: int, phase_id: int) -> 
         d_desc = deliv.get("description", "")
         instruction = (
             "Produis le livrable '{}'. {}\n\n"
+            "IMPORTANT: Le contenu DOIT etre en format Markdown structure (titres, listes, tableaux). "
+            "Ne jamais produire de JSON.\n\n"
             "Utilise save_deliverable avec deliverable_key='{}' pour sauvegarder le resultat."
         ).format(d_name, d_desc[:2000], deliv.get("id", d_name))
 
