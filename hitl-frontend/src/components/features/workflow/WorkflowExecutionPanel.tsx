@@ -188,7 +188,7 @@ export function WorkflowExecutionPanel({ slug, workflows: workflowsProp, onRefre
                 slug={slug}
                 workflowId={wf.id}
                 defaultExpanded={idx === 0}
-                onRefresh={() => void handleRefreshOne(wf.id)}
+                onRefresh={() => handleRefreshOne(wf.id)}
               />
             ))}
 

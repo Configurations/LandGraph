@@ -8,7 +8,7 @@ interface Props {
   slug: string;
   workflowId: number;
   defaultExpanded?: boolean;
-  onRefresh: () => void;
+  onRefresh: () => void | Promise<void>;
 }
 
 const STATUS_DOT: Record<string, string> = {
@@ -46,23 +46,28 @@ export function WorkflowPhaseCard({ phase, slug, workflowId, defaultExpanded = f
       const base = `/api/projects/${encodeURIComponent(slug)}/workflows/${workflowId}`;
 
       if (action === 'launch' || action === 'relaunch') {
-        // Reset first if relaunching
         if (action === 'relaunch') {
           await apiFetch(`${base}/phases/${phase.id}/reset`, { method: 'POST' });
         }
-        // Start the workflow (dispatches the current phase)
         await apiFetch(`${base}/start`, { method: 'POST' });
+        // Refresh immediately to show running state
+        await onRefresh();
+        // Poll until phase is no longer pending (agents dispatched)
+        for (let i = 0; i < 6; i++) {
+          await new Promise(r => setTimeout(r, 3000));
+          await onRefresh();
+        }
       } else if (action === 'reset') {
         if (!window.confirm(t('workflow.confirm_reset'))) {
           setActionLoading(null);
           return;
         }
         await apiFetch(`${base}/phases/${phase.id}/reset`, { method: 'POST' });
+        await onRefresh();
       } else if (action === 'pause') {
         await apiFetch(`${base}/pause`, { method: 'POST' });
+        await onRefresh();
       }
-
-      onRefresh();
     } catch (err) {
       console.error(`Phase action ${action} failed:`, err);
     } finally {
