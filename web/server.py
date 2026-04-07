@@ -102,6 +102,7 @@ MAIL_FILE = SHARED_DIR / "mail.json"
 DISCORD_FILE = SHARED_DIR / "discord.json"
 HITL_FILE = SHARED_DIR / "hitl.json"
 OTHERS_FILE = SHARED_DIR / "others.json"
+MCP_DISCOVERY_FILE = SHARED_DIR / "mcp_discovery.json"
 OUTLINE_FILE = CONFIGS / "outline.json"
 
 logging.basicConfig(
@@ -2153,6 +2154,53 @@ async def save_hitl_config(request: Request):
     data = await request.json()
     _write_json(HITL_FILE, data)
     return {"ok": True}
+
+
+@app.get("/api/templates/mcp-discovery")
+async def get_mcp_discovery():
+    """Read mcp_discovery.json config from Shared/."""
+    if not MCP_DISCOVERY_FILE.exists():
+        return {"services": []}
+    return _read_json(MCP_DISCOVERY_FILE)
+
+
+@app.put("/api/templates/mcp-discovery")
+async def save_mcp_discovery(request: Request):
+    """Write mcp_discovery.json config to Shared/."""
+    data = await request.json()
+    _write_json(MCP_DISCOVERY_FILE, data)
+    return {"ok": True}
+
+
+@app.get("/api/mcp-discovery/search")
+async def mcp_discovery_search(q: str = "", target: str = "", service_idx: int = 0, per_page: int = 10, page: int = 1):
+    """Proxy search to an external MCP discovery service."""
+    import httpx
+
+    cfg = _read_json(MCP_DISCOVERY_FILE) if MCP_DISCOVERY_FILE.exists() else {"services": []}
+    services = cfg.get("services", [])
+    if not services or service_idx >= len(services):
+        return {"items": [], "total": 0, "error": "No MCP discovery service configured"}
+
+    svc = services[service_idx]
+    url = svc.get("url", "").rstrip("/")
+    api_key_env = svc.get("api_key_env", "")
+    api_key = os.getenv(api_key_env, "") if api_key_env else ""
+
+    params = {"q": q, "per_page": per_page, "page": page}
+    if target:
+        params["targets"] = target
+    headers = {}
+    if api_key:
+        headers["Authorization"] = "Bearer {}".format(api_key)
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get("{}/search".format(url), params=params, headers=headers)
+            resp.raise_for_status()
+            return resp.json()
+    except Exception as exc:
+        return {"items": [], "total": 0, "error": str(exc)[:200]}
 
 
 @app.get("/api/templates/others")

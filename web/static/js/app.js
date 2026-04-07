@@ -4144,7 +4144,7 @@ function showTemplateTab(tabId) {
   else if (tabId === 'tpl-dockerfiles') loadTplDockerfiles();
   else if (tabId === 'tpl-i18n') loadTplI18n();
   else if (tabId === 'tpl-mail') loadMail();
-  else if (tabId === 'tpl-security') { loadApiKeys(); loadAuthConfig(); }
+  else if (tabId === 'tpl-security') { loadApiKeys(); loadAuthConfig(); loadMcpDiscovery(); }
   else if (tabId === 'tpl-misc') { loadCfgMisc(); loadTplOthers(); }
   else if (tabId === 'tpl-git') loadTplGit();
   else if (tabId === 'tpl-avatars') loadTplAvatars();
@@ -11015,6 +11015,128 @@ async function saveAuthConfig() {
     toast('Configuration enregistree.', 'success');
     loadAuthConfig();
   } catch (e) { toast(e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════
+// MCP DISCOVERY SERVICES
+// ═══════════════════════════════════════════════════
+let _mcpDiscoveryData = { services: [] };
+let _mcpDiscEditIdx = -1;
+
+async function loadMcpDiscovery() {
+  try {
+    _mcpDiscoveryData = await api('/api/templates/mcp-discovery');
+    if (!_mcpDiscoveryData.services) _mcpDiscoveryData.services = [];
+    renderMcpDiscoveryTable();
+  } catch (e) { /* ignore */ }
+}
+
+function renderMcpDiscoveryTable() {
+  const container = document.getElementById('mcp-discovery-table');
+  const services = _mcpDiscoveryData.services || [];
+  if (services.length === 0) {
+    container.innerHTML = '<p style="color:var(--text-secondary);padding:0.5rem;font-size:0.85rem">Aucun service configure.</p>';
+    return;
+  }
+  let html = '<table><thead><tr><th>Nom</th><th>URL</th><th>Cle API (.env)</th><th>Actions</th></tr></thead><tbody>';
+  services.forEach((s, i) => {
+    html += '<tr><td>' + escHtml(s.name || '') + '</td><td style="font-size:0.8rem;word-break:break-all">' + escHtml(s.url || '') + '</td><td><code>' + escHtml(s.api_key_env || '') + '</code></td><td style="white-space:nowrap">' +
+      '<button class="btn btn-outline btn-sm" onclick="editMcpDiscoveryEntry(' + i + ')">Editer</button> ' +
+      '<button class="btn btn-danger btn-sm" onclick="deleteMcpDiscoveryEntry(' + i + ')">Supprimer</button></td></tr>';
+  });
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
+function showAddMcpDiscoveryModal() {
+  _mcpDiscEditIdx = -1;
+  document.getElementById('mcp-disc-modal-title').textContent = 'Ajouter un service de decouverte';
+  document.getElementById('mcp-disc-name').value = '';
+  document.getElementById('mcp-disc-url').value = '';
+  document.getElementById('mcp-disc-apikey-env').value = '';
+  document.getElementById('modal-mcp-discovery').style.display = 'flex';
+}
+
+function editMcpDiscoveryEntry(idx) {
+  _mcpDiscEditIdx = idx;
+  const s = _mcpDiscoveryData.services[idx];
+  document.getElementById('mcp-disc-modal-title').textContent = 'Modifier le service';
+  document.getElementById('mcp-disc-name').value = s.name || '';
+  document.getElementById('mcp-disc-url').value = s.url || '';
+  document.getElementById('mcp-disc-apikey-env').value = s.api_key_env || '';
+  document.getElementById('modal-mcp-discovery').style.display = 'flex';
+}
+
+async function saveMcpDiscoveryEntry() {
+  const entry = {
+    name: document.getElementById('mcp-disc-name').value.trim(),
+    url: document.getElementById('mcp-disc-url').value.trim(),
+    api_key_env: document.getElementById('mcp-disc-apikey-env').value.trim()
+  };
+  if (!entry.name || !entry.url) { toast('Nom et URL requis', 'error'); return; }
+  if (_mcpDiscEditIdx >= 0) {
+    _mcpDiscoveryData.services[_mcpDiscEditIdx] = entry;
+  } else {
+    _mcpDiscoveryData.services.push(entry);
+  }
+  try {
+    await api('/api/templates/mcp-discovery', { method: 'PUT', body: _mcpDiscoveryData });
+    toast('Service enregistre.', 'success');
+    closeModal('modal-mcp-discovery');
+    renderMcpDiscoveryTable();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteMcpDiscoveryEntry(idx) {
+  if (!confirm('Supprimer ce service ?')) return;
+  _mcpDiscoveryData.services.splice(idx, 1);
+  try {
+    await api('/api/templates/mcp-discovery', { method: 'PUT', body: _mcpDiscoveryData });
+    toast('Service supprime.', 'success');
+    renderMcpDiscoveryTable();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function searchMcpDiscovery() {
+  const q = document.getElementById('mcp-disc-search-q').value.trim();
+  const target = document.getElementById('mcp-disc-search-target').value;
+  const container = document.getElementById('mcp-disc-search-results');
+  if (!q) { toast('Entrez un terme de recherche', 'error'); return; }
+  container.innerHTML = '<p style="color:var(--text-secondary)">Recherche en cours...</p>';
+  try {
+    const data = await api('/api/mcp-discovery/search?q=' + encodeURIComponent(q) + '&target=' + encodeURIComponent(target));
+    if (data.error) { container.innerHTML = '<p style="color:var(--danger)">' + escHtml(data.error) + '</p>'; return; }
+    if (!data.items || data.items.length === 0) { container.innerHTML = '<p style="color:var(--text-secondary)">Aucun resultat.</p>'; return; }
+    let html = '<div style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.5rem">' + data.total + ' resultats</div>';
+    data.items.forEach(item => {
+      const recipes = item.recipes || {};
+      const recipeKeys = Object.keys(recipes);
+      const desc = (item.description || '').substring(0, 200);
+      html += '<div style="border:1px solid var(--border);border-radius:6px;padding:0.75rem;margin-bottom:0.5rem">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:start"><strong>' + escHtml(item.name) + '</strong>';
+      if (item.transport) html += '<span class="tag">' + escHtml(item.transport) + '</span>';
+      html += '</div>';
+      if (desc) html += '<p style="font-size:0.8rem;color:var(--text-secondary);margin:0.25rem 0">' + escHtml(desc) + (item.description && item.description.length > 200 ? '...' : '') + '</p>';
+      if (item.parameters && item.parameters.length > 0) {
+        html += '<div style="font-size:0.75rem;margin-top:0.25rem">Parametres: ';
+        item.parameters.forEach(p => {
+          html += '<code>' + escHtml(p.name) + '</code>' + (p.is_required ? ' (requis)' : '') + ' ';
+        });
+        html += '</div>';
+      }
+      if (recipeKeys.length > 0) {
+        html += '<div style="margin-top:0.5rem;font-size:0.75rem"><strong>Recettes :</strong>';
+        recipeKeys.forEach(k => {
+          const r = recipes[k];
+          html += '<div style="margin-top:0.25rem"><span class="tag" style="font-size:0.65rem">' + escHtml(k) + '</span> ';
+          html += '<code style="font-size:0.7rem;word-break:break-all">' + escHtml(r.data || '').substring(0, 150) + '</code></div>';
+        });
+        html += '</div>';
+      }
+      html += '</div>';
+    });
+    container.innerHTML = html;
+  } catch (e) { container.innerHTML = '<p style="color:var(--danger)">' + escHtml(e.message) + '</p>'; }
 }
 
 // ═══════════════════════════════════════════════════

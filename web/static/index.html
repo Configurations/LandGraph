@@ -1036,6 +1036,82 @@
             <button class="btn btn-primary" onclick="saveAuthConfig()">Enregistrer</button>
             <button class="btn btn-outline" onclick="loadAuthConfig()">Annuler</button>
           </div>
+
+          <div class="card collapsible" style="margin-top:1.5rem">
+            <div class="card-header" onclick="this.parentElement.classList.toggle('collapsed')">
+              <h3>Services de decouverte MCP</h3>
+              <div style="display:flex;align-items:center;gap:0.5rem">
+                <button class="btn btn-primary btn-sm" onclick="event.stopPropagation();showAddMcpDiscoveryModal()">+ Ajouter</button>
+                <svg class="card-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+            </div>
+            <div class="card-body">
+              <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem">
+                Services externes qui decrivent les serveurs MCP disponibles et fournissent des recettes d'installation par cible (Claude Code, Codex, Gemini...).
+              </p>
+              <div class="table-container" id="mcp-discovery-table"></div>
+
+              <div class="card" style="margin-top:1rem;background:var(--bg-secondary)">
+                <div class="card-header" style="padding:0.5rem 0.75rem">
+                  <h4 style="font-size:0.85rem">Recherche MCP</h4>
+                </div>
+                <div class="card-body" style="padding:0.75rem">
+                  <div style="display:flex;gap:0.5rem;align-items:end">
+                    <div class="form-group" style="flex:2;margin:0">
+                      <label style="font-size:0.75rem">Recherche</label>
+                      <input id="mcp-disc-search-q" placeholder="Ex: git, fetch, database..." />
+                    </div>
+                    <div class="form-group" style="flex:1;margin:0">
+                      <label style="font-size:0.75rem">Cible</label>
+                      <select id="mcp-disc-search-target">
+                        <option value="">Toutes</option>
+                        <option value="claude_code">Claude Code</option>
+                        <option value="OpenAI Codex CLI">Codex CLI</option>
+                        <option value="Gemini CLI">Gemini CLI</option>
+                        <option value="Goose">Goose</option>
+                        <option value="langgraph">LangGraph</option>
+                        <option value="docker_stdio">Docker stdio</option>
+                      </select>
+                    </div>
+                    <button class="btn btn-primary btn-sm" style="margin-bottom:0" onclick="searchMcpDiscovery()">Rechercher</button>
+                  </div>
+                  <div id="mcp-disc-search-results" style="margin-top:0.75rem;max-height:400px;overflow-y:auto"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Modal: MCP Discovery Service -->
+        <div class="modal-overlay" id="modal-mcp-discovery" style="display:none">
+          <div class="modal" style="max-width:480px">
+            <div class="modal-header">
+              <h3 id="mcp-disc-modal-title">Ajouter un service de decouverte</h3>
+              <button class="btn-close" onclick="closeModal('modal-mcp-discovery')">&times;</button>
+            </div>
+            <div class="form-group">
+              <label>Nom</label>
+              <input id="mcp-disc-name" placeholder="Ex: MCP Manager" />
+            </div>
+            <div class="form-group">
+              <label>URL de base</label>
+              <input id="mcp-disc-url" placeholder="https://mcp.yoops.org/api/v1" />
+              <p style="font-size:0.75rem;color:var(--text-secondary);margin-top:0.25rem">
+                URL de l'API (sans /search). Le endpoint <code>/search</code> sera appele automatiquement.
+              </p>
+            </div>
+            <div class="form-group">
+              <label>Variable cle API (.env)</label>
+              <input id="mcp-disc-apikey-env" placeholder="MCP_MANAGER_API_KEY" />
+              <p style="font-size:0.75rem;color:var(--text-secondary);margin-top:0.25rem">
+                Nom de la variable dans <code>.env</code> contenant la cle API du service.
+              </p>
+            </div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem">
+              <button class="btn btn-outline" onclick="closeModal('modal-mcp-discovery')">Annuler</button>
+              <button class="btn btn-primary" onclick="saveMcpDiscoveryEntry()">Enregistrer</button>
+            </div>
+          </div>
         </div>
 
         <!-- Modal: New API Key -->
